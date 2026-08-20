@@ -27,6 +27,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
 use crate::pgroup;
+use crate::BackgroundStats;
 
 /// The in-process side of the framing protocol. `os.dup2(1, 2)` merges
 /// stderr into stdout at the fd level so ordering is preserved even for
@@ -88,6 +89,7 @@ pub struct KernelTool {
     /// Mirror of the live kernel's pgid, readable from the sync `Drop`.
     live_pgid: StdMutex<Option<u32>>,
     seq: AtomicU64,
+    stats: BackgroundStats,
 }
 
 impl Default for KernelTool {
@@ -98,8 +100,10 @@ impl Default for KernelTool {
 
 impl Drop for KernelTool {
     fn drop(&mut self) {
-        if let Some(pgid) = *self.live_pgid.lock().unwrap() {
+        let pgid = self.live_pgid.lock().unwrap().take();
+        if let Some(pgid) = pgid {
             pgroup::kill_group(pgid);
+            self.stats.dec_kernels();
         }
     }
 }
@@ -115,7 +119,26 @@ impl KernelTool {
             session: tokio::sync::Mutex::new(Session::default()),
             live_pgid: StdMutex::new(None),
             seq: AtomicU64::new(0),
+            stats: BackgroundStats::default(),
         }
+    }
+
+    /// Adopt shared live counters.
+    pub fn stats(mut self, stats: BackgroundStats) -> Self {
+        self.stats = stats;
+        self
+    }
+
+    /// The single place the live-pgid mirror changes; keeps the kernels
+    /// counter exactly in step with it.
+    fn set_live_pgid(&self, pgid: Option<u32>) {
+        let mut guard = self.live_pgid.lock().unwrap();
+        match (guard.is_some(), pgid.is_some()) {
+            (false, true) => self.stats.inc_kernels(),
+            (true, false) => self.stats.dec_kernels(),
+            _ => {}
+        }
+        *guard = pgid;
     }
 
     pub fn python(mut self, interpreter: impl Into<String>) -> Self {
@@ -161,7 +184,7 @@ impl KernelTool {
         let pgid = child.id();
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
-        *self.live_pgid.lock().unwrap() = pgid;
+        self.set_live_pgid(pgid);
         Ok(Live {
             child,
             stdin,
@@ -180,7 +203,7 @@ impl KernelTool {
             let _ = live.child.start_kill();
             let _ = live.child.wait().await;
         }
-        *self.live_pgid.lock().unwrap() = None;
+        self.set_live_pgid(None);
     }
 
     async fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
@@ -202,7 +225,7 @@ impl KernelTool {
             if live.child.try_wait().ok().flatten().is_some() {
                 session.live = None;
                 session.restart_notice = true;
-                *self.live_pgid.lock().unwrap() = None;
+                self.set_live_pgid(None);
             }
         }
         let restarted = session.restart_notice && session.live.is_none();

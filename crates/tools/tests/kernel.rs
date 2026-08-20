@@ -174,3 +174,20 @@ async fn dropping_kernel_tool_kills_the_kernel() {
         "kernel process must die with the tool (stat: {stat})"
     );
 }
+
+#[tokio::test]
+async fn kernel_stats_track_liveness() {
+    require_python!();
+    let stats = orca_harness_tools::BackgroundStats::new();
+    {
+        let k = KernelTool::new().stats(stats.clone());
+        assert_eq!(stats.kernels(), 0);
+        k.call(json!({"code": "a = 1"}), &ctx()).await.unwrap();
+        assert_eq!(stats.kernels(), 1);
+        k.call(json!({"action": "reset"}), &ctx()).await.unwrap();
+        assert_eq!(stats.kernels(), 0);
+        k.call(json!({"code": "a = 1"}), &ctx()).await.unwrap();
+        assert_eq!(stats.kernels(), 1);
+    } // drop
+    assert_eq!(stats.kernels(), 0);
+}
