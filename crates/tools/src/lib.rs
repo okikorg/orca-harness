@@ -31,6 +31,7 @@
 mod files;
 mod fs_admin;
 mod glob;
+mod kernel;
 mod pgroup;
 mod process;
 mod search;
@@ -44,6 +45,7 @@ use orca_harness_core::Tool;
 pub use files::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use glob::GlobTool;
+pub use kernel::KernelTool;
 pub use process::ProcessTool;
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
