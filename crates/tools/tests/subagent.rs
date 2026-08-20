@@ -44,7 +44,10 @@ async fn runs_task_and_reports_answer_and_usage() {
     }]));
     let (ws, _dir) = temp_ws();
     let tool = SubagentTool::new(model, &ws);
-    let out = tool.call(json!({"task": "count files"}), &ctx()).await.unwrap();
+    let out = tool
+        .call(json!({"task": "count files"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(out["answer"], "found 3 files");
     assert_eq!(out["usage"]["inputTokens"], 10);
     assert_eq!(out["usage"]["outputTokens"], 5);
@@ -62,7 +65,10 @@ async fn inner_agent_executes_real_tools() {
     ));
     let (ws, dir) = temp_ws();
     let tool = SubagentTool::new(model, &ws);
-    let out = tool.call(json!({"task": "write a note"}), &ctx()).await.unwrap();
+    let out = tool
+        .call(json!({"task": "write a note"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(out["answer"], "wrote it");
     assert_eq!(
         std::fs::read_to_string(dir.join("note.txt")).unwrap(),
@@ -147,7 +153,11 @@ async fn depth_two_lets_a_subagent_spawn_a_grandchild() {
     let tool = SubagentTool::new(model.clone(), &ws).max_depth(SubagentDepth::new(2));
     let out = tool.call(json!({"task": "outer"}), &ctx()).await.unwrap();
     assert_eq!(out["answer"], "child done");
-    assert_eq!(model.generate_calls(), 3, "grandchild must actually have run");
+    assert_eq!(
+        model.generate_calls(),
+        3,
+        "grandchild must actually have run"
+    );
 }
 
 #[tokio::test]
@@ -250,8 +260,9 @@ async fn spawn_extensions_receive_identity_and_events() {
     let events = events.lock().unwrap();
     assert!(events.iter().any(|(id, e)| *id == spawns[0].id
         && matches!(e, HarnessEvent::ToolCall { tool_name, .. } if tool_name == "list_dir")));
-    assert!(events.iter().any(|(id, e)| *id == spawns[0].id
-        && matches!(e, HarnessEvent::Result { .. })));
+    assert!(events
+        .iter()
+        .any(|(id, e)| *id == spawns[0].id && matches!(e, HarnessEvent::Result { .. })));
 }
 
 #[tokio::test]
@@ -297,7 +308,9 @@ async fn agent_count_rises_and_falls_even_on_cancel() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(stats.agents(), 1);
     cancel.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(5), handle).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .unwrap();
     assert_eq!(stats.agents(), 0);
 
     // Errors decrement too: a model with no script fails immediately.

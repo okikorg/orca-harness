@@ -2,15 +2,104 @@
 //! before they reach the context (protecting the window) or a downstream
 //! stream with a hard line cap. String fields over the limit are trimmed
 //! head-and-tail with an elision marker; the result stays valid JSON.
+//!
+//! Pair it with a [`TruncationStore`] to keep the full original of every
+//! truncated result, retrievable by the model through
+//! [`ReadToolResultTool`](crate::ReadToolResultTool): truncated outputs
+//! gain a `_readFull` hint carrying the `callId` to pass to
+//! `read_tool_result`. The store is byte-budgeted and evicts oldest-first.
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde_json::Value;
 
 use orca_harness_core::{Extension, ExtensionError, Subscriptions, ToolCall, ToolResult};
 
+/// Tool name of the paired reader; its outputs are exempt from truncation
+/// (it enforces its own slice cap) and from being stored again.
+pub(crate) const READ_TOOL_RESULT: &str = "read_tool_result";
+
+struct StoreEntry {
+    tool_name: String,
+    /// Serialized JSON of the original, untruncated output.
+    full: Arc<str>,
+}
+
+#[derive(Default)]
+struct StoreInner {
+    entries: HashMap<String, StoreEntry>,
+    /// Insertion order for FIFO eviction.
+    order: VecDeque<String>,
+    bytes: usize,
+}
+
+/// Retains the full originals of truncated tool results, keyed by call
+/// id, within a byte budget (oldest evicted first). Cheap to clone.
+#[derive(Clone)]
+pub struct TruncationStore {
+    inner: Arc<Mutex<StoreInner>>,
+    budget: usize,
+}
+
+impl Default for TruncationStore {
+    fn default() -> Self {
+        Self::new(16 * 1024 * 1024)
+    }
+}
+
+impl TruncationStore {
+    pub fn new(budget_bytes: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(StoreInner::default())),
+            budget: budget_bytes,
+        }
+    }
+
+    pub(crate) fn insert(&self, call_id: &str, tool_name: &str, full: String) {
+        // An original larger than the whole budget is unstorable.
+        if full.len() > self.budget {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(old) = inner.entries.remove(call_id) {
+            inner.bytes -= old.full.len();
+            inner.order.retain(|id| id != call_id);
+        }
+        inner.bytes += full.len();
+        inner.entries.insert(
+            call_id.to_string(),
+            StoreEntry {
+                tool_name: tool_name.to_string(),
+                full: full.into(),
+            },
+        );
+        inner.order.push_back(call_id.to_string());
+        while inner.bytes > self.budget {
+            let Some(oldest) = inner.order.pop_front() else {
+                break;
+            };
+            if let Some(evicted) = inner.entries.remove(&oldest) {
+                inner.bytes -= evicted.full.len();
+            }
+        }
+    }
+
+    /// The stored original for `call_id`: `(tool_name, serialized JSON)`.
+    pub(crate) fn get(&self, call_id: &str) -> Option<(String, Arc<str>)> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .entries
+            .get(call_id)
+            .map(|e| (e.tool_name.clone(), e.full.clone()))
+    }
+}
+
 pub struct Truncation {
     /// Maximum length, in characters, of any single string in the output.
     max_string_chars: usize,
+    store: Option<TruncationStore>,
 }
 
 impl Default for Truncation {
@@ -19,13 +108,33 @@ impl Default for Truncation {
         // for many strings in one result.
         Self {
             max_string_chars: 16 * 1024,
+            store: None,
         }
     }
 }
 
 impl Truncation {
     pub fn new(max_string_chars: usize) -> Self {
-        Self { max_string_chars }
+        Self {
+            max_string_chars,
+            store: None,
+        }
+    }
+
+    /// Retain full originals of truncated results in `store`, and stamp
+    /// truncated outputs with a `_readFull` hint for `read_tool_result`.
+    pub fn store(mut self, store: TruncationStore) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    fn needs_truncation(&self, value: &Value) -> bool {
+        match value {
+            Value::String(s) => s.chars().count() > self.max_string_chars,
+            Value::Array(items) => items.iter().any(|v| self.needs_truncation(v)),
+            Value::Object(map) => map.values().any(|v| self.needs_truncation(v)),
+            _ => false,
+        }
     }
 
     fn truncate_value(&self, value: &mut Value) -> bool {
@@ -74,13 +183,42 @@ impl Extension for Truncation {
 
     async fn after_tool(
         &self,
-        _call: &ToolCall,
+        call: &ToolCall,
         mut result: ToolResult,
     ) -> Result<ToolResult, ExtensionError> {
+        // The reader's slices are sized by explicit request; re-truncating
+        // them would make full outputs permanently unreachable.
+        if result.tool_name == READ_TOOL_RESULT {
+            return Ok(result);
+        }
+        // Capture the original before mutating, but only when something
+        // will actually be trimmed and there is a store to keep it.
+        let full = match &self.store {
+            Some(_) if self.needs_truncation(&result.output) => {
+                serde_json::to_string(&result.output).ok()
+            }
+            _ => None,
+        };
         let truncated = self.truncate_value(&mut result.output);
         if truncated {
+            let stored = match (&self.store, full) {
+                (Some(store), Some(full)) => {
+                    store.insert(&call.id, &result.tool_name, full);
+                    true
+                }
+                _ => false,
+            };
             if let Value::Object(map) = &mut result.output {
                 map.insert("_truncated".into(), Value::Bool(true));
+                if stored {
+                    map.insert(
+                        "_readFull".into(),
+                        Value::String(format!(
+                            "full output available: call {READ_TOOL_RESULT} with callId \"{}\"",
+                            call.id
+                        )),
+                    );
+                }
             }
         }
         Ok(result)

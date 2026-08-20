@@ -8,7 +8,9 @@
 //!   union so a sidecar can serialize them directly.
 //! - [`ToolPolicy`] — allow/deny tool calls before execution.
 //! - [`Truncation`] — cap oversized tool outputs to protect the context
-//!   window and downstream line caps.
+//!   window and downstream line caps. Pair with a [`TruncationStore`] and
+//!   the [`ReadToolResultTool`] so the model can page through the full
+//!   original of anything that was trimmed.
 //! - [`ToolRetry`] / [`RetryModel`] — retry failing tools (an extension)
 //!   and transient model errors (a `Model` decorator).
 //! - [`UsageMeter`] — accumulate self-reported token usage across a run.
@@ -36,12 +38,14 @@
 
 mod events;
 mod policy;
+mod read_tool_result;
 mod retry;
 mod truncation;
 mod usage;
 
 pub use events::{EventSink, EventStream, HarnessEvent};
 pub use policy::{PolicyOutcome, PolicyRule, ToolPolicy};
+pub use read_tool_result::ReadToolResultTool;
 pub use retry::{RetryModel, ToolRetry};
-pub use truncation::Truncation;
+pub use truncation::{Truncation, TruncationStore};
 pub use usage::{UsageHandle, UsageMeter};

@@ -38,7 +38,10 @@ async fn state_persists_across_calls() {
     let out = k.call(json!({"code": "x = 41"}), &ctx()).await.unwrap();
     assert_eq!(out["state"], "ok");
     assert_eq!(out["output"], "");
-    let out = k.call(json!({"code": "print(x + 1)"}), &ctx()).await.unwrap();
+    let out = k
+        .call(json!({"code": "print(x + 1)"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(out["state"], "ok");
     assert_eq!(out["output"].as_str().unwrap().trim(), "42");
 }
@@ -58,7 +61,9 @@ async fn multiline_code_runs_verbatim() {
 async fn errors_report_traceback_and_preserve_state() {
     require_python!();
     let k = KernelTool::new();
-    k.call(json!({"code": "kept = 'alive'"}), &ctx()).await.unwrap();
+    k.call(json!({"code": "kept = 'alive'"}), &ctx())
+        .await
+        .unwrap();
     let out = k.call(json!({"code": "1 / 0"}), &ctx()).await.unwrap();
     assert_eq!(out["state"], "error");
     assert!(out["traceback"]
@@ -66,7 +71,10 @@ async fn errors_report_traceback_and_preserve_state() {
         .unwrap()
         .contains("ZeroDivisionError"));
     // An exception must not cost the session its state.
-    let out = k.call(json!({"code": "print(kept)"}), &ctx()).await.unwrap();
+    let out = k
+        .call(json!({"code": "print(kept)"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(out["output"].as_str().unwrap().trim(), "alive");
 }
 
@@ -104,7 +112,10 @@ async fn timeout_kills_kernel_and_next_call_restarts_fresh() {
         .unwrap();
     assert_eq!(out["state"], "timeout");
     // Fresh kernel: y is gone, and the restart is announced.
-    let out = k.call(json!({"code": "print('y' in dir())"}), &ctx()).await.unwrap();
+    let out = k
+        .call(json!({"code": "print('y' in dir())"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(out["state"], "ok");
     assert_eq!(out["restarted"], true);
     assert_eq!(out["output"].as_str().unwrap().trim(), "False");
@@ -119,7 +130,10 @@ async fn reset_discards_state_without_restart_notice_afterwards() {
     assert_eq!(out["restarted"], true);
     // The reset itself announced the restart; the next exec is a plain
     // fresh start, not a surprise.
-    let out = k.call(json!({"code": "print('z' in dir())"}), &ctx()).await.unwrap();
+    let out = k
+        .call(json!({"code": "print('z' in dir())"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(out["output"].as_str().unwrap().trim(), "False");
     assert!(out.get("restarted").is_none());
 }

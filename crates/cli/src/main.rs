@@ -538,7 +538,8 @@ fn build_agent<M: Model + Clone + 'static>(
                     call_id: call_id.clone(),
                     event,
                 });
-            })) as std::sync::Arc<dyn orca_harness_core::Extension>]
+            }))
+                as std::sync::Arc<dyn orca_harness_core::Extension>]
         }));
     agent = agent.tool_arc(std::sync::Arc::new(subagent));
     agent

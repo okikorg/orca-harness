@@ -5,6 +5,7 @@ members = [
     "crates/model-openai",
     "crates/model-openrouter",
     "crates/tools",
+    "crates/tools-web",
     "crates/extensions",
     "crates/cli",
 ]

@@ -99,13 +99,23 @@ struct ToolRecord {
 /// summary until the user asks to inspect the tree with ctrl+o.
 struct CompletedWork {
     turn: usize,
-    summary: String,
+    /// Consecutive collapsed rows occupying this phase's place in the
+    /// transcript. Kept verbatim so ctrl+o can replace the whole block.
+    summaries: Vec<String>,
     lines: Vec<Line<'static>>,
     expanded: bool,
 }
 
 struct ThinkingRecord {
     elapsed: Duration,
+}
+
+/// Vertical rhythm between transcript components. Model-provided leading or
+/// trailing whitespace never participates in layout; the transcript owns it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockSpacing {
+    Tight,
+    Section,
 }
 
 struct ToolActivity {
@@ -236,16 +246,7 @@ impl App {
     }
 
     fn push_wrapped(&mut self, text: &str, indent: &str, style: Style, width: usize) {
-        let body_width = width.saturating_sub(indent.len()).max(16);
-        for paragraph in text.split('\n') {
-            if paragraph.trim().is_empty() {
-                self.push_line(Line::from(""));
-                continue;
-            }
-            for piece in textwrap::wrap(paragraph, body_width) {
-                self.push_line(Line::from(Span::styled(format!("{indent}{piece}"), style)));
-            }
-        }
+        push_wrapped_lines(&mut self.pending_history, text, indent, style, width);
     }
 
     fn push_record(&mut self, record: ToolRecord) {
@@ -285,37 +286,39 @@ impl App {
         self.assistant_started = false;
     }
 
-    fn ensure_assistant_started(&mut self) {
-        if self.assistant_started {
-            return;
-        }
-        self.push_line(Line::from(""));
-        self.assistant_started = true;
+    /// Render one transcript component with normalized outer edges and a
+    /// single source of truth for vertical rhythm.
+    fn push_transcript_block(&mut self, lines: Vec<Line<'static>>, spacing: BlockSpacing) {
+        let spacing = if self.assistant_started {
+            spacing
+        } else {
+            BlockSpacing::Section
+        };
+        let transcript_tail = self.transcript.last().map(line_is_blank);
+        let appended =
+            append_render_block(&mut self.pending_history, lines, spacing, transcript_tail);
+        self.assistant_started |= appended;
     }
 
-    /// Start another assistant-owned block with exactly one row of breathing
-    /// room, whether it is the first answer or follows earlier work.
-    fn begin_assistant_block(&mut self) {
-        if self.assistant_started {
-            self.push_line(Line::from(""));
-        } else {
-            self.ensure_assistant_started();
-        }
+    fn push_markdown_block(&mut self, text: &str, width: usize, spacing: BlockSpacing) {
+        self.push_transcript_block(view::markdown_lines(text, width, "  "), spacing);
     }
 
     fn commit_activity(&mut self, width: usize) {
         self.flush_reasoning();
         let lines = activity_lines(self, width, false);
         if !lines.is_empty() {
-            self.begin_assistant_block();
-            let summary = collapsed_activity_line(self);
-            let summary_text = line_text(&summary);
-            self.push_line(summary);
+            // Work is part of the surrounding event stream, not a new
+            // prose paragraph. Keep it adjacent to the narration and show
+            // its useful rows immediately.
+            self.push_transcript_block(lines.clone(), BlockSpacing::Tight);
+            let collapsed = collapsed_activity_lines(self);
+            let summaries = collapsed.iter().map(line_text).collect();
             self.work_log.push(CompletedWork {
                 turn: self.turn_count,
-                summary: summary_text,
+                summaries,
                 lines,
-                expanded: false,
+                expanded: true,
             });
             if self.work_log.len() > 100 {
                 self.work_log.remove(0);
@@ -324,6 +327,15 @@ impl App {
         self.thinking_log.clear();
         self.activity_tools.clear();
         self.pending_calls.clear();
+    }
+
+    /// A new model phase can only begin after the previous batch of tools
+    /// has settled. Commit that batch before accepting new deltas so the
+    /// transcript retains the event stream's chronology.
+    fn commit_settled_tools(&mut self, width: usize) {
+        if !self.activity_tools.is_empty() && self.pending_calls.is_empty() {
+            self.commit_activity(width);
+        }
     }
 
     /// Move pending lines into the transcript. A reader who has scrolled
@@ -836,10 +848,10 @@ fn expand_latest_work(app: &mut App) -> bool {
         return true;
     }
 
-    let summary = work.summary.clone();
+    let summaries = work.summaries.clone();
     let lines = work.lines.clone();
-    let inserted = replace_line(&mut app.pending_history, &summary, &lines)
-        || replace_line(&mut app.transcript, &summary, &lines);
+    let inserted = replace_block(&mut app.pending_history, &summaries, &lines)
+        || replace_block(&mut app.transcript, &summaries, &lines);
     if inserted {
         if let Some(work) = app.work_log.last_mut() {
             work.expanded = true;
@@ -855,15 +867,82 @@ fn line_text(line: &Line<'_>) -> String {
         .collect()
 }
 
-fn replace_line(
+fn line_is_blank(line: &Line<'_>) -> bool {
+    line.spans.iter().all(|span| span.content.trim().is_empty())
+}
+
+fn trim_blank_edges(lines: &mut Vec<Line<'static>>) {
+    let start = lines.iter().position(|line| !line_is_blank(line));
+    let Some(start) = start else {
+        lines.clear();
+        return;
+    };
+    let end = lines
+        .iter()
+        .rposition(|line| !line_is_blank(line))
+        .expect("non-empty block")
+        + 1;
+    lines.drain(end..);
+    lines.drain(..start);
+}
+
+fn append_render_block(
+    target: &mut Vec<Line<'static>>,
+    mut block: Vec<Line<'static>>,
+    spacing: BlockSpacing,
+    fallback_prior: Option<bool>,
+) -> bool {
+    trim_blank_edges(&mut block);
+    if block.is_empty() {
+        return false;
+    }
+    while target.last().is_some_and(line_is_blank) {
+        target.pop();
+    }
+    let prior = target.last().map(line_is_blank).or(fallback_prior);
+    if prior.is_some() && prior == Some(false) && spacing == BlockSpacing::Section {
+        target.push(Line::from(""));
+    }
+    target.extend(block);
+    true
+}
+
+fn push_wrapped_lines(
     lines: &mut Vec<Line<'static>>,
-    target: &str,
+    text: &str,
+    indent: &str,
+    style: Style,
+    width: usize,
+) {
+    let body_width = width.saturating_sub(indent.len()).max(16);
+    for paragraph in text.split('\n') {
+        if paragraph.trim().is_empty() {
+            lines.push(Line::from(""));
+            continue;
+        }
+        for piece in textwrap::wrap(paragraph, body_width) {
+            lines.push(Line::from(Span::styled(format!("{indent}{piece}"), style)));
+        }
+    }
+}
+
+fn replace_block(
+    lines: &mut Vec<Line<'static>>,
+    targets: &[String],
     replacement: &[Line<'static>],
 ) -> bool {
-    let Some(index) = lines.iter().rposition(|line| line_text(line) == target) else {
+    if targets.is_empty() || targets.len() > lines.len() {
+        return false;
+    }
+    let Some(index) = (0..=lines.len() - targets.len()).rev().find(|start| {
+        lines[*start..*start + targets.len()]
+            .iter()
+            .map(line_text)
+            .eq(targets.iter().cloned())
+    }) else {
         return false;
     };
-    lines.splice(index..=index, replacement.iter().cloned());
+    lines.splice(index..index + targets.len(), replacement.iter().cloned());
     true
 }
 
@@ -1044,23 +1123,21 @@ fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
                     app.pending_assistant.take()
                 };
                 if let Some(partial) = partial {
-                    app.begin_assistant_block();
-                    for line in view::markdown_lines(&partial, width, "  ") {
-                        app.push_line(line);
-                    }
+                    app.push_markdown_block(&partial, width, BlockSpacing::Section);
                 }
             }
             app.text.clear();
             app.run = RunState::Idle;
             app.approval = None;
             if let Err(err) = result {
-                app.ensure_assistant_started();
                 let (style, label) = if err.to_lowercase().contains("cancel") {
                     (theme().dim, "interrupted".to_string())
                 } else {
                     (theme().error, format!("run failed: {err}"))
                 };
-                app.push_wrapped(&label, "  ", style, width);
+                let mut lines = Vec::new();
+                push_wrapped_lines(&mut lines, &label, "  ", style, width);
+                app.push_transcript_block(lines, BlockSpacing::Tight);
             }
         }
     }
@@ -1068,15 +1145,24 @@ fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
 
 fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
     match event {
-        HarnessEvent::AssistantDelta { text } => app.text.push_str(&text),
+        HarnessEvent::AssistantDelta { text } => {
+            if app.text.is_empty() && !text.is_empty() {
+                app.commit_settled_tools(width);
+            }
+            app.text.push_str(&text);
+        }
         HarnessEvent::ReasoningDelta { text } => {
             if app.reasoning.is_empty() && !text.is_empty() {
+                app.commit_settled_tools(width);
                 app.reasoning_started = Some(Instant::now());
             }
             app.reasoning.push_str(&text);
         }
         HarnessEvent::Assistant { message } => {
-            app.flush_reasoning();
+            // `Assistant` closes the current model phase. Commit its
+            // reasoning and any preceding tool batch before retaining the
+            // message that follows it in the event stream.
+            app.commit_activity(width);
             app.text.clear();
             app.pending_assistant = Some(message);
         }
@@ -1088,10 +1174,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             app.flush_reasoning();
             if let Some(message) = app.pending_assistant.take() {
                 if !message.trim().is_empty() {
-                    app.begin_assistant_block();
-                    for line in view::markdown_lines(&message, width, "  ") {
-                        app.push_line(line);
-                    }
+                    app.push_markdown_block(&message, width, BlockSpacing::Tight);
                 }
             }
             let call_line = view::tool_call_line(&tool_name, &input);
@@ -1151,10 +1234,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             };
             app.text.clear();
             if !answer.trim().is_empty() {
-                app.begin_assistant_block();
-                for line in view::markdown_lines(&answer, width, "  ") {
-                    app.push_line(line);
-                }
+                app.push_markdown_block(&answer, width, BlockSpacing::Section);
             }
         }
         HarnessEvent::AgentStart | HarnessEvent::Error { .. } => {}
@@ -1496,13 +1576,20 @@ fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
         return lines;
     }
 
-    if !activity.is_empty() {
-        lines.push(Line::from(""));
-        lines.extend(activity);
-    }
+    let has_activity = !activity.is_empty();
+    append_render_block(&mut lines, activity, BlockSpacing::Section, None);
     if let Some(answer) = answer {
-        lines.push(Line::from(""));
-        lines.extend(view::markdown_lines(answer, width, "  "));
+        let spacing = if has_activity {
+            BlockSpacing::Tight
+        } else {
+            BlockSpacing::Section
+        };
+        append_render_block(
+            &mut lines,
+            view::markdown_lines(answer, width, "  "),
+            spacing,
+            None,
+        );
     }
     lines
 }
@@ -1554,7 +1641,13 @@ fn nested_subagent_lines(
     }
 }
 
-fn nested_spawn_rows(app: &App, id: u64, width: usize, prefix: &str, lines: &mut Vec<Line<'static>>) {
+fn nested_spawn_rows(
+    app: &App,
+    id: u64,
+    width: usize,
+    prefix: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
     let Some(spawn) = app.subagent_activity.get(&id) else {
         return;
     };
@@ -1603,9 +1696,9 @@ fn nested_spawn_rows(app: &App, id: u64, width: usize, prefix: &str, lines: &mut
     }
 }
 
-/// One quiet line for completed work. The full activity tree is retained in
-/// `work_log`; this summary keeps the answer visually dominant.
-fn collapsed_activity_line(app: &App) -> Line<'static> {
+/// Quiet, chronological rows for a completed phase. Thinking and tool work
+/// remain separate so collapsing detail never rewrites the event sequence.
+fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
     let tool_count = app.activity_tools.len();
     let thinking_count = app.thinking_log.len();
     let failed = app
@@ -1613,37 +1706,48 @@ fn collapsed_activity_line(app: &App) -> Line<'static> {
         .iter()
         .filter(|tool| tool.is_error)
         .count();
-    let elapsed = match &app.run {
-        RunState::Running { started, .. } => started.elapsed(),
-        RunState::Idle => app
-            .activity_tools
-            .iter()
-            .filter_map(|tool| tool.elapsed)
-            .max()
-            .unwrap_or_default(),
-    };
+    let tool_elapsed = app
+        .activity_tools
+        .iter()
+        .filter_map(|tool| tool.elapsed)
+        .max()
+        .unwrap_or_default();
 
-    let mut parts = Vec::new();
-    if tool_count > 0 {
-        parts.push(plural(tool_count, "tool"));
-    }
+    let mut lines = Vec::new();
     if thinking_count > 0 {
-        parts.push(plural(thinking_count, "thinking update"));
+        let thinking_elapsed = app
+            .thinking_log
+            .iter()
+            .map(|record| record.elapsed)
+            .sum::<Duration>();
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  ▸ Thinking · {} · {}",
+                elapsed_label(thinking_elapsed),
+                plural(thinking_count, "update")
+            ),
+            theme().dim,
+        )));
     }
-    if failed > 0 {
-        parts.push(format!("{failed} failed"));
-    }
-    parts.push(elapsed_label(elapsed));
 
-    let style = if failed > 0 {
-        theme().error
-    } else {
-        theme().dim
-    };
-    Line::from(Span::styled(
-        format!("  ▸ Work · {}", parts.join(" · ")),
-        style,
-    ))
+    if tool_count > 0 {
+        let mut parts = vec![plural(tool_count, "tool")];
+        if failed > 0 {
+            parts.push(format!("{failed} failed"));
+        }
+        parts.push(elapsed_label(tool_elapsed));
+        let style = if failed > 0 {
+            theme().error
+        } else {
+            theme().dim
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  ▸ Work · {}", parts.join(" · ")),
+            style,
+        )));
+    }
+
+    lines
 }
 
 /// Render the current run as one coherent activity rail. While the run is
@@ -2165,7 +2269,7 @@ mod tests {
         handle_ui_msg(&mut app, UiMsg::RunDone(Err("cancelled".into())), 80);
         let texts = pending_texts(&app);
         assert!(
-            texts.iter().any(|t| t.contains("Work · 1 thinking update")),
+            texts.iter().any(|t| t.contains("Thinking ·")),
             "partial thinking summarized: {texts:?}"
         );
         assert!(
@@ -2507,7 +2611,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_run_commits_one_collapsed_activity_rail_before_the_answer() {
+    fn completed_run_keeps_activity_expanded_before_the_answer() {
         let mut app = test_app();
         handle_harness_event(
             &mut app,
@@ -2547,9 +2651,9 @@ mod tests {
         let joined = texts.join("\n");
         let work = joined.find("Work · 1 tool").expect("work rail");
         let answer = joined.find("Everything passed.").expect("answer");
-        assert!(work < answer, "summary precedes answer: {joined}");
-        assert!(!joined.contains("shell $ cargo test"));
-        assert!(!joined.contains("✓ shell $ cargo test · exit 0 · 42 tests passed"));
+        assert!(work < answer, "work precedes answer: {joined}");
+        assert!(joined.contains("shell $ cargo test"));
+        assert!(joined.contains("✓ shell $ cargo test · exit 0 · 42 tests passed"));
         assert!(
             !joined.contains("private reasoning text"),
             "completed thinking is collapsed"
@@ -2559,6 +2663,10 @@ mod tests {
         assert!(details.contains("Thinking"));
         assert!(details.contains("shell $ cargo test"));
         assert!(details.contains("✓ shell $ cargo test · exit 0 · 42 tests passed"));
+        assert!(
+            app.work_log.last().expect("work tree retained").expanded,
+            "completed rails are expanded by default"
+        );
 
         app.absorb_pending();
         assert!(expand_latest_work(&mut app));
@@ -2576,6 +2684,130 @@ mod tests {
         let once = app.transcript.len();
         assert!(expand_latest_work(&mut app));
         assert_eq!(app.transcript.len(), once, "repeat expansion is a no-op");
+    }
+
+    #[test]
+    fn transcript_preserves_model_tool_phase_chronology() {
+        let mut app = test_app();
+
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ReasoningDelta {
+                text: "inspect the extension trait".into(),
+            },
+            100,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::Assistant {
+                message: "I understand the core mechanism. I will inspect the built-ins.\n\n"
+                    .into(),
+            },
+            100,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "read_file".into(),
+                input: serde_json::json!({"path": "crates/extensions/src/lib.rs"}),
+            },
+            100,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolResult {
+                tool_call_id: "c1".into(),
+                tool_name: "read_file".into(),
+                output: serde_json::json!({"bytes": 2048}),
+                is_error: false,
+            },
+            100,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ReasoningDelta {
+                text: "compare the concrete implementations".into(),
+            },
+            100,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::Result {
+                message: "The extension mechanism is useful.".into(),
+            },
+            100,
+        );
+
+        let texts = pending_texts(&app);
+        let joined = texts.join("\n");
+        let first_thinking = joined.find("Thinking ·").expect("first thinking phase");
+        let checkpoint = joined
+            .find("I understand the core mechanism")
+            .expect("checkpoint");
+        let work = joined.find("Work · 1 tool").expect("tool phase");
+        let second_thinking = joined
+            .match_indices("Thinking ·")
+            .nth(1)
+            .map(|(index, _)| index)
+            .expect("second thinking phase");
+        let answer = joined
+            .find("The extension mechanism is useful.")
+            .expect("answer");
+
+        assert!(
+            first_thinking < checkpoint
+                && checkpoint < work
+                && work < second_thinking
+                && second_thinking < answer,
+            "event chronology retained: {joined}"
+        );
+        let checkpoint_row = texts
+            .iter()
+            .position(|line| line.contains("I understand the core mechanism"))
+            .expect("checkpoint row");
+        let second_thinking_row = texts
+            .iter()
+            .rposition(|line| line.contains("Thinking ·"))
+            .expect("second thinking row");
+        assert!(
+            texts[checkpoint_row + 1..=second_thinking_row]
+                .iter()
+                .all(|line| !line.is_empty()),
+            "work phases do not inject blank rows: {texts:?}"
+        );
+        assert_eq!(app.work_log.len(), 3, "each phase remains expandable");
+    }
+
+    #[test]
+    fn transcript_block_component_owns_vertical_rhythm() {
+        let mut app = test_app();
+        app.push_line(Line::from("prompt"));
+
+        app.push_markdown_block(
+            "\nfirst paragraph\n\nsecond paragraph\n\n",
+            80,
+            BlockSpacing::Tight,
+        );
+        app.push_transcript_block(
+            vec![Line::from(""), Line::from("work"), Line::from("")],
+            BlockSpacing::Tight,
+        );
+        app.push_markdown_block("final answer\n", 80, BlockSpacing::Section);
+
+        assert_eq!(
+            pending_texts(&app),
+            vec![
+                "prompt",
+                "",
+                "  first paragraph",
+                "",
+                "  second paragraph",
+                "work",
+                "",
+                "  final answer",
+            ]
+        );
     }
 
     #[test]
@@ -3118,7 +3350,11 @@ mod nested_rail_tests {
             120,
         );
         handle_subagent_event(
-            &mut app, 1, None, 0, "c1".into(),
+            &mut app,
+            1,
+            None,
+            0,
+            "c1".into(),
             HarnessEvent::ToolCall {
                 tool_call_id: "i1".into(),
                 tool_name: "subagent".into(),
@@ -3126,7 +3362,11 @@ mod nested_rail_tests {
             },
         );
         handle_subagent_event(
-            &mut app, 2, Some(1), 1, "i1".into(),
+            &mut app,
+            2,
+            Some(1),
+            1,
+            "i1".into(),
             HarnessEvent::ToolCall {
                 tool_call_id: "g1".into(),
                 tool_name: "grep".into(),
@@ -3134,10 +3374,16 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let child = text.lines().find(|l| l.contains("subagent {\"task\":\"inner")).unwrap();
+        let child = text
+            .lines()
+            .find(|l| l.contains("subagent {\"task\":\"inner"))
+            .unwrap();
         let grandchild = text.lines().find(|l| l.contains("grep")).unwrap();
         let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
-        assert!(indent(grandchild) > indent(child), "child: {child:?} grandchild: {grandchild:?}");
+        assert!(
+            indent(grandchild) > indent(child),
+            "child: {child:?} grandchild: {grandchild:?}"
+        );
     }
 
     #[test]
@@ -3153,7 +3399,11 @@ mod nested_rail_tests {
             120,
         );
         handle_subagent_event(
-            &mut app, 7, None, 0, "c1".into(),
+            &mut app,
+            7,
+            None,
+            0,
+            "c1".into(),
             HarnessEvent::ToolCall {
                 tool_call_id: "i1".into(),
                 tool_name: "list_dir".into(),
@@ -3161,7 +3411,11 @@ mod nested_rail_tests {
             },
         );
         handle_subagent_event(
-            &mut app, 7, None, 0, "c1".into(),
+            &mut app,
+            7,
+            None,
+            0,
+            "c1".into(),
             HarnessEvent::ToolResult {
                 tool_call_id: "i1".into(),
                 tool_name: "list_dir".into(),
@@ -3180,14 +3434,21 @@ mod nested_rail_tests {
             120,
         );
 
-        assert!(app.subagent_activity.is_empty(), "spawn state must fold away");
+        assert!(
+            app.subagent_activity.is_empty(),
+            "spawn state must fold away"
+        );
         let record = app.tool_log.last().unwrap();
         assert!(record.inner.iter().any(|l| l.contains("list_dir")));
 
         expand_tool(&mut app, 1, 120);
-        let expanded: String = app.pending_history.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        let expanded: String = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(expanded.contains("inner activity"), "{expanded}");
         assert!(expanded.contains("list_dir"), "{expanded}");
     }
 }
-

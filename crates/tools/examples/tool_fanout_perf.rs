@@ -24,7 +24,33 @@ use orca_harness_core::{
     CancellationToken, Dispatcher, ExtensionRegistry, Tool, ToolCall, ToolContext, ToolError,
     ToolRegistry, ToolSchema,
 };
-use orca_harness_tools::{ReadFileTool, ShellTool, Workspace, WriteFileTool};
+use orca_harness_tools::{
+    core_tools, fs_admin_tools, ReadFileTool, ShellTool, Workspace, WriteFileTool,
+};
+
+/// [`Timed`] for already-boxed tools, so a whole registry can be wrapped.
+struct TimedDyn {
+    inner: Arc<dyn Tool>,
+    epoch: Instant,
+    first: Arc<AtomicU64>,
+    last: Arc<AtomicU64>,
+}
+
+#[async_trait::async_trait]
+impl Tool for TimedDyn {
+    fn schema(&self) -> ToolSchema {
+        self.inner.schema()
+    }
+    fn concurrency(&self, input: &Value) -> orca_harness_core::Concurrency {
+        self.inner.concurrency(input)
+    }
+    async fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let now = self.epoch.elapsed().as_nanos() as u64;
+        self.first.fetch_min(now, Ordering::Relaxed);
+        self.last.fetch_max(now, Ordering::Relaxed);
+        self.inner.call(input, ctx).await
+    }
+}
 
 fn pct(sorted: &[u64], p: f64) -> u64 {
     if sorted.is_empty() {
@@ -241,5 +267,62 @@ async fn main() {
     )
     .await;
 
+    // Case 4: one mixed batch across the whole shipped tool set (core +
+    // fs admin), every call repeatable across iterations.
+    let mixed_dir = std::env::temp_dir().join(format!("orca-perf-mixed-{}", std::process::id()));
+    std::fs::create_dir_all(mixed_dir.join("src")).unwrap();
+    std::fs::write(mixed_dir.join("src/seed.rs"), "needle in seed\n").unwrap();
+    std::fs::write(mixed_dir.join("copy_me.txt"), "payload\n").unwrap();
+    let mixed_ws = Workspace::new(mixed_dir.clone());
+    measure(
+        "mixed batch → every tool at once",
+        10,
+        iters.min(20),
+        |_| {
+            vec![
+                call("m-shell", "shell", json!({"command": "echo hi"})),
+                call(
+                    "m-proc",
+                    "process",
+                    json!({"action": "spawn", "command": "true"}),
+                ),
+                call("m-read", "read_file", json!({"path": "src/seed.rs"})),
+                call(
+                    "m-write",
+                    "write_file",
+                    json!({"path": "out.txt", "content": "x"}),
+                ),
+                call("m-list", "list_dir", json!({"path": "."})),
+                call("m-grep", "grep", json!({"query": "needle"})),
+                call("m-glob", "glob", json!({"pattern": "*.rs"})),
+                call(
+                    "m-copy",
+                    "copy_file",
+                    json!({"from": "copy_me.txt", "to": "copied.txt"}),
+                ),
+                call("m-mkdir", "create_folder", json!({"path": "made"})),
+                call("m-info", "file_info", json!({"path": "copy_me.txt"})),
+            ]
+        },
+        {
+            let ws = mixed_ws.clone();
+            move |epoch, first, last| {
+                let mut tools = ToolRegistry::new();
+                for tool in core_tools(&ws).into_iter().chain(fs_admin_tools(&ws)) {
+                    tools.register(Arc::new(TimedDyn {
+                        inner: tool,
+                        epoch,
+                        first: first.clone(),
+                        last: last.clone(),
+                    }));
+                }
+                tools
+            }
+        },
+        0,
+    )
+    .await;
+
+    std::fs::remove_dir_all(&mixed_dir).ok();
     std::fs::remove_dir_all(&dir).ok();
 }

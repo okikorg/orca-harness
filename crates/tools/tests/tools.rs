@@ -590,7 +590,10 @@ async fn shell_timeout_kills_grandchildren() {
 async fn process_kill_reaches_grandchildren() {
     let tool = ProcessTool::local();
     let out = tool
-        .call(json!({"action": "spawn", "command": "sleep 279.3 & wait"}), &ctx())
+        .call(
+            json!({"action": "spawn", "command": "sleep 279.3 & wait"}),
+            &ctx(),
+        )
         .await
         .unwrap();
     let id = out["id"].as_str().unwrap().to_string();
@@ -608,7 +611,10 @@ async fn process_kill_reaches_grandchildren() {
         .args(["-f", "sleep 279.3"])
         .output()
         .unwrap();
-    assert!(!found.status.success(), "grandchild must die with the kill action");
+    assert!(
+        !found.status.success(),
+        "grandchild must die with the kill action"
+    );
 }
 
 #[cfg(unix)]
@@ -616,16 +622,22 @@ async fn process_kill_reaches_grandchildren() {
 async fn dropping_process_tool_kills_children_synchronously() {
     {
         let tool = ProcessTool::local();
-        tool.call(json!({"action": "spawn", "command": "sleep 277.9 & wait"}), &ctx())
-            .await
-            .unwrap();
+        tool.call(
+            json!({"action": "spawn", "command": "sleep 277.9 & wait"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
     } // tool dropped here
     tokio::time::sleep(Duration::from_millis(300)).await;
     let found = std::process::Command::new("pgrep")
         .args(["-f", "sleep 277.9"])
         .output()
         .unwrap();
-    assert!(!found.status.success(), "children must die when the tool is dropped");
+    assert!(
+        !found.status.success(),
+        "children must die when the tool is dropped"
+    );
 }
 
 #[tokio::test]
@@ -639,7 +651,9 @@ async fn process_stats_track_live_children() {
         .unwrap();
     assert_eq!(stats.processes(), 1);
     let id = out["id"].as_str().unwrap().to_string();
-    tool.call(json!({"action": "kill", "id": id}), &ctx()).await.unwrap();
+    tool.call(json!({"action": "kill", "id": id}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(stats.processes(), 0);
 }
 

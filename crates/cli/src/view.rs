@@ -546,10 +546,43 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
             .get("query")
             .and_then(Value::as_str)
             .map(|q| format!("'{q}'")),
+        "process" => process_call_detail(args),
         _ => None,
     };
     let detail = detail.unwrap_or_else(|| args.to_string());
     truncate_line(&format!("{name} {detail}"), 100)
+}
+
+fn process_call_detail(args: &Value) -> Option<String> {
+    let action = args.get("action")?.as_str()?;
+    let id = args.get("id").and_then(Value::as_str);
+    Some(match action {
+        "spawn" => {
+            let command = args.get("command").and_then(Value::as_str).unwrap_or("?");
+            format!("spawn $ {command}")
+        }
+        "poll" => {
+            let wait = args
+                .get("waitMs")
+                .and_then(Value::as_u64)
+                .map(|ms| {
+                    if ms >= 1_000 && ms % 1_000 == 0 {
+                        format!(" · wait {}s", ms / 1_000)
+                    } else {
+                        format!(" · wait {ms}ms")
+                    }
+                })
+                .unwrap_or_default();
+            format!("poll {}{wait}", id.unwrap_or("?"))
+        }
+        "write" => {
+            let input = args.get("input").and_then(Value::as_str).unwrap_or("");
+            format!("write {} “{}”", id.unwrap_or("?"), truncate_line(input, 40))
+        }
+        "kill" => format!("kill {}", id.unwrap_or("?")),
+        "list" => "list".to_string(),
+        other => other.to_string(),
+    })
 }
 
 /// The compact outcome line for a finished tool call.
@@ -603,10 +636,40 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .get("entries")
             .and_then(Value::as_array)
             .map(|e| format!("{} entries", e.len())),
+        "process" => process_result_summary(output),
         _ => None,
     };
     let summary = summary.unwrap_or_else(|| output.to_string());
     truncate_line(&summary, 120)
+}
+
+fn process_result_summary(output: &Value) -> Option<String> {
+    if let Some(processes) = output.get("processes").and_then(Value::as_array) {
+        return Some(match processes.len() {
+            0 => "no processes".to_string(),
+            1 => "1 process".to_string(),
+            count => format!("{count} processes"),
+        });
+    }
+
+    let id = output.get("id").and_then(Value::as_str)?;
+    let state = if output.get("running").and_then(Value::as_bool) == Some(true) {
+        "running".to_string()
+    } else if let Some(code) = output.get("exitCode").and_then(Value::as_i64) {
+        format!("exit {code}")
+    } else {
+        "stopped".to_string()
+    };
+    let output_head = output
+        .get("output")
+        .and_then(Value::as_str)
+        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
+        .map(str::trim);
+
+    Some(match output_head {
+        Some(head) => format!("{id} · {state} · {head}"),
+        None => format!("{id} · {state}"),
+    })
 }
 
 #[cfg(test)]
@@ -639,6 +702,35 @@ mod tests {
     fn grep_shows_the_query() {
         let line = tool_call_line("grep", &json!({"query": "fn main", "path": "."}));
         assert_eq!(line, "grep 'fn main'");
+    }
+
+    #[test]
+    fn process_calls_show_actions_instead_of_json() {
+        assert_eq!(
+            tool_call_line(
+                "process",
+                &json!({"action": "spawn", "command": "python3 -u worker.py"})
+            ),
+            "process spawn $ python3 -u worker.py"
+        );
+        assert_eq!(
+            tool_call_line(
+                "process",
+                &json!({"action": "poll", "id": "p1", "waitMs": 2000})
+            ),
+            "process poll p1 · wait 2s"
+        );
+        assert_eq!(
+            tool_call_line(
+                "process",
+                &json!({"action": "write", "id": "p1", "input": "continue\n"})
+            ),
+            "process write p1 “continue”"
+        );
+        assert_eq!(
+            tool_call_line("process", &json!({"action": "kill", "id": "p1"})),
+            "process kill p1"
+        );
     }
 
     #[test]
@@ -682,6 +774,37 @@ mod tests {
         );
         let out = json!({"path": ".", "entries": ["a", "b"]});
         assert_eq!(tool_result_summary("list_dir", &out, false), "2 entries");
+    }
+
+    #[test]
+    fn process_results_show_identity_state_and_first_output() {
+        let running = json!({
+            "id": "p1",
+            "output": "ready\nsecond line",
+            "running": true,
+            "exitCode": null,
+            "moreOutput": false
+        });
+        assert_eq!(
+            tool_result_summary("process", &running, false),
+            "p1 · running · ready"
+        );
+
+        let exited = json!({
+            "id": "p1",
+            "output": "",
+            "running": false,
+            "exitCode": 0,
+            "moreOutput": false
+        });
+        assert_eq!(
+            tool_result_summary("process", &exited, false),
+            "p1 · exit 0"
+        );
+        assert_eq!(
+            tool_result_summary("process", &json!({"processes": []}), false),
+            "no processes"
+        );
     }
 
     fn flat(line: &Line) -> String {

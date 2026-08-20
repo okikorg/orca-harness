@@ -87,8 +87,7 @@ pub struct SubagentSpawn {
 }
 
 /// Builds extensions to attach to each spawned inner agent.
-pub type SpawnExtensions =
-    Arc<dyn Fn(&SubagentSpawn) -> Vec<Arc<dyn Extension>> + Send + Sync>;
+pub type SpawnExtensions = Arc<dyn Fn(&SubagentSpawn) -> Vec<Arc<dyn Extension>> + Send + Sync>;
 
 /// Decrements the in-flight agent count however the call ends.
 struct InFlight(BackgroundStats);

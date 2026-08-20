@@ -404,7 +404,9 @@ mod tests {
     /// its own, even if nobody kills it.
     #[tokio::test]
     async fn driver_exits_on_stdin_eof() {
-        let probe = std::process::Command::new("python3").arg("--version").output();
+        let probe = std::process::Command::new("python3")
+            .arg("--version")
+            .output();
         if !probe.is_ok_and(|o| o.status.success()) {
             eprintln!("skipping: python3 not found on PATH");
             return;
