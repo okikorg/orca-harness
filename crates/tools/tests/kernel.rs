@@ -142,14 +142,35 @@ async fn kernel_crash_is_detected_and_reported() {
 #[tokio::test]
 async fn dropping_kernel_tool_kills_the_kernel() {
     require_python!();
+    // The kernel reports its own pid, so the liveness check is exact —
+    // no pattern matching that could collide with sibling tests' kernels.
+    let dir = std::env::temp_dir().join(format!("orca-kernel-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pid_file = dir.join("kernel.pid");
     {
         let k = KernelTool::new();
-        k.call(json!({"code": "marker_275_5 = 1"}), &ctx()).await.unwrap();
+        let code = format!(
+            "import os\nopen({:?}, 'w').write(str(os.getpid()))",
+            pid_file.to_str().unwrap()
+        );
+        let out = k.call(json!({"code": code}), &ctx()).await.unwrap();
+        assert_eq!(out["state"], "ok");
     } // dropped
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    let found = std::process::Command::new("pgrep")
-        .args(["-f", "ORCA_K_"])
+    // Gone or zombie both count as dead; SIGKILL lands synchronously in
+    // Drop, but reaping is up to tokio's orphan queue.
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "stat="])
         .output()
         .unwrap();
-    assert!(!found.status.success(), "kernel process must die with the tool");
+    let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(
+        stat.is_empty() || stat.starts_with('Z'),
+        "kernel process must die with the tool (stat: {stat})"
+    );
 }

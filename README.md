@@ -42,11 +42,21 @@ orca-harness/
 │   ├── harness-core/     # the kernel: Agent, Context, Model, Loop,
 │   │                     # Dispatcher, Tool, Extension, Limits, errors
 │   ├── model-openai/     # OpenAI-compatible chat-completions adapter
-│   ├── tools/            # core host/target tools: shell, read/write/
-│   │                     # edit/list files, grep — the set that makes an
-│   │                     # agent independently useful
+│   ├── tools/            # core host/target tools: shell, process
+│   │                     # (persistent sessions / background processes),
+│   │                     # kernel (persistent Python compute), subagent
+│   │                     # (in-process agent fan-out with adjustable
+│   │                     # nesting), read/write/edit/list files, grep,
+│   │                     # glob — the set that makes an agent
+│   │                     # independently useful; plus an opt-in fs-admin
+│   │                     # bundle (copy/rename/delete/mkdir/stat)
+│   ├── tools-web/        # opt-in web tools: web_fetch (HTML→markdown,
+│   │                     # SSRF-guarded URL policy), plus web_search and
+│   │                     # web_crawl backed by Firecrawl (provider trait
+│   │                     # for swapping the search backend)
 │   ├── extensions/       # critical extensions: event stream, tool
-│   │                     # policy, truncation, retry, usage metering
+│   │                     # policy, truncation (+ store paired with the
+│   │                     # read_tool_result tool), retry, usage metering
 │   └── cli/              # `orca`: interactive terminal host (streaming
 │                         # REPL, tool approvals, headless mode)
 ```
@@ -63,11 +73,13 @@ cargo run --release -p orca-cli -- -p "count the rust files"   # headless
 cargo run --release -p orca-cli -- --json -p "..."   # NDJSON event stream
 ```
 
-Interactive mode groups live reasoning and parallel tool calls into a
-per-turn activity rail. Completed thinking collapses, tool outcomes and
-durations remain attached to their calls, failed output expands inline,
-and full thinking/tool output remains available with `ctrl+o` or
-`/expand`. Gated tools (`shell`, `write_file`, `edit_file`) pause behind a
+Interactive mode marks each user turn with a strong transcript spine and
+groups live reasoning and parallel tool calls into a per-turn activity rail.
+Completed work collapses to a compact summary; `ctrl+o` expands its full tree
+in place, while `/expand` prints the raw output of an individual tool call.
+Tool rows use `□`, `✓`, and `×` for running, successful, and failed states.
+Failed output expands inline while work is live. Gated tools (`shell`, `write_file`,
+`edit_file`, `kernel`, `subagent`) pause behind a
 y/a/n approval prompt; Esc cancels in-flight runs (killing spawned
 subprocesses), and the conversation persists across turns. `ORCA_MODEL`,
 `ORCA_BASE_URL`, and

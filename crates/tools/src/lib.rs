@@ -3,11 +3,15 @@
 //! The core set of tools that make the harness independently useful: run
 //! commands on the host (or a target machine / container), keep
 //! long-lived processes and interactive sessions alive across calls, and
-//! read, write, edit, list, glob, and search files. A separate
-//! [`fs_admin_tools`] bundle adds copy/rename/delete/mkdir/stat for
-//! shell-less restricted agents. These are ordinary [`Tool`]
-//! implementations — nothing here is privileged; they register into an
-//! [`Agent`](orca_harness_core::Agent) like any other tool.
+//! read, write, edit, list, glob, and search files. Two workflow tools
+//! build on the same primitives: [`KernelTool`] (persistent Python
+//! compute — state survives across calls) and [`SubagentTool`] (spawn
+//! independent in-process agents, with nesting governed by a shared
+//! [`SubagentDepth`]). A separate [`fs_admin_tools`] bundle adds
+//! copy/rename/delete/mkdir/stat for shell-less restricted agents. These
+//! are ordinary [`Tool`] implementations — nothing here is privileged;
+//! they register into an [`Agent`](orca_harness_core::Agent) like any
+//! other tool.
 //!
 //! ```no_run
 //! use orca_harness_core::Agent;

@@ -158,7 +158,7 @@ task; it returns only its final answer.
 | Param | Type | Notes |
 |---|---|---|
 | `task` | string | Required. The complete task prompt. |
-| `system_prompt` | string, optional | Overrides the tool's default for this spawn. |
+| `systemPrompt` | string, optional | Overrides the tool's default for this spawn. |
 
 `Concurrency::Parallel` — the dispatcher already fans out a batch, so the
 model can launch N subagents at once and collect their answers, which is
