@@ -78,7 +78,10 @@ groups live reasoning and parallel tool calls into a per-turn activity rail.
 Completed work collapses to a compact summary; `ctrl+o` expands its full tree
 in place, while `/expand` prints the raw output of an individual tool call.
 Tool rows use `□`, `✓`, and `×` for running, successful, and failed states.
-Failed output expands inline while work is live. Gated tools (`shell`, `write_file`,
+Failed output expands inline while work is live. Running subagents show their
+inner tool calls as an indented nested rail (collapsed into the expandable
+record when they finish), and the status line counts live background work
+(`procs 2 · kernel · agents 3`). Gated tools (`shell`, `write_file`,
 `edit_file`, `kernel`, `subagent`) pause behind a
 y/a/n approval prompt; Esc cancels in-flight runs (killing spawned
 subprocesses), and the conversation persists across turns. `ORCA_MODEL`,
