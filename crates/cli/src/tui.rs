@@ -44,6 +44,8 @@ pub struct TuiConfig {
     /// Shared handle behind the `subagent` tool's nesting cap;
     /// `/subagents` adjusts it live.
     pub subagent_depth: orca_harness_tools::SubagentDepth,
+    /// Live background-work counters rendered in the status line.
+    pub stats: orca_harness_tools::BackgroundStats,
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
@@ -956,6 +958,7 @@ fn slash_command(
 fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
     match msg {
         UiMsg::Event(event) => handle_harness_event(app, event, width),
+        UiMsg::SubagentEvent { .. } => {}
         UiMsg::Approval(request) => app.approval = Some(request),
         UiMsg::Models(result) => {
             let t = theme();
@@ -1158,13 +1161,15 @@ fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
     let live = live_lines(app, width);
     let live_height = live.len().min(PALETTE_ROWS + 7) as u16;
-    let [transcript_area, live_area, composer_area, status_area] = Layout::vertical([
-        Constraint::Min(3),
-        Constraint::Length(live_height),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    let [transcript_area, live_area, _composer_gap_area, composer_area, status_area] =
+        Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(live_height),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
 
     // Transcript: committed history plus a render-only projection of the
     // in-progress turn. Deltas therefore appear in their final location
@@ -1752,6 +1757,7 @@ mod tests {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
         });
         // A transcript taller than any viewport so scrolling has room.
         for i in 0..100 {
@@ -2435,6 +2441,7 @@ mod tests {
             model_name: "gpt-oss:20b".into(),
             workspace_name: "/workspace/orca-harness".into(),
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
@@ -2461,6 +2468,7 @@ mod tests {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -2490,11 +2498,30 @@ mod tests {
     }
 
     #[test]
+    fn composer_has_one_blank_row_above_it_without_a_divider() {
+        let mut app = App::new(TuiConfig {
+            model_name: "test".into(),
+            workspace_name: "/workspace".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+        });
+        app.transcript.push(Line::from("final answer"));
+
+        let rows = rendered_rows(&mut app, 80, 10);
+        let composer = rows
+            .iter()
+            .position(|row| row.contains("ask anything"))
+            .expect("composer");
+        assert!(rows[composer - 1].is_empty(), "gap has no divider");
+    }
+
+    #[test]
     fn assistant_deltas_are_markdown_rendered_while_streaming() {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -2522,6 +2549,7 @@ mod tests {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -2691,6 +2719,7 @@ mod subagents_command_tests {
             model_name: "m".into(),
             workspace_name: "w".into(),
             subagent_depth: depth,
+            stats: orca_harness_tools::BackgroundStats::new(),
         })
     }
 

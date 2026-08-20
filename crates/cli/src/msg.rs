@@ -90,6 +90,15 @@ pub enum UiMsg {
         provider: &'static str,
         model: String,
     },
+    /// A lifecycle event from inside a running subagent (any depth).
+    SubagentEvent {
+        id: u64,
+        parent_id: Option<u64>,
+        depth: u32,
+        /// The spawning agent's tool-call id (anchors the rail line).
+        call_id: String,
+        event: HarnessEvent,
+    },
 }
 
 /// Commands the UI sends to the agent worker.

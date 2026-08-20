@@ -20,7 +20,10 @@ use orca_harness_core::{Agent, Context, Limits, Message, Model, ToolResult};
 use orca_harness_extensions::{EventStream, ReadToolResultTool, Truncation, TruncationStore};
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
-use orca_harness_tools::{core_tools, KernelTool, SubagentDepth, SubagentTool, Workspace};
+use orca_harness_tools::{
+    core_tools, BackgroundStats, KernelTool, ProcessTool, SubagentDepth, SubagentSpawn,
+    SubagentTool, Workspace,
+};
 use orca_harness_tools_web::{Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool};
 
 use crate::approval::Approval;
@@ -430,6 +433,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
     let system = system_prompt(&ws, cfg.firecrawl_key.is_some());
     let endpoint = Endpoint::from_config(&cfg);
     let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
+    let stats = BackgroundStats::new();
 
     if cfg.prompt.is_some() {
         let code = headless::run(&cfg, endpoint.build_model(), &ws, &system).await;
@@ -444,9 +448,17 @@ async fn run_mode(cfg: Config) -> ExitCode {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
         let subagent_depth = subagent_depth.clone();
+        let stats = stats.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
-            build_agent(endpoint.build_model(), &cfg, &ws, &ui_tx, &subagent_depth)
+            build_agent(
+                endpoint.build_model(),
+                &cfg,
+                &ws,
+                &ui_tx,
+                &subagent_depth,
+                &stats,
+            )
         }
     };
     let agent = build(&endpoint);
@@ -456,6 +468,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         model_name: cfg.model.clone(),
         workspace_name: cfg.workspace.display().to_string(),
         subagent_depth,
+        stats,
     };
     match tui::run(tui_cfg, cmd_tx, ui_rx).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -472,6 +485,7 @@ fn build_agent<M: Model + Clone + 'static>(
     ws: &Workspace,
     ui: &mpsc::UnboundedSender<UiMsg>,
     subagent_depth: &SubagentDepth,
+    stats: &BackgroundStats,
 ) -> Agent<M> {
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
@@ -498,10 +512,35 @@ fn build_agent<M: Model + Clone + 'static>(
         agent = agent.tool_arc(tool);
     }
     let root = ws.root().to_string_lossy().into_owned();
-    agent = agent.tool_arc(std::sync::Arc::new(KernelTool::new().working_dir(root)));
+    // Re-registering `process` replaces core_tools' entry by name (its
+    // position is kept) so it can carry the shared stats handle.
     agent = agent.tool_arc(std::sync::Arc::new(
-        SubagentTool::new(model_for_subagents, ws).max_depth(subagent_depth.clone()),
+        ProcessTool::local()
+            .working_dir(root.clone())
+            .stats(stats.clone()),
     ));
+    agent = agent.tool_arc(std::sync::Arc::new(
+        KernelTool::new().working_dir(root).stats(stats.clone()),
+    ));
+    let ui_events = ui.clone();
+    let subagent = SubagentTool::new(model_for_subagents, ws)
+        .max_depth(subagent_depth.clone())
+        .stats(stats.clone())
+        .spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
+            let ui = ui_events.clone();
+            let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
+            let call_id = spawn.call_id.clone();
+            vec![std::sync::Arc::new(EventStream::from_fn(move |event| {
+                let _ = ui.send(UiMsg::SubagentEvent {
+                    id,
+                    parent_id,
+                    depth,
+                    call_id: call_id.clone(),
+                    event,
+                });
+            })) as std::sync::Arc<dyn orca_harness_core::Extension>]
+        }));
+    agent = agent.tool_arc(std::sync::Arc::new(subagent));
     agent
 }
 
