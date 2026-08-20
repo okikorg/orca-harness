@@ -40,6 +40,7 @@ mod pgroup;
 mod process;
 mod search;
 mod shell;
+mod stats;
 mod subagent;
 mod workspace;
 
@@ -54,6 +55,7 @@ pub use kernel::KernelTool;
 pub use process::ProcessTool;
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
+pub use stats::BackgroundStats;
 pub use subagent::{SubagentDepth, SubagentTool, MAX_SUBAGENT_DEPTH, MIN_SUBAGENT_DEPTH};
 pub use workspace::Workspace;
 

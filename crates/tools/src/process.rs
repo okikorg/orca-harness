@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +33,7 @@ use orca_harness_core::{CancellationToken, Concurrency, Tool, ToolContext, ToolE
 
 use crate::pgroup;
 use crate::shell::Executor;
+use crate::BackgroundStats;
 
 /// Merged, bounded, unread output of one process.
 struct OutBuf {
@@ -66,6 +67,10 @@ struct Proc {
     command: String,
     /// Process-group id (== child pid, since each child leads its group).
     pgid: Option<u32>,
+    /// True while this child is counted in the shared stats; whoever
+    /// swaps it to false performs the single decrement (waiter on reap,
+    /// or `Manager::drop` for children the waiter never reaps).
+    counted: AtomicBool,
     buf: Mutex<OutBuf>,
     /// Wakes pollers when the readers append output.
     output_ready: Notify,
@@ -91,6 +96,7 @@ struct Manager {
     seq: AtomicU64,
     procs: Mutex<HashMap<String, Arc<Proc>>>,
     shutdown: CancellationToken,
+    stats: BackgroundStats,
 }
 
 impl Drop for Manager {
@@ -104,6 +110,9 @@ impl Drop for Manager {
                 if let Some(pgid) = proc.pgid {
                     pgroup::kill_group(pgid);
                 }
+            }
+            if proc.counted.swap(false, Ordering::Relaxed) {
+                self.stats.dec_processes();
             }
         }
     }
@@ -144,8 +153,20 @@ impl ProcessTool {
                 seq: AtomicU64::new(0),
                 procs: Mutex::new(HashMap::new()),
                 shutdown: CancellationToken::new(),
+                stats: BackgroundStats::default(),
             }),
         }
+    }
+
+    /// Adopt shared live counters. Call before any spawn.
+    pub fn stats(mut self, stats: BackgroundStats) -> Self {
+        self.manager = Arc::new(Manager {
+            seq: AtomicU64::new(0),
+            procs: Mutex::new(HashMap::new()),
+            shutdown: CancellationToken::new(),
+            stats,
+        });
+        self
     }
 
     /// Convenience: host-local processes.
@@ -232,6 +253,7 @@ impl ProcessTool {
         let proc = Arc::new(Proc {
             command: command_str.to_string(),
             pgid,
+            counted: AtomicBool::new(true),
             buf: Mutex::new(OutBuf {
                 data: Vec::new(),
                 dropped: 0,
@@ -273,9 +295,12 @@ impl ProcessTool {
             }));
         }
 
+        self.manager.stats.inc_processes();
+
         // The waiter owns the child: reap on exit or kill on demand, then
         // give the readers a moment to drain before signalling `done`.
         let p = proc.clone();
+        let stats = self.manager.stats.clone();
         tokio::spawn(async move {
             let status = tokio::select! {
                 biased;
@@ -289,6 +314,9 @@ impl ProcessTool {
                 status = child.wait() => status,
             };
             *p.exit.lock().unwrap() = Some(status.ok().and_then(|s| s.code()));
+            if p.counted.swap(false, Ordering::Relaxed) {
+                stats.dec_processes();
+            }
             let _ = tokio::time::timeout(Duration::from_millis(200), async {
                 for r in readers {
                     let _ = r.await;

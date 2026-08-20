@@ -10,9 +10,9 @@ use tokio::time::timeout;
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{Agent, CancellationToken, Message, ModelResponse, Tool, ToolContext};
 use orca_harness_tools::{
-    core_tools, CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool, FileInfoTool,
-    GlobTool, GrepTool, ListDirTool, ProcessTool, ReadFileTool, RenameFileTool, ShellTool,
-    Workspace, WriteFileTool,
+    core_tools, BackgroundStats, CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool,
+    FileInfoTool, GlobTool, GrepTool, ListDirTool, ProcessTool, ReadFileTool, RenameFileTool,
+    ShellTool, Workspace, WriteFileTool,
 };
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -626,4 +626,32 @@ async fn dropping_process_tool_kills_children_synchronously() {
         .output()
         .unwrap();
     assert!(!found.status.success(), "children must die when the tool is dropped");
+}
+
+#[tokio::test]
+async fn process_stats_track_live_children() {
+    let stats = BackgroundStats::new();
+    let tool = ProcessTool::local().stats(stats.clone());
+    assert_eq!(stats.processes(), 0);
+    let out = tool
+        .call(json!({"action": "spawn", "command": "sleep 259.1"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(stats.processes(), 1);
+    let id = out["id"].as_str().unwrap().to_string();
+    tool.call(json!({"action": "kill", "id": id}), &ctx()).await.unwrap();
+    assert_eq!(stats.processes(), 0);
+}
+
+#[tokio::test]
+async fn process_stats_zero_after_tool_drop() {
+    let stats = BackgroundStats::new();
+    {
+        let tool = ProcessTool::local().stats(stats.clone());
+        tool.call(json!({"action": "spawn", "command": "sleep 258.3"}), &ctx())
+            .await
+            .unwrap();
+        assert_eq!(stats.processes(), 1);
+    }
+    assert_eq!(stats.processes(), 0);
 }
