@@ -116,8 +116,26 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
 
 Convenience constructor `SubagentTool::new(model, &workspace)` uses
 `core_tools(&ws)` as the factory. `core_tools` does not include
-`subagent`, so there is no accidental infinite recursion; hosts wanting
-deeper nesting supply their own factory deliberately.
+`subagent`; nesting is provided by the tool itself (below), never by the
+factory, so depth stays controlled.
+
+### Nesting: subagents calling subagents
+
+`SubagentTool` carries a `depth` (its distance from the top-level agent;
+the tool registered on the top-level agent has depth 0) and a shared
+`SubagentDepth(Arc<AtomicU32>)` handle holding `max_depth` — the number
+of subagent levels allowed. When assembling a child's tool set, the tool
+appends a self-replica (`model.clone()`, same factory, same handle,
+`depth + 1`) if and only if `depth + 1 < max_depth`. At the limit the
+child simply has no `subagent` tool.
+
+`max_depth` is read at spawn time from the shared handle, so a host (or
+the TUI, section 3) can change it mid-session and the next spawn obeys
+the new value. Range 1..=5: 1 (the default) means the top-level agent
+can spawn workers but workers cannot nest; 5 is a hard cap against
+runaway fan-out (each level multiplies model calls). Already-running
+chains are unaffected by a lowering — the cap gates tool-set assembly,
+not running agents.
 
 ### Per call
 
@@ -162,6 +180,15 @@ the orchestration pattern from the experiment.
   `UsageMeter`.
 - Headless (`-p`) keeps the existing rule: gated tools are denied unless
   `--auto-approve`.
+- **Subagent nesting setting.** The TUI exposes the shared
+  `SubagentDepth` handle via a `/subagents [depth]` slash command, in the
+  style of `/model`: bare `/subagents` prints the current max depth,
+  `/subagents 2` sets it (clamped to 1..=5, takes effect on the next
+  spawn). `main.rs` creates the handle, hands one clone to the
+  `SubagentTool` and one to the TUI app state — no new worker-channel
+  plumbing. Startup default 1, overridable with `ORCA_SUBAGENT_DEPTH`
+  (also the only knob in headless mode, which has no TUI). `/help` gains
+  the command's one-liner.
 
 ## 4. Shutdown: no dangling children
 
@@ -233,7 +260,11 @@ refactoring.
   - inner tool calls execute against the factory's tools;
   - cancellation propagates (parent token cancels inner run);
   - `max_steps` exhaustion surfaces as a tool error;
-  - parallel fan-out: N calls in one batch all complete.
+  - parallel fan-out: N calls in one batch all complete;
+  - nesting: with `max_depth = 2` a subagent's tool set includes
+    `subagent` and a grandchild run completes; at `depth + 1 ==
+    max_depth` the child's tool set omits it; raising the shared handle
+    mid-session enables nesting on the next spawn.
 - CLI: approval test additions for the two new gated names.
 - Shutdown (`crates/tools/tests/tools.rs` / `kernel.rs`):
   - killing a `process` entry kills its grandchildren (spawn
