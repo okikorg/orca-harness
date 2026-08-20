@@ -1,0 +1,105 @@
+//! Headless single-shot mode: `orca -p "prompt"`. Streams assistant text
+//! to stdout as it is generated; tool activity goes to stderr. With
+//! `--json`, every harness event is serialized to stdout as NDJSON.
+
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use orca_harness_core::{Agent, CancellationToken, Context, Model};
+use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
+use orca_harness_tools::{core_tools, Workspace};
+
+use crate::approval::HeadlessGate;
+use crate::view;
+use crate::Config;
+
+pub async fn run<M: Model>(cfg: &Config, model: M, ws: &Workspace, system_prompt: &str) -> i32 {
+    let json = cfg.json;
+    let saw_delta = Arc::new(AtomicBool::new(false));
+    let saw = saw_delta.clone();
+    let events = EventStream::from_fn(move |ev: HarnessEvent| {
+        if json {
+            if let Ok(line) = serde_json::to_string(&ev) {
+                println!("{line}");
+            }
+            return;
+        }
+        match &ev {
+            HarnessEvent::AssistantDelta { text } => {
+                saw.store(true, Ordering::Relaxed);
+                print!("{text}");
+                std::io::stdout().flush().ok();
+            }
+            HarnessEvent::ReasoningDelta { text } => {
+                eprint!("{text}");
+                std::io::stderr().flush().ok();
+            }
+            HarnessEvent::ToolCall {
+                tool_name, input, ..
+            } => {
+                eprintln!("• {}", view::tool_call_line(tool_name, input));
+            }
+            HarnessEvent::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } => {
+                eprintln!(
+                    "  {}",
+                    view::tool_result_summary(tool_name, output, *is_error)
+                );
+            }
+            HarnessEvent::Result { message } => {
+                if !saw.load(Ordering::Relaxed) && !message.is_empty() {
+                    print!("{message}");
+                    std::io::stdout().flush().ok();
+                }
+            }
+            _ => {}
+        }
+    });
+
+    let (meter, usage) = UsageMeter::new();
+    let mut agent = Agent::new(model)
+        .limits(cfg.limits())
+        .extension(events)
+        .extension(meter)
+        .extension(Truncation::new(16_000));
+    if !cfg.auto_approve {
+        agent = agent.extension(HeadlessGate);
+    }
+    for tool in core_tools(ws) {
+        agent = agent.tool_arc(tool);
+    }
+
+    let cancel = CancellationToken::new();
+    let cancel_on_ctrl_c = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            cancel_on_ctrl_c.cancel();
+        }
+    });
+
+    let mut context = Context::new();
+    context.push_system(system_prompt);
+    context.push_user(cfg.prompt.as_deref().unwrap_or_default());
+
+    let result = agent.run_context(&mut context, cancel).await;
+    if !json {
+        println!();
+        let totals = usage.total();
+        eprintln!(
+            "tokens: {} in, {} out",
+            totals.input_tokens, totals.output_tokens
+        );
+    }
+    match result {
+        Ok(_) => 0,
+        Err(err) => {
+            eprintln!("error: {err}");
+            1
+        }
+    }
+}

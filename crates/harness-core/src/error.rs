@@ -1,0 +1,84 @@
+//! Typed errors. The kernel defines failure identity and termination
+//! semantics; Extensions may implement recovery policy on top.
+
+use thiserror::Error;
+
+/// Terminal failure of an agent run.
+///
+/// Note that a *tool* failing at runtime is not terminal: the Dispatcher
+/// normalizes tool execution failures into error-flagged [`crate::ToolResult`]s
+/// that flow back to the model, which may recover. `HarnessError` is reserved
+/// for conditions that end the run.
+#[derive(Debug, Error)]
+pub enum HarnessError {
+    #[error("model error: {0}")]
+    Model(#[from] ModelError),
+
+    #[error("tool error: {0}")]
+    Tool(#[from] ToolError),
+
+    #[error("extension error: {0}")]
+    Extension(#[from] ExtensionError),
+
+    #[error("cancelled")]
+    Cancelled,
+
+    #[error("deadline exceeded")]
+    DeadlineExceeded,
+
+    #[error("step limit exceeded")]
+    StepLimitExceeded,
+
+    #[error("invalid tool call: {0}")]
+    InvalidToolCall(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+/// Failure reported by a [`crate::Model`] adapter.
+#[derive(Debug, Error)]
+pub enum ModelError {
+    /// Transport-level failure (network, HTTP status, timeout).
+    #[error("request failed: {0}")]
+    Request(String),
+
+    /// The provider answered but the payload could not be interpreted.
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
+}
+
+/// Failure raised by a [`crate::Tool`] (or an `around_tool` wrapper).
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub struct ToolError {
+    pub message: String,
+}
+
+impl ToolError {
+    pub fn msg(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+/// Failure raised by an [`crate::Extension`] hook. Extension failures in
+/// deterministic hooks (`before_model`, `before_tool`, ...) are terminal:
+/// an extension that wants to tolerate its own errors must catch them.
+#[derive(Debug, Error)]
+#[error("{extension}: {message}")]
+pub struct ExtensionError {
+    /// Name of the extension that failed.
+    pub extension: String,
+    pub message: String,
+}
+
+impl ExtensionError {
+    pub fn new(extension: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            extension: extension.into(),
+            message: message.into(),
+        }
+    }
+}

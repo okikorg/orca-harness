@@ -1,0 +1,21 @@
+[package]
+name = "orca-harness-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core host/target execution tools for Orca Harness: shell, file I/O, search — the set that lets an agent act on a machine and hand results to the model."
+
+[lib]
+name = "orca_harness_tools"
+
+[dependencies]
+orca-harness-core = { path = "../harness-core" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+orca-harness-extensions = { path = "../extensions" }
+tokio = { version = "1", features = ["full"] }

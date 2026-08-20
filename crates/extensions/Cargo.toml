@@ -1,0 +1,20 @@
+[package]
+name = "orca-harness-extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Critical extensions for Orca Harness: event streaming, tool policy, output truncation, retries, and usage metering."
+
+[lib]
+name = "orca_harness_extensions"
+
+[dependencies]
+orca-harness-core = { path = "../harness-core" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

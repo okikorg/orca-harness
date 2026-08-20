@@ -1,0 +1,25 @@
+[package]
+name = "orca-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Interactive terminal host for Orca Harness: streaming REPL, tool approvals, headless mode."
+
+[[bin]]
+name = "orca"
+path = "src/main.rs"
+
+[dependencies]
+orca-harness-core = { path = "../harness-core" }
+orca-harness-model-openai = { path = "../model-openai" }
+orca-harness-model-openrouter = { path = "../model-openrouter" }
+orca-harness-tools = { path = "../tools" }
+orca-harness-extensions = { path = "../extensions" }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+futures-util = { workspace = true }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+textwrap = "0.16"
