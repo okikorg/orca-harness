@@ -4,7 +4,9 @@
 //! and the composer plus status line are pinned to the bottom. PgUp/PgDn
 //! scroll the in-app transcript buffer.
 
+use std::collections::VecDeque;
 use std::io;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -31,13 +33,14 @@ use crate::commands::{filter_commands, CommandSpec};
 use crate::msg::{ApprovalRequest, ApprovalResponse, Provider, UiMsg, WorkerCmd};
 use crate::view::{self, theme};
 
-const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER: &[char] = &['·', ' '];
 const EXPAND_MAX_LINES: usize = 200;
 const TRANSCRIPT_CAP: usize = 5000;
 const SCROLL_PAGE: usize = 10;
 const PALETTE_ROWS: usize = 8;
 const PICKER_ROWS: usize = 10;
 const LIVE_TOOL_ROWS: usize = 8;
+const QUEUE_PREVIEW_ROWS: usize = 3;
 pub struct TuiConfig {
     pub model_name: String,
     pub workspace_name: String,
@@ -169,6 +172,8 @@ struct App {
     approval: Option<ApprovalRequest>,
     composer: String,
     cursor: usize,
+    /// Prompts waiting for the active turn to finish, oldest first.
+    prompt_queue: VecDeque<String>,
     prompt_history: Vec<String>,
     history_pos: Option<usize>,
     tokens_in: u64,
@@ -210,6 +215,7 @@ impl App {
             approval: None,
             composer: String::new(),
             cursor: 0,
+            prompt_queue: VecDeque::new(),
             prompt_history: Vec::new(),
             history_pos: None,
             tokens_in: 0,
@@ -397,7 +403,7 @@ pub async fn run(
             }
             maybe_msg = ui_rx.recv() => {
                 match maybe_msg {
-                    Some(msg) => handle_ui_msg(&mut app, msg, width),
+                    Some(msg) => handle_ui_msg(&mut app, msg, &worker, width),
                     None => app.quit = true,
                 }
             }
@@ -750,19 +756,65 @@ fn history_nav(app: &mut App, dir: i32) {
 fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, width: usize) {
     let prompt = app.composer.trim().to_string();
     if prompt.is_empty() {
+        if !app.running() {
+            start_next_queued_prompt(app, worker, width);
+        }
         return;
     }
-    if app.running() {
-        return; // one run at a time; Esc cancels
+
+    // Queue management is intentionally available during a run. Other
+    // slash commands retain the existing one-run-at-a-time behavior and
+    // stay in the composer until the active turn finishes.
+    let command = prompt.strip_prefix('/').map(str::trim);
+    if app.running()
+        && !command.is_some_and(|command| command == "queue" || command.starts_with("queue "))
+        && command.is_some()
+    {
+        return;
     }
+
     app.composer.clear();
     app.cursor = 0;
     app.history_pos = None;
     app.prompt_history.push(prompt.clone());
 
-    if let Some(command) = prompt.strip_prefix('/') {
-        slash_command(app, command.trim(), worker, width);
+    if let Some(command) = command {
+        slash_command(app, command, worker, width);
         return;
+    }
+
+    if app.running() || !app.prompt_queue.is_empty() {
+        app.prompt_queue.push_back(prompt);
+        if !app.running() {
+            start_next_queued_prompt(app, worker, width);
+        }
+        return;
+    }
+
+    start_prompt(app, worker, prompt, width);
+}
+
+/// Start one prompt and commit it to the transcript only after the worker
+/// accepts it. Returns false when the worker is gone.
+fn start_prompt(
+    app: &mut App,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    prompt: String,
+    width: usize,
+) -> bool {
+    let cancel = CancellationToken::new();
+    if worker
+        .send(WorkerCmd::Run {
+            prompt: prompt.clone(),
+            cancel: cancel.clone(),
+        })
+        .is_err()
+    {
+        app.push_line(Line::from(Span::styled(
+            "worker is gone; restart orca",
+            theme().error,
+        )));
+        return false;
     }
 
     app.reset_activity();
@@ -772,24 +824,28 @@ fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, width: usize
     }
     app.push_wrapped(&prompt, "┃ ", theme().strong, width);
     app.turn_count += 1;
-    let cancel = CancellationToken::new();
-    if worker
-        .send(WorkerCmd::Run {
-            prompt,
-            cancel: cancel.clone(),
-        })
-        .is_err()
-    {
-        app.push_line(Line::from(Span::styled(
-            "worker is gone; restart orca",
-            theme().error,
-        )));
-        return;
-    }
     app.run = RunState::Running {
         started: Instant::now(),
         cancel,
     };
+    true
+}
+
+/// Resume the oldest waiting prompt. A failed send leaves the item queued
+/// so the UI cannot silently discard work.
+fn start_next_queued_prompt(
+    app: &mut App,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    width: usize,
+) -> bool {
+    let Some(prompt) = app.prompt_queue.front().cloned() else {
+        return false;
+    };
+    if !start_prompt(app, worker, prompt, width) {
+        return false;
+    }
+    app.prompt_queue.pop_front();
+    true
 }
 
 /// Print the full output of the n-th most recent tool call (1 = latest)
@@ -953,13 +1009,39 @@ fn slash_command(
     width: usize,
 ) {
     let dim = theme().dim;
+    if command == "queue" {
+        let queued = app.prompt_queue.len();
+        let message = match queued {
+            0 => "queue empty".to_string(),
+            1 => "1 prompt queued".to_string(),
+            _ => format!("{queued} prompts queued"),
+        };
+        app.push_line(Line::from(Span::styled(message, dim)));
+        return;
+    }
+    if let Some(rest) = command.strip_prefix("queue ") {
+        if rest.trim() == "clear" {
+            let cleared = app.prompt_queue.len();
+            app.prompt_queue.clear();
+            let message = match cleared {
+                0 => "queue already empty".to_string(),
+                1 => "cleared 1 queued prompt".to_string(),
+                _ => format!("cleared {cleared} queued prompts"),
+            };
+            app.push_line(Line::from(Span::styled(message, dim)));
+            return;
+        }
+        app.push_line(Line::from(Span::styled(
+            "usage: /queue [clear]",
+            theme().error,
+        )));
+        return;
+    }
     if let Some(rest) = command.strip_prefix("expand") {
         let nth = rest.trim().parse::<usize>().unwrap_or(1).max(1);
         expand_tool(app, nth, width);
         return;
     }
-    // "models" before "model": both take arguments, and the bare match
-    // below only handles the argument-less forms.
     if let Some(rest) = command.strip_prefix("subagents") {
         if rest.is_empty() {
             app.push_line(Line::from(Span::styled(
@@ -1009,18 +1091,6 @@ fn slash_command(
             return;
         }
     }
-    if let Some(rest) = command.strip_prefix("model ") {
-        let id = rest.trim().to_string();
-        if !id.is_empty() {
-            if worker.send(WorkerCmd::SetModel { id }).is_err() {
-                app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orca",
-                    theme().error,
-                )));
-            }
-            return;
-        }
-    }
     match command {
         "quit" | "exit" | "q" => app.quit = true,
         "clear" => {
@@ -1028,16 +1098,13 @@ fn slash_command(
             app.transcript.clear();
             app.pending_history.clear();
             app.scroll = 0;
+            app.prompt_queue.clear();
             app.tokens_in = 0;
             app.tokens_out = 0;
             app.tool_log.clear();
             app.work_log.clear();
             app.turn_count = 0;
             app.reset_activity();
-        }
-        "model" => {
-            let text = format!("model: {}", app.cfg.model_name);
-            app.push_line(Line::from(Span::styled(text, dim)));
         }
         "provider" => {
             app.overlay = Some(Overlay::Providers { index: 0 });
@@ -1047,12 +1114,12 @@ fn slash_command(
                 "/help        show this help",
                 "/expand [n]  full output of the n-th latest tool call (1 = latest)",
                 "/clear       reset the conversation context",
-                "/model [id]  show the current model, or switch to another",
+                "/queue [clear] show or clear waiting prompts",
                 "/models [f]  pick a model from the endpoint's catalog",
                 "/provider    switch provider (openrouter, openai, local)",
                 "/subagents [n] show or set subagent nesting depth (1-5)",
                 "/quit        exit",
-                "keys: enter send · esc cancel run · ctrl+o reveal latest work tree",
+                "keys: enter send or queue · esc cancel run · ctrl+o reveal latest work tree",
                 "      pgup/pgdn scroll · ctrl+c quit · up/down history",
                 "approvals: y allow once · a always allow tool · n deny",
             ] {
@@ -1068,7 +1135,12 @@ fn slash_command(
     }
 }
 
-fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
+fn handle_ui_msg(
+    app: &mut App,
+    msg: UiMsg,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    width: usize,
+) {
     match msg {
         UiMsg::Event(event) => handle_harness_event(app, event, width),
         UiMsg::SubagentEvent {
@@ -1114,6 +1186,7 @@ fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
             )));
         }
         UiMsg::RunDone(result) => {
+            let completed = result.is_ok();
             // Flush any partial stream (interrupted mid-generation).
             if result.is_err() {
                 app.commit_activity(width);
@@ -1138,6 +1211,9 @@ fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
                 let mut lines = Vec::new();
                 push_wrapped_lines(&mut lines, &label, "  ", style, width);
                 app.push_transcript_block(lines, BlockSpacing::Tight);
+            }
+            if completed {
+                start_next_queued_prompt(app, worker, width);
             }
         }
     }
@@ -1433,10 +1509,17 @@ fn draw(frame: &mut Frame, app: &mut App) {
         0
     };
     let visible: String = chars.iter().skip(start).take(inner_width).collect();
-    let composer_line = if app.composer.is_empty() && !app.running() {
+    let composer_line = if app.composer.is_empty() {
+        let placeholder = if app.running() {
+            "type another prompt to queue"
+        } else if !app.prompt_queue.is_empty() {
+            "queue paused · enter to resume"
+        } else {
+            "ask anything · /help for commands"
+        };
         Line::from(vec![
             Span::styled("│ ", theme().accent),
-            Span::styled("ask anything · /help for commands", theme().dim),
+            Span::styled(placeholder, theme().dim),
         ])
     } else {
         Line::from(vec![Span::styled("│ ", theme().accent), Span::raw(visible)])
@@ -1452,6 +1535,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
         "awaiting approval"
     } else if app.running() {
         "running"
+    } else if !app.prompt_queue.is_empty() {
+        "queue paused"
     } else {
         "idle"
     };
@@ -1462,18 +1547,22 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else if app.palette_query().is_some() && app.approval.is_none() {
         "↑↓ navigate · enter use · tab complete · esc close"
     } else if app.running() {
-        "esc interrupt"
+        "enter queue · esc interrupt"
+    } else if !app.prompt_queue.is_empty() {
+        "enter resume · /queue clear"
     } else {
         "enter send · ctrl+o expand · pgup scroll"
     };
     let status = format!(
-        " {} · {} · in {} out {}{} · {}",
+        " {} · {} · in {} out {}{}{} · {} · {}",
         app.cfg.model_name,
         state,
         app.tokens_in,
         app.tokens_out,
         stats_segments(&app.cfg.stats),
-        hint
+        queue_segment(app.prompt_queue.len()),
+        hint,
+        workspace_status_name(&app.cfg.workspace_name),
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -1482,6 +1571,16 @@ fn draw(frame: &mut Frame, app: &mut App) {
         ))),
         status_area,
     );
+}
+
+/// Keep the pinned status line compact by showing only the workspace folder.
+/// The welcome screen still shows the full path.
+fn workspace_status_name(workspace: &str) -> &str {
+    Path::new(workspace)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(workspace)
 }
 
 /// Status-line segments for live background work; empty when idle so the
@@ -1498,6 +1597,58 @@ fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> String {
         out.push_str(&format!(" · agents {}", stats.agents()));
     }
     out
+}
+
+fn queue_segment(queued: usize) -> String {
+    if queued == 0 {
+        String::new()
+    } else {
+        format!(" · queued {queued}")
+    }
+}
+
+/// A compact execution rail. Prompts stay out of the transcript until
+/// they start, so the conversation preserves its actual chronology.
+fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    if app.prompt_queue.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  queued", t.strong),
+        Span::styled(format!(" · {}", app.prompt_queue.len()), t.dim),
+    ])];
+    let visible = app.prompt_queue.len().min(QUEUE_PREVIEW_ROWS);
+    let overflow = app.prompt_queue.len().saturating_sub(visible);
+    for (index, prompt) in app.prompt_queue.iter().take(visible).enumerate() {
+        let last = index + 1 == visible && overflow == 0;
+        let branch = if last { "└" } else { "├" };
+        let label = if index == 0 {
+            "next".to_string()
+        } else {
+            (index + 1).to_string()
+        };
+        let available = width.saturating_sub(12).max(8);
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {branch} "), t.dim),
+            Span::styled(
+                format!("{label:<4} "),
+                if index == 0 { t.accent } else { t.dim },
+            ),
+            Span::styled(
+                view::truncate_line(prompt, available),
+                if index == 0 { t.strong } else { t.dim },
+            ),
+        ]));
+    }
+    if overflow > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  └      +{overflow} more"),
+            t.dim,
+        )));
+    }
+    lines
 }
 
 /// The pinned live region: approval prompt beats palette beats run status.
@@ -1532,7 +1683,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         return palette_lines(app, PALETTE_ROWS + 2, width);
     }
     if app.running() {
-        let mut lines = Vec::new();
+        let mut lines = queue_lines(app, width);
         let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
         let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
             "writing"
@@ -1555,7 +1706,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         }
         return lines;
     }
-    Vec::new()
+    queue_lines(app, width)
 }
 
 fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -2260,13 +2411,14 @@ mod tests {
 
     #[test]
     fn interrupted_thinking_still_lands_in_the_rail() {
+        let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         handle_harness_event(
             &mut app,
             HarnessEvent::ReasoningDelta { text: "hmm".into() },
             80,
         );
-        handle_ui_msg(&mut app, UiMsg::RunDone(Err("cancelled".into())), 80);
+        handle_ui_msg(&mut app, UiMsg::RunDone(Err("cancelled".into())), &tx, 80);
         let texts = pending_texts(&app);
         assert!(
             texts.iter().any(|t| t.contains("Thinking ·")),
@@ -2382,6 +2534,168 @@ mod tests {
     }
 
     #[test]
+    fn prompts_submitted_while_running_queue_in_fifo_order() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+
+        app.composer = "add queue rendering tests".into();
+        submit(&mut app, &tx, 80);
+        app.composer = "update the readme".into();
+        submit(&mut app, &tx, 80);
+
+        assert_eq!(
+            app.prompt_queue.iter().cloned().collect::<Vec<_>>(),
+            vec!["add queue rendering tests", "update the readme"]
+        );
+        assert!(app.composer.is_empty(), "queued input clears the composer");
+        assert!(
+            rx.try_recv().is_err(),
+            "queued turns do not overlap the run"
+        );
+    }
+
+    #[test]
+    fn successful_run_starts_the_next_queued_prompt() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        app.prompt_queue.extend([
+            "add queue rendering tests".to_string(),
+            "update the readme".to_string(),
+        ]);
+
+        handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
+
+        match rx.try_recv() {
+            Ok(WorkerCmd::Run { prompt, .. }) => {
+                assert_eq!(prompt, "add queue rendering tests")
+            }
+            other => panic!("expected queued run, got {:?}", other.is_ok()),
+        }
+        assert!(app.running());
+        assert_eq!(
+            app.prompt_queue.iter().cloned().collect::<Vec<_>>(),
+            vec!["update the readme"]
+        );
+        assert!(
+            pending_texts(&app)
+                .iter()
+                .any(|line| line.contains("add queue rendering tests")),
+            "a queued prompt enters the transcript when it starts"
+        );
+    }
+
+    #[test]
+    fn failed_run_pauses_the_queue_until_empty_enter_resumes_it() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        app.prompt_queue.push_back("inspect the failure".into());
+
+        handle_ui_msg(
+            &mut app,
+            UiMsg::RunDone(Err("model endpoint unavailable".into())),
+            &tx,
+            80,
+        );
+
+        assert!(!app.running());
+        assert_eq!(
+            app.prompt_queue.front().map(String::as_str),
+            Some("inspect the failure")
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "failure must not cascade through the queue"
+        );
+
+        app.composer.clear();
+        submit(&mut app, &tx, 80);
+        match rx.try_recv() {
+            Ok(WorkerCmd::Run { prompt, .. }) => assert_eq!(prompt, "inspect the failure"),
+            other => panic!("expected resumed run, got {:?}", other.is_ok()),
+        }
+        assert!(app.prompt_queue.is_empty());
+        assert!(app.running());
+    }
+
+    #[test]
+    fn queue_rail_previews_three_prompts_and_collapses_overflow() {
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        app.prompt_queue.extend([
+            "first queued prompt".to_string(),
+            "second queued prompt".to_string(),
+            "third queued prompt".to_string(),
+            "fourth queued prompt".to_string(),
+        ]);
+
+        let rows = live_lines(&app, 80)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>();
+        assert!(rows[0].contains("queued · 4"), "queue heading: {rows:?}");
+        assert!(rows[1].contains("next") && rows[1].contains("first queued prompt"));
+        assert!(rows[2].contains("2") && rows[2].contains("second queued prompt"));
+        assert!(rows[3].contains("3") && rows[3].contains("third queued prompt"));
+        assert!(rows[4].contains("+1 more"), "overflow summary: {rows:?}");
+        assert!(
+            rows[5].contains("working"),
+            "spinner follows queue: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn paused_queue_shows_resume_guidance_in_the_composer_and_status() {
+        let mut app = App::new(TuiConfig {
+            model_name: "test".into(),
+            workspace_name: "/workspace".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+        });
+        app.prompt_queue.push_back("inspect the failure".into());
+
+        let screen = rendered_rows(&mut app, 100, 24).join("\n");
+        assert!(screen.contains("queue paused · enter to resume"));
+        assert!(screen.contains("queued · 1"));
+        assert!(screen.contains("queued 1 · enter resume · /queue clear"));
+    }
+
+    #[test]
+    fn queue_clear_discards_waiting_prompts_without_interrupting_the_run() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        app.prompt_queue.extend(["one".into(), "two".into()]);
+        app.composer = "/queue clear".into();
+
+        submit(&mut app, &tx, 80);
+
+        assert!(app.prompt_queue.is_empty());
+        assert!(
+            app.running(),
+            "clearing the queue leaves the current run alone"
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn later_turns_have_no_divider_or_trailing_spine() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
@@ -2447,6 +2761,7 @@ mod tests {
         app.scroll = 20;
         app.tokens_in = 100;
         app.spinner_frame = 99;
+        app.prompt_queue.push_back("waiting prompt".into());
         app.tool_log.push(ToolRecord {
             call_line: "shell $ ls".into(),
             tool_name: "shell".into(),
@@ -2459,6 +2774,7 @@ mod tests {
         assert!(app.transcript.is_empty(), "transcript wiped");
         assert_eq!(app.scroll, 0);
         assert_eq!(app.tokens_in, 0);
+        assert!(app.prompt_queue.is_empty(), "prompt queue wiped");
         assert!(app.tool_log.is_empty(), "expandable log wiped");
         assert!(
             matches!(rx.try_recv(), Ok(WorkerCmd::Clear)),
@@ -2896,10 +3212,12 @@ mod tests {
 
     #[test]
     fn immediate_model_failure_renders_without_assistant_label() {
+        let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         handle_ui_msg(
             &mut app,
             UiMsg::RunDone(Err("model endpoint unavailable".into())),
+            &tx,
             80,
         );
         let joined = pending_texts(&app).join("\n");
@@ -2951,6 +3269,39 @@ mod tests {
             "welcome hint missing: {screen}"
         );
         assert!(screen.contains("/models switch model"));
+    }
+
+    #[test]
+    fn status_line_starts_with_model_and_ends_with_workspace_name() {
+        let mut app = App::new(TuiConfig {
+            model_name: "gpt-oss:20b".into(),
+            workspace_name: "/workspace/orca-harness".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+        });
+
+        let rows = rendered_rows(&mut app, 100, 24);
+        let status = rows
+            .iter()
+            .find(|row| row.contains("idle"))
+            .expect("status line");
+
+        assert!(
+            status.starts_with(" gpt-oss:20b ·"),
+            "model not first: {status}"
+        );
+        assert!(
+            status.ends_with("· orca-harness"),
+            "workspace not last: {status}"
+        );
+        assert!(
+            !status.contains("cwd"),
+            "cwd prefix should be omitted: {status}"
+        );
+        assert!(
+            !status.contains("/workspace/"),
+            "full path should be omitted: {status}"
+        );
     }
 
     #[test]
@@ -3091,9 +3442,10 @@ mod tests {
 
     #[test]
     fn catalog_reply_opens_the_picker_seeded_with_the_command_filter() {
+        let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         app.picker_pending = Some("acme".into());
-        handle_ui_msg(&mut app, UiMsg::Models(Ok(catalog())), 80);
+        handle_ui_msg(&mut app, UiMsg::Models(Ok(catalog())), &tx, 80);
         let Some(Overlay::Models(picker)) = &app.overlay else {
             panic!("expected the model picker to open");
         };

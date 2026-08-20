@@ -58,7 +58,7 @@ OPTIONS:
   -p, --prompt TEXT  headless prompt
   -h, --help         show this help
 
-In the TUI, /models [filter] lists the catalog and /model <id> switches.
+In the TUI, /models [filter] opens the model catalog and picker.
 ";
 
 #[derive(Clone)]

@@ -83,8 +83,11 @@ inner tool calls as an indented nested rail (collapsed into the expandable
 record when they finish), and the status line counts live background work
 (`procs 2 · kernel · agents 3`). Gated tools (`shell`, `write_file`,
 `edit_file`, `kernel`, `subagent`) pause behind a
-y/a/n approval prompt; Esc cancels in-flight runs (killing spawned
-subprocesses), and the conversation persists across turns. `ORCA_MODEL`,
+y/a/n approval prompt. Prompts submitted during a run wait in a FIFO rail
+above the activity indicator and start automatically in submission order;
+`/queue clear` discards the waiting prompts. Esc cancels in-flight runs
+(killing spawned subprocesses) and pauses the queue, and the conversation
+persists across turns. `ORCA_MODEL`,
 `ORCA_BASE_URL`, and
 `OPENAI_API_KEY` (or `--model`, `--base-url`, `--api-key`) select the
 endpoint.

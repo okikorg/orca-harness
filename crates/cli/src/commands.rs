@@ -24,15 +24,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
-        name: "expand",
-        description: "full output of the n-th latest tool call (1 = latest)",
-        category: "Tools",
+        name: "queue",
+        description: "show the prompt queue, or clear waiting prompts",
+        category: "Session",
         takes_args: true,
     },
     CommandSpec {
-        name: "model",
-        description: "show the current model, or switch with /model <id>",
-        category: "General",
+        name: "expand",
+        description: "full output of the n-th latest tool call (1 = latest)",
+        category: "Tools",
         takes_args: true,
     },
     CommandSpec {
@@ -96,17 +96,16 @@ mod tests {
         let all = filter_commands("");
         assert_eq!(all.len(), COMMANDS.len());
         assert_eq!(all[0].name, "help");
+        assert!(all.iter().all(|spec| spec.name != "model"));
+        assert!(all.iter().any(|spec| spec.name == "queue"));
     }
 
     #[test]
     fn prefix_matches_rank_before_substring_matches() {
-        // "el" prefixes nothing but appears inside "help", "model", "models".
-        assert_eq!(
-            names(&filter_commands("el")),
-            vec!["help", "model", "models"]
-        );
-        // "m" prefixes "model" and "models" and appears nowhere else.
-        assert_eq!(names(&filter_commands("m")), vec!["model", "models"]);
+        // "el" prefixes nothing but appears inside "help" and "models".
+        assert_eq!(names(&filter_commands("el")), vec!["help", "models"]);
+        // "m" prefixes "models" and appears nowhere else.
+        assert_eq!(names(&filter_commands("m")), vec!["models"]);
         // "e" prefixes "expand"; appears inside every other command except
         // "quit"... which it doesn't contain.
         assert_eq!(
@@ -115,7 +114,7 @@ mod tests {
                 "expand",
                 "help",
                 "clear",
-                "model",
+                "queue",
                 "models",
                 "provider",
                 "subagents"
