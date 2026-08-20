@@ -89,3 +89,67 @@ fn kernel_calls_are_serial() {
     let k = KernelTool::new();
     assert_eq!(k.concurrency(&json!({"code": "1"})), Concurrency::Serial);
 }
+
+#[tokio::test]
+async fn timeout_kills_kernel_and_next_call_restarts_fresh() {
+    require_python!();
+    let k = KernelTool::new();
+    k.call(json!({"code": "y = 7"}), &ctx()).await.unwrap();
+    let out = k
+        .call(
+            json!({"code": "import time\ntime.sleep(60)", "timeoutMs": 500}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["state"], "timeout");
+    // Fresh kernel: y is gone, and the restart is announced.
+    let out = k.call(json!({"code": "print('y' in dir())"}), &ctx()).await.unwrap();
+    assert_eq!(out["state"], "ok");
+    assert_eq!(out["restarted"], true);
+    assert_eq!(out["output"].as_str().unwrap().trim(), "False");
+}
+
+#[tokio::test]
+async fn reset_discards_state_without_restart_notice_afterwards() {
+    require_python!();
+    let k = KernelTool::new();
+    k.call(json!({"code": "z = 1"}), &ctx()).await.unwrap();
+    let out = k.call(json!({"action": "reset"}), &ctx()).await.unwrap();
+    assert_eq!(out["restarted"], true);
+    // The reset itself announced the restart; the next exec is a plain
+    // fresh start, not a surprise.
+    let out = k.call(json!({"code": "print('z' in dir())"}), &ctx()).await.unwrap();
+    assert_eq!(out["output"].as_str().unwrap().trim(), "False");
+    assert!(out.get("restarted").is_none());
+}
+
+#[tokio::test]
+async fn kernel_crash_is_detected_and_reported() {
+    require_python!();
+    let k = KernelTool::new();
+    k.call(json!({"code": "import os"}), &ctx()).await.unwrap();
+    // os._exit skips the driver loop entirely — the process just dies.
+    // Same-turn shape may surface as the timeout-recovery path (stdout
+    // EOF) or a broken-pipe error; the invariant is the NEXT call.
+    let _ = k.call(json!({"code": "os._exit(3)"}), &ctx()).await;
+    let out = k.call(json!({"code": "print(1)"}), &ctx()).await.unwrap();
+    assert_eq!(out["restarted"], true);
+    assert_eq!(out["output"].as_str().unwrap().trim(), "1");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_kernel_tool_kills_the_kernel() {
+    require_python!();
+    {
+        let k = KernelTool::new();
+        k.call(json!({"code": "marker_275_5 = 1"}), &ctx()).await.unwrap();
+    } // dropped
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "ORCA_K_"])
+        .output()
+        .unwrap();
+    assert!(!found.status.success(), "kernel process must die with the tool");
+}
