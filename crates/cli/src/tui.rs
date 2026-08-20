@@ -369,7 +369,9 @@ pub async fn run(
                     None => app.quit = true,
                 }
             }
-            _ = ticker.tick(), if app.running() => {
+            // Also tick while background processes live so their count
+            // stays fresh in the status line between runs.
+            _ = ticker.tick(), if app.running() || app.cfg.stats.processes() > 0 => {
                 app.spinner_frame = app.spinner_frame.wrapping_add(1);
             }
             // SIGTERM/SIGHUP: leave through the normal quit path so tool
@@ -1231,8 +1233,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
         "enter send · ctrl+o expand · pgup scroll"
     };
     let status = format!(
-        " {} · {} · in {} out {} · {}",
-        app.cfg.model_name, state, app.tokens_in, app.tokens_out, hint
+        " {} · {} · in {} out {}{} · {}",
+        app.cfg.model_name,
+        state,
+        app.tokens_in,
+        app.tokens_out,
+        stats_segments(&app.cfg.stats),
+        hint
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -1241,6 +1248,22 @@ fn draw(frame: &mut Frame, app: &mut App) {
         ))),
         status_area,
     );
+}
+
+/// Status-line segments for live background work; empty when idle so the
+/// line stays quiet. `kernel` is unnumbered (it is 0 or 1).
+fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> String {
+    let mut out = String::new();
+    if stats.processes() > 0 {
+        out.push_str(&format!(" · procs {}", stats.processes()));
+    }
+    if stats.kernels() > 0 {
+        out.push_str(" · kernel");
+    }
+    if stats.agents() > 0 {
+        out.push_str(&format!(" · agents {}", stats.agents()));
+    }
+    out
 }
 
 /// The pinned live region: approval prompt beats palette beats run status.
@@ -2742,5 +2765,22 @@ mod subagents_command_tests {
         // Garbage input leaves the value alone.
         slash_command(&mut app, "subagents lots", &worker, 80);
         assert_eq!(depth.get(), 5);
+    }
+}
+
+#[cfg(test)]
+mod stats_segment_tests {
+    use super::*;
+
+    #[test]
+    fn segments_render_only_nonzero_counts() {
+        let stats = orca_harness_tools::BackgroundStats::new();
+        assert_eq!(stats_segments(&stats), "");
+        stats.inc_processes();
+        stats.inc_processes();
+        stats.inc_agents();
+        assert_eq!(stats_segments(&stats), " · procs 2 · agents 1");
+        stats.inc_kernels();
+        assert_eq!(stats_segments(&stats), " · procs 2 · kernel · agents 1");
     }
 }
