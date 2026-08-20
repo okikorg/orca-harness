@@ -107,6 +107,8 @@ struct ThinkingRecord {
 }
 
 struct ToolActivity {
+    /// The model-assigned tool-call id (anchors nested subagent spawns).
+    call_id: String,
     call_line: String,
     tool_name: String,
     input: serde_json::Value,
@@ -115,6 +117,17 @@ struct ToolActivity {
     output: Option<serde_json::Value>,
     is_error: bool,
     approval: Option<String>,
+}
+
+/// One spawned inner agent's tool activity while it runs.
+struct SpawnActivity {
+    /// Tool-call id of the subagent call that spawned it.
+    call_id: String,
+    parent_id: Option<u64>,
+    depth: u32,
+    tools: Vec<ToolActivity>,
+    /// Inner call id -> index into `tools`.
+    pending: std::collections::HashMap<String, usize>,
 }
 
 enum RunState {
@@ -158,6 +171,8 @@ struct App {
     /// Call lines for in-flight tool calls, keyed by call id.
     pending_calls: std::collections::HashMap<String, usize>,
     activity_tools: Vec<ToolActivity>,
+    /// Live inner activity of running subagents, keyed by spawn id.
+    subagent_activity: std::collections::HashMap<u64, SpawnActivity>,
     /// Selected row in the slash-command palette.
     palette_index: usize,
     /// Open modal selector, if any.
@@ -194,6 +209,7 @@ impl App {
             turn_count: 0,
             pending_calls: std::collections::HashMap::new(),
             activity_tools: Vec::new(),
+            subagent_activity: std::collections::HashMap::new(),
             palette_index: 0,
             overlay: None,
             picker_pending: None,
@@ -260,6 +276,7 @@ impl App {
         self.reasoning_started = None;
         self.thinking_log.clear();
         self.activity_tools.clear();
+        self.subagent_activity.clear();
         self.pending_calls.clear();
         self.pending_assistant = None;
         self.assistant_started = false;
@@ -960,7 +977,13 @@ fn slash_command(
 fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
     match msg {
         UiMsg::Event(event) => handle_harness_event(app, event, width),
-        UiMsg::SubagentEvent { .. } => {}
+        UiMsg::SubagentEvent {
+            id,
+            parent_id,
+            depth,
+            call_id,
+            event,
+        } => handle_subagent_event(app, id, parent_id, depth, call_id, event),
         UiMsg::Approval(request) => app.approval = Some(request),
         UiMsg::Models(result) => {
             let t = theme();
@@ -1059,6 +1082,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             let call_line = view::tool_call_line(&tool_name, &input);
             let index = app.activity_tools.len();
             app.activity_tools.push(ToolActivity {
+                call_id: tool_call_id.clone(),
                 call_line,
                 tool_name,
                 input,
@@ -1113,6 +1137,67 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             }
         }
         HarnessEvent::AgentStart | HarnessEvent::Error { .. } => {}
+    }
+}
+
+/// Inner subagent lifecycle: only tool calls/results feed the nested
+/// rail; inner deltas and text stay hidden by design.
+fn handle_subagent_event(
+    app: &mut App,
+    id: u64,
+    parent_id: Option<u64>,
+    depth: u32,
+    call_id: String,
+    event: HarnessEvent,
+) {
+    match event {
+        HarnessEvent::ToolCall {
+            tool_call_id,
+            tool_name,
+            input,
+        } => {
+            let spawn = app
+                .subagent_activity
+                .entry(id)
+                .or_insert_with(|| SpawnActivity {
+                    call_id,
+                    parent_id,
+                    depth,
+                    tools: Vec::new(),
+                    pending: std::collections::HashMap::new(),
+                });
+            let call_line = view::tool_call_line(&tool_name, &input);
+            let index = spawn.tools.len();
+            spawn.tools.push(ToolActivity {
+                call_id: tool_call_id.clone(),
+                call_line,
+                tool_name,
+                input,
+                started: Instant::now(),
+                elapsed: None,
+                output: None,
+                is_error: false,
+                approval: None,
+            });
+            spawn.pending.insert(tool_call_id, index);
+        }
+        HarnessEvent::ToolResult {
+            tool_call_id,
+            output,
+            is_error,
+            ..
+        } => {
+            if let Some(spawn) = app.subagent_activity.get_mut(&id) {
+                if let Some(index) = spawn.pending.remove(&tool_call_id) {
+                    if let Some(tool) = spawn.tools.get_mut(index) {
+                        tool.elapsed = Some(tool.started.elapsed());
+                        tool.output = Some(output);
+                        tool.is_error = is_error;
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1373,6 +1458,69 @@ fn plural(count: usize, singular: &str) -> String {
     }
 }
 
+/// Cap on rendered inner tool rows per spawn while live.
+const NESTED_TOOL_ROWS: usize = 4;
+
+/// Indented inner tool rows for every spawn anchored to `call_id`, plus
+/// their descendants, one extra indent level per depth.
+fn nested_subagent_lines(app: &App, call_id: &str, width: usize, lines: &mut Vec<Line<'static>>) {
+    let mut roots: Vec<u64> = app
+        .subagent_activity
+        .iter()
+        .filter(|(_, spawn)| spawn.call_id == call_id)
+        .map(|(id, _)| *id)
+        .collect();
+    roots.sort_unstable();
+    for id in roots {
+        nested_spawn_rows(app, id, width, lines);
+    }
+}
+
+fn nested_spawn_rows(app: &App, id: u64, width: usize, lines: &mut Vec<Line<'static>>) {
+    let Some(spawn) = app.subagent_activity.get(&id) else {
+        return;
+    };
+    let t = theme();
+    let indent = " ".repeat(6 + 4 * spawn.depth as usize);
+    let hidden = spawn.tools.len().saturating_sub(NESTED_TOOL_ROWS);
+    if hidden > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("{indent}… {hidden} earlier tools"),
+            t.dim,
+        )));
+    }
+    for tool in spawn.tools.iter().skip(hidden) {
+        let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
+        let (glyph, style) = match &tool.output {
+            Some(_) if tool.is_error => ("×", t.error),
+            Some(_) => ("✓", t.dim),
+            None => ("□", t.dim),
+        };
+        let call = view::truncate_line(
+            &tool.call_line,
+            width.saturating_sub(indent.len() + 16).max(8),
+        );
+        lines.push(Line::from(vec![
+            Span::styled(format!("{indent}{glyph} "), style),
+            Span::styled(call, t.accent),
+            Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
+        ]));
+        // A running nested subagent call: its spawns render below it.
+        if tool.tool_name == "subagent" && tool.output.is_none() {
+            let mut children: Vec<u64> = app
+                .subagent_activity
+                .iter()
+                .filter(|(_, s)| s.parent_id == Some(id))
+                .map(|(child, _)| *child)
+                .collect();
+            children.sort_unstable();
+            for child in children {
+                nested_spawn_rows(app, child, width, lines);
+            }
+        }
+    }
+}
+
 /// One quiet line for completed work. The full activity tree is retained in
 /// `work_log`; this summary keeps the answer visually dominant.
 fn collapsed_activity_line(app: &App) -> Line<'static> {
@@ -1581,6 +1729,9 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
                     t.success,
                 )));
             }
+        }
+        if tool.tool_name == "subagent" && tool.output.is_none() {
+            nested_subagent_lines(app, &tool.call_id, width, &mut lines);
         }
         if tool.is_error {
             if let Some(output) = &tool.output {
@@ -2228,6 +2379,7 @@ mod tests {
         let mut app = test_app();
         for index in 0..12 {
             app.activity_tools.push(ToolActivity {
+                call_id: format!("call-{index}"),
                 call_line: format!("read_file file-{index}.rs"),
                 tool_name: "read_file".into(),
                 input: serde_json::json!({"path": format!("file-{index}.rs")}),
@@ -2239,6 +2391,7 @@ mod tests {
             });
         }
         app.activity_tools.push(ToolActivity {
+            call_id: "call-shell".into(),
             call_line: "shell $ cargo test --workspace".into(),
             tool_name: "shell".into(),
             input: serde_json::json!({"command": "cargo test --workspace"}),
@@ -2782,5 +2935,115 @@ mod stats_segment_tests {
         assert_eq!(stats_segments(&stats), " · procs 2 · agents 1");
         stats.inc_kernels();
         assert_eq!(stats_segments(&stats), " · procs 2 · kernel · agents 1");
+    }
+}
+
+#[cfg(test)]
+mod nested_rail_tests {
+    use super::*;
+    use orca_harness_extensions::HarnessEvent;
+    use serde_json::json;
+
+    fn nested_app() -> App {
+        App::new(TuiConfig {
+            model_name: "m".into(),
+            workspace_name: "w".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+        })
+    }
+
+    fn rail_text(app: &App) -> String {
+        activity_lines(app, 120, true)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn inner_tools_render_indented_under_the_subagent_line() {
+        let mut app = nested_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "subagent".into(),
+                input: json!({"task": "explore"}),
+            },
+            120,
+        );
+        handle_subagent_event(
+            &mut app,
+            7,
+            None,
+            0,
+            "c1".into(),
+            HarnessEvent::ToolCall {
+                tool_call_id: "i1".into(),
+                tool_name: "list_dir".into(),
+                input: json!({"path": "."}),
+            },
+        );
+        let text = rail_text(&app);
+        assert!(text.contains("subagent"), "rail: {text}");
+        assert!(text.contains("list_dir"), "rail: {text}");
+        let inner_line = text.lines().find(|l| l.contains("list_dir")).unwrap();
+        assert!(
+            inner_line.starts_with("      "),
+            "inner line must be indented: {inner_line:?}"
+        );
+
+        handle_subagent_event(
+            &mut app,
+            7,
+            None,
+            0,
+            "c1".into(),
+            HarnessEvent::ToolResult {
+                tool_call_id: "i1".into(),
+                tool_name: "list_dir".into(),
+                output: json!({"entries": []}),
+                is_error: false,
+            },
+        );
+        let text = rail_text(&app);
+        let inner_line = text.lines().find(|l| l.contains("list_dir")).unwrap();
+        assert!(inner_line.contains("✓"), "completed glyph: {inner_line:?}");
+    }
+
+    #[test]
+    fn deeper_spawns_indent_further() {
+        let mut app = nested_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "subagent".into(),
+                input: json!({"task": "outer"}),
+            },
+            120,
+        );
+        handle_subagent_event(
+            &mut app, 1, None, 0, "c1".into(),
+            HarnessEvent::ToolCall {
+                tool_call_id: "i1".into(),
+                tool_name: "subagent".into(),
+                input: json!({"task": "inner"}),
+            },
+        );
+        handle_subagent_event(
+            &mut app, 2, Some(1), 1, "i1".into(),
+            HarnessEvent::ToolCall {
+                tool_call_id: "g1".into(),
+                tool_name: "grep".into(),
+                input: json!({"pattern": "x"}),
+            },
+        );
+        let text = rail_text(&app);
+        let child = text.lines().find(|l| l.contains("subagent {\"task\":\"inner")).unwrap();
+        let grandchild = text.lines().find(|l| l.contains("grep")).unwrap();
+        let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
+        assert!(indent(grandchild) > indent(child), "child: {child:?} grandchild: {grandchild:?}");
     }
 }
