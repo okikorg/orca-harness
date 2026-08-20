@@ -128,3 +128,79 @@ async fn task_is_required() {
     let err = tool.call(json!({}), &ctx()).await.unwrap_err();
     assert!(err.to_string().contains("task"));
 }
+
+use orca_harness_core::Message;
+use orca_harness_tools::SubagentDepth;
+
+#[tokio::test]
+async fn depth_two_lets_a_subagent_spawn_a_grandchild() {
+    // One shared script, consumed strictly in order:
+    //   child agent step 1 -> calls subagent
+    //   grandchild agent   -> final
+    //   child agent step 2 -> final
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tool_calls(vec![call("1", "subagent", json!({"task": "inner"}))]),
+        ModelResponse::final_text("grandchild done"),
+        ModelResponse::final_text("child done"),
+    ]));
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(model.clone(), &ws).max_depth(SubagentDepth::new(2));
+    let out = tool.call(json!({"task": "outer"}), &ctx()).await.unwrap();
+    assert_eq!(out["answer"], "child done");
+    assert_eq!(model.generate_calls(), 3, "grandchild must actually have run");
+}
+
+#[tokio::test]
+async fn default_depth_gives_children_no_subagent_tool() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tool_calls(vec![call("1", "subagent", json!({"task": "inner"}))]),
+        ModelResponse::final_text("child done"),
+    ]));
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(model.clone(), &ws); // max_depth defaults to 1
+    let out = tool.call(json!({"task": "outer"}), &ctx()).await.unwrap();
+    assert_eq!(out["answer"], "child done");
+    // The child's subagent call must have come back as an unknown tool.
+    let contexts = model.observed_contexts();
+    let last = contexts.last().unwrap();
+    let saw_unknown = last.messages().iter().any(|m| match m {
+        Message::Tool { results } => results
+            .iter()
+            .any(|r| r.is_error && r.output.to_string().contains("unknown tool")),
+        _ => false,
+    });
+    assert!(saw_unknown, "child had no subagent tool, call must error");
+}
+
+#[tokio::test]
+async fn raising_the_shared_depth_applies_to_the_next_spawn() {
+    let depth = SubagentDepth::new(1);
+    let model = Arc::new(ScriptedModel::new(vec![
+        // First call (depth 1): nested attempt fails as unknown tool.
+        ModelResponse::tool_calls(vec![call("1", "subagent", json!({"task": "inner"}))]),
+        ModelResponse::final_text("first done"),
+        // Second call (after raise to 2): nesting works.
+        ModelResponse::tool_calls(vec![call("2", "subagent", json!({"task": "inner"}))]),
+        ModelResponse::final_text("grandchild done"),
+        ModelResponse::final_text("second done"),
+    ]));
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(model.clone(), &ws).max_depth(depth.clone());
+
+    let out = tool.call(json!({"task": "one"}), &ctx()).await.unwrap();
+    assert_eq!(out["answer"], "first done");
+
+    assert_eq!(depth.set(2), 2);
+    let out = tool.call(json!({"task": "two"}), &ctx()).await.unwrap();
+    assert_eq!(out["answer"], "second done");
+    assert_eq!(model.generate_calls(), 5);
+}
+
+#[test]
+fn depth_handle_clamps_to_permitted_range() {
+    let depth = SubagentDepth::new(0);
+    assert_eq!(depth.get(), 1);
+    assert_eq!(depth.set(99), 5);
+    assert_eq!(depth.get(), 5);
+    assert_eq!(depth.set(3), 3);
+}
