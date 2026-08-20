@@ -142,7 +142,10 @@ tools: Vec<ToolActivity>, done: bool }`.
 - `SubagentEvent` with `ToolCall` starts an indented activity line under
   the owning rail entry: depth-0 spawns anchor to the top-level
   `pending_calls[call_id]` rail line; deeper spawns anchor under their
-  parent spawn's current position. Indent: 6 spaces + 4 per depth level.
+  parent spawn's current position. Nested rows reuse the rail's
+  `├─`/`└─` branch vocabulary one level deeper (with the parent's `│`
+  continuation running alongside), so ownership is visually unambiguous;
+  each nesting level offsets its branches further right.
 - `ToolResult` completes the line (checkmark/cross plus duration), same
   glyphs as the main rail.
 - Inner `AssistantDelta`/`ReasoningDelta` events are ignored.

@@ -1530,9 +1530,17 @@ fn plural(count: usize, singular: &str) -> String {
 /// Cap on rendered inner tool rows per spawn while live.
 const NESTED_TOOL_ROWS: usize = 4;
 
-/// Indented inner tool rows for every spawn anchored to `call_id`, plus
-/// their descendants, one extra indent level per depth.
-fn nested_subagent_lines(app: &App, call_id: &str, width: usize, lines: &mut Vec<Line<'static>>) {
+/// Inner tool rows for every spawn anchored to `call_id`, plus their
+/// descendants. Rows reuse the rail's `├─`/`└─` vocabulary one level
+/// deeper, and `continuation` carries the parent rail's `│ ` (or blank)
+/// so ownership stays unambiguous even mid-list.
+fn nested_subagent_lines(
+    app: &App,
+    call_id: &str,
+    width: usize,
+    continuation: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
     let mut roots: Vec<u64> = app
         .subagent_activity
         .iter()
@@ -1540,25 +1548,28 @@ fn nested_subagent_lines(app: &App, call_id: &str, width: usize, lines: &mut Vec
         .map(|(id, _)| *id)
         .collect();
     roots.sort_unstable();
+    let prefix = format!("    {continuation} ");
     for id in roots {
-        nested_spawn_rows(app, id, width, lines);
+        nested_spawn_rows(app, id, width, &prefix, lines);
     }
 }
 
-fn nested_spawn_rows(app: &App, id: u64, width: usize, lines: &mut Vec<Line<'static>>) {
+fn nested_spawn_rows(app: &App, id: u64, width: usize, prefix: &str, lines: &mut Vec<Line<'static>>) {
     let Some(spawn) = app.subagent_activity.get(&id) else {
         return;
     };
     let t = theme();
-    let indent = " ".repeat(6 + 4 * spawn.depth as usize);
     let hidden = spawn.tools.len().saturating_sub(NESTED_TOOL_ROWS);
     if hidden > 0 {
         lines.push(Line::from(Span::styled(
-            format!("{indent}… {hidden} earlier tools"),
+            format!("{prefix}… {hidden} earlier tools"),
             t.dim,
         )));
     }
-    for tool in spawn.tools.iter().skip(hidden) {
+    let visible: Vec<&ToolActivity> = spawn.tools.iter().skip(hidden).collect();
+    for (position, tool) in visible.iter().enumerate() {
+        let last = position + 1 == visible.len();
+        let branch = if last { "└─" } else { "├─" };
         let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
         let (glyph, style) = match &tool.output {
             Some(_) if tool.is_error => ("×", t.error),
@@ -1567,15 +1578,17 @@ fn nested_spawn_rows(app: &App, id: u64, width: usize, lines: &mut Vec<Line<'sta
         };
         let call = view::truncate_line(
             &tool.call_line,
-            width.saturating_sub(indent.len() + 16).max(8),
+            width.saturating_sub(prefix.len() + 20).max(8),
         );
         lines.push(Line::from(vec![
-            Span::styled(format!("{indent}{glyph} "), style),
+            Span::styled(format!("{prefix}{branch} "), t.dim),
+            Span::styled(format!("{glyph} "), style),
             Span::styled(call, t.accent),
             Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
         ]));
-        // A running nested subagent call: its spawns render below it.
+        // A running nested subagent call: its spawns branch off this row.
         if tool.tool_name == "subagent" && tool.output.is_none() {
+            let child_prefix = format!("{prefix}{}  ", if last { " " } else { "│" });
             let mut children: Vec<u64> = app
                 .subagent_activity
                 .iter()
@@ -1584,7 +1597,7 @@ fn nested_spawn_rows(app: &App, id: u64, width: usize, lines: &mut Vec<Line<'sta
                 .collect();
             children.sort_unstable();
             for child in children {
-                nested_spawn_rows(app, child, width, lines);
+                nested_spawn_rows(app, child, width, &child_prefix, lines);
             }
         }
     }
@@ -1800,7 +1813,7 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
             }
         }
         if tool.tool_name == "subagent" && tool.output.is_none() {
-            nested_subagent_lines(app, &tool.call_id, width, &mut lines);
+            nested_subagent_lines(app, &tool.call_id, width, continuation, &mut lines);
         }
         if tool.is_error {
             if let Some(output) = &tool.output {
@@ -3062,6 +3075,16 @@ mod nested_rail_tests {
         assert!(
             inner_line.starts_with("      "),
             "inner line must be indented: {inner_line:?}"
+        );
+        assert!(
+            inner_line.contains("└─") || inner_line.contains("├─"),
+            "inner line must carry a tree branch so ownership is unambiguous: {inner_line:?}"
+        );
+        let outer_line = text.lines().find(|l| l.contains("subagent")).unwrap();
+        let branch_col = |l: &str| l.find(|c| c == '└' || c == '├').unwrap();
+        assert!(
+            branch_col(inner_line) > branch_col(outer_line),
+            "inner branch must sit deeper than the subagent's own branch:\n{outer_line}\n{inner_line}"
         );
 
         handle_subagent_event(
