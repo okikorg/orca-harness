@@ -91,6 +91,8 @@ struct ToolRecord {
     call_line: String,
     tool_name: String,
     output: serde_json::Value,
+    /// Folded inner tool log of a finished subagent call, empty otherwise.
+    inner: Vec<String>,
 }
 
 /// A completed turn's compacted work rail. The transcript keeps only the
@@ -268,6 +270,7 @@ impl App {
             call_line: label,
             tool_name: "thinking".into(),
             output: serde_json::Value::String(reasoning),
+            inner: Vec::new(),
         });
     }
 
@@ -804,6 +807,18 @@ fn expand_tool(app: &mut App, nth_latest: usize, width: usize) {
             t.dim,
         )));
     }
+    if !record.inner.is_empty() {
+        rendered.push(Line::from(vec![
+            Span::styled("  │ ", t.dim),
+            Span::styled("inner activity:", t.dim),
+        ]));
+        for line in &record.inner {
+            rendered.push(Line::from(vec![
+                Span::styled("  │   ", t.dim),
+                Span::raw(view::truncate_line(line, body_width.saturating_sub(2))),
+            ]));
+        }
+    }
     rendered.push(Line::from(Span::styled("  └", t.dim)));
     app.pending_history.extend(rendered);
 }
@@ -1110,10 +1125,16 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
                     activity.call_line.clone()
                 })
                 .unwrap_or_else(|| tool_name.clone());
+            let inner = if tool_name == "subagent" {
+                fold_subagent_activity(app, &tool_call_id)
+            } else {
+                Vec::new()
+            };
             app.push_record(ToolRecord {
                 call_line,
                 tool_name,
                 output,
+                inner,
             });
         }
         HarnessEvent::Usage { usage } => {
@@ -1137,6 +1158,54 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             }
         }
         HarnessEvent::AgentStart | HarnessEvent::Error { .. } => {}
+    }
+}
+
+/// Remove all spawn activity anchored to a finished subagent call
+/// (including nested descendants) and render it to plain lines for the
+/// expandable record.
+fn fold_subagent_activity(app: &mut App, call_id: &str) -> Vec<String> {
+    let mut roots: Vec<u64> = app
+        .subagent_activity
+        .iter()
+        .filter(|(_, spawn)| spawn.call_id == call_id)
+        .map(|(id, _)| *id)
+        .collect();
+    roots.sort_unstable();
+    let mut lines = Vec::new();
+    for id in roots {
+        collect_spawn_log(app, id, &mut lines);
+    }
+    lines
+}
+
+fn collect_spawn_log(app: &mut App, id: u64, lines: &mut Vec<String>) {
+    let Some(spawn) = app.subagent_activity.remove(&id) else {
+        return;
+    };
+    let indent = "  ".repeat(spawn.depth as usize);
+    for tool in &spawn.tools {
+        let glyph = match &tool.output {
+            Some(_) if tool.is_error => "×",
+            Some(_) => "✓",
+            None => "□",
+        };
+        let elapsed = tool.elapsed.unwrap_or_default();
+        lines.push(format!(
+            "{indent}{glyph} {} · {}",
+            tool.call_line,
+            elapsed_label(elapsed)
+        ));
+    }
+    let mut children: Vec<u64> = app
+        .subagent_activity
+        .iter()
+        .filter(|(_, s)| s.parent_id == Some(id))
+        .map(|(child, _)| *child)
+        .collect();
+    children.sort_unstable();
+    for child in children {
+        collect_spawn_log(app, child, lines);
     }
 }
 
@@ -2265,6 +2334,7 @@ mod tests {
             call_line: "shell $ ls".into(),
             tool_name: "shell".into(),
             output: serde_json::json!({}),
+            inner: Vec::new(),
         });
 
         slash_command(&mut app, "clear", &tx, 80);
@@ -3046,4 +3116,55 @@ mod nested_rail_tests {
         let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
         assert!(indent(grandchild) > indent(child), "child: {child:?} grandchild: {grandchild:?}");
     }
+
+    #[test]
+    fn completion_folds_inner_log_into_the_expandable_record() {
+        let mut app = nested_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "subagent".into(),
+                input: json!({"task": "explore"}),
+            },
+            120,
+        );
+        handle_subagent_event(
+            &mut app, 7, None, 0, "c1".into(),
+            HarnessEvent::ToolCall {
+                tool_call_id: "i1".into(),
+                tool_name: "list_dir".into(),
+                input: json!({"path": "."}),
+            },
+        );
+        handle_subagent_event(
+            &mut app, 7, None, 0, "c1".into(),
+            HarnessEvent::ToolResult {
+                tool_call_id: "i1".into(),
+                tool_name: "list_dir".into(),
+                output: json!({"entries": []}),
+                is_error: false,
+            },
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolResult {
+                tool_call_id: "c1".into(),
+                tool_name: "subagent".into(),
+                output: json!({"answer": "found things"}),
+                is_error: false,
+            },
+            120,
+        );
+
+        assert!(app.subagent_activity.is_empty(), "spawn state must fold away");
+        let record = app.tool_log.last().unwrap();
+        assert!(record.inner.iter().any(|l| l.contains("list_dir")));
+
+        expand_tool(&mut app, 1, 120);
+        let expanded: String = app.pending_history.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(expanded.contains("inner activity"), "{expanded}");
+        assert!(expanded.contains("list_dir"), "{expanded}");
+    }
 }
+
