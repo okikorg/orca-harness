@@ -40,6 +40,9 @@ const PICKER_ROWS: usize = 10;
 pub struct TuiConfig {
     pub model_name: String,
     pub workspace_name: String,
+    /// Shared handle behind the `subagent` tool's nesting cap;
+    /// `/subagents` adjusts it live.
+    pub subagent_depth: orca_harness_tools::SubagentDepth,
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
@@ -80,11 +83,20 @@ enum Overlay {
 }
 
 /// A finished tool call kept around so the user can expand its full
-/// output later (ctrl+o / `/expand n`).
+/// output later with `/expand n`.
 struct ToolRecord {
     call_line: String,
     tool_name: String,
     output: serde_json::Value,
+}
+
+/// A completed turn's compacted work rail. The transcript keeps only the
+/// summary until the user asks to inspect the tree with ctrl+o.
+struct CompletedWork {
+    turn: usize,
+    summary: String,
+    lines: Vec<Line<'static>>,
+    expanded: bool,
 }
 
 struct ThinkingRecord {
@@ -136,6 +148,10 @@ struct App {
     spinner_frame: usize,
     quit: bool,
     tool_log: Vec<ToolRecord>,
+    /// Completed per-turn work trees, newest last.
+    work_log: Vec<CompletedWork>,
+    /// Number of user turns rendered in this session.
+    turn_count: usize,
     /// Call lines for in-flight tool calls, keyed by call id.
     pending_calls: std::collections::HashMap<String, usize>,
     activity_tools: Vec<ToolActivity>,
@@ -171,6 +187,8 @@ impl App {
             spinner_frame: 0,
             quit: false,
             tool_log: Vec::new(),
+            work_log: Vec::new(),
+            turn_count: 0,
             pending_calls: std::collections::HashMap::new(),
             activity_tools: Vec::new(),
             palette_index: 0,
@@ -252,13 +270,33 @@ impl App {
         self.assistant_started = true;
     }
 
+    /// Start another assistant-owned block with exactly one row of breathing
+    /// room, whether it is the first answer or follows earlier work.
+    fn begin_assistant_block(&mut self) {
+        if self.assistant_started {
+            self.push_line(Line::from(""));
+        } else {
+            self.ensure_assistant_started();
+        }
+    }
+
     fn commit_activity(&mut self, width: usize) {
         self.flush_reasoning();
         let lines = activity_lines(self, width, false);
         if !lines.is_empty() {
-            self.ensure_assistant_started();
-            self.push_line(Line::from(""));
-            self.pending_history.extend(lines);
+            self.begin_assistant_block();
+            let summary = collapsed_activity_line(self);
+            let summary_text = line_text(&summary);
+            self.push_line(summary);
+            self.work_log.push(CompletedWork {
+                turn: self.turn_count,
+                summary: summary_text,
+                lines,
+                expanded: false,
+            });
+            if self.work_log.len() > 100 {
+                self.work_log.remove(0);
+            }
         }
         self.thinking_log.clear();
         self.activity_tools.clear();
@@ -389,7 +427,11 @@ fn handle_terminal_event(
             app.composer.clear();
             app.cursor = 0;
         }
-        KeyCode::Char('o') if ctrl => expand_tool(app, 1, width),
+        KeyCode::Char('o') if ctrl => {
+            if !expand_latest_work(app) {
+                expand_tool(app, 1, width);
+            }
+        }
         KeyCode::PageUp => app.scroll += SCROLL_PAGE,
         KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(SCROLL_PAGE),
         KeyCode::Esc => {
@@ -680,8 +722,11 @@ fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, width: usize
 
     app.reset_activity();
 
-    app.push_line(Line::from(""));
-    app.push_wrapped(&prompt, "│ ", theme().strong, width);
+    if app.turn_count > 0 {
+        app.push_line(Line::from(""));
+    }
+    app.push_wrapped(&prompt, "┃ ", theme().strong, width);
+    app.turn_count += 1;
     let cancel = CancellationToken::new();
     if worker
         .send(WorkerCmd::Run {
@@ -731,6 +776,50 @@ fn expand_tool(app: &mut App, nth_latest: usize, width: usize) {
     }
     rendered.push(Line::from(Span::styled("  └", t.dim)));
     app.pending_history.extend(rendered);
+}
+
+/// Reveal the most recent completed turn's work tree. Raw output remains
+/// available through `/expand n`, so this shortcut can focus on structure.
+fn expand_latest_work(app: &mut App) -> bool {
+    let Some(work) = app.work_log.last() else {
+        return false;
+    };
+    if work.turn != app.turn_count {
+        return true;
+    }
+    if work.expanded {
+        return true;
+    }
+
+    let summary = work.summary.clone();
+    let lines = work.lines.clone();
+    let inserted = replace_line(&mut app.pending_history, &summary, &lines)
+        || replace_line(&mut app.transcript, &summary, &lines);
+    if inserted {
+        if let Some(work) = app.work_log.last_mut() {
+            work.expanded = true;
+        }
+    }
+    true
+}
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn replace_line(
+    lines: &mut Vec<Line<'static>>,
+    target: &str,
+    replacement: &[Line<'static>],
+) -> bool {
+    let Some(index) = lines.iter().rposition(|line| line_text(line) == target) else {
+        return false;
+    };
+    lines.splice(index..=index, replacement.iter().cloned());
+    true
 }
 
 fn slash_command(
@@ -791,6 +880,8 @@ fn slash_command(
             app.tokens_in = 0;
             app.tokens_out = 0;
             app.tool_log.clear();
+            app.work_log.clear();
+            app.turn_count = 0;
             app.reset_activity();
         }
         "model" => {
@@ -809,7 +900,7 @@ fn slash_command(
                 "/models [f]  pick a model from the endpoint's catalog",
                 "/provider    switch provider (openrouter, openai, local)",
                 "/quit        exit",
-                "keys: enter send · esc cancel run · ctrl+o expand last tool output",
+                "keys: enter send · esc cancel run · ctrl+o reveal latest work tree",
                 "      pgup/pgdn scroll · ctrl+c quit · up/down history",
                 "approvals: y allow once · a always allow tool · n deny",
             ] {
@@ -873,7 +964,7 @@ fn handle_ui_msg(app: &mut App, msg: UiMsg, width: usize) {
                     app.pending_assistant.take()
                 };
                 if let Some(partial) = partial {
-                    app.push_line(Line::from(""));
+                    app.begin_assistant_block();
                     for line in view::markdown_lines(&partial, width, "  ") {
                         app.push_line(line);
                     }
@@ -917,8 +1008,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             app.flush_reasoning();
             if let Some(message) = app.pending_assistant.take() {
                 if !message.trim().is_empty() {
-                    app.ensure_assistant_started();
-                    app.push_line(Line::from(""));
+                    app.begin_assistant_block();
                     for line in view::markdown_lines(&message, width, "  ") {
                         app.push_line(line);
                     }
@@ -974,8 +1064,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             };
             app.text.clear();
             if !answer.trim().is_empty() {
-                app.ensure_assistant_started();
-                app.push_line(Line::from(""));
+                app.begin_assistant_block();
                 for line in view::markdown_lines(&answer, width, "  ") {
                     app.push_line(line);
                 }
@@ -1032,10 +1121,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
     let live = live_lines(app, width);
     let live_height = live.len().min(PALETTE_ROWS + 7) as u16;
-    let [transcript_area, live_area, rule_area, composer_area, status_area] = Layout::vertical([
+    let [transcript_area, live_area, composer_area, status_area] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(live_height),
-        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
@@ -1056,12 +1144,6 @@ fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(Text::from(visible)), transcript_area);
 
     frame.render_widget(Paragraph::new(Text::from(live)), live_area);
-
-    // Thin rule separating the transcript from the pinned input region.
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled("─".repeat(width), theme().dim))),
-        rule_area,
-    );
 
     // Composer with a horizontally-scrolling single line and a
     // placeholder when empty.
@@ -1151,7 +1233,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         return palette_lines(app, PALETTE_ROWS + 2, width);
     }
     if app.running() {
-        let mut lines = vec![Line::from("")];
+        let mut lines = Vec::new();
         let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
         let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
             "writing"
@@ -1195,9 +1277,6 @@ fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
         return lines;
     }
 
-    if !app.assistant_started {
-        lines.push(Line::from(""));
-    }
     if !activity.is_empty() {
         lines.push(Line::from(""));
         lines.extend(activity);
@@ -1229,9 +1308,52 @@ fn plural(count: usize, singular: &str) -> String {
     }
 }
 
+/// One quiet line for completed work. The full activity tree is retained in
+/// `work_log`; this summary keeps the answer visually dominant.
+fn collapsed_activity_line(app: &App) -> Line<'static> {
+    let tool_count = app.activity_tools.len();
+    let thinking_count = app.thinking_log.len();
+    let failed = app
+        .activity_tools
+        .iter()
+        .filter(|tool| tool.is_error)
+        .count();
+    let elapsed = match &app.run {
+        RunState::Running { started, .. } => started.elapsed(),
+        RunState::Idle => app
+            .activity_tools
+            .iter()
+            .filter_map(|tool| tool.elapsed)
+            .max()
+            .unwrap_or_default(),
+    };
+
+    let mut parts = Vec::new();
+    if tool_count > 0 {
+        parts.push(plural(tool_count, "tool"));
+    }
+    if thinking_count > 0 {
+        parts.push(plural(thinking_count, "thinking update"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    parts.push(elapsed_label(elapsed));
+
+    let style = if failed > 0 {
+        theme().error
+    } else {
+        theme().dim
+    };
+    Line::from(Span::styled(
+        format!("  ▸ Work · {}", parts.join(" · ")),
+        style,
+    ))
+}
+
 /// Render the current run as one coherent activity rail. While the run is
 /// live this includes the latest reasoning tail and pending tool states;
-/// once committed, reasoning collapses and all tool outcomes remain visible.
+/// once committed, the rail is retained for on-demand expansion.
 fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
     let t = theme();
     let mut lines = Vec::new();
@@ -1297,13 +1419,40 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
         let last = index + 1 == app.activity_tools.len();
         let branch = if last { "└─" } else { "├─" };
         let continuation = if last { "  " } else { "│ " };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "    {branch} {}",
-                view::truncate_line(&tool.call_line, width.saturating_sub(8).max(16))
+        let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
+        let (glyph, mut detail, status_style) = match &tool.output {
+            Some(output) if tool.is_error => (
+                "×",
+                format!(
+                    "{} · {}",
+                    view::tool_result_summary(&tool.tool_name, output, true),
+                    elapsed_label(elapsed)
+                ),
+                t.error,
             ),
-            t.accent,
-        )));
+            Some(output) => (
+                "✓",
+                format!(
+                    "{} · {}",
+                    view::tool_result_summary(&tool.tool_name, output, false),
+                    elapsed_label(elapsed)
+                ),
+                t.dim,
+            ),
+            None if live => ("□", elapsed_label(elapsed), t.dim),
+            None => ("×", elapsed_label(elapsed), t.warn),
+        };
+        if let Some(approval) = &tool.approval {
+            detail = format!("{approval} · {detail}");
+        }
+        let fixed_width = 12 + detail.chars().count();
+        let call = view::truncate_line(&tool.call_line, width.saturating_sub(fixed_width).max(8));
+        lines.push(Line::from(vec![
+            Span::styled(format!("    {branch} "), t.dim),
+            Span::styled(format!("{glyph} "), status_style),
+            Span::styled(call, t.accent),
+            Span::styled(format!(" · {detail}"), status_style),
+        ]));
         if tool.tool_name == "edit_file" {
             let diff_width = width.saturating_sub(12).max(16);
             if let Some(old) = tool.input.get("old").and_then(serde_json::Value::as_str) {
@@ -1325,34 +1474,6 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
                 )));
             }
         }
-        let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
-        let (mut status, style) = match &tool.output {
-            Some(output) if tool.is_error => (
-                format!(
-                    "failed · {} · {}",
-                    view::tool_result_summary(&tool.tool_name, output, true),
-                    elapsed_label(elapsed)
-                ),
-                t.error,
-            ),
-            Some(output) => (
-                format!(
-                    "completed · {} · {}",
-                    view::tool_result_summary(&tool.tool_name, output, false),
-                    elapsed_label(elapsed)
-                ),
-                t.dim,
-            ),
-            None if live => (format!("running · {}", elapsed_label(elapsed)), t.dim),
-            None => (format!("interrupted · {}", elapsed_label(elapsed)), t.warn),
-        };
-        if let Some(approval) = &tool.approval {
-            status = format!("{approval} · {status}");
-        }
-        lines.push(Line::from(Span::styled(
-            format!("    {continuation} {status}"),
-            style,
-        )));
         if tool.is_error {
             if let Some(output) = &tool.output {
                 let output_width = width.saturating_sub(12).max(16);
@@ -1550,6 +1671,7 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
         });
         // A transcript taller than any viewport so scrolling has room.
         for i in 0..100 {
@@ -1623,7 +1745,7 @@ mod tests {
         );
         let joined = flat_lines(&activity_lines(&app, 80, true));
         assert!(joined.contains("shell $ ls"));
-        assert!(joined.contains("completed · exit 0 · a.rs"));
+        assert!(joined.contains("✓ shell $ ls · exit 0 · a.rs"));
     }
 
     fn flat_lines(lines: &[Line]) -> String {
@@ -1701,14 +1823,19 @@ mod tests {
         handle_ui_msg(&mut app, UiMsg::RunDone(Err("cancelled".into())), 80);
         let texts = pending_texts(&app);
         assert!(
-            texts.iter().any(|t| t.contains("Thinking")),
-            "partial thinking kept: {texts:?}"
+            texts.iter().any(|t| t.contains("Work · 1 thinking update")),
+            "partial thinking summarized: {texts:?}"
         );
         assert!(
             !texts.iter().any(|t| t.contains("hmm")),
             "committed thinking collapsed"
         );
         assert_eq!(app.tool_log.last().unwrap().tool_name, "thinking");
+        let details = flat_lines(&app.work_log.last().expect("work tree retained").lines);
+        assert!(
+            details.contains("Thinking"),
+            "work tree retained: {details}"
+        );
     }
 
     #[test]
@@ -1760,9 +1887,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let list_call = joined.find("list_dir .").unwrap();
-        let list_result = joined.find("completed · 2 entries").unwrap();
+        let list_result = joined.find("· 2 entries").unwrap();
         let shell_call = joined.find("shell $ git log").unwrap();
-        let shell_result = joined.find("completed · exit 0 · abc123").unwrap();
+        let shell_result = joined.find("· exit 0 · abc123").unwrap();
         assert!(
             list_call < list_result && shell_call < shell_result,
             "results stay attached: {joined}"
@@ -1791,21 +1918,53 @@ mod tests {
         );
         let joined = flat_lines(&activity_lines(&app, 80, true));
         assert!(joined.contains("shell $ ls"));
-        assert!(joined.contains("completed · exit 0"));
+        assert!(joined.contains("✓ shell $ ls · exit 0"));
     }
 
     #[test]
-    fn wrapped_user_prompts_carry_the_bar_on_every_line() {
+    fn wrapped_user_prompts_carry_the_spine_on_every_line() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         app.composer = "alpha beta gamma delta epsilon zeta eta theta".into();
         submit(&mut app, &tx, 24);
         let texts = pending_texts(&app);
-        let prompt_lines: Vec<&String> = texts.iter().filter(|t| t.starts_with("│ ")).collect();
+        let prompt_lines: Vec<&String> = texts.iter().filter(|t| t.starts_with("┃ ")).collect();
         assert!(prompt_lines.len() >= 2, "prompt should wrap: {texts:?}");
         for line in prompt_lines {
-            assert!(line.starts_with("│ "), "bar carried: {line}");
+            assert!(line.starts_with("┃ "), "spine carried: {line}");
         }
+    }
+
+    #[test]
+    fn later_turns_have_no_divider_or_trailing_spine() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+
+        app.composer = "first turn".into();
+        submit(&mut app, &tx, 40);
+        app.run = RunState::Idle;
+        app.composer = "second turn".into();
+        submit(&mut app, &tx, 40);
+
+        let texts = pending_texts(&app);
+        assert!(
+            !texts.iter().any(|line| line.starts_with("  ─")),
+            "turn divider removed: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|line| line == "┃"),
+            "spine ends with prompt text: {texts:?}"
+        );
+        let second = texts
+            .iter()
+            .position(|line| line == "┃ second turn")
+            .expect("second prompt");
+        assert_eq!(texts[second - 1], "", "one row separates turns: {texts:?}");
+        assert!(
+            second < 2 || texts[second - 2] != "",
+            "spacing stays to one row: {texts:?}"
+        );
+        assert_eq!(app.turn_count, 2);
     }
 
     #[test]
@@ -1832,7 +1991,7 @@ mod tests {
         );
         let joined = flat_lines(&activity_lines(&app, 80, true));
         assert!(joined.contains("shell $ ls"));
-        assert!(joined.contains("approved · running"));
+        assert!(joined.contains("□ shell $ ls · approved"));
     }
 
     #[test]
@@ -1945,17 +2104,14 @@ mod tests {
             "completed call missing: {joined}"
         );
         assert!(
-            joined.contains("completed · read 2048 bytes"),
+            joined.contains("✓ read_file src/tui.rs · read 2048 bytes"),
             "result missing: {joined}"
         );
         assert!(
             joined.contains("shell $ cargo test"),
             "running call missing: {joined}"
         );
-        assert!(
-            joined.contains("running"),
-            "running state missing: {joined}"
-        );
+        assert!(joined.contains("□"), "running state missing: {joined}");
     }
 
     #[test]
@@ -1997,19 +2153,37 @@ mod tests {
 
         let texts = pending_texts(&app);
         let joined = texts.join("\n");
-        let thinking = joined.find("Thinking").expect("thinking rail");
         let work = joined.find("Work · 1 tool").expect("work rail");
         let answer = joined.find("Everything passed.").expect("answer");
-        assert!(
-            thinking < work && work < answer,
-            "rail precedes answer: {joined}"
-        );
-        assert!(joined.contains("shell $ cargo test"));
-        assert!(joined.contains("completed · exit 0 · 42 tests passed"));
+        assert!(work < answer, "summary precedes answer: {joined}");
+        assert!(!joined.contains("shell $ cargo test"));
+        assert!(!joined.contains("✓ shell $ cargo test · exit 0 · 42 tests passed"));
         assert!(
             !joined.contains("private reasoning text"),
             "completed thinking is collapsed"
         );
+
+        let details = flat_lines(&app.work_log.last().expect("work tree retained").lines);
+        assert!(details.contains("Thinking"));
+        assert!(details.contains("shell $ cargo test"));
+        assert!(details.contains("✓ shell $ cargo test · exit 0 · 42 tests passed"));
+
+        app.absorb_pending();
+        assert!(expand_latest_work(&mut app));
+        let expanded = app
+            .transcript
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!expanded.contains("▸ Work · 1 tool"));
+        assert!(expanded.contains("shell $ cargo test"));
+        let tool = expanded.find("shell $ cargo test").expect("expanded tool");
+        let answer = expanded.find("Everything passed.").expect("answer");
+        assert!(tool < answer, "work expands in place: {expanded}");
+        let once = app.transcript.len();
+        assert!(expand_latest_work(&mut app));
+        assert_eq!(app.transcript.len(), once, "repeat expansion is a no-op");
     }
 
     #[test]
@@ -2083,7 +2257,7 @@ mod tests {
         );
         let joined = flat_lines(&activity_lines(&app, 100, true));
         assert!(
-            joined.contains("failed · exit 1"),
+            joined.contains("× shell $ cargo test · exit 1"),
             "failure state shown: {joined}"
         );
         assert!(
@@ -2133,6 +2307,7 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "gpt-oss:20b".into(),
             workspace_name: "/workspace/orca-harness".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
@@ -2158,6 +2333,7 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -2191,6 +2367,7 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -2217,6 +2394,7 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
         });
         app.run = RunState::Running {
             started: Instant::now(),

@@ -17,10 +17,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Limits, Message, Model, ToolResult};
-use orca_harness_extensions::{EventStream, Truncation};
+use orca_harness_extensions::{EventStream, ReadToolResultTool, Truncation, TruncationStore};
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
-use orca_harness_tools::{core_tools, Workspace};
+use orca_harness_tools::{core_tools, KernelTool, SubagentDepth, SubagentTool, Workspace};
+use orca_harness_tools_web::{Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool};
 
 use crate::approval::Approval;
 use crate::msg::{Provider, UiMsg, WorkerCmd};
@@ -40,10 +41,14 @@ OPTIONS:
                      otherwise http://localhost:11434/v1)
   --api-key KEY      bearer token (env OPENAI_API_KEY, or
                      OPENROUTER_API_KEY with --openrouter)
+  --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
+                     web_search and web_crawl tools
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
   --list-models      print the endpoint's model catalog and exit
   --workspace DIR    tool workspace root (default: current directory)
   --max-steps N      model invocations per run (default 48)
+  --subagent-depth N subagent nesting levels, 1-5 (env ORCA_SUBAGENT_DEPTH;
+                     default 1; /subagents adjusts it live in the TUI)
   --theme NAME       mono (default) or color
   --json             headless: emit NDJSON harness events on stdout
   --auto-approve     headless: allow shell/write/edit without approval
@@ -58,6 +63,7 @@ pub struct Config {
     pub model: String,
     pub base_url: String,
     pub api_key: Option<String>,
+    pub firecrawl_key: Option<String>,
     pub openrouter: bool,
     pub list_models: bool,
     pub workspace: PathBuf,
@@ -65,6 +71,7 @@ pub struct Config {
     pub json: bool,
     pub auto_approve: bool,
     pub max_steps: u32,
+    pub subagent_depth: u32,
     pub theme: String,
 }
 
@@ -81,6 +88,7 @@ fn parse_args() -> Result<Config, String> {
     let mut model = std::env::var("ORCA_MODEL").ok();
     let mut base_url = std::env::var("ORCA_BASE_URL").ok();
     let mut api_key: Option<String> = None;
+    let mut firecrawl_key: Option<String> = None;
     let mut openrouter = false;
     let mut list_models = false;
     let mut workspace = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -88,6 +96,10 @@ fn parse_args() -> Result<Config, String> {
     let mut json = false;
     let mut auto_approve = false;
     let mut max_steps = 48;
+    let mut subagent_depth: u32 = std::env::var("ORCA_SUBAGENT_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let mut theme = std::env::var("ORCA_THEME").unwrap_or_else(|_| "mono".into());
 
     let mut args = std::env::args().skip(1);
@@ -100,6 +112,7 @@ fn parse_args() -> Result<Config, String> {
             "--model" => model = Some(value("--model")?),
             "--base-url" => base_url = Some(value("--base-url")?),
             "--api-key" => api_key = Some(value("--api-key")?),
+            "--firecrawl-key" => firecrawl_key = Some(value("--firecrawl-key")?),
             "--openrouter" => openrouter = true,
             "--list-models" => list_models = true,
             "--workspace" => workspace = PathBuf::from(value("--workspace")?),
@@ -107,6 +120,11 @@ fn parse_args() -> Result<Config, String> {
                 max_steps = value("--max-steps")?
                     .parse()
                     .map_err(|_| "--max-steps expects a number".to_string())?
+            }
+            "--subagent-depth" => {
+                subagent_depth = value("--subagent-depth")?
+                    .parse()
+                    .map_err(|_| "--subagent-depth expects a number".to_string())?
             }
             "--theme" => theme = value("--theme")?,
             "--json" => json = true,
@@ -129,6 +147,7 @@ fn parse_args() -> Result<Config, String> {
         };
         std::env::var(env).ok()
     });
+    let firecrawl_key = firecrawl_key.or_else(|| std::env::var("FIRECRAWL_API_KEY").ok());
     let base_url = base_url.unwrap_or_else(|| {
         if openrouter {
             openrouter::OPENROUTER_BASE_URL.into()
@@ -151,6 +170,7 @@ fn parse_args() -> Result<Config, String> {
         model,
         base_url,
         api_key,
+        firecrawl_key,
         openrouter,
         list_models,
         workspace,
@@ -158,14 +178,26 @@ fn parse_args() -> Result<Config, String> {
         json,
         auto_approve,
         max_steps,
+        subagent_depth,
         theme,
     })
 }
 
-fn system_prompt(ws: &Workspace) -> String {
+fn system_prompt(ws: &Workspace, web_search: bool) -> String {
+    let web_tools = if web_search {
+        ", web_fetch (fetch a URL as markdown), web_search, and web_crawl \
+         (read a whole site section via Firecrawl)"
+    } else {
+        ", and web_fetch (fetch a URL as markdown)"
+    };
     format!(
         "You are Orca, a coding agent operating in the workspace at {root} on {os}. \
-         You act through tools: shell, read_file, write_file, edit_file, list_dir, grep. \
+         You act through tools: shell, process (persistent sessions and background \
+         processes), kernel (persistent Python — variables survive across calls; \
+         print what you need to see), subagent (spawn an independent agent with its \
+         own context and tools for a self-contained task; parallel calls fan out), \
+         read_file, write_file, edit_file, list_dir, grep, glob, \
+         read_tool_result (re-read the full output of a truncated result){web_tools}. \
          File paths are workspace-relative. Investigate with tools instead of guessing; \
          run commands to verify your work. Keep responses brief and concrete: report \
          what you did and what you found.\n\
@@ -372,8 +404,9 @@ async fn main() -> ExitCode {
 /// lives in the worker and can be switched from the TUI at runtime.
 async fn run_mode(cfg: Config) -> ExitCode {
     let ws = Workspace::new(&cfg.workspace);
-    let system = system_prompt(&ws);
+    let system = system_prompt(&ws, cfg.firecrawl_key.is_some());
     let endpoint = Endpoint::from_config(&cfg);
+    let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
 
     if cfg.prompt.is_some() {
         let code = headless::run(&cfg, endpoint.build_model(), &ws, &system).await;
@@ -387,9 +420,10 @@ async fn run_mode(cfg: Config) -> ExitCode {
     let build = {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
+        let subagent_depth = subagent_depth.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
-            build_agent(endpoint.build_model(), &cfg, &ws, &ui_tx)
+            build_agent(endpoint.build_model(), &cfg, &ws, &ui_tx, &subagent_depth)
         }
     };
     let agent = build(&endpoint);
@@ -398,6 +432,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
     let tui_cfg = tui::TuiConfig {
         model_name: cfg.model.clone(),
         workspace_name: cfg.workspace.display().to_string(),
+        subagent_depth,
     };
     match tui::run(tui_cfg, cmd_tx, ui_rx).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -408,26 +443,42 @@ async fn run_mode(cfg: Config) -> ExitCode {
     }
 }
 
-fn build_agent<M: Model>(
+fn build_agent<M: Model + Clone + 'static>(
     model: M,
     cfg: &Config,
     ws: &Workspace,
     ui: &mpsc::UnboundedSender<UiMsg>,
+    subagent_depth: &SubagentDepth,
 ) -> Agent<M> {
+    let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
         let ui = ui.clone();
         move |event| {
             let _ = ui.send(UiMsg::Event(event));
         }
     });
+    let store = TruncationStore::default();
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
         .extension(Approval::new(ui.clone()))
-        .extension(Truncation::new(16_000));
+        .extension(Truncation::new(16_000).store(store.clone()))
+        .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store)))
+        .tool_arc(std::sync::Arc::new(WebFetchTool::new(UrlPolicy::strict())));
+    if let Some(key) = &cfg.firecrawl_key {
+        let fc = std::sync::Arc::new(Firecrawl::new(key.clone()));
+        agent = agent
+            .tool_arc(std::sync::Arc::new(WebSearchTool::new(fc.clone())))
+            .tool_arc(std::sync::Arc::new(WebCrawlTool::new(fc)));
+    }
     for tool in core_tools(ws) {
         agent = agent.tool_arc(tool);
     }
+    let root = ws.root().to_string_lossy().into_owned();
+    agent = agent.tool_arc(std::sync::Arc::new(KernelTool::new().working_dir(root)));
+    agent = agent.tool_arc(std::sync::Arc::new(
+        SubagentTool::new(model_for_subagents, ws).max_depth(subagent_depth.clone()),
+    ));
     agent
 }
 
@@ -439,9 +490,29 @@ mod main_tests {
     /// calls — dropping this silently reverts the agent to one call per turn.
     #[test]
     fn system_prompt_instructs_concurrent_batching() {
-        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")));
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
         assert!(prompt.contains("execute concurrently"));
         assert!(prompt.contains("plan the batch"));
         assert!(prompt.contains("one response"));
+    }
+
+    /// The advertised tool list must match what build_agent registers:
+    /// web_fetch is always on, search/crawl only with a Firecrawl key.
+    #[test]
+    fn system_prompt_advertises_web_tools_to_match_registration() {
+        let ws = Workspace::new(PathBuf::from("."));
+        let without = system_prompt(&ws, false);
+        assert!(without.contains("web_fetch"));
+        assert!(!without.contains("web_search"));
+        let with = system_prompt(&ws, true);
+        assert!(with.contains("web_search"));
+        assert!(with.contains("web_crawl"));
+    }
+
+    #[test]
+    fn system_prompt_advertises_kernel_and_subagent() {
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
+        assert!(prompt.contains("kernel"));
+        assert!(prompt.contains("subagent"));
     }
 }

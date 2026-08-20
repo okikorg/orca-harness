@@ -11,8 +11,18 @@ use tokio::sync::{mpsc, oneshot};
 use crate::msg::{ApprovalRequest, ApprovalResponse, UiMsg};
 use crate::view;
 
-/// Tools that mutate the machine and therefore need a human answer.
-pub const GATED_TOOLS: &[&str] = &["shell", "write_file", "edit_file"];
+/// Tools that mutate the machine or egress to arbitrary hosts and
+/// therefore need a human answer. `web_search`/`web_crawl` are not here:
+/// they only talk to the Firecrawl endpoint the user opted into by
+/// providing a key.
+pub const GATED_TOOLS: &[&str] = &[
+    "shell",
+    "write_file",
+    "edit_file",
+    "web_fetch",
+    "kernel",
+    "subagent",
+];
 
 pub struct Approval {
     gated: HashSet<String>,
@@ -179,5 +189,11 @@ mod tests {
         let approval = Approval::new(tx);
         let decision = approval.before_tool(&call("write_file")).await.unwrap();
         assert!(denied(&decision));
+    }
+
+    #[test]
+    fn kernel_and_subagent_are_gated() {
+        assert!(GATED_TOOLS.contains(&"kernel"));
+        assert!(GATED_TOOLS.contains(&"subagent"));
     }
 }

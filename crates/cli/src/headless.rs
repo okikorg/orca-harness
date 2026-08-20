@@ -8,13 +8,19 @@ use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
-use orca_harness_tools::{core_tools, Workspace};
+use orca_harness_tools::{core_tools, KernelTool, SubagentDepth, SubagentTool, Workspace};
 
 use crate::approval::HeadlessGate;
 use crate::view;
 use crate::Config;
 
-pub async fn run<M: Model>(cfg: &Config, model: M, ws: &Workspace, system_prompt: &str) -> i32 {
+pub async fn run<M: Model + Clone + 'static>(
+    cfg: &Config,
+    model: M,
+    ws: &Workspace,
+    system_prompt: &str,
+) -> i32 {
+    let model_for_subagents = model.clone();
     let json = cfg.json;
     let saw_delta = Arc::new(AtomicBool::new(false));
     let saw = saw_delta.clone();
@@ -73,6 +79,12 @@ pub async fn run<M: Model>(cfg: &Config, model: M, ws: &Workspace, system_prompt
     for tool in core_tools(ws) {
         agent = agent.tool_arc(tool);
     }
+    let root = ws.root().to_string_lossy().into_owned();
+    agent = agent.tool_arc(Arc::new(KernelTool::new().working_dir(root)));
+    agent = agent.tool_arc(Arc::new(
+        SubagentTool::new(model_for_subagents, ws)
+            .max_depth(SubagentDepth::new(cfg.subagent_depth)),
+    ));
 
     let cancel = CancellationToken::new();
     let cancel_on_ctrl_c = cancel.clone();
