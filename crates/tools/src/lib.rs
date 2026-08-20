@@ -36,6 +36,7 @@ mod pgroup;
 mod process;
 mod search;
 mod shell;
+mod subagent;
 mod workspace;
 
 use std::sync::Arc;
@@ -49,6 +50,7 @@ pub use kernel::KernelTool;
 pub use process::ProcessTool;
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
+pub use subagent::{SubagentDepth, SubagentTool, MAX_SUBAGENT_DEPTH, MIN_SUBAGENT_DEPTH};
 pub use workspace::Workspace;
 
 /// The recommended default tool set: a local `shell` and `process`
