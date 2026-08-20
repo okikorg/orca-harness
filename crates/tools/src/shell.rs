@@ -65,6 +65,35 @@ impl Executor {
             ["exec", "-i", &container.into(), "sh", "-c"].map(String::from),
         )
     }
+
+    fn is_local_sh(&self) -> bool {
+        self.program == "sh"
+    }
+
+    /// Build a [`Command`] that runs `command_str` through this executor.
+    /// For the local `sh` executor `working_dir` becomes the child's real
+    /// cwd; for remote executors there is no cwd to set, so it is folded
+    /// in as `cd <dir> && …`. Stdio is left for the caller to configure.
+    pub(crate) fn build(&self, command_str: &str, working_dir: Option<&str>) -> Command {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.leading_args);
+        let effective = match (working_dir, self.is_local_sh()) {
+            (Some(_), true) | (None, _) => command_str.to_string(),
+            (Some(dir), false) => format!("cd {dir} && {command_str}"),
+        };
+        cmd.arg(effective);
+        if self.is_local_sh() {
+            if let Some(dir) = working_dir {
+                cmd.current_dir(dir);
+            }
+        }
+        // Own process group: kills can reach grandchildren, and children
+        // no longer die accidentally with the host's terminal — hosts
+        // must kill them deliberately (see pgroup + CLI signal handling).
+        #[cfg(unix)]
+        cmd.process_group(0);
+        cmd
+    }
 }
 
 /// `shell` tool. Runs one command per call; concurrency-`Parallel` by
@@ -119,23 +148,9 @@ impl ShellTool {
     }
 
     fn build_command(&self, command_str: &str) -> Command {
-        let is_local = self.executor.program == "sh";
-        let mut cmd = Command::new(&self.executor.program);
-        cmd.args(&self.executor.leading_args);
-
-        let effective = match (&self.working_dir, is_local) {
-            // Local: use the child's real cwd (set below), no wrapping.
-            (Some(_), true) | (None, _) => command_str.to_string(),
-            // Remote/container: there is no cwd to set, so fold it in.
-            (Some(dir), false) => format!("cd {dir} && {command_str}"),
-        };
-        cmd.arg(effective);
-
-        if is_local {
-            if let Some(dir) = &self.working_dir {
-                cmd.current_dir(dir);
-            }
-        }
+        let mut cmd = self
+            .executor
+            .build(command_str, self.working_dir.as_deref());
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
