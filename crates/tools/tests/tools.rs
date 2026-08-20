@@ -584,3 +584,46 @@ async fn shell_timeout_kills_grandchildren() {
         "grandchild sleep must die with the timed-out shell call"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_kill_reaches_grandchildren() {
+    let tool = ProcessTool::local();
+    let out = tool
+        .call(json!({"action": "spawn", "command": "sleep 279.3 & wait"}), &ctx())
+        .await
+        .unwrap();
+    let id = out["id"].as_str().unwrap().to_string();
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 279.3"])
+        .output()
+        .unwrap();
+    assert!(found.status.success(), "grandchild should be running");
+
+    tool.call(json!({"action": "kill", "id": id}), &ctx())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 279.3"])
+        .output()
+        .unwrap();
+    assert!(!found.status.success(), "grandchild must die with the kill action");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_process_tool_kills_children_synchronously() {
+    {
+        let tool = ProcessTool::local();
+        tool.call(json!({"action": "spawn", "command": "sleep 277.9 & wait"}), &ctx())
+            .await
+            .unwrap();
+    } // tool dropped here
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 277.9"])
+        .output()
+        .unwrap();
+    assert!(!found.status.success(), "children must die when the tool is dropped");
+}
