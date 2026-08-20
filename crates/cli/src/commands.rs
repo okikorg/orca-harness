@@ -48,6 +48,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
+        name: "subagents",
+        description: "show or set subagent nesting depth (1-5)",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
         name: "quit",
         description: "exit orca",
         category: "General",
@@ -105,7 +111,15 @@ mod tests {
         // "quit"... which it doesn't contain.
         assert_eq!(
             names(&filter_commands("e")),
-            vec!["expand", "help", "clear", "model", "models", "provider"]
+            vec![
+                "expand",
+                "help",
+                "clear",
+                "model",
+                "models",
+                "provider",
+                "subagents"
+            ]
         );
     }
 

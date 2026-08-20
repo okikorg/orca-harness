@@ -836,6 +836,38 @@ fn slash_command(
     }
     // "models" before "model": both take arguments, and the bare match
     // below only handles the argument-less forms.
+    if let Some(rest) = command.strip_prefix("subagents") {
+        if rest.is_empty() {
+            app.push_line(Line::from(Span::styled(
+                format!(
+                    "subagent nesting depth: {}",
+                    app.cfg.subagent_depth.get()
+                ),
+                dim,
+            )));
+            return;
+        }
+        if let Some(arg) = rest.strip_prefix(' ') {
+            match arg.trim().parse::<u32>() {
+                Ok(depth) => {
+                    let set = app.cfg.subagent_depth.set(depth);
+                    app.push_line(Line::from(Span::styled(
+                        format!(
+                            "subagent nesting depth set to {set} (applies to the next spawn)"
+                        ),
+                        dim,
+                    )));
+                }
+                Err(_) => {
+                    app.push_line(Line::from(Span::styled(
+                        "usage: /subagents [1-5]",
+                        theme().error,
+                    )));
+                }
+            }
+            return;
+        }
+    }
     if let Some(rest) = command.strip_prefix("models") {
         if rest.is_empty() || rest.starts_with(' ') {
             // Fetch the full catalog; the argument seeds the picker's
@@ -899,6 +931,7 @@ fn slash_command(
                 "/model [id]  show the current model, or switch to another",
                 "/models [f]  pick a model from the endpoint's catalog",
                 "/provider    switch provider (openrouter, openai, local)",
+                "/subagents [n] show or set subagent nesting depth (1-5)",
                 "/quit        exit",
                 "keys: enter send · esc cancel run · ctrl+o reveal latest work tree",
                 "      pgup/pgdn scroll · ctrl+c quit · up/down history",
@@ -2551,5 +2584,40 @@ mod tests {
         let mut app = test_app();
         slash_command(&mut app, "provider", &tx, 80);
         assert!(matches!(app.overlay, Some(Overlay::Providers { index: 0 })));
+    }
+}
+
+#[cfg(test)]
+mod subagents_command_tests {
+    use super::*;
+    use orca_harness_tools::SubagentDepth;
+
+    fn depth_app(depth: SubagentDepth) -> App {
+        App::new(TuiConfig {
+            model_name: "m".into(),
+            workspace_name: "w".into(),
+            subagent_depth: depth,
+        })
+    }
+
+    #[tokio::test]
+    async fn subagents_command_sets_and_clamps_depth() {
+        let depth = SubagentDepth::new(1);
+        let mut app = depth_app(depth.clone());
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "subagents 3", &worker, 80);
+        assert_eq!(depth.get(), 3);
+
+        slash_command(&mut app, "subagents 99", &worker, 80);
+        assert_eq!(depth.get(), 5, "out-of-range input clamps");
+
+        // Bare form only reports; it must not change the value.
+        slash_command(&mut app, "subagents", &worker, 80);
+        assert_eq!(depth.get(), 5);
+
+        // Garbage input leaves the value alone.
+        slash_command(&mut app, "subagents lots", &worker, 80);
+        assert_eq!(depth.get(), 5);
     }
 }
