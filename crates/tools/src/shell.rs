@@ -20,6 +20,8 @@ use tokio::process::Command;
 
 use orca_harness_core::{Tool, ToolContext, ToolError, ToolSchema};
 
+use crate::pgroup;
+
 /// How and where a shell command is executed.
 #[derive(Clone, Debug)]
 pub struct Executor {
@@ -196,6 +198,7 @@ impl Tool for ShellTool {
             .build_command(command_str)
             .spawn()
             .map_err(|e| ToolError::msg(format!("failed to spawn: {e}")))?;
+        let pgid = child.id();
 
         let mut stdout_pipe = child.stdout.take();
         let mut stderr_pipe = child.stderr.take();
@@ -213,11 +216,14 @@ impl Tool for ShellTool {
         };
 
         // Race execution against cancellation and the optional timeout.
-        // On either, `kill_on_drop` reaps the child when `child`/its pipes
-        // drop as this future unwinds.
+        // On either, the whole process group is SIGKILLed so grandchildren
+        // die too; `kill_on_drop` remains as the non-Unix fallback.
         let outcome = tokio::select! {
             biased;
             _ = ctx.cancellation.cancelled() => {
+                if let Some(pgid) = pgid {
+                    pgroup::kill_group(pgid);
+                }
                 return Err(ToolError::msg("cancelled"));
             }
             result = async {
@@ -230,7 +236,12 @@ impl Tool for ShellTool {
 
         let (stdout, stderr, status) = match outcome {
             Ok(triple) => triple,
-            Err(()) => return Err(ToolError::msg("command timed out")),
+            Err(()) => {
+                if let Some(pgid) = pgid {
+                    pgroup::kill_group(pgid);
+                }
+                return Err(ToolError::msg("command timed out"));
+            }
         };
         let status = status.map_err(|e| ToolError::msg(format!("wait failed: {e}")))?;
 

@@ -10,8 +10,9 @@ use tokio::time::timeout;
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{Agent, CancellationToken, Message, ModelResponse, Tool, ToolContext};
 use orca_harness_tools::{
-    core_tools, EditFileTool, GrepTool, ListDirTool, ReadFileTool, ShellTool, Workspace,
-    WriteFileTool,
+    core_tools, CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool, FileInfoTool,
+    GlobTool, GrepTool, ListDirTool, ProcessTool, ReadFileTool, RenameFileTool, ShellTool,
+    Workspace, WriteFileTool,
 };
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -369,4 +370,217 @@ async fn concurrent_shell_calls_run_in_parallel() {
 #[allow(dead_code)]
 fn _touch(m: &Message) -> bool {
     matches!(m, Message::Tool { .. })
+}
+
+// ---- glob -----------------------------------------------------------------
+
+#[tokio::test]
+async fn glob_matches_bare_anchored_and_recursive_patterns() {
+    let (ws, dir) = temp_ws();
+    let write = WriteFileTool::new(ws.clone());
+    for (path, content) in [
+        ("src/a.rs", "x"),
+        ("src/deep/b.rs", "x"),
+        ("c.txt", "x"),
+        ("src/note.md", "x"),
+    ] {
+        write
+            .call(json!({"path": path, "content": content}), &ctx())
+            .await
+            .unwrap();
+    }
+    let glob = GlobTool::new(ws.clone());
+
+    // Bare pattern searches the whole tree.
+    let out = glob.call(json!({"pattern": "*.rs"}), &ctx()).await.unwrap();
+    assert_eq!(
+        out["matches"],
+        json!(["src/a.rs", "src/deep/b.rs"]),
+        "sorted, tree-wide"
+    );
+
+    // Anchored single-star stays at one level.
+    let out = glob
+        .call(json!({"pattern": "src/*.rs"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(out["matches"], json!(["src/a.rs"]));
+
+    // `**` spans levels (including zero).
+    let out = glob
+        .call(json!({"pattern": "src/**/*.rs"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(out["matches"], json!(["src/a.rs", "src/deep/b.rs"]));
+    assert_eq!(out["truncated"], json!(false));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ---- process --------------------------------------------------------------
+
+#[tokio::test]
+async fn process_runs_a_quick_command_to_completion() {
+    let tool = ProcessTool::local();
+    let out = tool
+        .call(json!({"action": "spawn", "command": "echo hi"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(out["output"], json!("hi\n"));
+    assert_eq!(out["running"], json!(false));
+    assert_eq!(out["exitCode"], json!(0));
+}
+
+#[tokio::test]
+async fn process_polls_a_background_command_until_output_arrives() {
+    let tool = ProcessTool::local();
+    let out = tool
+        .call(
+            json!({"action": "spawn", "command": "sleep 1 && echo done"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    let id = out["id"].as_str().unwrap().to_string();
+    assert_eq!(out["running"], json!(true));
+
+    let polled = tool
+        .call(json!({"action": "poll", "id": id, "waitMs": 5000}), &ctx())
+        .await
+        .unwrap();
+    assert!(
+        polled["output"].as_str().unwrap().contains("done"),
+        "poll should wake on output, got: {polled}"
+    );
+}
+
+#[tokio::test]
+async fn process_drives_an_interactive_child_and_kills_it() {
+    let tool = ProcessTool::local();
+    let out = tool
+        .call(json!({"action": "spawn", "command": "cat"}), &ctx())
+        .await
+        .unwrap();
+    let id = out["id"].as_str().unwrap().to_string();
+    assert_eq!(out["running"], json!(true));
+
+    let echoed = tool
+        .call(
+            json!({"action": "write", "id": id, "input": "hello"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(echoed["output"], json!("hello\n"));
+
+    let listed = tool.call(json!({"action": "list"}), &ctx()).await.unwrap();
+    assert_eq!(listed["processes"].as_array().unwrap().len(), 1);
+
+    let killed = tool
+        .call(json!({"action": "kill", "id": id}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(killed["running"], json!(false));
+
+    // The id is gone after kill.
+    let err = tool
+        .call(json!({"action": "poll", "id": id}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown process id"));
+}
+
+#[tokio::test]
+async fn process_write_eof_lets_stdin_readers_finish() {
+    let tool = ProcessTool::local();
+    let out = tool
+        .call(json!({"action": "spawn", "command": "wc -l"}), &ctx())
+        .await
+        .unwrap();
+    let id = out["id"].as_str().unwrap().to_string();
+    let out = tool
+        .call(
+            json!({"action": "write", "id": id, "input": "a\nb", "eof": true}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["running"], json!(false), "wc exits on EOF: {out}");
+    assert!(out["output"].as_str().unwrap().trim().ends_with('2'));
+}
+
+// ---- fs admin -------------------------------------------------------------
+
+#[tokio::test]
+async fn fs_admin_roundtrip() {
+    let (ws, dir) = temp_ws();
+    let write = WriteFileTool::new(ws.clone());
+    write
+        .call(json!({"path": "a.txt", "content": "data"}), &ctx())
+        .await
+        .unwrap();
+
+    let mkdir = CreateFolderTool::new(ws.clone());
+    mkdir
+        .call(json!({"path": "nested/dir"}), &ctx())
+        .await
+        .unwrap();
+    assert!(dir.join("nested/dir").is_dir());
+
+    let copy = CopyFileTool::new(ws.clone());
+    let out = copy
+        .call(json!({"from": "a.txt", "to": "nested/b.txt"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(out["bytesCopied"], json!(4));
+
+    let rename = RenameFileTool::new(ws.clone());
+    rename
+        .call(json!({"from": "nested/b.txt", "to": "c.txt"}), &ctx())
+        .await
+        .unwrap();
+    assert!(dir.join("c.txt").exists());
+    assert!(!dir.join("nested/b.txt").exists());
+
+    let info = FileInfoTool::new(ws.clone());
+    let meta = info.call(json!({"path": "c.txt"}), &ctx()).await.unwrap();
+    assert_eq!(meta["exists"], json!(true));
+    assert_eq!(meta["kind"], json!("file"));
+    assert_eq!(meta["sizeBytes"], json!(4));
+    let missing = info.call(json!({"path": "nope"}), &ctx()).await.unwrap();
+    assert_eq!(missing["exists"], json!(false));
+
+    let del = DeleteFileTool::new(ws.clone());
+    // Directory without recursive is refused.
+    let err = del
+        .call(json!({"path": "nested"}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("recursive"));
+    del.call(json!({"path": "nested", "recursive": true}), &ctx())
+        .await
+        .unwrap();
+    assert!(!dir.join("nested").exists());
+    del.call(json!({"path": "c.txt"}), &ctx()).await.unwrap();
+    assert!(!dir.join("c.txt").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_timeout_kills_grandchildren() {
+    let tool = ShellTool::local().timeout(Some(Duration::from_millis(400)));
+    let err = tool
+        .call(json!({"command": "sleep 281.7 & wait"}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("timed out"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 281.7"])
+        .output()
+        .unwrap();
+    assert!(
+        !found.status.success(),
+        "grandchild sleep must die with the timed-out shell call"
+    );
 }
