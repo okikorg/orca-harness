@@ -56,7 +56,10 @@ pub use process::ProcessTool;
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
 pub use stats::BackgroundStats;
-pub use subagent::{SubagentDepth, SubagentTool, MAX_SUBAGENT_DEPTH, MIN_SUBAGENT_DEPTH};
+pub use subagent::{
+    SpawnExtensions, SubagentDepth, SubagentSpawn, SubagentTool, MAX_SUBAGENT_DEPTH,
+    MIN_SUBAGENT_DEPTH,
+};
 pub use workspace::Workspace;
 
 /// The recommended default tool set: a local `shell` and `process`
