@@ -87,11 +87,17 @@ pub async fn run<M: Model + Clone + 'static>(
     ));
 
     let cancel = CancellationToken::new();
-    let cancel_on_ctrl_c = cancel.clone();
+    let cancel_on_signal = cancel.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            cancel_on_ctrl_c.cancel();
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if result.is_err() {
+                    return;
+                }
+            }
+            _ = crate::shutdown_signal() => {}
         }
+        cancel_on_signal.cancel();
     });
 
     let mut context = Context::new();

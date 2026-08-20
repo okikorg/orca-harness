@@ -37,6 +37,7 @@ const TRANSCRIPT_CAP: usize = 5000;
 const SCROLL_PAGE: usize = 10;
 const PALETTE_ROWS: usize = 8;
 const PICKER_ROWS: usize = 10;
+const LIVE_TOOL_ROWS: usize = 8;
 pub struct TuiConfig {
     pub model_name: String,
     pub workspace_name: String,
@@ -343,6 +344,8 @@ pub async fn run(
     let mut app = App::new(cfg);
     let mut input = CtEventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(120));
+    let shutdown = crate::shutdown_signal();
+    tokio::pin!(shutdown);
 
     while !app.quit {
         let width = terminal.size()?.width as usize;
@@ -366,6 +369,12 @@ pub async fn run(
             }
             _ = ticker.tick(), if app.running() => {
                 app.spinner_frame = app.spinner_frame.wrapping_add(1);
+            }
+            // SIGTERM/SIGHUP: leave through the normal quit path so tool
+            // destructors kill the child process groups. The guard keeps
+            // the completed future from being polled again.
+            _ = &mut shutdown, if !app.quit => {
+                app.quit = true;
             }
         }
     }
@@ -839,10 +848,7 @@ fn slash_command(
     if let Some(rest) = command.strip_prefix("subagents") {
         if rest.is_empty() {
             app.push_line(Line::from(Span::styled(
-                format!(
-                    "subagent nesting depth: {}",
-                    app.cfg.subagent_depth.get()
-                ),
+                format!("subagent nesting depth: {}", app.cfg.subagent_depth.get()),
                 dim,
             )));
             return;
@@ -852,9 +858,7 @@ fn slash_command(
                 Ok(depth) => {
                     let set = app.cfg.subagent_depth.set(depth);
                     app.push_line(Line::from(Span::styled(
-                        format!(
-                            "subagent nesting depth set to {set} (applies to the next spawn)"
-                        ),
+                        format!("subagent nesting depth set to {set} (applies to the next spawn)"),
                         dim,
                     )));
                 }
@@ -1442,14 +1446,51 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
         .count();
     let running = app.activity_tools.len() - complete;
     let header = if live {
-        format!("  ▾ Work · {complete} complete · {running} running")
+        format!("  ▾ Work · ✓ {complete} · □ {running}")
     } else {
         format!("  ▾ Work · {}", plural(app.activity_tools.len(), "tool"))
     };
     lines.push(Line::from(Span::styled(header, t.dim)));
 
-    for (index, tool) in app.activity_tools.iter().enumerate() {
-        let last = index + 1 == app.activity_tools.len();
+    let visible_indices = if live && app.activity_tools.len() > LIVE_TOOL_ROWS {
+        let mut selected: Vec<usize> = app
+            .activity_tools
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, tool)| tool.output.is_none())
+            .map(|(index, _)| index)
+            .take(LIVE_TOOL_ROWS)
+            .collect();
+        let remaining = LIVE_TOOL_ROWS.saturating_sub(selected.len());
+        selected.extend(
+            app.activity_tools
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, tool)| tool.output.is_some())
+                .map(|(index, _)| index)
+                .take(remaining),
+        );
+        selected.sort_unstable();
+        selected
+    } else {
+        (0..app.activity_tools.len()).collect()
+    };
+    let hidden = app
+        .activity_tools
+        .len()
+        .saturating_sub(visible_indices.len());
+    if hidden > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("    … {hidden} earlier tools"),
+            t.dim,
+        )));
+    }
+
+    for (position, index) in visible_indices.iter().copied().enumerate() {
+        let tool = &app.activity_tools[index];
+        let last = position + 1 == visible_indices.len();
         let branch = if last { "└─" } else { "├─" };
         let continuation = if last { "  " } else { "│ " };
         let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
@@ -1478,8 +1519,14 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
         if let Some(approval) = &tool.approval {
             detail = format!("{approval} · {detail}");
         }
+        let row_width = width.min(132);
+        let detail_width = (row_width / 3).clamp(16, 48);
+        detail = view::truncate_line(&detail, detail_width);
         let fixed_width = 12 + detail.chars().count();
-        let call = view::truncate_line(&tool.call_line, width.saturating_sub(fixed_width).max(8));
+        let call = view::truncate_line(
+            &tool.call_line,
+            row_width.saturating_sub(fixed_width).max(8),
+        );
         lines.push(Line::from(vec![
             Span::styled(format!("    {branch} "), t.dim),
             Span::styled(format!("{glyph} "), status_style),
@@ -2129,7 +2176,7 @@ mod tests {
             "thinking group missing: {joined}"
         );
         assert!(
-            joined.contains("Work · 1 complete · 1 running"),
+            joined.contains("Work · ✓ 1 · □ 1"),
             "work totals missing: {joined}"
         );
         assert!(
@@ -2145,6 +2192,53 @@ mod tests {
             "running call missing: {joined}"
         );
         assert!(joined.contains("□"), "running state missing: {joined}");
+    }
+
+    #[test]
+    fn live_activity_prioritizes_running_tools_and_bounds_the_history() {
+        let mut app = test_app();
+        for index in 0..12 {
+            app.activity_tools.push(ToolActivity {
+                call_line: format!("read_file file-{index}.rs"),
+                tool_name: "read_file".into(),
+                input: serde_json::json!({"path": format!("file-{index}.rs")}),
+                started: Instant::now(),
+                elapsed: Some(Duration::from_millis(1)),
+                output: Some(serde_json::json!({"bytes": 42})),
+                is_error: false,
+                approval: None,
+            });
+        }
+        app.activity_tools.push(ToolActivity {
+            call_line: "shell $ cargo test --workspace".into(),
+            tool_name: "shell".into(),
+            input: serde_json::json!({"command": "cargo test --workspace"}),
+            started: Instant::now(),
+            elapsed: None,
+            output: None,
+            is_error: false,
+            approval: None,
+        });
+
+        let rendered = activity_lines(&app, 100, true);
+        let joined = rendered
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("… 5 earlier tools"),
+            "history summarized: {joined}"
+        );
+        assert!(
+            joined.contains("□ shell $ cargo test --workspace"),
+            "running tool retained: {joined}"
+        );
+        assert!(
+            !joined.contains("file-0.rs"),
+            "oldest tools hidden: {joined}"
+        );
+        assert!(rendered.len() <= LIVE_TOOL_ROWS + 2, "rail stays bounded");
     }
 
     #[test]
