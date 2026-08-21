@@ -30,6 +30,7 @@ use orca_harness_extensions::HarnessEvent;
 use orca_harness_model_openrouter::ModelInfo;
 
 use crate::commands::{filter_commands, CommandSpec};
+use crate::components::picker::{ListPicker, PickerEvent};
 use crate::msg::{ApprovalRequest, ApprovalResponse, Provider, UiMsg, WorkerCmd};
 use crate::view::{self, theme};
 
@@ -95,26 +96,29 @@ enum Overlay {
     /// Model selector over the fetched catalog.
     Models(ModelPicker),
     /// Provider selector (openrouter, openai, local).
-    Providers { index: usize },
+    Providers { picker: ListPicker },
     /// Theme selector over `view::ThemeName::ALL`.
-    Themes { index: usize },
+    Themes { picker: ListPicker },
     /// Transcript layout selector (classic or split inspector).
-    Views { index: usize },
+    Views { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
     Usage,
     /// Masked API-key entry for a provider whose key is not in the env.
     ApiKey { provider: Provider, input: String },
     /// Settings menu: shows the persisted preferences and jumps into
     /// the provider, model, theme, api-key, and approval pickers.
-    Settings { index: usize },
+    Settings { picker: ListPicker },
     /// This workspace's saved always-allowed tools; enter revokes one.
-    Approvals { tools: Vec<String>, index: usize },
+    Approvals {
+        tools: Vec<String>,
+        picker: ListPicker,
+    },
     /// The harness extension catalog; enter toggles the selected one.
-    Extensions { index: usize },
+    Extensions { picker: ListPicker },
     /// Recorded sessions for this workspace; enter resumes the selection.
     Sessions {
         sessions: Vec<orca_harness_extensions::SessionFile>,
-        index: usize,
+        picker: ListPicker,
     },
 }
 
@@ -818,17 +822,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             picker.index = picker.index.min(len.saturating_sub(1));
             after
         }
-        Overlay::Providers { index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(Provider::ALL.len() - 1);
-                After::Nothing
-            }
-            KeyCode::Enter => {
-                let provider = Provider::ALL[(*index).min(Provider::ALL.len() - 1)];
+        Overlay::Providers { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                let provider = Provider::ALL[index];
                 if provider.key_env().is_some() && provider.resolve_key().is_none() {
                     // No key in the shell or config file: ask before switching.
                     After::Replace(Overlay::ApiKey {
@@ -844,17 +840,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
-        Overlay::Themes { index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(view::ThemeName::ALL.len() - 1);
-                After::Nothing
-            }
-            KeyCode::Enter => {
-                let name = view::ThemeName::ALL[(*index).min(view::ThemeName::ALL.len() - 1)];
+        Overlay::Themes { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                let name = view::ThemeName::ALL[index];
                 view::set_theme(name);
                 let note = match crate::config::save_theme(name.slug()) {
                     Ok(_) => format!("theme set to {}", name.label()),
@@ -864,19 +852,8 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
-        Overlay::Views { index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(ViewMode::ALL.len() - 1);
-                After::Nothing
-            }
-            KeyCode::Enter => {
-                let mode = ViewMode::ALL[(*index).min(ViewMode::ALL.len() - 1)];
-                After::CloseAndSetView(mode)
-            }
+        Overlay::Views { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => After::CloseAndSetView(ViewMode::ALL[index]),
             _ => After::Nothing,
         },
         Overlay::Usage => match key.code {
@@ -915,22 +892,16 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
-        Overlay::Settings { index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(SETTINGS_ROWS - 1);
-                After::Nothing
-            }
-            KeyCode::Enter => match *index {
+        Overlay::Settings { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(row) => match row {
                 0 => {
                     let selected = Provider::ALL
                         .iter()
                         .position(|p| *p == current_provider)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Providers { index: selected })
+                    After::Replace(Overlay::Providers {
+                        picker: ListPicker::with_selected(Provider::ALL.len(), selected),
+                    })
                 }
                 1 => After::FetchModels,
                 2 => {
@@ -939,14 +910,18 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                         .iter()
                         .position(|name| *name == current)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Themes { index: selected })
+                    After::Replace(Overlay::Themes {
+                        picker: ListPicker::with_selected(view::ThemeName::ALL.len(), selected),
+                    })
                 }
                 3 => {
                     let selected = ViewMode::ALL
                         .iter()
                         .position(|mode| *mode == current_view)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Views { index: selected })
+                    After::Replace(Overlay::Views {
+                        picker: ListPicker::with_selected(ViewMode::ALL.len(), selected),
+                    })
                 }
                 4 => {
                     if current_provider.key_env().is_none() {
@@ -966,27 +941,22 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                     if tools.is_empty() {
                         After::CloseWithNote("no saved approvals for this workspace".into())
                     } else {
-                        After::Replace(Overlay::Approvals { tools, index: 0 })
+                        After::Replace(Overlay::Approvals {
+                            picker: ListPicker::new(tools.len()),
+                            tools,
+                        })
                     }
                 }
             },
             _ => After::Nothing,
         },
-        Overlay::Approvals { tools, index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(tools.len().saturating_sub(1));
-                After::Nothing
-            }
-            KeyCode::Enter => {
-                let tool = tools[(*index).min(tools.len() - 1)].clone();
+        Overlay::Approvals { tools, picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                let tool = tools[index].clone();
                 match crate::config::remove_approval(&workspace_root, &tool) {
                     Ok(_) => {
                         tools.retain(|t| *t != tool);
-                        *index = (*index).min(tools.len().saturating_sub(1));
+                        picker.set_len(tools.len());
                         if tools.is_empty() {
                             After::CloseWithNote(
                                 "all saved approvals removed; these tools ask again".into(),
@@ -1000,18 +970,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
-        Overlay::Extensions { index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(crate::extensions::EXTENSIONS.len() - 1);
-                After::Nothing
-            }
-            KeyCode::Enter => {
-                let spec = &crate::extensions::EXTENSIONS
-                    [(*index).min(crate::extensions::EXTENSIONS.len() - 1)];
+        Overlay::Extensions { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                let spec = &crate::extensions::EXTENSIONS[index];
                 let enabled = !crate::extensions::is_enabled(spec);
                 match crate::config::save_extension(spec.name, enabled) {
                     // Stay open so several extensions can be toggled;
@@ -1022,21 +983,10 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
-        Overlay::Sessions { sessions, index } => match key.code {
-            KeyCode::Up => {
-                *index = index.saturating_sub(1);
-                After::Nothing
-            }
-            KeyCode::Down => {
-                *index = (*index + 1).min(sessions.len().saturating_sub(1));
-                After::Nothing
-            }
-            KeyCode::Enter => match sessions.get((*index).min(sessions.len().saturating_sub(1))) {
-                Some(session) => After::CloseAndSend(WorkerCmd::LoadSession {
-                    path: session.path.clone(),
-                }),
-                None => After::Close,
-            },
+        Overlay::Sessions { sessions, picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::LoadSession {
+                path: sessions[index].path.clone(),
+            }),
             _ => After::Nothing,
         },
     };
@@ -1517,7 +1467,9 @@ fn slash_command(
         if rest.is_empty() {
             // Same interface as /theme and /provider: a picker overlay
             // where enter toggles the selected extension.
-            app.overlay = Some(Overlay::Extensions { index: 0 });
+            app.overlay = Some(Overlay::Extensions {
+                picker: ListPicker::new(crate::extensions::EXTENSIONS.len()),
+            });
             return;
         }
         if let Some(args) = rest.strip_prefix(' ') {
@@ -1619,7 +1571,10 @@ fn slash_command(
                 .iter()
                 .position(|s| app.cfg.session_id.as_deref() == Some(s.meta.id.as_str()))
                 .unwrap_or(0);
-            app.overlay = Some(Overlay::Sessions { sessions, index });
+            app.overlay = Some(Overlay::Sessions {
+                picker: ListPicker::with_selected(sessions.len(), index),
+                sessions,
+            });
             return;
         }
         match sessions.iter().find(|s| s.meta.id.starts_with(arg)) {
@@ -1660,7 +1615,9 @@ fn slash_command(
                 .iter()
                 .position(|name| *name == current)
                 .unwrap_or(0);
-            app.overlay = Some(Overlay::Themes { index });
+            app.overlay = Some(Overlay::Themes {
+                picker: ListPicker::with_selected(view::ThemeName::ALL.len(), index),
+            });
             return;
         }
         match view::ThemeName::from_str(arg) {
@@ -1703,10 +1660,14 @@ fn slash_command(
             }
         }
         "provider" => {
-            app.overlay = Some(Overlay::Providers { index: 0 });
+            app.overlay = Some(Overlay::Providers {
+                picker: ListPicker::new(Provider::ALL.len()),
+            });
         }
         "settings" => {
-            app.overlay = Some(Overlay::Settings { index: 0 });
+            app.overlay = Some(Overlay::Settings {
+                picker: ListPicker::new(SETTINGS_ROWS),
+            });
         }
         "help" | "" => {
             for entry in [
@@ -3016,16 +2977,16 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     if let Some(overlay) = &app.overlay {
         return match overlay {
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
-            Overlay::Providers { index } => provider_lines(*index, width),
-            Overlay::Themes { index } => theme_picker_lines(*index, width),
-            Overlay::Views { index } => view_picker_lines(app.view_mode, *index, width),
+            Overlay::Providers { picker } => provider_lines(picker, width),
+            Overlay::Themes { picker } => theme_picker_lines(picker, width),
+            Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
             Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
-            Overlay::Settings { index } => settings_lines(app, *index, width),
-            Overlay::Approvals { tools, index } => approvals_lines(tools, *index, width),
-            Overlay::Extensions { index } => extensions_picker_lines(*index, width),
-            Overlay::Sessions { sessions, index } => {
-                sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), *index, width)
+            Overlay::Settings { picker } => settings_lines(app, picker, width),
+            Overlay::Approvals { tools, picker } => approvals_lines(tools, picker, width),
+            Overlay::Extensions { picker } => extensions_picker_lines(picker, width),
+            Overlay::Sessions { sessions, picker } => {
+                sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
         };
     }
@@ -3658,35 +3619,24 @@ fn context_segment(tokens: u64, window: Option<u64>) -> String {
     }
 }
 
-fn provider_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
-    let t = theme();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Select provider · ↑↓ navigate · enter use · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    for (index, provider) in Provider::ALL.iter().enumerate() {
-        let is_selected = index == selected.min(Provider::ALL.len() - 1);
-        let marker = if is_selected { "▸ " } else { "  " };
+fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let rows = Provider::ALL.iter().map(|provider| {
         let key_note = match provider.key_env() {
             None => "no key needed".to_string(),
             Some(env) if provider.env_key().is_some() => format!("key from ${env}"),
             Some(env) => format!("${env} not set — will ask"),
         };
-        let text = format!(
-            "  {marker}{:<12} {:<36} {key_note}",
+        format!(
+            "{:<12} {:<36} {key_note}",
             provider.label(),
             provider.base_url()
-        );
-        let style = if is_selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
-    lines
+        )
+    });
+    picker.lines(
+        "Select provider · ↑↓ navigate · enter use · esc close",
+        rows,
+        width,
+    )
 }
 
 /// The /usage panel: same tray styling as the provider and theme
@@ -3727,60 +3677,38 @@ fn usage_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn theme_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
-    let t = theme();
+fn theme_picker_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
     let current = view::theme_name();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Select theme · ↑↓ navigate · enter use · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    for (index, name) in view::ThemeName::ALL.iter().enumerate() {
-        let is_selected = index == selected.min(view::ThemeName::ALL.len() - 1);
-        let marker = if is_selected { "▸ " } else { "  " };
+    let rows = view::ThemeName::ALL.iter().map(|name| {
         let note = if *name == current { "current" } else { "" };
-        let text = format!("  {marker}{:<16} {:<16} {note}", name.label(), name.slug());
-        let style = if is_selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
-    lines
+        format!("{:<16} {:<16} {note}", name.label(), name.slug())
+    });
+    picker.lines(
+        "Select theme · ↑↓ navigate · enter use · esc close",
+        rows,
+        width,
+    )
 }
 
-fn view_picker_lines(current: ViewMode, selected: usize, width: usize) -> Vec<Line<'static>> {
-    let t = theme();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Select view · ↑↓ navigate · enter use · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    for (index, mode) in ViewMode::ALL.iter().enumerate() {
-        let is_selected = index == selected.min(ViewMode::ALL.len() - 1);
-        let marker = if is_selected { "▸ " } else { "  " };
+fn view_picker_lines(current: ViewMode, picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let rows = ViewMode::ALL.iter().map(|mode| {
         let note = if *mode == current { "current" } else { "" };
         let description = match mode {
             ViewMode::Classic => "transcript with inline work rail",
             ViewMode::Split => "tool rail with connected inspector",
         };
-        let text = format!("  {marker}{:<10} {:<38} {note}", mode.label(), description);
-        let style = if is_selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
-    lines
+        format!("{:<10} {:<38} {note}", mode.label(), description)
+    });
+    picker.lines(
+        "Select view · ↑↓ navigate · enter use · esc close",
+        rows,
+        width,
+    )
 }
 
 /// The /settings tray: current values for the persisted preferences,
 /// enter drills into the matching picker.
-fn settings_lines(app: &App, selected: usize, width: usize) -> Vec<Line<'static>> {
+fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let provider = app.cfg.provider;
     let key_status = match provider.key_env() {
@@ -3803,22 +3731,12 @@ fn settings_lines(app: &App, selected: usize, width: usize) -> Vec<Line<'static>
         ("api key", key_status),
         ("approvals", approvals_status),
     ];
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Settings · ↑↓ navigate · enter change · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    for (index, (name, value)) in rows.iter().enumerate() {
-        let marker = if index == selected { "▸ " } else { "  " };
-        let text = format!("  {marker}{name:<10} {value}");
-        let style = if index == selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
+    let mut lines = picker.lines(
+        "Settings · ↑↓ navigate · enter change · esc close",
+        rows.iter()
+            .map(|(name, value)| format!("{name:<10} {value}")),
+        width,
+    );
     if let Some(path) = crate::config::config_path() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -3831,54 +3749,30 @@ fn settings_lines(app: &App, selected: usize, width: usize) -> Vec<Line<'static>
 
 /// This workspace's saved always-allowed tools; enter revokes the
 /// selected one so it prompts again.
-fn approvals_lines(tools: &[String], selected: usize, width: usize) -> Vec<Line<'static>> {
-    let t = theme();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Saved approvals (this workspace) · ↑↓ navigate · enter revoke · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    for (index, tool) in tools.iter().enumerate() {
-        let marker = if index == selected { "▸ " } else { "  " };
-        let style = if index == selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&format!("  {marker}{tool}"), width),
-            style,
-        )));
-    }
-    lines
+fn approvals_lines(tools: &[String], picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    picker.lines(
+        "Saved approvals (this workspace) · ↑↓ navigate · enter revoke · esc close",
+        tools.iter().cloned(),
+        width,
+    )
 }
 
 /// The harness extension catalog with live on/off state; enter toggles
 /// the selected extension and the list stays open.
-fn extensions_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
-    let t = theme();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Extensions · ↑↓ navigate · enter toggle · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    let last = crate::extensions::EXTENSIONS.len() - 1;
-    for (index, spec) in crate::extensions::EXTENSIONS.iter().enumerate() {
-        let is_selected = index == selected.min(last);
-        let marker = if is_selected { "▸ " } else { "  " };
+fn extensions_picker_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let rows = crate::extensions::EXTENSIONS.iter().map(|spec| {
         let state = if crate::extensions::is_enabled(spec) {
             "on "
         } else {
             "off"
         };
-        let text = format!("  {marker}{:<12} {state}  {}", spec.name, spec.description);
-        let style = if is_selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
-    lines
+        format!("{:<12} {state}  {}", spec.name, spec.description)
+    });
+    picker.lines(
+        "Extensions · ↑↓ navigate · enter toggle · esc close",
+        rows,
+        width,
+    )
 }
 
 /// Recorded sessions for this workspace, newest first; enter resumes
@@ -3886,39 +3780,27 @@ fn extensions_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> 
 fn sessions_picker_lines(
     sessions: &[orca_harness_extensions::SessionFile],
     current: Option<&str>,
-    selected: usize,
+    picker: &ListPicker,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let t = theme();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Sessions (this workspace) · ↑↓ navigate · enter resume · esc close",
-            t.dim,
-        )),
-        Line::from(""),
-    ];
-    let last = sessions.len().saturating_sub(1);
-    for (index, session) in sessions.iter().enumerate() {
-        let is_selected = index == selected.min(last);
-        let marker = if is_selected { "▸ " } else { "  " };
+    let rows = sessions.iter().map(|session| {
         let note = if current == Some(session.meta.id.as_str()) {
             "  (current)"
         } else {
             ""
         };
-        let text = format!(
-            "  {marker}{}  {:<8} {}{note}",
+        format!(
+            "{}  {:<8} {}{note}",
             session.meta.id,
             age_label(session.meta.created_at),
             session.meta.model,
-        );
-        let style = if is_selected { t.strong } else { t.dim };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
-    lines
+        )
+    });
+    picker.lines(
+        "Sessions (this workspace) · ↑↓ navigate · enter resume · esc close",
+        rows,
+        width,
+    )
 }
 
 fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static>> {
@@ -5595,7 +5477,9 @@ mod tests {
     fn provider_without_key_requirement_switches_directly() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.overlay = Some(Overlay::Providers { index: 0 });
+        app.overlay = Some(Overlay::Providers {
+            picker: ListPicker::new(Provider::ALL.len()),
+        });
         // Down twice: openrouter -> openai -> local (needs no key).
         press(&mut app, &tx, KeyCode::Down);
         press(&mut app, &tx, KeyCode::Down);
@@ -5653,7 +5537,10 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         slash_command(&mut app, "provider", &tx, 80);
-        assert!(matches!(app.overlay, Some(Overlay::Providers { index: 0 })));
+        match &app.overlay {
+            Some(Overlay::Providers { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the provider overlay"),
+        }
     }
 
     #[test]
@@ -5661,30 +5548,45 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         slash_command(&mut app, "settings", &tx, 80);
-        assert!(matches!(app.overlay, Some(Overlay::Settings { index: 0 })));
+        match &app.overlay {
+            Some(Overlay::Settings { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the settings overlay"),
+        }
 
         // Provider row: opens the provider picker preselected on the
         // active provider (local sits at index 2).
         press(&mut app, &tx, KeyCode::Enter);
-        assert!(matches!(app.overlay, Some(Overlay::Providers { index: 2 })));
+        match &app.overlay {
+            Some(Overlay::Providers { picker }) => assert_eq!(picker.index(), 2),
+            _ => panic!("expected the provider overlay"),
+        }
 
         // Model row: kicks off the same fetch-then-pick flow as /models.
-        app.overlay = Some(Overlay::Settings { index: 1 });
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 1),
+        });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
         assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ListModels { .. })));
         assert_eq!(app.picker_pending.as_deref(), Some(""));
 
         // Theme row: opens the theme picker.
-        app.overlay = Some(Overlay::Settings { index: 2 });
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 2),
+        });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(matches!(app.overlay, Some(Overlay::Themes { .. })));
 
         // View row opens a picker preselected on the current layout.
         app.view_mode = ViewMode::Classic;
-        app.overlay = Some(Overlay::Settings { index: 3 });
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 3),
+        });
         press(&mut app, &tx, KeyCode::Enter);
-        assert!(matches!(app.overlay, Some(Overlay::Views { index: 0 })));
+        match &app.overlay {
+            Some(Overlay::Views { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the view overlay"),
+        }
 
         // Down and enter selects Split using the same pattern as theme/provider.
         press(&mut app, &tx, KeyCode::Down);
@@ -5694,7 +5596,9 @@ mod tests {
         assert_eq!(crate::config::stored_view().as_deref(), Some("split"));
 
         // Api key row on a keyless provider closes with an explanation.
-        app.overlay = Some(Overlay::Settings { index: 4 });
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 4),
+        });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
         assert!(rx.try_recv().is_err(), "no command for a keyless provider");
@@ -5822,7 +5726,9 @@ mod tests {
         let mut app = test_app();
 
         // With nothing saved, the settings approvals row just explains.
-        app.overlay = Some(Overlay::Settings { index: 5 });
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 5),
+        });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
 
@@ -5858,7 +5764,9 @@ mod tests {
         assert_eq!(crate::config::stored_approvals("/test-ws"), ["shell"]);
 
         // The settings approvals row opens the list; enter revokes.
-        app.overlay = Some(Overlay::Settings { index: 5 });
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 5),
+        });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(matches!(app.overlay, Some(Overlay::Approvals { .. })));
         press(&mut app, &tx, KeyCode::Enter);
@@ -5877,7 +5785,7 @@ mod tests {
             .position(|name| *name == current)
             .unwrap();
         match &app.overlay {
-            Some(Overlay::Themes { index }) => assert_eq!(*index, expected),
+            Some(Overlay::Themes { picker }) => assert_eq!(picker.index(), expected),
             other => panic!("expected theme overlay, got {}", other.is_some()),
         }
 
@@ -6048,10 +5956,10 @@ mod extensions_command_tests {
         let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         slash_command(&mut app, "extensions", &worker, 80);
-        assert!(matches!(
-            app.overlay,
-            Some(Overlay::Extensions { index: 0 })
-        ));
+        match &app.overlay {
+            Some(Overlay::Extensions { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the extensions overlay"),
+        }
 
         // Same rendered shape as the other pickers: every extension with
         // its live state and a selection marker.
@@ -6153,7 +6061,7 @@ mod extensions_command_tests {
                 session_file("0000000002-b-0", "m2"),
                 session_file("0000000001-a-0", "m1"),
             ],
-            index: 0,
+            picker: ListPicker::new(2),
         });
 
         // Same rendered shape as the other pickers: every session with a
@@ -6182,7 +6090,7 @@ mod extensions_command_tests {
         // Esc closes like every other overlay.
         app.overlay = Some(Overlay::Sessions {
             sessions: vec![session_file("0000000001-a-0", "m1")],
-            index: 0,
+            picker: ListPicker::new(1),
         });
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         handle_overlay_key(&mut app, esc, &worker);

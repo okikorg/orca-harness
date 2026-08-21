@@ -5,6 +5,7 @@
 
 mod approval;
 mod commands;
+mod components;
 mod config;
 mod extensions;
 mod headless;
