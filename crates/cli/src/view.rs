@@ -448,6 +448,72 @@ fn render_code_block(
     output
 }
 
+/// Syntax-highlight code for the scrollable inspector. Unlike transcript
+/// fences, inspector rows wrap styled segments instead of truncating them.
+pub fn highlighted_code_lines(
+    source: &str,
+    language: &str,
+    width: usize,
+    indent: &str,
+) -> Vec<Line<'static>> {
+    let selected_theme = theme();
+    let code_width = width.saturating_sub(indent.chars().count() + 2).max(8);
+    let fallback_style = selected_theme.code.remove_modifier(Modifier::ITALIC);
+    let fallback = || {
+        source
+            .lines()
+            .flat_map(|raw| {
+                textwrap::wrap(raw, code_width)
+                    .into_iter()
+                    .map(|part| {
+                        Line::from(vec![
+                            Span::styled(format!("{indent}│ "), selected_theme.dim),
+                            Span::styled(part.into_owned(), fallback_style),
+                        ])
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    if selected_theme.code.fg.is_none() {
+        return fallback();
+    }
+    let language = language.trim().trim_start_matches("language-");
+    let Some(syntax) = syntax_set().find_syntax_by_token(language) else {
+        return fallback();
+    };
+    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    let mut output = Vec::new();
+    for raw in source.lines() {
+        let line_with_ending = format!("{}\n", raw.trim_end());
+        let Ok(highlighted) = highlighter.highlight_line(&line_with_ending, syntax_set()) else {
+            return fallback();
+        };
+        let mut segments = Vec::new();
+        for (style, content) in highlighted {
+            let content = content.trim_end_matches(['\r', '\n']);
+            if content.is_empty() {
+                continue;
+            }
+            let converted = into_span((style, content));
+            match converted {
+                Ok(span) => {
+                    let mut style = span.style;
+                    style.bg = None;
+                    segments.push((span.content.into_owned(), style));
+                }
+                Err(_) => segments.push((content.to_string(), fallback_style)),
+            }
+        }
+        for wrapped in wrap_styled(&segments, code_width) {
+            let mut spans = vec![Span::styled(format!("{indent}│ "), selected_theme.dim)];
+            spans.extend(wrapped);
+            output.push(Line::from(spans));
+        }
+    }
+    output
+}
+
 fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     if total <= max {
@@ -768,6 +834,7 @@ fn push_wrapped_word(
 /// Which slice of an N-line transcript is visible in a viewport of
 /// `height` rows when the user has scrolled `scroll` lines up from the
 /// bottom. Returns `(start, end)` indices.
+#[cfg(test)]
 pub fn scroll_window(len: usize, height: usize, scroll: usize) -> (usize, usize) {
     let max_scroll = len.saturating_sub(height);
     let scroll = scroll.min(max_scroll);
@@ -1186,6 +1253,24 @@ mod tests {
                 .any(|(index, color)| token_colors[index + 1..].iter().any(|next| next != color)),
             "expected more than one syntax color: {code_line:?}"
         );
+    }
+
+    #[test]
+    fn inspector_code_highlights_and_wraps_without_ellipsis() {
+        set_theme(ThemeName::Default);
+        let source = "let deterministic_result = compute_parallel_tool_output();";
+        let lines = highlighted_code_lines(source, "rust", 32, "  ");
+        assert!(lines.len() > 1, "long code wraps: {lines:?}");
+        let text = lines.iter().map(flat).collect::<Vec<_>>().join("\n");
+        assert!(
+            !text.contains('…'),
+            "inspector code is not truncated: {text}"
+        );
+        let colors: std::collections::HashSet<_> = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().filter_map(|span| span.style.fg))
+            .collect();
+        assert!(colors.len() > 1, "syntax colors applied: {lines:?}");
     }
 
     #[test]

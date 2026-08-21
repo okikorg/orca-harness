@@ -21,7 +21,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 use tokio::sync::mpsc;
 
@@ -36,6 +36,8 @@ use crate::view::{self, theme};
 const SPINNER: &[char] = &['·', ' '];
 const EXPAND_MAX_LINES: usize = 200;
 const TRANSCRIPT_CAP: usize = 5000;
+const INSPECTOR_PREVIEW_LINES: usize = 240;
+const INSPECTOR_PREVIEW_CHARS: usize = 32 * 1024;
 const SCROLL_PAGE: usize = 10;
 const PALETTE_ROWS: usize = 8;
 const PICKER_ROWS: usize = 10;
@@ -92,6 +94,8 @@ enum Overlay {
     Providers { index: usize },
     /// Theme selector over `view::ThemeName::ALL`.
     Themes { index: usize },
+    /// Transcript layout selector (classic or split inspector).
+    Views { index: usize },
     /// Read-only session usage panel; any dismissal key closes it.
     Usage,
     /// Masked API-key entry for a provider whose key is not in the env.
@@ -105,9 +109,9 @@ enum Overlay {
     Extensions { index: usize },
 }
 
-/// Rows in the settings overlay: provider, model, theme, api key,
-/// approvals.
-const SETTINGS_ROWS: usize = 5;
+/// Rows in the settings overlay: provider, model, theme, transcript view,
+/// api key, approvals.
+const SETTINGS_ROWS: usize = 6;
 
 /// A finished tool call kept around so the user can expand its full
 /// output later with `/expand n`.
@@ -142,6 +146,38 @@ enum BlockSpacing {
     Section,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    Classic,
+    Split,
+}
+
+impl ViewMode {
+    const ALL: [Self; 2] = [Self::Classic, Self::Split];
+
+    fn stored() -> Self {
+        match crate::config::stored_view().as_deref() {
+            Some("split") => Self::Split,
+            _ => Self::Classic,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Classic => "Classic",
+            Self::Split => "Split",
+        }
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Split => "split",
+        }
+    }
+}
+
+#[derive(Clone)]
 struct ToolActivity {
     /// The model-assigned tool-call id (anchors nested subagent spawns).
     call_id: String,
@@ -153,6 +189,14 @@ struct ToolActivity {
     output: Option<serde_json::Value>,
     is_error: bool,
     approval: Option<String>,
+}
+
+struct InspectorBodyCache {
+    call_id: String,
+    complete: bool,
+    is_error: bool,
+    width: usize,
+    lines: Vec<Line<'static>>,
 }
 
 /// One spawned inner agent's tool activity while it runs.
@@ -182,6 +226,9 @@ struct App {
     transcript: Vec<Line<'static>>,
     /// Lines scrolled up from the bottom of the transcript.
     scroll: usize,
+    /// Previous wrapped overflow height. Used to keep the same top row
+    /// anchored while live content or the composer region changes size.
+    transcript_max_scroll: usize,
     reasoning: String,
     /// When the current reasoning phase started streaming.
     reasoning_started: Option<Instant>,
@@ -225,6 +272,14 @@ struct App {
     /// Call lines for in-flight tool calls, keyed by call id.
     pending_calls: std::collections::HashMap<String, usize>,
     activity_tools: Vec<ToolActivity>,
+    view_mode: ViewMode,
+    split_tool: Option<usize>,
+    /// Last inspected call retained across model phases so Split never
+    /// collapses or flashes while the next call is being prepared.
+    split_snapshot: Option<ToolActivity>,
+    split_inspector_cache: Option<InspectorBodyCache>,
+    split_focused: bool,
+    split_scroll: u16,
     /// Live inner activity of running subagents, keyed by spawn id.
     subagent_activity: std::collections::HashMap<u64, SpawnActivity>,
     /// Selected row in the slash-command palette.
@@ -242,6 +297,7 @@ impl App {
             pending_history: Vec::new(),
             transcript: Vec::new(),
             scroll: 0,
+            transcript_max_scroll: 0,
             reasoning: String::new(),
             reasoning_started: None,
             thinking_log: Vec::new(),
@@ -271,6 +327,12 @@ impl App {
             last_turn_summary: None,
             pending_calls: std::collections::HashMap::new(),
             activity_tools: Vec::new(),
+            view_mode: ViewMode::stored(),
+            split_tool: None,
+            split_snapshot: None,
+            split_inspector_cache: None,
+            split_focused: false,
+            split_scroll: 0,
             subagent_activity: std::collections::HashMap::new(),
             palette_index: 0,
             overlay: None,
@@ -332,6 +394,9 @@ impl App {
         self.reasoning_started = None;
         self.thinking_log.clear();
         self.activity_tools.clear();
+        self.split_tool = None;
+        self.split_focused = false;
+        self.split_scroll = 0;
         self.subagent_activity.clear();
         self.pending_calls.clear();
         self.pending_assistant = None;
@@ -358,7 +423,17 @@ impl App {
 
     fn commit_activity(&mut self, width: usize) {
         self.flush_reasoning();
-        let lines = activity_lines(self, width, false);
+        let selected = if !self.activity_tools.is_empty() {
+            let selected = self
+                .split_tool
+                .unwrap_or_else(|| self.activity_tools.len().saturating_sub(1))
+                .min(self.activity_tools.len().saturating_sub(1));
+            self.split_snapshot = self.activity_tools.get(selected).cloned();
+            (self.view_mode == ViewMode::Split).then_some(selected)
+        } else {
+            None
+        };
+        let lines = activity_lines_selected(self, width, false, selected);
         if !lines.is_empty() {
             // Work is part of the surrounding event stream, not a new
             // prose paragraph. Keep it adjacent to the narration and show
@@ -379,6 +454,9 @@ impl App {
         self.thinking_log.clear();
         self.activity_tools.clear();
         self.pending_calls.clear();
+        self.split_tool = None;
+        self.split_focused = false;
+        self.split_scroll = 0;
     }
 
     /// A new model phase can only begin after the previous batch of tools
@@ -396,11 +474,7 @@ impl App {
         if self.pending_history.is_empty() {
             return;
         }
-        let added = self.pending_history.len();
         self.transcript.append(&mut self.pending_history);
-        if self.scroll > 0 {
-            self.scroll += added;
-        }
         if self.transcript.len() > TRANSCRIPT_CAP {
             let excess = self.transcript.len() - TRANSCRIPT_CAP;
             self.transcript.drain(..excess);
@@ -449,7 +523,10 @@ pub async fn run(
             }
             maybe_msg = ui_rx.recv() => {
                 match maybe_msg {
-                    Some(msg) => handle_ui_msg(&mut app, msg, &worker, width),
+                    Some(msg) => {
+                        let content_width = transcript_content_width(&app, width);
+                        handle_ui_msg(&mut app, msg, &worker, content_width)
+                    },
                     None => app.quit = true,
                 }
             }
@@ -485,7 +562,16 @@ fn handle_terminal_event(
     let key = match event {
         CtEvent::Key(key) => key,
         CtEvent::Mouse(mouse) => {
+            let split_boundary = ((width as u32 * 58) / 100) as u16;
+            let over_inspector =
+                app.view_mode == ViewMode::Split && width >= 100 && mouse.column >= split_boundary;
             match mouse.kind {
+                MouseEventKind::ScrollUp if over_inspector => {
+                    app.split_scroll = app.split_scroll.saturating_sub(3)
+                }
+                MouseEventKind::ScrollDown if over_inspector => {
+                    app.split_scroll = app.split_scroll.saturating_add(3)
+                }
                 MouseEventKind::ScrollUp => app.scroll += 3,
                 MouseEventKind::ScrollDown => app.scroll = app.scroll.saturating_sub(3),
                 _ => {}
@@ -505,6 +591,7 @@ fn handle_terminal_event(
         handle_overlay_key(app, key, worker);
         return;
     }
+    let content_width = transcript_content_width(app, width);
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Char('c') if ctrl => {
@@ -526,13 +613,43 @@ fn handle_terminal_event(
         }
         KeyCode::Char('o') if ctrl => {
             if !expand_latest_work(app) {
-                expand_tool(app, 1, width);
+                expand_tool(app, 1, content_width);
             }
+        }
+        KeyCode::Tab
+            if app.view_mode == ViewMode::Split
+                && width >= 100
+                && !app.activity_tools.is_empty() =>
+        {
+            app.split_focused = !app.split_focused;
+            if app.split_tool.is_none() {
+                app.split_tool = Some(app.activity_tools.len() - 1);
+            }
+        }
+        KeyCode::Up if app.split_focused => {
+            let selected = app
+                .split_tool
+                .unwrap_or_else(|| app.activity_tools.len().saturating_sub(1));
+            app.split_tool = Some(selected.saturating_sub(1));
+            app.split_scroll = 0;
+        }
+        KeyCode::Down if app.split_focused => {
+            let last = app.activity_tools.len().saturating_sub(1);
+            app.split_tool = Some(app.split_tool.unwrap_or(last).saturating_add(1).min(last));
+            app.split_scroll = 0;
+        }
+        KeyCode::PageUp if app.split_focused => {
+            app.split_scroll = app.split_scroll.saturating_sub(SCROLL_PAGE as u16);
+        }
+        KeyCode::PageDown if app.split_focused => {
+            app.split_scroll = app.split_scroll.saturating_add(SCROLL_PAGE as u16);
         }
         KeyCode::PageUp => app.scroll += SCROLL_PAGE,
         KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(SCROLL_PAGE),
         KeyCode::Esc => {
-            if app.palette_query().is_some() {
+            if app.split_focused {
+                app.split_focused = false;
+            } else if app.palette_query().is_some() {
                 app.composer.clear();
                 app.cursor = 0;
                 app.palette_index = 0;
@@ -563,7 +680,7 @@ fn handle_terminal_event(
                 }
             }
             app.scroll = 0;
-            submit(app, worker, width);
+            submit(app, worker, content_width);
             app.palette_index = 0;
         }
         KeyCode::Char(c) => {
@@ -637,6 +754,8 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             id: String,
             window: Option<u64>,
         },
+        /// Close, persist, and activate the selected transcript layout.
+        CloseAndSetView(ViewMode),
         /// Close and drop a dim status line into the history.
         CloseWithNote(String),
         /// Close, send to the worker, and drop a dim status line.
@@ -646,6 +765,7 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
     }
     // Read before the overlay borrow: the settings rows need these.
     let current_provider = app.cfg.provider;
+    let current_view = app.view_mode;
     let workspace_root = app.cfg.workspace_root.clone();
     let Some(overlay) = app.overlay.as_mut() else {
         return;
@@ -735,6 +855,21 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
+        Overlay::Views { index } => match key.code {
+            KeyCode::Up => {
+                *index = index.saturating_sub(1);
+                After::Nothing
+            }
+            KeyCode::Down => {
+                *index = (*index + 1).min(ViewMode::ALL.len() - 1);
+                After::Nothing
+            }
+            KeyCode::Enter => {
+                let mode = ViewMode::ALL[(*index).min(ViewMode::ALL.len() - 1)];
+                After::CloseAndSetView(mode)
+            }
+            _ => After::Nothing,
+        },
         Overlay::Usage => match key.code {
             KeyCode::Enter | KeyCode::Char('q') => After::Close,
             _ => After::Nothing,
@@ -798,6 +933,13 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                     After::Replace(Overlay::Themes { index: selected })
                 }
                 3 => {
+                    let selected = ViewMode::ALL
+                        .iter()
+                        .position(|mode| *mode == current_view)
+                        .unwrap_or(0);
+                    After::Replace(Overlay::Views { index: selected })
+                }
+                4 => {
                     if current_provider.key_env().is_none() {
                         After::CloseWithNote(format!(
                             "the {} endpoint needs no api key",
@@ -885,6 +1027,22 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             app.overlay = None;
             app.context_window = window;
             send_or_report(app, worker, WorkerCmd::SetModel { id });
+        }
+        After::CloseAndSetView(mode) => {
+            app.overlay = None;
+            app.view_mode = mode;
+            if mode == ViewMode::Classic {
+                clear_tool_connectors(&mut app.transcript);
+                clear_tool_connectors(&mut app.pending_history);
+                app.split_inspector_cache = None;
+            }
+            app.split_focused = false;
+            app.split_scroll = 0;
+            let note = match crate::config::save_view(mode.slug()) {
+                Ok(_) => format!("view set to {}", mode.label()),
+                Err(err) => format!("view set to {} (not saved: {err})", mode.label()),
+            };
+            app.push_line(Line::from(Span::styled(note, theme().dim)));
         }
         After::CloseWithNote(note) => {
             app.overlay = None;
@@ -1172,6 +1330,17 @@ fn line_text(line: &Line<'_>) -> String {
         .collect()
 }
 
+fn clear_tool_connectors(lines: &mut [Line<'static>]) {
+    for line in lines {
+        line.spans.retain(|span| {
+            let text = span.content.trim();
+            !(text.contains('·')
+                && text.ends_with('○')
+                && text.chars().all(|ch| ch == '·' || ch == '○'))
+        });
+    }
+}
+
 fn line_is_blank(line: &Line<'_>) -> bool {
     line.spans.iter().all(|span| span.content.trim().is_empty())
 }
@@ -1437,6 +1606,8 @@ fn slash_command(
             app.transcript.clear();
             app.pending_history.clear();
             app.scroll = 0;
+            app.transcript_max_scroll = 0;
+            app.split_inspector_cache = None;
             app.prompt_queue.clear();
             app.tokens_in = 0;
             app.tokens_out = 0;
@@ -1448,6 +1619,7 @@ fn slash_command(
             app.work_log.clear();
             app.turn_count = 0;
             app.reset_activity();
+            app.split_snapshot = None;
         }
         "usage" => {
             app.overlay = Some(Overlay::Usage);
@@ -1675,6 +1847,8 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             tool_name,
             input,
         } => {
+            clear_tool_connectors(&mut app.transcript);
+            clear_tool_connectors(&mut app.pending_history);
             app.flush_reasoning();
             if let Some(message) = app.pending_assistant.take() {
                 if !message.trim().is_empty() {
@@ -1695,6 +1869,10 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
                 is_error: false,
                 approval: None,
             });
+            if !app.split_focused {
+                app.split_tool = Some(index);
+                app.split_scroll = 0;
+            }
             app.pending_calls.insert(tool_call_id, index);
         }
         HarnessEvent::ToolResult {
@@ -1924,7 +2102,17 @@ fn welcome_lines(
 
 fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
-    let live = live_lines(app, width);
+    // Split the whole terminal first so the transcript, live rail, composer,
+    // and status share one left column and the inspector owns the full right.
+    let split_active = app.view_mode == ViewMode::Split && width >= 100;
+    let [left_root, inspector_area] = if split_active {
+        Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .areas(frame.area())
+    } else {
+        [frame.area(), frame.area()]
+    };
+    let left_width = left_root.width as usize;
+    let live = live_lines(app, left_width);
     let live_height = live.len().min(PALETTE_ROWS + 7) as u16;
     let [transcript_area, live_area, _composer_gap_area, composer_area, status_area] =
         Layout::vertical([
@@ -1934,22 +2122,100 @@ fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Length(1),
             Constraint::Length(1),
         ])
-        .areas(frame.area());
+        .areas(left_root);
 
     // Transcript: committed history plus a render-only projection of the
     // in-progress turn. Deltas therefore appear in their final location
     // instead of streaming through the temporary area and jumping here.
     let height = transcript_area.height as usize;
-    let projected = projected_transcript(app, width);
-    app.scroll = app.scroll.min(projected.len().saturating_sub(height));
-    let visible = if projected.is_empty() && !app.running() {
-        let full_height = frame.area().height as usize;
-        welcome_lines(full_height, height, width, &app.cfg)
+    let transcript_width = transcript_area.width as usize;
+    let selected_tool = (split_active && !app.activity_tools.is_empty()).then(|| {
+        app.split_tool
+            .unwrap_or_else(|| app.activity_tools.len().saturating_sub(1))
+            .min(app.activity_tools.len().saturating_sub(1))
+    });
+    let projected = if selected_tool.is_some() {
+        projected_transcript_selected(app, transcript_width, selected_tool)
     } else {
-        let (start, end) = view::scroll_window(projected.len(), height, app.scroll);
-        projected[start..end].to_vec()
+        projected_transcript(app, transcript_width)
     };
-    frame.render_widget(Paragraph::new(Text::from(visible)), transcript_area);
+    if projected.is_empty() && !app.running() {
+        let full_height = frame.area().height as usize;
+        let welcome = welcome_lines(full_height, height, transcript_width, &app.cfg);
+        frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
+    } else {
+        let max_scroll = projected.len().saturating_sub(height);
+        stabilize_transcript_scroll(app, max_scroll);
+        let end = projected.len().saturating_sub(app.scroll);
+        let start = end.saturating_sub(height);
+        frame.render_widget(
+            Paragraph::new(Text::from(projected[start..end].to_vec())),
+            transcript_area,
+        );
+    }
+
+    if split_active {
+        let inspected = selected_tool
+            .and_then(|selected| app.activity_tools.get(selected))
+            .or(app.split_snapshot.as_ref());
+        let inspector_width = inspector_area.width as usize;
+        let (header, body) = if let Some(tool) = inspected {
+            let complete = tool.output.is_some();
+            let cache_valid = app.split_inspector_cache.as_ref().is_some_and(|cache| {
+                cache.call_id == tool.call_id
+                    && cache.complete == complete
+                    && cache.is_error == tool.is_error
+                    && cache.width == inspector_width
+            });
+            if !cache_valid {
+                app.split_inspector_cache = Some(InspectorBodyCache {
+                    call_id: tool.call_id.clone(),
+                    complete,
+                    is_error: tool.is_error,
+                    width: inspector_width,
+                    lines: tool_inspector_body_lines(tool, inspector_width),
+                });
+            }
+            (
+                tool_inspector_header_lines(tool),
+                app.split_inspector_cache
+                    .as_ref()
+                    .map(|cache| cache.lines.clone())
+                    .unwrap_or_default(),
+            )
+        } else {
+            (empty_tool_inspector_lines(), Vec::new())
+        };
+        let header_len = header.len();
+        let [header_area, body_area] =
+            Layout::vertical([Constraint::Length(header_len as u16), Constraint::Min(0)])
+                .areas(inspector_area);
+        let max_scroll = body
+            .len()
+            .saturating_sub(body_area.height as usize)
+            .min(u16::MAX as usize) as u16;
+        app.split_scroll = app.split_scroll.min(max_scroll);
+        let border_style = if app.split_focused {
+            theme().accent
+        } else {
+            theme().dim
+        };
+        let divider = || {
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(border_style)
+        };
+        frame.render_widget(
+            Paragraph::new(Text::from(header)).block(divider()),
+            header_area,
+        );
+        let body_start = app.split_scroll as usize;
+        let body_end = (body_start + body_area.height as usize).min(body.len());
+        frame.render_widget(
+            Paragraph::new(Text::from(body[body_start..body_end].to_vec())).block(divider()),
+            body_area,
+        );
+    }
 
     frame.render_widget(Paragraph::new(Text::from(live)), live_area);
 
@@ -2000,6 +2266,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
         "↑↓ navigate · enter use · esc close"
     } else if app.palette_query().is_some() && app.approval.is_none() {
         "↑↓ navigate · enter use · tab complete · esc close"
+    } else if app.split_focused {
+        "↑↓ select tool · pgup/pgdn scroll · tab return"
+    } else if split_active && !app.activity_tools.is_empty() {
+        "tab inspect · enter queue · esc interrupt"
+    } else if split_active && app.running() {
+        "split ready · waiting for tool call · esc interrupt"
     } else if app.running() {
         "enter queue · esc interrupt"
     } else if !app.prompt_queue.is_empty() {
@@ -2019,11 +2291,35 @@ fn draw(frame: &mut Frame, app: &mut App) {
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            view::truncate_line(&status, width),
+            view::truncate_line(&status, left_width),
             theme().dim,
         ))),
         status_area,
     );
+}
+
+fn transcript_content_width(app: &App, terminal_width: usize) -> usize {
+    if app.view_mode == ViewMode::Split && terminal_width >= 100 {
+        terminal_width.saturating_mul(58) / 100
+    } else {
+        terminal_width
+    }
+}
+
+fn stabilize_transcript_scroll(app: &mut App, max_scroll: usize) {
+    if app.scroll > 0 {
+        if max_scroll >= app.transcript_max_scroll {
+            app.scroll = app
+                .scroll
+                .saturating_add(max_scroll - app.transcript_max_scroll);
+        } else {
+            app.scroll = app
+                .scroll
+                .saturating_sub(app.transcript_max_scroll - max_scroll);
+        }
+    }
+    app.scroll = app.scroll.min(max_scroll);
+    app.transcript_max_scroll = max_scroll;
 }
 
 /// Keep the pinned status line compact by showing only the workspace folder.
@@ -2034,6 +2330,217 @@ fn workspace_status_name(workspace: &str) -> &str {
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or(workspace)
+}
+
+#[cfg(test)]
+fn tool_inspector_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
+    let mut lines = tool_inspector_header_lines(tool);
+    lines.extend(tool_inspector_body_lines(tool, width));
+    lines
+}
+
+fn tool_inspector_header_lines(tool: &ToolActivity) -> Vec<Line<'static>> {
+    let t = theme();
+    let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
+    let (status, status_style) = match &tool.output {
+        Some(_) if tool.is_error => ("failed", t.error),
+        Some(_) => ("completed", t.success),
+        None => ("running", t.accent),
+    };
+    vec![
+        Line::from(vec![
+            Span::styled("  ○ ", t.dim),
+            Span::styled(tool.tool_name.to_uppercase(), t.strong),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("  {status}"), status_style),
+            Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
+        ]),
+        Line::from(""),
+    ]
+}
+
+fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let inner = width.saturating_sub(4).max(16);
+    let mut lines = vec![Line::from(Span::styled("  INPUT", t.dim))];
+    let input =
+        serde_json::to_string_pretty(&tool.input).unwrap_or_else(|_| tool.input.to_string());
+    lines.extend(view::highlighted_code_lines(&input, "json", inner, "  "));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("  OUTPUT", t.dim)));
+    if let Some(output) = &tool.output {
+        let language = inspector_output_language(tool, output);
+        let (expanded, omitted) = if language == Some("json") {
+            shallow_json_preview(output)
+        } else {
+            inspector_output_preview(&tool.tool_name, output)
+        };
+        if tool.is_error {
+            push_inspector_text(&mut lines, &expanded, inner, t.error);
+        } else if let Some(language) = language {
+            lines.extend(view::highlighted_code_lines(
+                &expanded, language, inner, "  ",
+            ));
+        } else {
+            push_inspector_text(&mut lines, &expanded, inner, Style::default());
+        }
+        if omitted {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  Preview limited to {} lines / {} KiB",
+                    INSPECTOR_PREVIEW_LINES,
+                    INSPECTOR_PREVIEW_CHARS / 1024
+                ),
+                t.dim,
+            )));
+        }
+    } else {
+        lines.push(Line::from(Span::styled("  Waiting for result", t.dim)));
+    }
+    lines
+}
+
+fn shallow_json_preview(output: &serde_json::Value) -> (String, bool) {
+    fn child(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::Object(_) => "{ … }".to_owned(),
+            serde_json::Value::Array(_) => "[ … ]".to_owned(),
+            _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+        }
+    }
+
+    let max_children = INSPECTOR_PREVIEW_LINES.saturating_sub(2);
+    let (text, omitted) = match output {
+        serde_json::Value::Object(map) => {
+            let shown = map.len().min(max_children);
+            let mut lines = Vec::with_capacity(shown + 2);
+            lines.push("{".to_owned());
+            for (index, (key, value)) in map.iter().take(shown).enumerate() {
+                let comma = if index + 1 < shown { "," } else { "" };
+                let key = serde_json::to_string(key).unwrap_or_else(|_| format!("\"{key}\""));
+                lines.push(format!("  {key}: {}{comma}", child(value)));
+            }
+            lines.push("}".to_owned());
+            (lines.join("\n"), map.len() > shown)
+        }
+        serde_json::Value::Array(values) => {
+            let shown = values.len().min(max_children);
+            let mut lines = Vec::with_capacity(shown + 2);
+            lines.push("[".to_owned());
+            for (index, value) in values.iter().take(shown).enumerate() {
+                let comma = if index + 1 < shown { "," } else { "" };
+                lines.push(format!("  {}{comma}", child(value)));
+            }
+            lines.push("]".to_owned());
+            (lines.join("\n"), values.len() > shown)
+        }
+        _ => (
+            serde_json::to_string_pretty(output).unwrap_or_else(|_| output.to_string()),
+            false,
+        ),
+    };
+    let (text, size_omitted) = limit_inspector_preview(&text);
+    (text, omitted || size_omitted)
+}
+
+fn inspector_output_preview(tool_name: &str, output: &serde_json::Value) -> (String, bool) {
+    let expanded = view::expand_output(tool_name, output).join("\n");
+    limit_inspector_preview(&expanded)
+}
+
+fn limit_inspector_preview(expanded: &str) -> (String, bool) {
+    let mut preview = String::new();
+    let mut omitted = expanded.lines().count() > INSPECTOR_PREVIEW_LINES;
+    for (index, line) in expanded.lines().take(INSPECTOR_PREVIEW_LINES).enumerate() {
+        let separator = usize::from(index > 0);
+        let remaining = INSPECTOR_PREVIEW_CHARS.saturating_sub(preview.len() + separator);
+        if remaining == 0 {
+            omitted = true;
+            break;
+        }
+        if index > 0 {
+            preview.push('\n');
+        }
+        if line.len() > remaining {
+            let end = line
+                .char_indices()
+                .map(|(offset, _)| offset)
+                .take_while(|offset| *offset <= remaining)
+                .last()
+                .unwrap_or(0);
+            preview.push_str(&line[..end]);
+            omitted = true;
+            break;
+        }
+        preview.push_str(line);
+    }
+    (preview, omitted)
+}
+
+fn inspector_output_language<'a>(
+    tool: &ToolActivity,
+    output: &'a serde_json::Value,
+) -> Option<&'a str> {
+    let path = tool
+        .input
+        .get("path")
+        .or_else(|| tool.input.get("file_path"))
+        .and_then(serde_json::Value::as_str);
+    if let Some(extension) = path.and_then(|path| Path::new(path).extension()?.to_str()) {
+        let language = match extension.to_ascii_lowercase().as_str() {
+            "rs" => "rust",
+            "js" | "jsx" => "javascript",
+            "ts" | "tsx" => "typescript",
+            "py" => "python",
+            "go" => "go",
+            "sh" | "bash" | "zsh" => "bash",
+            "json" => "json",
+            "toml" => "toml",
+            "yaml" | "yml" => "yaml",
+            "md" => "markdown",
+            "html" => "html",
+            "css" => "css",
+            "sql" => "sql",
+            _ => return None,
+        };
+        return Some(language);
+    }
+    if (output.is_object() || output.is_array())
+        && !matches!(
+            tool.tool_name.as_str(),
+            "shell" | "process" | "grep" | "read_file" | "list_dir"
+        )
+    {
+        Some("json")
+    } else {
+        None
+    }
+}
+
+fn empty_tool_inspector_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled("  TOOL INSPECTOR", theme().strong)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Tool input and output will appear here.",
+            theme().dim,
+        )),
+    ]
+}
+
+fn push_inspector_text(lines: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    for source in text.lines() {
+        let wrapped = textwrap::wrap(source, width.saturating_sub(2).max(8));
+        if wrapped.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            for part in wrapped {
+                lines.push(Line::from(Span::styled(format!("  {part}"), style)));
+            }
+        }
+    }
 }
 
 /// Status-line segments for live background work; empty when idle so the
@@ -2130,6 +2637,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
             Overlay::Providers { index } => provider_lines(*index, width),
             Overlay::Themes { index } => theme_picker_lines(*index, width),
+            Overlay::Views { index } => view_picker_lines(app.view_mode, *index, width),
             Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
             Overlay::Settings { index } => settings_lines(app, *index, width),
@@ -2172,12 +2680,20 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
 }
 
 fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
+    projected_transcript_selected(app, width, None)
+}
+
+fn projected_transcript_selected(
+    app: &App,
+    width: usize,
+    selected_tool: Option<usize>,
+) -> Vec<Line<'static>> {
     let mut lines = app.transcript.clone();
     if !app.running() {
         return lines;
     }
 
-    let activity = activity_lines(app, width, true);
+    let activity = activity_lines_selected(app, width, true, selected_tool);
     let answer = if !app.text.is_empty() {
         Some(app.text.as_str())
     } else {
@@ -2366,7 +2882,17 @@ fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
 /// Render the current run as one coherent activity rail. While the run is
 /// live this includes the latest reasoning tail and pending tool states;
 /// once committed, the rail is retained for on-demand expansion.
+#[cfg(test)]
 fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
+    activity_lines_selected(app, width, live, None)
+}
+
+fn activity_lines_selected(
+    app: &App,
+    width: usize,
+    live: bool,
+    selected_tool: Option<usize>,
+) -> Vec<Line<'static>> {
     let t = theme();
     let mut lines = Vec::new();
     let current_thinking = !app.reasoning.trim().is_empty();
@@ -2506,17 +3032,35 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
         let row_width = width.min(132);
         let detail_width = (row_width / 3).clamp(16, 48);
         detail = view::truncate_line(&detail, detail_width);
-        let fixed_width = 12 + detail.chars().count();
-        let call = view::truncate_line(
-            &tool.call_line,
-            row_width.saturating_sub(fixed_width).max(8),
-        );
-        lines.push(Line::from(vec![
-            Span::styled(format!("    {branch} "), t.dim),
+        let selected = selected_tool == Some(index);
+        let prefix = format!("    {branch} ");
+        let status = format!(" · {detail}");
+        let fixed_width = prefix.chars().count() + 2 + status.chars().count();
+        let connector_reserve = if selected { 10 } else { 0 };
+        let call_width = row_width
+            .saturating_sub(fixed_width)
+            .min(width.saturating_sub(fixed_width + connector_reserve))
+            .max(8);
+        let call = view::truncate_line(&tool.call_line, call_width);
+        let row_style = if selected { t.strong } else { t.accent };
+        let mut spans = vec![
+            Span::styled(prefix, t.dim),
             Span::styled(format!("{glyph} "), status_style),
-            Span::styled(call, t.accent),
-            Span::styled(format!(" · {detail}"), status_style),
-        ]));
+            Span::styled(call, row_style),
+            Span::styled(status, status_style),
+        ];
+        if selected {
+            let used = spans
+                .iter()
+                .map(|span| span.content.chars().count())
+                .sum::<usize>();
+            let dots = width.saturating_sub(used + 1);
+            spans.push(Span::styled(
+                format!(" {}○", "·".repeat(dots.saturating_sub(1).max(1))),
+                t.dim,
+            ));
+        }
+        lines.push(Line::from(spans));
         if tool.tool_name == "edit_file" {
             let diff_width = width.saturating_sub(12).max(16);
             if let Some(old) = tool.input.get("old").and_then(serde_json::Value::as_str) {
@@ -2786,6 +3330,33 @@ fn theme_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+fn view_picker_lines(current: ViewMode, selected: usize, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Select view · ↑↓ navigate · enter use · esc close",
+            t.dim,
+        )),
+        Line::from(""),
+    ];
+    for (index, mode) in ViewMode::ALL.iter().enumerate() {
+        let is_selected = index == selected.min(ViewMode::ALL.len() - 1);
+        let marker = if is_selected { "▸ " } else { "  " };
+        let note = if *mode == current { "current" } else { "" };
+        let description = match mode {
+            ViewMode::Classic => "transcript with inline work rail",
+            ViewMode::Split => "tool rail with connected inspector",
+        };
+        let text = format!("  {marker}{:<10} {:<38} {note}", mode.label(), description);
+        let style = if is_selected { t.strong } else { t.dim };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            style,
+        )));
+    }
+    lines
+}
+
 /// The /settings tray: current values for the persisted preferences,
 /// enter drills into the matching picker.
 fn settings_lines(app: &App, selected: usize, width: usize) -> Vec<Line<'static>> {
@@ -2807,6 +3378,7 @@ fn settings_lines(app: &App, selected: usize, width: usize) -> Vec<Line<'static>
         ("provider", provider.label().to_string()),
         ("model", app.cfg.model_name.clone()),
         ("theme", view::theme_name().label().to_string()),
+        ("view", app.view_mode.label().to_string()),
         ("api key", key_status),
         ("approvals", approvals_status),
     ];
@@ -2936,9 +3508,13 @@ mod tests {
     }
 
     fn mouse(kind: MouseEventKind) -> CtEvent {
+        mouse_at(kind, 0)
+    }
+
+    fn mouse_at(kind: MouseEventKind, column: u16) -> CtEvent {
         CtEvent::Mouse(MouseEvent {
             kind,
-            column: 0,
+            column,
             row: 0,
             modifiers: KeyModifiers::NONE,
         })
@@ -2958,6 +3534,97 @@ mod tests {
         let scrolled = app.scroll;
         handle_terminal_event(&mut app, mouse(MouseEventKind::ScrollDown), &tx, 80);
         assert!(app.scroll < scrolled, "wheel down scrolls forward");
+    }
+
+    #[test]
+    fn mouse_wheel_over_split_inspector_scrolls_only_the_inspector() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.view_mode = ViewMode::Split;
+        let transcript_scroll = app.scroll;
+
+        handle_terminal_event(
+            &mut app,
+            mouse_at(MouseEventKind::ScrollDown, 100),
+            &tx,
+            120,
+        );
+        assert_eq!(app.split_scroll, 3);
+        assert_eq!(app.scroll, transcript_scroll, "left transcript stays put");
+
+        handle_terminal_event(&mut app, mouse_at(MouseEventKind::ScrollUp, 100), &tx, 120);
+        assert_eq!(app.split_scroll, 0);
+    }
+
+    #[test]
+    fn scrolled_transcript_keeps_the_same_top_row_as_live_height_changes() {
+        let mut app = test_app();
+        app.transcript_max_scroll = 100;
+        app.scroll = 10;
+        let original_top = app.transcript_max_scroll - app.scroll;
+
+        stabilize_transcript_scroll(&mut app, 112);
+        assert_eq!(app.scroll, 22);
+        assert_eq!(112 - app.scroll, original_top);
+
+        stabilize_transcript_scroll(&mut app, 96);
+        assert_eq!(app.scroll, 6);
+        assert_eq!(96 - app.scroll, original_top);
+
+        app.scroll = 0;
+        stabilize_transcript_scroll(&mut app, 140);
+        assert_eq!(app.scroll, 0, "bottom-follow mode remains at the bottom");
+    }
+
+    #[test]
+    fn split_renders_new_transcript_blocks_at_the_left_panes_real_width() {
+        let mut app = test_app();
+        app.transcript.clear();
+        app.view_mode = ViewMode::Split;
+        let width = transcript_content_width(&app, 120);
+        assert_eq!(width, 69);
+
+        app.push_markdown_block(
+            "| Component | Responsibility | Notes |\n|---|---|---|\n| harness-core | Dispatch and concurrency | deterministic ordered results |",
+            width,
+            BlockSpacing::Section,
+        );
+        assert!(
+            app.pending_history
+                .iter()
+                .all(|line| line_text(line).chars().count() <= width),
+            "markdown is laid out for the pane before it is committed"
+        );
+    }
+
+    #[test]
+    fn inspector_caps_large_file_previews() {
+        let output = serde_json::Value::String(
+            (0..400)
+                .map(|line| format!("line {line}: {}", "x".repeat(200)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let (preview, omitted) = inspector_output_preview("read_file", &output);
+        assert!(omitted);
+        assert!(preview.len() <= INSPECTOR_PREVIEW_CHARS);
+        assert!(preview.lines().count() <= INSPECTOR_PREVIEW_LINES);
+    }
+
+    #[test]
+    fn inspector_json_preview_stops_after_one_level() {
+        let output = serde_json::json!({
+            "ok": true,
+            "metadata": { "owner": { "name": "orca" }, "count": 3 },
+            "results": [{ "id": 1 }, { "id": 2 }]
+        });
+        let (preview, omitted) = shallow_json_preview(&output);
+        assert!(!omitted);
+        assert!(preview.contains("\"ok\": true"));
+        assert!(preview.contains("\"metadata\": { … }"));
+        assert!(preview.contains("\"results\": [ … ]"));
+        assert!(!preview.contains("owner"));
+        assert!(!preview.contains("id"));
     }
 
     fn pending_texts(app: &App) -> Vec<String> {
@@ -3303,7 +3970,12 @@ mod tests {
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };
-        handle_ui_msg(&mut failed, UiMsg::RunDone(Err("cancelled".into())), &tx, 80);
+        handle_ui_msg(
+            &mut failed,
+            UiMsg::RunDone(Err("cancelled".into())),
+            &tx,
+            80,
+        );
         assert!(
             failed.last_turn_summary.is_none(),
             "no summary on an interrupted run"
@@ -4432,11 +5104,140 @@ mod tests {
         press(&mut app, &tx, KeyCode::Enter);
         assert!(matches!(app.overlay, Some(Overlay::Themes { .. })));
 
-        // Api key row on a keyless provider closes with an explanation.
+        // View row opens a picker preselected on the current layout.
+        app.view_mode = ViewMode::Classic;
         app.overlay = Some(Overlay::Settings { index: 3 });
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Views { index: 0 })));
+
+        // Down and enter selects Split using the same pattern as theme/provider.
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+        assert!(app.view_mode == ViewMode::Split);
+        assert_eq!(crate::config::stored_view().as_deref(), Some("split"));
+
+        // Api key row on a keyless provider closes with an explanation.
+        app.overlay = Some(Overlay::Settings { index: 4 });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
         assert!(rx.try_recv().is_err(), "no command for a keyless provider");
+    }
+
+    #[test]
+    fn split_view_connects_the_selected_tool_to_its_inspector() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.view_mode = ViewMode::Split;
+        let empty = rendered_rows(&mut app, 120, 24).join("\n");
+        assert!(
+            empty.contains("TOOL INSPECTOR"),
+            "split geometry exists before calls: {empty}"
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "call-1".into(),
+                tool_name: "shell".into(),
+                input: serde_json::json!({
+                    "command": format!("cargo test {}", "heterogeneous_burst_".repeat(6))
+                }),
+            },
+            120,
+        );
+
+        let rail = flat_lines(&activity_lines_selected(&app, 70, true, Some(0)));
+        assert!(
+            rail.contains("·"),
+            "selected row has a dotted leader: {rail}"
+        );
+        assert!(
+            rail.contains('○'),
+            "selected row ends at a connection node: {rail}"
+        );
+        let connected = activity_lines_selected(&app, 70, true, Some(0))
+            .into_iter()
+            .map(|line| line_text(&line))
+            .find(|line| line.contains('○'))
+            .expect("connector row");
+        assert!(
+            connected.contains("shell") && connected.chars().count() <= 70,
+            "call and connector stay on one row: {connected}"
+        );
+
+        let inspector = flat_lines(&tool_inspector_lines(&app.activity_tools[0], 50));
+        assert!(
+            inspector.contains("○ SHELL"),
+            "tool identity repeats: {inspector}"
+        );
+        assert!(
+            inspector.contains("cargo test"),
+            "input is expanded: {inspector}"
+        );
+        assert!(inspector.contains("Waiting for result"));
+
+        handle_terminal_event(
+            &mut app,
+            CtEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            &tx,
+            120,
+        );
+        assert!(app.split_focused);
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(!app.split_focused);
+
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolResult {
+                tool_call_id: "call-1".into(),
+                tool_name: "shell".into(),
+                output: serde_json::json!({
+                    "stdout": (0..50).map(|line| format!("result {line}")).collect::<Vec<_>>().join("\n"),
+                    "exit_code": 0
+                }),
+                is_error: false,
+            },
+            120,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::Assistant {
+                message: "done".into(),
+            },
+            120,
+        );
+        assert!(app.activity_tools.is_empty(), "phase was committed");
+        assert!(
+            flat_lines(&app.pending_history).contains('○'),
+            "the last committed call keeps its connector"
+        );
+        app.split_scroll = 10;
+        let settled = rendered_rows(&mut app, 120, 24).join("\n");
+        assert!(
+            settled.contains("SHELL") && settled.contains("result"),
+            "the pane stays mounted and its header stays pinned: {settled}"
+        );
+    }
+
+    #[test]
+    fn split_divider_runs_through_composer_and_status_rows() {
+        let mut app = test_app();
+        app.view_mode = ViewMode::Split;
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let inspector_x =
+            Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+                .split(ratatui::layout::Rect::new(0, 0, 120, 24))[1]
+                .x;
+        let buffer = terminal.backend().buffer();
+        for y in 0..24 {
+            assert_eq!(
+                buffer[(inspector_x, y)].symbol(),
+                "│",
+                "divider missing at row {y}"
+            );
+        }
     }
 
     #[test]
@@ -4445,7 +5246,7 @@ mod tests {
         let mut app = test_app();
 
         // With nothing saved, the settings approvals row just explains.
-        app.overlay = Some(Overlay::Settings { index: 4 });
+        app.overlay = Some(Overlay::Settings { index: 5 });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
 
@@ -4481,7 +5282,7 @@ mod tests {
         assert_eq!(crate::config::stored_approvals("/test-ws"), ["shell"]);
 
         // The settings approvals row opens the list; enter revokes.
-        app.overlay = Some(Overlay::Settings { index: 4 });
+        app.overlay = Some(Overlay::Settings { index: 5 });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(matches!(app.overlay, Some(Overlay::Approvals { .. })));
         press(&mut app, &tx, KeyCode::Enter);

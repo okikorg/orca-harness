@@ -138,7 +138,11 @@ registering an unused one costs nothing on the hot path:
 - **Truncation** — cap oversized tool outputs to protect the context
   window and any downstream line cap.
 - **ToolRetry** / **RetryModel** — retry failing tools (an `around_tool`
-  extension) and transient model errors (a `Model` decorator).
+  extension) and transient model errors (a `Model` decorator). The CLI
+  wires `ToolRetry` to also retry the failures core tools report *as
+  data* — a nonzero shell exit, an HTTP 5xx from `web_fetch` — and
+  mirrors the same policy inside subagents, so every level of the agent
+  tree retries.
 - **UsageMeter** — accumulate self-reported token usage across a run,
   readable via a shared handle after it returns.
 

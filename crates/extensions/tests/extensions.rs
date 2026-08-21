@@ -300,6 +300,80 @@ async fn tool_retry_exhausts_and_reports_error() {
         .contains("nope"));
 }
 
+#[tokio::test]
+async fn tool_retry_retries_data_failures_and_reports_last_output() {
+    // A tool whose failures are *data*: it reports `success: false`
+    // instead of returning Err. This is what shell/web_fetch do for
+    // nonzero exits and 5xx responses — the classic case retry must
+    // cover to be useful.
+    let attempts = Arc::new(AtomicU32::new(0));
+    let flaky = {
+        let attempts = attempts.clone();
+        FnTool::new(
+            "probe",
+            "reports success: false until the third try",
+            json!({"type": "object"}),
+            move |_i, _c| {
+                let attempts = attempts.clone();
+                async move {
+                    let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                    Ok(json!({"success": n >= 3, "attempt": n}))
+                }
+            },
+        )
+    };
+    let model = Arc::new(ScriptedModel::tool_round(
+        vec![call("c0", "probe", json!({}))],
+        "done",
+    ));
+
+    // Three total attempts; every `success: false` output is retried.
+    let agent = Agent::new(model.clone()).tool(flaky).extension(
+        ToolRetry::new(3)
+            .backoff(Duration::from_millis(1))
+            .retry_ok_when(|call, out| {
+                call.name == "probe" && out["success"].as_bool() == Some(false)
+            }),
+    );
+    timeout(RUN_TIMEOUT, agent.run("retry"))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    let results = last_tool_results(&model.observed_contexts());
+    assert!(
+        !results[0].is_error,
+        "rule-last output flows back as a result"
+    );
+    assert_eq!(results[0].output["attempt"], json!(3));
+
+    // When every attempt is data-failed, the last real output (not a
+    // synthetic error) is what the model sees.
+    let always_fail = FnTool::new(
+        "probe",
+        "always success: false",
+        json!({"type": "object"}),
+        |_i, _c| async move { Ok(json!({"success": false, "status": 503})) },
+    );
+    let model = Arc::new(ScriptedModel::tool_round(
+        vec![call("c0", "probe", json!({}))],
+        "done",
+    ));
+    let agent = Agent::new(model.clone()).tool(always_fail).extension(
+        ToolRetry::new(2)
+            .backoff(Duration::from_millis(1))
+            .retry_ok_when(|_, out| out["success"].as_bool() == Some(false)),
+    );
+    timeout(RUN_TIMEOUT, agent.run("retry"))
+        .await
+        .unwrap()
+        .unwrap();
+    let results = last_tool_results(&model.observed_contexts());
+    assert!(!results[0].is_error, "last output is returned as-is");
+    assert_eq!(results[0].output["status"], json!(503));
+}
+
 /// A model that fails transiently N times before succeeding.
 struct FlakyModel {
     fails_remaining: AtomicU32,

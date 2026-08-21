@@ -22,7 +22,7 @@ pub const EXTENSIONS: &[ExtensionSpec] = &[
     },
     ExtensionSpec {
         name: "retry",
-        description: "retry a failing tool call (3 attempts with a short backoff)",
+        description: "retry a failing tool call (3 attempts; covers Err failures and data failures like nonzero shell exits and HTTP 5xx)",
         default_on: false,
     },
 ];
@@ -40,6 +40,35 @@ pub fn is_enabled(spec: &ExtensionSpec) -> bool {
 /// never enabled.
 pub fn enabled(name: &str) -> bool {
     find(name).is_some_and(is_enabled)
+}
+
+/// The tool-retry extension as the CLI registers it: three total attempts
+/// with a short backoff, and — beyond plain `Err` failures — also retry
+/// the failures the core tools report *as data*, so the toggle actually
+/// covers the failures that happen in practice:
+/// - `shell` / `process` results carry `success: false`;
+/// - `web_fetch` results carry an HTTP `status` (5xx retried, 4xx left
+///   alone — the caller asked for something that is not there).
+///
+/// When attempts are exhausted the last real output is returned as-is, so
+/// the model still sees the actual failure instead of a synthetic one.
+pub fn tool_retry() -> orca_harness_extensions::ToolRetry {
+    orca_harness_extensions::ToolRetry::new(3)
+        .backoff(std::time::Duration::from_millis(250))
+        .retry_ok_when(data_failure)
+}
+
+/// The data-failure rule for [`tool_retry`], shared with the subagent
+/// relay so inner agents retry exactly what the top-level agent retries.
+pub fn data_failure(call: &orca_harness_core::ToolCall, out: &serde_json::Value) -> bool {
+    match call.name.as_str() {
+        "shell" | "process" => out["success"].as_bool() == Some(false),
+        "web_fetch" => match out["status"].as_u64() {
+            Some(status) => (500..600).contains(&status),
+            None => false,
+        },
+        _ => false,
+    }
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@
 //!   "models": { "openrouter": "openrouter/auto", "local": "qwen3.5:9b" },
 //!   "provider": "openrouter",
 //!   "theme": "nord",
+//!   "view": "split",
 //!   "approvals": { "/abs/workspace/root": ["shell", "write_file"] },
 //!   "extensions": { "truncation": true, "retry": false }
 //! }
@@ -77,6 +78,15 @@ pub fn stored_theme() -> Option<String> {
 
 pub fn save_theme(slug: &str) -> io::Result<PathBuf> {
     save_str(None, "theme", slug)
+}
+
+/// The transcript layout last selected in `/settings`.
+pub fn stored_view() -> Option<String> {
+    stored_str(None, "view")
+}
+
+pub fn save_view(slug: &str) -> io::Result<PathBuf> {
+    save_str(None, "view", slug)
 }
 
 /// The saved on/off override for a user-toggleable extension. `None`

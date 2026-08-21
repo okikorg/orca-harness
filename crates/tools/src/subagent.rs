@@ -24,8 +24,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use orca_harness_core::{
-    Agent, Concurrency, Context, Extension, ExtensionError, Limits, Model, ModelResponse,
-    Subscriptions, Tool, ToolContext, ToolError, ToolSchema, Usage,
+    Agent, Concurrency, Context, Extension, ExtensionError, Limits, Model, ModelResponse, Next,
+    Subscriptions, Tool, ToolCall, ToolContext, ToolError, ToolSchema, Usage,
 };
 
 use crate::{core_tools, BackgroundStats, Workspace};
@@ -71,6 +71,12 @@ fn clamp_depth(depth: u32) -> u32 {
 
 type ToolFactory = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
 
+/// Predicate marking an `Ok` tool result as a failure for retry purposes.
+type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
+
+/// Inner-agent retry policy: total attempts plus backoff.
+type RetryPolicy = (u32, std::time::Duration);
+
 /// Identity of one spawned inner agent, handed to the host's
 /// spawn-extension factory.
 #[derive(Clone, Debug)]
@@ -113,6 +119,11 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
     /// The spawn that created this tool instance (None on the top level).
     parent_spawn: Option<u64>,
     stats: BackgroundStats,
+    /// Inner-agent retry: `(max_attempts, backoff)`. Inherited by
+    /// replicas. `None` means subagent tool calls are not retried.
+    retry_policy: Option<RetryPolicy>,
+    /// Data-failure rule for [`Self::retry_policy`].
+    ok_failure: Option<OkFailureRule>,
 }
 
 impl<M: Model + Clone + 'static> SubagentTool<M> {
@@ -142,6 +153,8 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             spawn_seq: Arc::new(AtomicU64::new(0)),
             parent_spawn: None,
             stats: BackgroundStats::default(),
+            retry_policy: None,
+            ok_failure: None,
         }
     }
 
@@ -176,6 +189,29 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         self
     }
 
+    /// Configure the inner-agent retry policy: `max_attempts` total tries,
+    /// then a `backoff` between attempts. Any `Ok` result matching
+    /// `ok_failure` is retried too (data failures like a nonzero shell
+    /// exit). Pass `None` to keep retry-on-`Err`-only. Hosts that want
+    /// subagents to share the top-level retry toggle call this from their
+    /// agent build (the CLI does).
+    pub fn retry(mut self, max_attempts: u32, backoff: std::time::Duration) -> Self {
+        self.retry_policy = Some((max_attempts.max(1), backoff));
+        self
+    }
+
+    /// Like [`Self::retry`], with a data-failure rule.
+    pub fn retry_with_rule(
+        mut self,
+        max_attempts: u32,
+        backoff: std::time::Duration,
+        ok_failure: impl Fn(&ToolCall, &Value) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.retry_policy = Some((max_attempts.max(1), backoff));
+        self.ok_failure = Some(std::sync::Arc::new(ok_failure));
+        self
+    }
+
     fn child_replica(&self, spawn_id: u64) -> Self {
         Self {
             model: self.model.clone(),
@@ -188,6 +224,8 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             spawn_seq: self.spawn_seq.clone(),
             parent_spawn: Some(spawn_id),
             stats: self.stats.clone(),
+            retry_policy: self.retry_policy,
+            ok_failure: self.ok_failure.clone(),
         }
     }
 }
@@ -223,6 +261,82 @@ impl Extension for Meter {
             self.0.lock().unwrap().add(usage);
         }
         Ok(())
+    }
+}
+
+/// Tool-call retry for *inner* agents. Deliberately a local copy of the
+/// extensions crate's `ToolRetry` semantics (crate-layering:
+/// `orca-harness-tools` must not depend on `orca-harness-extensions`):
+/// re-invoke a failing call up to `max_attempts` times, and treat an
+/// `Ok` result the [`OkFailureRule`] rejects as a failed attempt too.
+#[derive(Clone)]
+struct SubagentRetry {
+    max_attempts: u32,
+    backoff: std::time::Duration,
+    /// Data-failure rule for the inherited [`RetryPolicy`].
+    ok_failure: Option<OkFailureRule>,
+}
+
+impl SubagentRetry {
+    fn new(policy: RetryPolicy, ok_failure: Option<OkFailureRule>) -> Self {
+        Self {
+            max_attempts: policy.0,
+            backoff: policy.1,
+            ok_failure,
+        }
+    }
+}
+
+#[async_trait]
+impl Extension for SubagentRetry {
+    fn name(&self) -> &str {
+        "subagent-tool-retry"
+    }
+
+    fn subscriptions(&self) -> Subscriptions {
+        Subscriptions::none().around_tool()
+    }
+
+    async fn around_tool<'a>(
+        &self,
+        call: &ToolCall,
+        input: Value,
+        _ctx: &ToolContext,
+        next: Next<'a>,
+    ) -> Result<Value, ToolError> {
+        let mut last_err = None;
+        let mut last_value = None;
+        for attempt in 1..=self.max_attempts {
+            match next.run(input.clone()).await {
+                Ok(value) => {
+                    if self
+                        .ok_failure
+                        .as_ref()
+                        .is_some_and(|rule| rule(call, &value))
+                    {
+                        last_value = Some(value);
+                        if attempt == self.max_attempts {
+                            break;
+                        }
+                        tokio::time::sleep(self.backoff).await;
+                        continue;
+                    }
+                    return Ok(value);
+                }
+                Err(err) => {
+                    last_err = Some(err);
+                    if attempt < self.max_attempts {
+                        tokio::time::sleep(self.backoff).await;
+                    }
+                }
+            }
+        }
+        match last_value {
+            Some(value) => Ok(value),
+            None => {
+                Err(last_err.unwrap_or_else(|| ToolError::msg("subagent retry: no attempts made")))
+            }
+        }
     }
 }
 
@@ -291,6 +405,19 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             for extension in factory(&spawn) {
                 agent = agent.extension_arc(extension);
             }
+        }
+        // Retry *inside* the inner loop. The top-level agent's `ToolRetry`
+        // only wraps that agent's own tool calls — inner agents build a
+        // fresh `Agent` here, so without this they get no retry at all.
+        // Register after the host's spawn extensions: like the top-level
+        // build, retry wraps their `around_tool`, and denials from
+        // `before_tool` never reach the around chain, so a `Deny` verdict
+        // is not retried.
+        if let Some(policy) = self.retry_policy {
+            agent = agent.extension_arc(std::sync::Arc::new(SubagentRetry::new(
+                policy,
+                self.ok_failure.clone(),
+            )));
         }
 
         let answer = agent

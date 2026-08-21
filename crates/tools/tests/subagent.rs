@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{
     CancellationToken, Context, Limits, Model, ModelError, ModelResponse, Tool, ToolContext,
-    ToolSchema, Usage,
+    ToolError, ToolSchema, Usage,
 };
 use orca_harness_tools::{SubagentTool, Workspace};
 
@@ -73,6 +73,71 @@ async fn inner_agent_executes_real_tools() {
     assert_eq!(
         std::fs::read_to_string(dir.join("note.txt")).unwrap(),
         "from the subagent"
+    );
+}
+
+/// A tool `shell`-shaped enough for the retry rule: reports failures as
+/// data (`success: false`) rather than `Err`.
+#[derive(Clone)]
+struct FlakyShell {
+    attempts: Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[async_trait]
+impl Tool for FlakyShell {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "shell".into(),
+            description: "test shell".into(),
+            parameters: json!({"type": "object"}),
+        }
+    }
+
+    async fn call(&self, _input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
+        let n = self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        // Fails as data twice, then succeeds — the inner-agent retry
+        // (which honors the data-failure rule) must hide both failures.
+        Ok(json!({"success": n >= 3, "stdout": format!("attempt {n}")}))
+    }
+}
+
+#[tokio::test]
+async fn inner_agents_retry_data_failing_tool_calls() {
+    let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let (_ws, _dir) = temp_ws();
+
+    // One scripted turn: the inner agent issues one `shell` call whose
+    // runner reports `success: false` twice before succeeding (all within
+    // a single tool call — the inner retry wrapper re-invokes the tool),
+    // then the agent answers. The two data failures must be invisible to
+    // the inner loop's model.
+    let tool = SubagentTool::with_tools(
+        Arc::new(ScriptedModel::tool_round(
+            vec![call("1", "shell", json!({"command": "probe"}))],
+            "succeeded",
+        )),
+        {
+            let attempts = attempts.clone();
+            Arc::new(move || {
+                vec![Arc::new(FlakyShell {
+                    attempts: attempts.clone(),
+                }) as Arc<dyn Tool>]
+            })
+        },
+    )
+    .retry_with_rule(3, Duration::from_millis(1), |call, out| {
+        call.name == "shell" && out["success"].as_bool() == Some(false)
+    });
+
+    let out = tool.call(json!({"task": "probe"}), &ctx()).await.unwrap();
+    assert_eq!(out["answer"], "succeeded");
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "two data failures must be retried before the third succeeds"
     );
 }
 

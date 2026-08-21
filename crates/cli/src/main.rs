@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Limits, Message, Model, ToolResult};
 use orca_harness_extensions::{
-    compact, CompactConfig, EventStream, ReadToolResultTool, ToolRetry, Truncation, TruncationStore,
+    compact, CompactConfig, EventStream, ReadToolResultTool, Truncation, TruncationStore,
 };
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
@@ -645,7 +645,7 @@ fn build_agent<M: Model + Clone + 'static>(
         agent = agent.extension(Truncation::new(16_000).store(store.clone()));
     }
     if extensions::enabled("retry") {
-        agent = agent.extension(ToolRetry::new(3));
+        agent = agent.extension(extensions::tool_retry());
     }
     // read_tool_result stays registered even with truncation off so
     // outputs trimmed before the toggle remain pageable.
@@ -673,24 +673,34 @@ fn build_agent<M: Model + Clone + 'static>(
         PyKernelTool::new().working_dir(root).stats(stats.clone()),
     ));
     let ui_events = ui.clone();
-    let subagent = SubagentTool::new(model_for_subagents, ws)
+    let mut subagent = SubagentTool::new(model_for_subagents, ws)
         .max_depth(subagent_depth.clone())
-        .stats(stats.clone())
-        .spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
-            let ui = ui_events.clone();
-            let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
-            let call_id = spawn.call_id.clone();
-            vec![std::sync::Arc::new(EventStream::from_fn(move |event| {
-                let _ = ui.send(UiMsg::SubagentEvent {
-                    id,
-                    parent_id,
-                    depth,
-                    call_id: call_id.clone(),
-                    event,
-                });
-            }))
-                as std::sync::Arc<dyn orca_harness_core::Extension>]
-        }));
+        .stats(stats.clone());
+    if extensions::enabled("retry") {
+        // Inner agents get the same retry policy as the orchestrator:
+        // three attempts, and data failures (nonzero exit, HTTP 5xx)
+        // retry too.
+        subagent = subagent.retry_with_rule(
+            3,
+            std::time::Duration::from_millis(250),
+            extensions::data_failure,
+        );
+    }
+    subagent = subagent.spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
+        let ui = ui_events.clone();
+        let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
+        let call_id = spawn.call_id.clone();
+        vec![std::sync::Arc::new(EventStream::from_fn(move |event| {
+            let _ = ui.send(UiMsg::SubagentEvent {
+                id,
+                parent_id,
+                depth,
+                call_id: call_id.clone(),
+                event,
+            });
+        }))
+            as std::sync::Arc<dyn orca_harness_core::Extension>]
+    }));
     agent = agent.tool_arc(std::sync::Arc::new(subagent));
     agent
 }

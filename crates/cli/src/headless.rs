@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
-use orca_harness_extensions::{EventStream, HarnessEvent, ToolRetry, Truncation, UsageMeter};
+use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
 use orca_harness_tools::{core_tools, PyKernelTool, SubagentDepth, SubagentTool, Workspace};
 
 use crate::approval::HeadlessGate;
@@ -76,7 +76,7 @@ pub async fn run<M: Model + Clone + 'static>(
         agent = agent.extension(Truncation::new(16_000));
     }
     if crate::extensions::enabled("retry") {
-        agent = agent.extension(ToolRetry::new(3));
+        agent = agent.extension(crate::extensions::tool_retry());
     }
     if !cfg.auto_approve {
         agent = agent.extension(HeadlessGate);
