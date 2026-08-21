@@ -30,7 +30,7 @@ use orca_harness_extensions::HarnessEvent;
 use orca_harness_model_openrouter::ModelInfo;
 
 use crate::commands::{filter_commands, CommandSpec};
-use crate::components::picker::{ListPicker, PickerEvent};
+use crate::components::picker::{ListPicker, PickerAction, PickerEvent};
 use crate::msg::{ApprovalRequest, ApprovalResponse, Provider, UiMsg, WorkerCmd};
 use crate::view::{self, theme};
 
@@ -125,6 +125,12 @@ enum Overlay {
 /// Rows in the settings overlay: provider, model, theme, transcript view,
 /// api key, approvals.
 const SETTINGS_ROWS: usize = 6;
+
+/// Row actions in the /sessions picker (space arms them).
+const SESSION_ACTIONS: &[PickerAction] = &[PickerAction {
+    key: 'd',
+    label: "delete",
+}];
 
 /// A finished tool call kept around so the user can expand its full
 /// output later with `/expand n`.
@@ -771,6 +777,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
         CloseAndSetView(ViewMode),
         /// Close and drop a dim status line into the history.
         CloseWithNote(String),
+        /// Keep the overlay open and drop a dim status line (row
+        /// actions that mutate the list in place).
+        Note(String),
         /// Close, send to the worker, and drop a dim status line.
         SendWithNote(WorkerCmd, String),
         /// Close and start the /models fetch-then-pick flow.
@@ -780,6 +789,7 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
     let current_provider = app.cfg.provider;
     let current_view = app.view_mode;
     let workspace_root = app.cfg.workspace_root.clone();
+    let current_session = app.cfg.session_id.clone();
     let Some(overlay) = app.overlay.as_mut() else {
         return;
     };
@@ -987,6 +997,25 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::LoadSession {
                 path: sessions[index].path.clone(),
             }),
+            PickerEvent::Action { key: 'd', row } => {
+                let session = &sessions[row];
+                if current_session.as_deref() == Some(session.meta.id.as_str()) {
+                    After::Note("the active session cannot be deleted (use /clear first)".into())
+                } else {
+                    match std::fs::remove_file(&session.path) {
+                        Ok(()) => {
+                            let id = sessions.remove(row).meta.id;
+                            picker.set_len(sessions.len());
+                            if sessions.is_empty() {
+                                After::CloseWithNote(format!("deleted session {id}"))
+                            } else {
+                                After::Note(format!("deleted session {id}"))
+                            }
+                        }
+                        Err(err) => After::Note(format!("could not delete: {err}")),
+                    }
+                }
+            }
             _ => After::Nothing,
         },
     };
@@ -1022,6 +1051,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
         }
         After::CloseWithNote(note) => {
             app.overlay = None;
+            app.push_line(Line::from(Span::styled(note, theme().dim)));
+        }
+        After::Note(note) => {
             app.push_line(Line::from(Span::styled(note, theme().dim)));
         }
         After::SendWithNote(cmd, note) => {
@@ -1572,7 +1604,7 @@ fn slash_command(
                 .position(|s| app.cfg.session_id.as_deref() == Some(s.meta.id.as_str()))
                 .unwrap_or(0);
             app.overlay = Some(Overlay::Sessions {
-                picker: ListPicker::with_selected(sessions.len(), index),
+                picker: ListPicker::with_selected(sessions.len(), index).actions(SESSION_ACTIONS),
                 sessions,
             });
             return;
@@ -6150,6 +6182,58 @@ mod extensions_command_tests {
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         handle_overlay_key(&mut app, esc, &worker);
         assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn space_d_deletes_a_session_but_never_the_active_one() {
+        let dir = std::env::temp_dir().join(format!("orca-tui-del-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let on_disk = |id: &str, model: &str| {
+            let mut session = session_file(id, model);
+            session.path = dir.join(format!("{id}.jsonl"));
+            std::fs::write(&session.path, "{}\n").unwrap();
+            session
+        };
+
+        let mut app = ext_app();
+        app.cfg.session_id = Some("0000000002-b-0".into());
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let active = on_disk("0000000002-b-0", "m2");
+        let old = on_disk("0000000001-a-0", "m1");
+        let active_path = active.path.clone();
+        let old_path = old.path.clone();
+        app.overlay = Some(Overlay::Sessions {
+            sessions: vec![active, old],
+            picker: ListPicker::new(2).actions(SESSION_ACTIONS),
+        });
+
+        // Space + d on the active session (row 0): refused, file kept.
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        handle_overlay_key(&mut app, space, &worker);
+        handle_overlay_key(&mut app, d, &worker);
+        assert!(active_path.exists(), "active session file kept");
+        assert!(printed(&app).contains("cannot be deleted"));
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { .. })));
+
+        // Down, space + d: the old session is deleted and the list
+        // shrinks in place with the picker still open.
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, down, &worker);
+        handle_overlay_key(&mut app, space, &worker);
+        handle_overlay_key(&mut app, d, &worker);
+        assert!(!old_path.exists(), "old session file removed");
+        assert!(printed(&app).contains("deleted session 0000000001-a-0"));
+        match &app.overlay {
+            Some(Overlay::Sessions { sessions, picker }) => {
+                assert_eq!(sessions.len(), 1);
+                assert_eq!(picker.index(), 0);
+            }
+            _ => panic!("picker stays open while rows remain"),
+        }
+        assert!(rx.try_recv().is_err(), "deleting sends nothing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

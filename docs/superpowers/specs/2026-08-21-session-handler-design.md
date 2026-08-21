@@ -114,6 +114,10 @@ anything new to record there; the next `before_model` or the final
 - `/sessions` opens a picker overlay (same interface as `/provider`
   and `/theme`): newest first, current session marked, enter resumes,
   esc closes. `/sessions <id>` resumes directly by unique id prefix.
+  Space arms the picker's row-action strip (a shared component
+  feature any overlay can declare actions on); `d` deletes the
+  selected recording. The active session is protected — delete it via
+  `/clear` rotation and then deleting the old file.
 - Every session, interactive and headless, records by default. A
   `--no-session` flag (and matching config field) opts out.
 
