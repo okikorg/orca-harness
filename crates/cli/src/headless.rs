@@ -19,6 +19,8 @@ pub async fn run<M: Model + Clone + 'static>(
     model: M,
     ws: &Workspace,
     system_prompt: &str,
+    session: Option<Arc<orca_harness_extensions::SessionHandler>>,
+    resumed: Option<Context>,
 ) -> i32 {
     let model_for_subagents = model.clone();
     let json = cfg.json;
@@ -81,6 +83,9 @@ pub async fn run<M: Model + Clone + 'static>(
     if !cfg.auto_approve {
         agent = agent.extension(HeadlessGate);
     }
+    if let Some(session) = &session {
+        agent = agent.extension_arc(session.clone());
+    }
     for tool in core_tools(ws) {
         agent = agent.tool_arc(tool);
     }
@@ -105,8 +110,15 @@ pub async fn run<M: Model + Clone + 'static>(
         cancel_on_signal.cancel();
     });
 
-    let mut context = Context::new();
-    context.push_system(system_prompt);
+    let mut context = match resumed {
+        // A recorded transcript already begins with its system prompt.
+        Some(context) => context,
+        None => {
+            let mut context = Context::new();
+            context.push_system(system_prompt);
+            context
+        }
+    };
     context.push_user(cfg.prompt.as_deref().unwrap_or_default());
 
     let result = agent.run_context(&mut context, cancel).await;

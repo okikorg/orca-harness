@@ -400,19 +400,20 @@ async fn ollama_context_window(base_url: &str, model: &str) -> Option<u64> {
 /// Owns the Agent and the conversation; runs prompts sent by the UI.
 /// `build` produces a fresh agent for the current endpoint; the
 /// conversation context survives model and provider swaps.
+#[allow(clippy::too_many_arguments)]
 async fn worker<F>(
     mut agent: Agent<Arc<dyn Model>>,
     system: String,
     mut endpoint: Endpoint,
     build: F,
     store: TruncationStore,
+    session: Option<Arc<SessionHandler>>,
+    mut context: Context,
     mut commands: mpsc::UnboundedReceiver<WorkerCmd>,
     ui: mpsc::UnboundedSender<UiMsg>,
 ) where
     F: Fn(&Endpoint) -> Agent<Arc<dyn Model>>,
 {
-    let mut context = Context::new();
-    context.push_system(&system);
     spawn_window_probe(&endpoint, ui.clone());
     while let Some(command) = commands.recv().await {
         match command {
@@ -420,6 +421,11 @@ async fn worker<F>(
                 context.push_user(&prompt);
                 let result = agent.run_context(&mut context, cancel).await;
                 repair_dangling_tool_calls(&mut context);
+                // The repair lands after on_agent_end fired; catch up so
+                // the file never ends in dangling tool calls.
+                if let Some(session) = &session {
+                    session.sync(&context);
+                }
                 let done = UiMsg::RunDone(result.map_err(|e| e.to_string()));
                 if ui.send(done).is_err() {
                     return;
@@ -428,12 +434,43 @@ async fn worker<F>(
             WorkerCmd::Clear => {
                 context = Context::new();
                 context.push_system(&system);
+                if let Some(session) = &session {
+                    if let Err(err) = session.start_new() {
+                        let _ = ui.send(UiMsg::Notice(format!("session file not rotated: {err}")));
+                    }
+                }
             }
             WorkerCmd::Compact => {
                 let result = compact(&mut context, &store, &CompactConfig::default())
                     .map_err(|e| e.to_string());
+                if let Some(session) = &session {
+                    session.sync(&context);
+                }
                 if ui.send(UiMsg::Compacted(result)).is_err() {
                     return;
+                }
+            }
+            WorkerCmd::LoadSession { path } => {
+                let Some(session) = &session else {
+                    let _ = ui.send(UiMsg::Notice(
+                        "session recording is disabled (--no-session)".into(),
+                    ));
+                    continue;
+                };
+                match session.switch_to(&path) {
+                    Ok(loaded) => {
+                        for warning in &loaded.warnings {
+                            let _ = ui.send(UiMsg::Notice(warning.clone()));
+                        }
+                        context = loaded.context;
+                        let _ = ui.send(UiMsg::SessionLoaded {
+                            id: loaded.meta.id,
+                            messages: context.messages().len(),
+                        });
+                    }
+                    Err(err) => {
+                        let _ = ui.send(UiMsg::Notice(format!("session load failed: {err}")));
+                    }
                 }
             }
             WorkerCmd::ListModels { filter } => {
@@ -617,14 +654,60 @@ async fn run_mode(cfg: Config) -> ExitCode {
     let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
     let stats = BackgroundStats::new();
 
+    let session = if cfg.no_session {
+        None
+    } else {
+        match open_session(&cfg, &ws) {
+            Ok(opened) => Some(opened),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
     if cfg.prompt.is_some() {
-        let code = headless::run(&cfg, endpoint.build_model(), &ws, &system).await;
+        let (handler, resumed) = match session {
+            Some((handler, resumed)) => (Some(Arc::new(handler)), resumed),
+            None => (None, None),
+        };
+        let code =
+            headless::run(&cfg, endpoint.build_model(), &ws, &system, handler, resumed).await;
         return ExitCode::from(code as u8);
     }
 
     // Interactive: worker task owns the agent; UI owns the terminal.
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+
+    // Session warnings surface as transcript notices; recording failures
+    // must be visible but never fatal mid-run.
+    let (session, resumed) = match session {
+        Some((handler, resumed)) => {
+            let ui = ui_tx.clone();
+            let handler = handler.on_warn(move |message| {
+                let _ = ui.send(UiMsg::Notice(message.to_string()));
+            });
+            (Some(Arc::new(handler)), resumed)
+        }
+        None => (None, None),
+    };
+    let context = match resumed {
+        // A recorded transcript already begins with its system prompt.
+        Some(context) => {
+            let _ = ui_tx.send(UiMsg::Notice(format!(
+                "resumed session {} ({} messages)",
+                session.as_ref().map(|s| s.session_id()).unwrap_or_default(),
+                context.messages().len()
+            )));
+            context
+        }
+        None => {
+            let mut context = Context::new();
+            context.push_system(&system);
+            context
+        }
+    };
 
     // One store for the whole session: agent rebuilds (model/provider
     // swaps) keep it, so read_tool_result and /compact recovery survive.
@@ -635,6 +718,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         let subagent_depth = subagent_depth.clone();
         let stats = stats.clone();
         let store = store.clone();
+        let session = session.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
@@ -645,12 +729,16 @@ async fn run_mode(cfg: Config) -> ExitCode {
                 &subagent_depth,
                 &stats,
                 &store,
+                &session,
             )
         }
     };
     let agent = build(&endpoint);
     let initial_provider = endpoint.provider;
-    tokio::spawn(worker(agent, system, endpoint, build, store, cmd_rx, ui_tx));
+    let session_id = session.as_ref().map(|s| s.session_id());
+    tokio::spawn(worker(
+        agent, system, endpoint, build, store, session, context, cmd_rx, ui_tx,
+    ));
 
     let tui_cfg = tui::TuiConfig {
         model_name: cfg.model.clone(),
@@ -659,6 +747,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         provider: initial_provider,
         subagent_depth,
         stats,
+        session_id,
     };
     match tui::run(tui_cfg, cmd_tx, ui_rx).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -677,6 +766,7 @@ fn build_agent<M: Model + Clone + 'static>(
     subagent_depth: &SubagentDepth,
     stats: &BackgroundStats,
     store: &TruncationStore,
+    session: &Option<Arc<SessionHandler>>,
 ) -> Agent<M> {
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
@@ -689,6 +779,9 @@ fn build_agent<M: Model + Clone + 'static>(
         .limits(cfg.limits())
         .extension(events)
         .extension(Approval::new(ui.clone(), workspace_scope(ws)));
+    if let Some(session) = session {
+        agent = agent.extension_arc(session.clone());
+    }
     if extensions::enabled("truncation") {
         agent = agent.extension(Truncation::new(16_000).store(store.clone()));
     }

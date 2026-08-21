@@ -58,6 +58,8 @@ pub struct TuiConfig {
     pub subagent_depth: orca_harness_tools::SubagentDepth,
     /// Live background-work counters rendered in the status line.
     pub stats: orca_harness_tools::BackgroundStats,
+    /// The recording session's id, if recording; `/sessions` marks it.
+    pub session_id: Option<String>,
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
@@ -1605,23 +1607,7 @@ fn slash_command(
         "quit" | "exit" | "q" => app.quit = true,
         "clear" => {
             let _ = worker.send(WorkerCmd::Clear);
-            app.transcript.clear();
-            app.pending_history.clear();
-            app.scroll = 0;
-            app.transcript_max_scroll = 0;
-            app.split_inspector_cache = None;
-            app.prompt_queue.clear();
-            app.tokens_in = 0;
-            app.tokens_out = 0;
-            app.cache_read_total = 0;
-            app.cache_write_total = 0;
-            app.usage_steps = 0;
-            app.context_tokens = 0;
-            app.tool_log.clear();
-            app.work_log.clear();
-            app.turn_count = 0;
-            app.reset_activity();
-            app.split_snapshot = None;
+            reset_conversation_ui(app);
         }
         "usage" => {
             app.overlay = Some(Overlay::Usage);
@@ -1766,6 +1752,17 @@ fn handle_ui_msg(
                 )));
             }
         },
+        UiMsg::Notice(text) => {
+            app.push_line(Line::from(Span::styled(text, theme().dim)));
+        }
+        UiMsg::SessionLoaded { id, messages } => {
+            reset_conversation_ui(app);
+            app.cfg.session_id = Some(id.clone());
+            app.push_line(Line::from(Span::styled(
+                format!("resumed session {id} ({messages} messages)"),
+                theme().dim,
+            )));
+        }
         UiMsg::ProviderChanged { provider, model } => {
             app.cfg.provider = provider;
             app.cfg.model_name = model.clone();
@@ -3456,6 +3453,43 @@ fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
         ]));
     }
     lines
+}
+
+/// Reset every piece of per-conversation UI state. Used by /clear and
+/// when the worker adopts another session.
+fn reset_conversation_ui(app: &mut App) {
+    app.transcript.clear();
+    app.pending_history.clear();
+    app.scroll = 0;
+    app.transcript_max_scroll = 0;
+    app.split_inspector_cache = None;
+    app.prompt_queue.clear();
+    app.tokens_in = 0;
+    app.tokens_out = 0;
+    app.cache_read_total = 0;
+    app.cache_write_total = 0;
+    app.usage_steps = 0;
+    app.context_tokens = 0;
+    app.tool_log.clear();
+    app.work_log.clear();
+    app.turn_count = 0;
+    app.reset_activity();
+    app.split_snapshot = None;
+}
+
+/// Compact "how long ago" label for the /sessions listing.
+fn age_label(created_at: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let delta = now.saturating_sub(created_at);
+    match delta {
+        0..=59 => format!("{delta}s ago"),
+        60..=3599 => format!("{}m ago", delta / 60),
+        3600..=86_399 => format!("{}h ago", delta / 3600),
+        _ => format!("{}d ago", delta / 86_400),
+    }
 }
 
 fn model_picker_lines(picker: &ModelPicker, height: usize, width: usize) -> Vec<Line<'static>> {
