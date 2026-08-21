@@ -116,6 +116,10 @@ pub enum UiMsg {
         id: String,
         messages: usize,
     },
+    /// /clear rotated to a fresh session file with this id.
+    SessionStarted {
+        id: String,
+    },
     /// The active model's context window, discovered from the endpoint.
     ContextWindow(Option<u64>),
     /// The worker switched provider and reset the model to its default.

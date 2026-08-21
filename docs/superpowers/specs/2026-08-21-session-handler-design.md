@@ -107,7 +107,13 @@ anything new to record there; the next `before_model` or the final
 - The handler is created once per session in `run_mode` and registered
   in `build_agent` via `extension_arc`, so it survives model/provider
   rebuilds the same way `TruncationStore` does.
-- `/clear` starts a new session file; the old file is left intact.
+- `/clear` starts a new session file (the old file is left intact) and
+  rebuilds the agent: dropping the old process/pykernel/subagent tools
+  kills background process groups and the interpreter, so `/clear`
+  leaves nothing running.
+- `/sessions` opens a picker overlay (same interface as `/provider`
+  and `/theme`): newest first, current session marked, enter resumes,
+  esc closes. `/sessions <id>` resumes directly by unique id prefix.
 - Every session, interactive and headless, records by default. A
   `--no-session` flag (and matching config field) opts out.
 

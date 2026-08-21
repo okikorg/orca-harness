@@ -19,7 +19,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "clear",
-        description: "reset the conversation context",
+        description: "reset the conversation, start a new session, and stop background work",
         category: "Session",
         takes_args: false,
     },
@@ -91,7 +91,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "sessions",
-        description: "list recorded sessions for this workspace, or resume one by id",
+        description: "resume a recorded session (no argument opens the picker)",
         category: "Session",
         takes_args: true,
     },

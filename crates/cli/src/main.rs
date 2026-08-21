@@ -435,10 +435,20 @@ async fn worker<F>(
                 context = Context::new();
                 context.push_system(&system);
                 if let Some(session) = &session {
-                    if let Err(err) = session.start_new() {
-                        let _ = ui.send(UiMsg::Notice(format!("session file not rotated: {err}")));
+                    match session.start_new() {
+                        Ok(id) => {
+                            let _ = ui.send(UiMsg::SessionStarted { id });
+                        }
+                        Err(err) => {
+                            let _ =
+                                ui.send(UiMsg::Notice(format!("session file not rotated: {err}")));
+                        }
                     }
                 }
+                // A fresh agent drops the old process/pykernel/subagent
+                // tools; their Drop kills background process groups and
+                // the interpreter, so /clear leaves nothing running.
+                agent = build(&endpoint);
             }
             WorkerCmd::Compact => {
                 let result = compact(&mut context, &store, &CompactConfig::default())

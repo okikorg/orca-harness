@@ -95,8 +95,10 @@ above the activity indicator and start automatically in submission order;
 (killing spawned subprocesses) and pauses the queue, and the conversation
 persists across turns. Sessions are recorded per workspace under
 `~/.config/orcacode/sessions/` as append-only JSONL; `--continue` resumes
-the latest, `--resume <id>` a specific one, `/sessions` lists and resumes
-them from the TUI, and `--no-session` opts out. `ORCA_MODEL`,
+the latest, `--resume <id>` a specific one, `/sessions` opens a picker to
+resume one from the TUI, and `--no-session` opts out. `/clear` starts a
+fresh session and stops all background work (processes, pykernel,
+subagents). `ORCA_MODEL`,
 `ORCA_BASE_URL`, and
 `OPENAI_API_KEY` (or `--model`, `--base-url`, `--api-key`) select the
 endpoint. API keys entered in the TUI, the active provider, the theme, and

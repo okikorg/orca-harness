@@ -111,6 +111,11 @@ enum Overlay {
     Approvals { tools: Vec<String>, index: usize },
     /// The harness extension catalog; enter toggles the selected one.
     Extensions { index: usize },
+    /// Recorded sessions for this workspace; enter resumes the selection.
+    Sessions {
+        sessions: Vec<orca_harness_extensions::SessionFile>,
+        index: usize,
+    },
 }
 
 /// Rows in the settings overlay: provider, model, theme, transcript view,
@@ -1017,6 +1022,23 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
+        Overlay::Sessions { sessions, index } => match key.code {
+            KeyCode::Up => {
+                *index = index.saturating_sub(1);
+                After::Nothing
+            }
+            KeyCode::Down => {
+                *index = (*index + 1).min(sessions.len().saturating_sub(1));
+                After::Nothing
+            }
+            KeyCode::Enter => match sessions.get((*index).min(sessions.len().saturating_sub(1))) {
+                Some(session) => After::CloseAndSend(WorkerCmd::LoadSession {
+                    path: session.path.clone(),
+                }),
+                None => After::Close,
+            },
+            _ => After::Nothing,
+        },
     };
     match after {
         After::Nothing => {}
@@ -1591,23 +1613,13 @@ fn slash_command(
                 )));
                 return;
             }
-            for session in sessions.iter().take(20) {
-                let current = app.cfg.session_id.as_deref() == Some(session.meta.id.as_str());
-                let marker = if current { "  (current)" } else { "" };
-                app.push_line(Line::from(Span::styled(
-                    format!(
-                        "{}  {}  {}{marker}",
-                        session.meta.id,
-                        age_label(session.meta.created_at),
-                        session.meta.model,
-                    ),
-                    dim,
-                )));
-            }
-            app.push_line(Line::from(Span::styled(
-                "/sessions <id> resumes one (a unique prefix works)",
-                dim,
-            )));
+            // Same interface as /provider and /theme: a picker overlay,
+            // preselected on the current session.
+            let index = sessions
+                .iter()
+                .position(|s| app.cfg.session_id.as_deref() == Some(s.meta.id.as_str()))
+                .unwrap_or(0);
+            app.overlay = Some(Overlay::Sessions { sessions, index });
             return;
         }
         match sessions.iter().find(|s| s.meta.id.starts_with(arg)) {
@@ -1700,10 +1712,10 @@ fn slash_command(
             for entry in [
                 "/help        show this help",
                 "/expand [n]  full output of the n-th latest tool call (1 = latest)",
-                "/clear       reset the conversation context",
+                "/clear       reset the conversation, start a new session, stop background work",
                 "/compact     compact the conversation (elide tool outputs, capped summary)",
                 "/usage       session token totals, cache traffic, and context occupancy",
-                "/sessions [id] list recorded sessions, or resume one",
+                "/sessions [id] resume a recorded session (no argument opens the picker)",
                 "/queue [clear] show or clear waiting prompts",
                 "/models [f]  pick a model from the endpoint's catalog",
                 "/provider    switch provider (openrouter, openai, local)",
@@ -1823,6 +1835,13 @@ fn handle_ui_msg(
         },
         UiMsg::Notice(text) => {
             app.push_line(Line::from(Span::styled(text, theme().dim)));
+        }
+        UiMsg::SessionStarted { id } => {
+            app.cfg.session_id = Some(id.clone());
+            app.push_line(Line::from(Span::styled(
+                format!("new session {id} · background work stopped"),
+                theme().dim,
+            )));
         }
         UiMsg::SessionLoaded { id, messages } => {
             reset_conversation_ui(app);
@@ -3005,6 +3024,9 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Settings { index } => settings_lines(app, *index, width),
             Overlay::Approvals { tools, index } => approvals_lines(tools, *index, width),
             Overlay::Extensions { index } => extensions_picker_lines(*index, width),
+            Overlay::Sessions { sessions, index } => {
+                sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), *index, width)
+            }
         };
     }
     if app.palette_query().is_some() {
@@ -3850,6 +3872,46 @@ fn extensions_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> 
             "off"
         };
         let text = format!("  {marker}{:<12} {state}  {}", spec.name, spec.description);
+        let style = if is_selected { t.strong } else { t.dim };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            style,
+        )));
+    }
+    lines
+}
+
+/// Recorded sessions for this workspace, newest first; enter resumes
+/// the selected one. Same interface as /provider and /theme.
+fn sessions_picker_lines(
+    sessions: &[orca_harness_extensions::SessionFile],
+    current: Option<&str>,
+    selected: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let t = theme();
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Sessions (this workspace) · ↑↓ navigate · enter resume · esc close",
+            t.dim,
+        )),
+        Line::from(""),
+    ];
+    let last = sessions.len().saturating_sub(1);
+    for (index, session) in sessions.iter().enumerate() {
+        let is_selected = index == selected.min(last);
+        let marker = if is_selected { "▸ " } else { "  " };
+        let note = if current == Some(session.meta.id.as_str()) {
+            "  (current)"
+        } else {
+            ""
+        };
+        let text = format!(
+            "  {marker}{}  {:<8} {}{note}",
+            session.meta.id,
+            age_label(session.meta.created_at),
+            session.meta.model,
+        );
         let style = if is_selected { t.strong } else { t.dim };
         lines.push(Line::from(Span::styled(
             view::truncate_line(&text, width),
@@ -6064,6 +6126,67 @@ mod extensions_command_tests {
         assert!(printed(&app).contains("usage: /extensions"));
 
         assert!(rx.try_recv().is_err(), "bad input sends nothing");
+    }
+
+    fn session_file(id: &str, model: &str) -> orca_harness_extensions::SessionFile {
+        orca_harness_extensions::SessionFile {
+            path: std::path::PathBuf::from(format!("/tmp/{id}.jsonl")),
+            meta: orca_harness_extensions::SessionMeta {
+                v: orca_harness_extensions::SESSION_FORMAT_VERSION,
+                id: id.into(),
+                created_at: 0,
+                workspace: "/test-ws".into(),
+                model: model.into(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_picker_navigates_and_enter_resumes() {
+        let mut app = ext_app();
+        app.cfg.session_id = Some("0000000002-b-0".into());
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Newest first, preselected on the current session (row 0).
+        app.overlay = Some(Overlay::Sessions {
+            sessions: vec![
+                session_file("0000000002-b-0", "m2"),
+                session_file("0000000001-a-0", "m1"),
+            ],
+            index: 0,
+        });
+
+        // Same rendered shape as the other pickers: every session with a
+        // selection marker, the current one labeled.
+        let lines = live_lines(&app, 100)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone().into_owned()))
+            .collect::<String>();
+        assert!(lines.contains("enter resume"), "shows key hint: {lines}");
+        assert!(lines.contains("(current)"), "marks current: {lines}");
+        assert!(lines.contains("0000000001-a-0"), "lists both: {lines}");
+
+        // Down then enter resumes the older session and closes the picker.
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, down, &worker);
+        handle_overlay_key(&mut app, enter, &worker);
+        match rx.try_recv() {
+            Ok(WorkerCmd::LoadSession { path }) => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/0000000001-a-0.jsonl"));
+            }
+            other => panic!("expected LoadSession, got {:?}", other.is_ok()),
+        }
+        assert!(app.overlay.is_none());
+
+        // Esc closes like every other overlay.
+        app.overlay = Some(Overlay::Sessions {
+            sessions: vec![session_file("0000000001-a-0", "m1")],
+            index: 0,
+        });
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, esc, &worker);
+        assert!(app.overlay.is_none());
     }
 }
 
