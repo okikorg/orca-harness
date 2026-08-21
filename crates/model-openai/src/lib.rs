@@ -27,6 +27,7 @@ pub struct OpenAiModel {
     max_tokens: Option<u64>,
     parallel_tool_calls: Option<bool>,
     headers: Vec<(String, String)>,
+    usage_accounting: bool,
 }
 
 impl OpenAiModel {
@@ -40,7 +41,16 @@ impl OpenAiModel {
             max_tokens: None,
             parallel_tool_calls: None,
             headers: Vec::new(),
+            usage_accounting: false,
         }
+    }
+
+    /// Ask the endpoint for detailed usage accounting (`usage: {include:
+    /// true}`). OpenRouter needs this to report cached-token details;
+    /// plain OpenAI rejects the parameter, so it is off by default.
+    pub fn usage_accounting(mut self, enabled: bool) -> Self {
+        self.usage_accounting = enabled;
+        self
     }
 
     /// Point at a different OpenAI-compatible endpoint, e.g. a local vLLM
@@ -131,6 +141,9 @@ impl OpenAiModel {
         if let Some(max_tokens) = self.max_tokens {
             body["max_tokens"] = json!(max_tokens);
         }
+        if self.usage_accounting {
+            body["usage"] = json!({"include": true});
+        }
         body
     }
 }
@@ -203,21 +216,45 @@ pub(crate) struct WireUsage {
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: WirePromptTokensDetails,
+    /// DeepSeek-style cache reporting, used when details are absent.
+    #[serde(default)]
+    prompt_cache_hit_tokens: u64,
 }
 
 #[derive(Deserialize, Default)]
 struct WirePromptTokensDetails {
     #[serde(default)]
     cached_tokens: u64,
+    /// OpenRouter reports Anthropic cache writes here.
+    #[serde(default)]
+    cache_write_tokens: u64,
 }
 
 impl WireUsage {
     pub(crate) fn into_usage(self) -> Usage {
+        // OpenAI-style `prompt_tokens` INCLUDES cached tokens; harness
+        // Usage semantics keep them separate, so subtract to avoid
+        // double-counting. Some providers (observed on OpenRouter) fold
+        // cache writes into `cached_tokens` too — remove them from the
+        // read figure. Matches pi-ai's normalization.
+        let reported_cached = match self.prompt_tokens_details.cached_tokens {
+            0 => self.prompt_cache_hit_tokens,
+            cached => cached,
+        };
+        let cache_write = self.prompt_tokens_details.cache_write_tokens;
+        let cache_read = if cache_write > 0 {
+            reported_cached.saturating_sub(cache_write)
+        } else {
+            reported_cached
+        };
         Usage {
-            input_tokens: self.prompt_tokens,
+            input_tokens: self
+                .prompt_tokens
+                .saturating_sub(cache_read)
+                .saturating_sub(cache_write),
             output_tokens: self.completion_tokens,
-            cache_read_tokens: self.prompt_tokens_details.cached_tokens,
-            cache_create_tokens: 0,
+            cache_read_tokens: cache_read,
+            cache_create_tokens: cache_write,
         }
     }
 }

@@ -44,7 +44,7 @@ orca-harness/
 │   ├── model-openai/     # OpenAI-compatible chat-completions adapter
 │   ├── tools/            # core host/target tools: shell, process
 │   │                     # (persistent sessions / background processes),
-│   │                     # kernel (persistent Python compute), subagent
+│   │                     # pykernel (persistent Python compute), subagent
 │   │                     # (in-process agent fan-out with adjustable
 │   │                     # nesting), read/write/edit/list files, grep,
 │   │                     # glob — the set that makes an agent
@@ -57,20 +57,20 @@ orca-harness/
 │   ├── extensions/       # critical extensions: event stream, tool
 │   │                     # policy, truncation (+ store paired with the
 │   │                     # read_tool_result tool), retry, usage metering
-│   └── cli/              # `orca`: interactive terminal host (streaming
+│   └── cli/              # `orcacode`: interactive terminal host (streaming
 │                         # REPL, tool approvals, headless mode)
 ```
 
 ## Try it
 
-`orca` is a reference host proving the harness drives a real terminal
+`orcacode` is a reference host proving the harness drives a real terminal
 agent. It talks to any OpenAI-compatible endpoint; with no key set it
 defaults to a local Ollama server:
 
 ```bash
-cargo run --release -p orca-cli                      # interactive REPL
-cargo run --release -p orca-cli -- -p "count the rust files"   # headless
-cargo run --release -p orca-cli -- --json -p "..."   # NDJSON event stream
+cargo run --release -p orcacode                      # interactive REPL
+cargo run --release -p orcacode -- -p "count the rust files"   # headless
+cargo run --release -p orcacode -- --json -p "..."   # NDJSON event stream
 ```
 
 Interactive mode marks each user turn with a strong transcript spine and
@@ -81,16 +81,30 @@ Tool rows use `□`, `✓`, and `×` for running, successful, and failed states.
 Failed output expands inline while work is live. Running subagents show their
 inner tool calls as an indented nested rail (collapsed into the expandable
 record when they finish), and the status line counts live background work
-(`procs 2 · kernel · agents 3`). Gated tools (`shell`, `write_file`,
-`edit_file`, `kernel`, `subagent`) pause behind a
-y/a/n approval prompt. Prompts submitted during a run wait in a FIFO rail
+(`procs 2 · pykernel · agents 3`). Gated tools (`shell`, `write_file`,
+`edit_file`, `pykernel`, `subagent`) pause behind an approval prompt:
+`y` allows once, `a` always allows for the session, `A` always allows and
+saves the grant to the config file scoped to this workspace (future
+sessions in the same directory skip the prompt; other directories still
+ask), and `n` denies. Saved grants are listed and revocable
+from `/settings`. Prompts submitted during a run wait in a FIFO rail
 above the activity indicator and start automatically in submission order;
 `/queue clear` discards the waiting prompts. Esc cancels in-flight runs
 (killing spawned subprocesses) and pauses the queue, and the conversation
 persists across turns. `ORCA_MODEL`,
 `ORCA_BASE_URL`, and
 `OPENAI_API_KEY` (or `--model`, `--base-url`, `--api-key`) select the
-endpoint.
+endpoint. API keys entered in the TUI, the active provider, the theme, and
+the last model picked per provider persist to
+`~/.config/orcacode/config.json` (owner-only permissions; `$ORCA_CONFIG_DIR`
+overrides the directory) and are reused on later runs — flags and
+environment variables always win over the saved values. `/settings` shows
+the current values and jumps into the provider, model, theme, and api-key
+pickers. `/extensions` opens a picker over the optional harness extensions —
+output truncation (default on) and tool retry (default off) — where
+enter toggles the selected one (`/extensions enable|disable <name>`
+works directly); toggles persist to the same config file and apply to
+interactive and headless runs alike.
 
 ## Core tools
 
@@ -274,4 +288,4 @@ errors — plus the OpenAI-compatible adapter and a basic benchmark suite.
 
 Deliberately not in the kernel: durable sessions, workflow DAGs, queues,
 planners, distributed scheduling, built-in memory, UI. Those belong to the
-platform, to Extensions, or to hosts like the `orca` CLI.
+platform, to Extensions, or to hosts like the `orcacode` CLI.

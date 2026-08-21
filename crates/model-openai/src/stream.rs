@@ -300,6 +300,30 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_cache_writes_are_split_out_of_cached_tokens() {
+        // OpenRouter usage accounting: cached_tokens can be hits + writes;
+        // reads and writes must separate and never double-count input.
+        let mut acc = ChunkAccumulator::new();
+        let _ = apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}"#,
+                r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":60,"cache_write_tokens":40}}}"#,
+            ],
+        );
+        match acc.finish().unwrap() {
+            ModelResponse::Final { usage, .. } => {
+                let usage = usage.expect("usage captured");
+                assert_eq!(usage.cache_read_tokens, 20, "60 reported minus 40 written");
+                assert_eq!(usage.cache_create_tokens, 40);
+                assert_eq!(usage.input_tokens, 40, "100 minus read minus write");
+                assert_eq!(usage.context_tokens(), 110);
+            }
+            other => panic!("expected Final, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn usage_only_chunk_with_empty_choices_is_captured() {
         let mut acc = ChunkAccumulator::new();
         apply_all(
@@ -312,9 +336,12 @@ mod tests {
         match acc.finish().unwrap() {
             ModelResponse::Final { usage, .. } => {
                 let usage = usage.expect("usage captured");
-                assert_eq!(usage.input_tokens, 12);
+                // prompt_tokens (12) includes the 5 cached: normalized
+                // input is the uncached remainder.
+                assert_eq!(usage.input_tokens, 7);
                 assert_eq!(usage.output_tokens, 34);
                 assert_eq!(usage.cache_read_tokens, 5);
+                assert_eq!(usage.context_tokens(), 46);
             }
             other => panic!("expected Final, got {other:?}"),
         }

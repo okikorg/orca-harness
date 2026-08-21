@@ -1,13 +1,13 @@
 [package]
-name = "orca-cli"
+name = "orcacode"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Interactive terminal host for Orca Harness: streaming REPL, tool approvals, headless mode."
+description = "Orca Code: interactive terminal host for Orca Harness. Streaming REPL, tool approvals, headless mode."
 
 [[bin]]
-name = "orca"
+name = "orcacode"
 path = "src/main.rs"
 
 [dependencies]
@@ -18,9 +18,12 @@ orca-harness-tools = { path = "../tools" }
 orca-harness-tools-web = { path = "../tools-web" }
 orca-harness-extensions = { path = "../extensions" }
 async-trait = { workspace = true }
+reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 futures-util = { workspace = true }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 textwrap = "0.16"
+syntect-tui = { version = "3.0.6", default-features = false }
+two-face = { version = "0.5.1", default-features = false, features = ["syntect-fancy"] }

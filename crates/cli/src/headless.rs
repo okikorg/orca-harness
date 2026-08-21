@@ -1,4 +1,4 @@
-//! Headless single-shot mode: `orca -p "prompt"`. Streams assistant text
+//! Headless single-shot mode: `orcacode -p "prompt"`. Streams assistant text
 //! to stdout as it is generated; tool activity goes to stderr. With
 //! `--json`, every harness event is serialized to stdout as NDJSON.
 
@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
-use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
-use orca_harness_tools::{core_tools, KernelTool, SubagentDepth, SubagentTool, Workspace};
+use orca_harness_extensions::{EventStream, HarnessEvent, ToolRetry, Truncation, UsageMeter};
+use orca_harness_tools::{core_tools, PyKernelTool, SubagentDepth, SubagentTool, Workspace};
 
 use crate::approval::HeadlessGate;
 use crate::view;
@@ -71,8 +71,13 @@ pub async fn run<M: Model + Clone + 'static>(
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
-        .extension(meter)
-        .extension(Truncation::new(16_000));
+        .extension(meter);
+    if crate::extensions::enabled("truncation") {
+        agent = agent.extension(Truncation::new(16_000));
+    }
+    if crate::extensions::enabled("retry") {
+        agent = agent.extension(ToolRetry::new(3));
+    }
     if !cfg.auto_approve {
         agent = agent.extension(HeadlessGate);
     }
@@ -80,7 +85,7 @@ pub async fn run<M: Model + Clone + 'static>(
         agent = agent.tool_arc(tool);
     }
     let root = ws.root().to_string_lossy().into_owned();
-    agent = agent.tool_arc(Arc::new(KernelTool::new().working_dir(root)));
+    agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root)));
     agent = agent.tool_arc(Arc::new(
         SubagentTool::new(model_for_subagents, ws)
             .max_depth(SubagentDepth::new(cfg.subagent_depth)),

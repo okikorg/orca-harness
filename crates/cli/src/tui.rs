@@ -44,6 +44,11 @@ const QUEUE_PREVIEW_ROWS: usize = 3;
 pub struct TuiConfig {
     pub model_name: String,
     pub workspace_name: String,
+    /// Canonicalized workspace root: keys this workspace's saved tool
+    /// approvals in the config file.
+    pub workspace_root: String,
+    /// The active endpoint provider; provider switches update it.
+    pub provider: Provider,
     /// Shared handle behind the `subagent` tool's nesting cap;
     /// `/subagents` adjusts it live.
     pub subagent_depth: orca_harness_tools::SubagentDepth,
@@ -69,11 +74,12 @@ impl ModelPicker {
     }
 
     /// The id under the cursor, if any model matches the filter.
-    fn selected_id(&self) -> Option<String> {
+    /// The selected model's id and catalog-reported context window.
+    fn selected_info(&self) -> Option<(String, Option<u64>)> {
         let filtered = self.filtered();
         filtered
             .get(self.index.min(filtered.len().saturating_sub(1)))
-            .map(|m| m.id.clone())
+            .map(|m| (m.id.clone(), m.context_length))
     }
 }
 
@@ -84,9 +90,24 @@ enum Overlay {
     Models(ModelPicker),
     /// Provider selector (openrouter, openai, local).
     Providers { index: usize },
+    /// Theme selector over `view::ThemeName::ALL`.
+    Themes { index: usize },
+    /// Read-only session usage panel; any dismissal key closes it.
+    Usage,
     /// Masked API-key entry for a provider whose key is not in the env.
     ApiKey { provider: Provider, input: String },
+    /// Settings menu: shows the persisted preferences and jumps into
+    /// the provider, model, theme, api-key, and approval pickers.
+    Settings { index: usize },
+    /// This workspace's saved always-allowed tools; enter revokes one.
+    Approvals { tools: Vec<String>, index: usize },
+    /// The harness extension catalog; enter toggles the selected one.
+    Extensions { index: usize },
 }
+
+/// Rows in the settings overlay: provider, model, theme, api key,
+/// approvals.
+const SETTINGS_ROWS: usize = 5;
 
 /// A finished tool call kept around so the user can expand its full
 /// output later with `/expand n`.
@@ -178,6 +199,17 @@ struct App {
     history_pos: Option<usize>,
     tokens_in: u64,
     tokens_out: u64,
+    cache_read_total: u64,
+    cache_write_total: u64,
+    /// Model steps that reported usage this session.
+    usage_steps: u64,
+    /// Approximate size of the model's current context, pi-style: the
+    /// last step's provider-reported total, plus bytes/4 estimates for
+    /// content appended since (tool results, the next prompt), plus
+    /// /compact's estimate. Distinct from the cumulative session totals.
+    context_tokens: u64,
+    /// The active model's context window, when the catalog knows it.
+    context_window: Option<u64>,
     spinner_frame: usize,
     quit: bool,
     tool_log: Vec<ToolRecord>,
@@ -185,6 +217,11 @@ struct App {
     work_log: Vec<CompletedWork>,
     /// Number of user turns rendered in this session.
     turn_count: usize,
+    /// Top-level tool calls made during the current turn.
+    turn_tool_calls: usize,
+    /// Duration/tool-call summary of the last completed turn, shown in
+    /// the rail above the composer until the next run starts.
+    last_turn_summary: Option<String>,
     /// Call lines for in-flight tool calls, keyed by call id.
     pending_calls: std::collections::HashMap<String, usize>,
     activity_tools: Vec<ToolActivity>,
@@ -220,11 +257,18 @@ impl App {
             history_pos: None,
             tokens_in: 0,
             tokens_out: 0,
+            cache_read_total: 0,
+            cache_write_total: 0,
+            usage_steps: 0,
+            context_tokens: 0,
+            context_window: None,
             spinner_frame: 0,
             quit: false,
             tool_log: Vec::new(),
             work_log: Vec::new(),
             turn_count: 0,
+            turn_tool_calls: 0,
+            last_turn_summary: None,
             pending_calls: std::collections::HashMap::new(),
             activity_tools: Vec::new(),
             subagent_activity: std::collections::HashMap::new(),
@@ -282,6 +326,8 @@ impl App {
     }
 
     fn reset_activity(&mut self) {
+        self.turn_tool_calls = 0;
+        self.last_turn_summary = None;
         self.reasoning.clear();
         self.reasoning_started = None;
         self.thinking_log.clear();
@@ -424,7 +470,7 @@ pub async fn run(
     crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
     disable_raw_mode()?;
     println!(
-        "orca · session ended · tokens in {} out {}",
+        "orcacode · session ended · tokens in {} out {}",
         app.tokens_in, app.tokens_out
     );
     Ok(())
@@ -583,8 +629,24 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
         Nothing,
         Close,
         Replace(Overlay),
+        /// Send to the worker with the overlay left open (toggle rows).
+        Send(WorkerCmd),
         CloseAndSend(WorkerCmd),
+        /// Close, remember the picked model's context window, switch model.
+        CloseAndSetModel {
+            id: String,
+            window: Option<u64>,
+        },
+        /// Close and drop a dim status line into the history.
+        CloseWithNote(String),
+        /// Close, send to the worker, and drop a dim status line.
+        SendWithNote(WorkerCmd, String),
+        /// Close and start the /models fetch-then-pick flow.
+        FetchModels,
     }
+    // Read before the overlay borrow: the settings rows need these.
+    let current_provider = app.cfg.provider;
+    let workspace_root = app.cfg.workspace_root.clone();
     let Some(overlay) = app.overlay.as_mut() else {
         return;
     };
@@ -607,8 +669,8 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                     picker.index += PICKER_ROWS;
                     After::Nothing
                 }
-                KeyCode::Enter => match picker.selected_id() {
-                    Some(id) => After::CloseAndSend(WorkerCmd::SetModel { id }),
+                KeyCode::Enter => match picker.selected_info() {
+                    Some((id, window)) => After::CloseAndSetModel { id, window },
                     None => After::Close,
                 },
                 KeyCode::Char(c) => {
@@ -638,8 +700,8 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             KeyCode::Enter => {
                 let provider = Provider::ALL[(*index).min(Provider::ALL.len() - 1)];
-                if provider.key_env().is_some() && provider.env_key().is_none() {
-                    // No key in the shell: ask for one before switching.
+                if provider.key_env().is_some() && provider.resolve_key().is_none() {
+                    // No key in the shell or config file: ask before switching.
                     After::Replace(Overlay::ApiKey {
                         provider,
                         input: String::new(),
@@ -653,16 +715,50 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
+        Overlay::Themes { index } => match key.code {
+            KeyCode::Up => {
+                *index = index.saturating_sub(1);
+                After::Nothing
+            }
+            KeyCode::Down => {
+                *index = (*index + 1).min(view::ThemeName::ALL.len() - 1);
+                After::Nothing
+            }
+            KeyCode::Enter => {
+                let name = view::ThemeName::ALL[(*index).min(view::ThemeName::ALL.len() - 1)];
+                view::set_theme(name);
+                let note = match crate::config::save_theme(name.slug()) {
+                    Ok(_) => format!("theme set to {}", name.label()),
+                    Err(err) => format!("theme set to {} (not saved: {err})", name.label()),
+                };
+                After::CloseWithNote(note)
+            }
+            _ => After::Nothing,
+        },
+        Overlay::Usage => match key.code {
+            KeyCode::Enter | KeyCode::Char('q') => After::Close,
+            _ => After::Nothing,
+        },
         Overlay::ApiKey { provider, input } => match key.code {
             KeyCode::Enter => {
                 let key = input.trim().to_string();
                 if key.is_empty() {
                     After::Nothing
                 } else {
-                    After::CloseAndSend(WorkerCmd::SetProvider {
-                        provider: *provider,
-                        api_key: Some(key),
-                    })
+                    let provider = *provider;
+                    let note = match crate::config::save_key(provider.label(), &key) {
+                        Ok(path) => format!("api key saved to {}", path.display()),
+                        Err(err) => {
+                            format!("api key kept for this session only (save failed: {err})")
+                        }
+                    };
+                    After::SendWithNote(
+                        WorkerCmd::SetProvider {
+                            provider,
+                            api_key: Some(key),
+                        },
+                        note,
+                    )
                 }
             }
             KeyCode::Char(c) => {
@@ -675,14 +771,147 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
+        Overlay::Settings { index } => match key.code {
+            KeyCode::Up => {
+                *index = index.saturating_sub(1);
+                After::Nothing
+            }
+            KeyCode::Down => {
+                *index = (*index + 1).min(SETTINGS_ROWS - 1);
+                After::Nothing
+            }
+            KeyCode::Enter => match *index {
+                0 => {
+                    let selected = Provider::ALL
+                        .iter()
+                        .position(|p| *p == current_provider)
+                        .unwrap_or(0);
+                    After::Replace(Overlay::Providers { index: selected })
+                }
+                1 => After::FetchModels,
+                2 => {
+                    let current = view::theme_name();
+                    let selected = view::ThemeName::ALL
+                        .iter()
+                        .position(|name| *name == current)
+                        .unwrap_or(0);
+                    After::Replace(Overlay::Themes { index: selected })
+                }
+                3 => {
+                    if current_provider.key_env().is_none() {
+                        After::CloseWithNote(format!(
+                            "the {} endpoint needs no api key",
+                            current_provider.label()
+                        ))
+                    } else {
+                        After::Replace(Overlay::ApiKey {
+                            provider: current_provider,
+                            input: String::new(),
+                        })
+                    }
+                }
+                _ => {
+                    let tools = crate::config::stored_approvals(&workspace_root);
+                    if tools.is_empty() {
+                        After::CloseWithNote("no saved approvals for this workspace".into())
+                    } else {
+                        After::Replace(Overlay::Approvals { tools, index: 0 })
+                    }
+                }
+            },
+            _ => After::Nothing,
+        },
+        Overlay::Approvals { tools, index } => match key.code {
+            KeyCode::Up => {
+                *index = index.saturating_sub(1);
+                After::Nothing
+            }
+            KeyCode::Down => {
+                *index = (*index + 1).min(tools.len().saturating_sub(1));
+                After::Nothing
+            }
+            KeyCode::Enter => {
+                let tool = tools[(*index).min(tools.len() - 1)].clone();
+                match crate::config::remove_approval(&workspace_root, &tool) {
+                    Ok(_) => {
+                        tools.retain(|t| *t != tool);
+                        *index = (*index).min(tools.len().saturating_sub(1));
+                        if tools.is_empty() {
+                            After::CloseWithNote(
+                                "all saved approvals removed; these tools ask again".into(),
+                            )
+                        } else {
+                            After::Nothing
+                        }
+                    }
+                    Err(err) => After::CloseWithNote(format!("could not update the config: {err}")),
+                }
+            }
+            _ => After::Nothing,
+        },
+        Overlay::Extensions { index } => match key.code {
+            KeyCode::Up => {
+                *index = index.saturating_sub(1);
+                After::Nothing
+            }
+            KeyCode::Down => {
+                *index = (*index + 1).min(crate::extensions::EXTENSIONS.len() - 1);
+                After::Nothing
+            }
+            KeyCode::Enter => {
+                let spec = &crate::extensions::EXTENSIONS
+                    [(*index).min(crate::extensions::EXTENSIONS.len() - 1)];
+                let enabled = !crate::extensions::is_enabled(spec);
+                match crate::config::save_extension(spec.name, enabled) {
+                    // Stay open so several extensions can be toggled;
+                    // the row re-renders with its new state.
+                    Ok(_) => After::Send(WorkerCmd::ReloadExtensions),
+                    Err(err) => After::CloseWithNote(format!("could not update the config: {err}")),
+                }
+            }
+            _ => After::Nothing,
+        },
     };
     match after {
         After::Nothing => {}
         After::Close => app.overlay = None,
         After::Replace(next) => app.overlay = Some(next),
+        After::Send(cmd) => send_or_report(app, worker, cmd),
         After::CloseAndSend(cmd) => {
             app.overlay = None;
             send_or_report(app, worker, cmd);
+        }
+        After::CloseAndSetModel { id, window } => {
+            app.overlay = None;
+            app.context_window = window;
+            send_or_report(app, worker, WorkerCmd::SetModel { id });
+        }
+        After::CloseWithNote(note) => {
+            app.overlay = None;
+            app.push_line(Line::from(Span::styled(note, theme().dim)));
+        }
+        After::SendWithNote(cmd, note) => {
+            app.overlay = None;
+            send_or_report(app, worker, cmd);
+            app.push_line(Line::from(Span::styled(note, theme().dim)));
+        }
+        After::FetchModels => {
+            app.overlay = None;
+            app.picker_pending = Some(String::new());
+            if worker
+                .send(WorkerCmd::ListModels {
+                    filter: String::new(),
+                })
+                .is_err()
+            {
+                app.picker_pending = None;
+                app.push_line(Line::from(Span::styled(
+                    "worker is gone; restart orcacode",
+                    theme().error,
+                )));
+            } else {
+                app.push_line(Line::from(Span::styled("fetching models…", theme().dim)));
+            }
         }
     }
 }
@@ -690,7 +919,7 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
 fn send_or_report(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, cmd: WorkerCmd) {
     if worker.send(cmd).is_err() {
         app.push_line(Line::from(Span::styled(
-            "worker is gone; restart orca",
+            "worker is gone; restart orcacode",
             theme().error,
         )));
     }
@@ -708,7 +937,10 @@ fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
 fn handle_approval_key(app: &mut App, key: KeyEvent) {
     let response = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalResponse::AllowOnce),
-        KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalResponse::AllowAlways),
+        KeyCode::Char('a') => Some(ApprovalResponse::AllowAlways),
+        // Deliberately a distinct key: persisting trust across sessions
+        // must never happen from a habitual lowercase 'a'.
+        KeyCode::Char('A') => Some(ApprovalResponse::AllowAlwaysSave),
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalResponse::Deny),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(ApprovalResponse::Deny)
@@ -720,8 +952,24 @@ fn handle_approval_key(app: &mut App, key: KeyEvent) {
             let verdict = match response {
                 ApprovalResponse::AllowOnce => "approved",
                 ApprovalResponse::AllowAlways => "always allowed",
+                ApprovalResponse::AllowAlwaysSave => "always allowed (saved)",
                 ApprovalResponse::Deny => "denied",
             };
+            if response == ApprovalResponse::AllowAlwaysSave {
+                let note =
+                    match crate::config::save_approval(&app.cfg.workspace_root, &request.tool_name)
+                    {
+                        Ok(_) => format!(
+                            "{} always allowed in this workspace — saved; /settings to revoke",
+                            request.tool_name
+                        ),
+                        Err(err) => format!(
+                            "{} always allowed this session only (save failed: {err})",
+                            request.tool_name
+                        ),
+                    };
+                app.push_line(Line::from(Span::styled(note, theme().dim)));
+            }
             if let Some(activity) = app.activity_tools.iter_mut().rev().find(|activity| {
                 activity.tool_name == request.tool_name && activity.output.is_none()
             }) {
@@ -803,6 +1051,7 @@ fn start_prompt(
     width: usize,
 ) -> bool {
     let cancel = CancellationToken::new();
+    app.context_tokens += (prompt.len() / 4) as u64;
     if worker
         .send(WorkerCmd::Run {
             prompt: prompt.clone(),
@@ -811,7 +1060,7 @@ fn start_prompt(
         .is_err()
     {
         app.push_line(Line::from(Span::styled(
-            "worker is gone; restart orca",
+            "worker is gone; restart orcacode",
             theme().error,
         )));
         return false;
@@ -1069,6 +1318,63 @@ fn slash_command(
             return;
         }
     }
+    if let Some(rest) = command.strip_prefix("extensions") {
+        if rest.is_empty() {
+            // Same interface as /theme and /provider: a picker overlay
+            // where enter toggles the selected extension.
+            app.overlay = Some(Overlay::Extensions { index: 0 });
+            return;
+        }
+        if let Some(args) = rest.strip_prefix(' ') {
+            let mut parts = args.split_whitespace();
+            let enabled = match parts.next() {
+                Some("enable" | "add" | "on") => true,
+                Some("disable" | "remove" | "delete" | "off") => false,
+                _ => {
+                    app.push_line(Line::from(Span::styled(
+                        "usage: /extensions [enable|disable <name>]",
+                        theme().error,
+                    )));
+                    return;
+                }
+            };
+            let name = parts.next().unwrap_or("");
+            if crate::extensions::find(name).is_none() {
+                let known = crate::extensions::EXTENSIONS
+                    .iter()
+                    .map(|spec| spec.name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                app.push_line(Line::from(Span::styled(
+                    format!("unknown extension: {name} — valid extensions: {known}"),
+                    theme().error,
+                )));
+                return;
+            }
+            let state = if enabled { "enabled" } else { "disabled" };
+            match crate::config::save_extension(name, enabled) {
+                Ok(_) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("extension {name} {state} (applies to the next run)"),
+                        dim,
+                    )));
+                    if worker.send(WorkerCmd::ReloadExtensions).is_err() {
+                        app.push_line(Line::from(Span::styled(
+                            "worker is gone; restart orcacode",
+                            theme().error,
+                        )));
+                    }
+                }
+                Err(err) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("extension {name} not {state} (save failed: {err})"),
+                        theme().error,
+                    )));
+                }
+            }
+            return;
+        }
+    }
     if let Some(rest) = command.strip_prefix("models") {
         if rest.is_empty() || rest.starts_with(' ') {
             // Fetch the full catalog; the argument seeds the picker's
@@ -1082,7 +1388,7 @@ fn slash_command(
             {
                 app.picker_pending = None;
                 app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orca",
+                    "worker is gone; restart orcacode",
                     theme().error,
                 )));
             } else {
@@ -1090,6 +1396,39 @@ fn slash_command(
             }
             return;
         }
+    }
+    if let Some(rest) = command.strip_prefix("theme") {
+        let arg = rest.trim();
+        if arg.is_empty() {
+            // Same interface as /models and /provider: a picker overlay,
+            // preselected on the active theme.
+            let current = view::theme_name();
+            let index = view::ThemeName::ALL
+                .iter()
+                .position(|name| *name == current)
+                .unwrap_or(0);
+            app.overlay = Some(Overlay::Themes { index });
+            return;
+        }
+        match view::ThemeName::from_str(arg) {
+            Some(name) => {
+                view::set_theme(name);
+                let note = match crate::config::save_theme(name.slug()) {
+                    Ok(_) => format!("theme set to {}", name.label()),
+                    Err(err) => format!("theme set to {} (not saved: {err})", name.label()),
+                };
+                app.push_line(Line::from(Span::styled(note, dim)));
+            }
+            None => {
+                app.push_line(Line::from(Span::styled(
+                    format!(
+                        "unknown theme: {arg} — valid themes: default, mono, dracula, solarized-dark, one-dark, monokai, nord"
+                    ),
+                    theme().error,
+                )));
+            }
+        }
+        return;
     }
     match command {
         "quit" | "exit" | "q" => app.quit = true,
@@ -1101,27 +1440,52 @@ fn slash_command(
             app.prompt_queue.clear();
             app.tokens_in = 0;
             app.tokens_out = 0;
+            app.cache_read_total = 0;
+            app.cache_write_total = 0;
+            app.usage_steps = 0;
+            app.context_tokens = 0;
             app.tool_log.clear();
             app.work_log.clear();
             app.turn_count = 0;
             app.reset_activity();
         }
+        "usage" => {
+            app.overlay = Some(Overlay::Usage);
+        }
+        "compact" => {
+            if worker.send(WorkerCmd::Compact).is_err() {
+                app.push_line(Line::from(Span::styled(
+                    "worker is gone; restart orcacode",
+                    theme().error,
+                )));
+            } else {
+                app.push_line(Line::from(Span::styled("compacting conversation…", dim)));
+            }
+        }
         "provider" => {
             app.overlay = Some(Overlay::Providers { index: 0 });
+        }
+        "settings" => {
+            app.overlay = Some(Overlay::Settings { index: 0 });
         }
         "help" | "" => {
             for entry in [
                 "/help        show this help",
                 "/expand [n]  full output of the n-th latest tool call (1 = latest)",
                 "/clear       reset the conversation context",
+                "/compact     compact the conversation (elide tool outputs, capped summary)",
+                "/usage       session token totals, cache traffic, and context occupancy",
                 "/queue [clear] show or clear waiting prompts",
                 "/models [f]  pick a model from the endpoint's catalog",
                 "/provider    switch provider (openrouter, openai, local)",
+                "/settings    view and change provider, model, theme, api key",
                 "/subagents [n] show or set subagent nesting depth (1-5)",
+                "/extensions  toggle harness extensions (no argument opens the picker)",
                 "/quit        exit",
+                "/theme [name] pick a color theme (no argument opens the picker)",
                 "keys: enter send or queue · esc cancel run · ctrl+o reveal latest work tree",
                 "      pgup/pgdn scroll · ctrl+c quit · up/down history",
-                "approvals: y allow once · a always allow tool · n deny",
+                "approvals: y allow once · a always (session) · A always (saved for this workspace) · n deny",
             ] {
                 app.push_line(Line::from(Span::styled(entry.to_string(), dim)));
             }
@@ -1154,6 +1518,14 @@ fn handle_ui_msg(
         UiMsg::Models(result) => {
             let t = theme();
             let seed = app.picker_pending.take().unwrap_or_default();
+            // Learn the active model's window from the catalog in passing.
+            if let Ok(models) = &result {
+                if let Some(info) = models.iter().find(|m| m.id == app.cfg.model_name) {
+                    if info.context_length.is_some() {
+                        app.context_window = info.context_length;
+                    }
+                }
+            }
             match result {
                 Ok(models) if models.is_empty() => {
                     app.push_line(Line::from(Span::styled("no models available", t.dim)));
@@ -1178,15 +1550,63 @@ fn handle_ui_msg(
                 theme().dim,
             )));
         }
+        UiMsg::ContextWindow(window) => {
+            // Best-effort discovery: never wipe a window the model picker
+            // already stashed with a probe that found nothing.
+            if window.is_some() {
+                app.context_window = window;
+            }
+        }
+        UiMsg::Compacted(result) => match result {
+            Ok(report) => {
+                // Until the next model step reports real usage, the
+                // report's estimate is the best context figure we have.
+                app.context_tokens = report.est_tokens_after as u64;
+                let pct =
+                    100.0 * report.est_tokens_after as f64 / report.est_tokens_before.max(1) as f64;
+                app.push_line(Line::from(Span::styled(
+                    format!(
+                        "compacted: {} -> {} messages · ~{} -> ~{} est tokens ({pct:.1}%)",
+                        report.messages_before,
+                        report.messages_after,
+                        report.est_tokens_before,
+                        report.est_tokens_after,
+                    ),
+                    theme().dim,
+                )));
+                if report.elided_results > 0 {
+                    app.push_line(Line::from(Span::styled(
+                        format!(
+                            "{} tool outputs ({} KB) elided to store, recoverable via read_tool_result",
+                            report.elided_results,
+                            report.elided_bytes / 1024,
+                        ),
+                        theme().dim,
+                    )));
+                }
+            }
+            Err(err) => {
+                app.push_line(Line::from(Span::styled(
+                    format!("compact: {err}"),
+                    theme().dim,
+                )));
+            }
+        },
         UiMsg::ProviderChanged { provider, model } => {
+            app.cfg.provider = provider;
             app.cfg.model_name = model.clone();
+            app.context_window = None;
             app.push_line(Line::from(Span::styled(
-                format!("provider: {provider} · model: {model}"),
+                format!("provider: {} · model: {model}", provider.label()),
                 theme().dim,
             )));
         }
         UiMsg::RunDone(result) => {
             let completed = result.is_ok();
+            let turn_elapsed = match &app.run {
+                RunState::Running { started, .. } => Some(started.elapsed()),
+                RunState::Idle => None,
+            };
             // Flush any partial stream (interrupted mid-generation).
             if result.is_err() {
                 app.commit_activity(width);
@@ -1213,6 +1633,14 @@ fn handle_ui_msg(
                 app.push_transcript_block(lines, BlockSpacing::Tight);
             }
             if completed {
+                if let Some(elapsed) = turn_elapsed {
+                    let calls = app.turn_tool_calls;
+                    let plural = if calls == 1 { "" } else { "s" };
+                    app.last_turn_summary = Some(format!(
+                        "Turn took {:.1}s and took {calls} tool call{plural}",
+                        elapsed.as_secs_f64(),
+                    ));
+                }
                 start_next_queued_prompt(app, worker, width);
             }
         }
@@ -1254,6 +1682,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
                 }
             }
             let call_line = view::tool_call_line(&tool_name, &input);
+            app.turn_tool_calls += 1;
             let index = app.activity_tools.len();
             app.activity_tools.push(ToolActivity {
                 call_id: tool_call_id.clone(),
@@ -1274,6 +1703,11 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             output,
             is_error,
         } => {
+            // Trailing estimate, pi-style: the result joins the context
+            // now but is only billed at the next model step, which then
+            // overwrites this with the provider's count.
+            let result_bytes = serde_json::to_string(&output).map(|s| s.len()).unwrap_or(0);
+            app.context_tokens += (result_bytes / 4) as u64;
             let index = app.pending_calls.remove(&tool_call_id);
             let call_line = index
                 .and_then(|index| app.activity_tools.get_mut(index))
@@ -1299,6 +1733,13 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
         HarnessEvent::Usage { usage } => {
             app.tokens_in += usage.input_tokens;
             app.tokens_out += usage.output_tokens;
+            app.cache_read_total += usage.cache_read_tokens;
+            app.cache_write_total += usage.cache_create_tokens;
+            app.usage_steps += 1;
+            // The latest step's full footprint (uncached + cached input +
+            // output) is what the next request will carry. Authoritative:
+            // replaces any bytes/4 estimates accumulated since last step.
+            app.context_tokens = usage.context_tokens();
         }
         HarnessEvent::Result { message } => {
             app.commit_activity(width);
@@ -1426,7 +1867,17 @@ fn handle_subagent_event(
     }
 }
 
-fn welcome_lines(height: usize, width: usize, cfg: &TuiConfig) -> Vec<Line<'static>> {
+/// Build the welcome screen lines. `full_height` is the whole terminal
+/// height (including the pinned composer/status rows) so the card sits
+/// on the screen's true vertical centre; `clip` is the transcript area
+/// height the lines are rendered into, and `top` is capped at it so the
+/// card can never be pushed below the visible clip.
+fn welcome_lines(
+    full_height: usize,
+    clip: usize,
+    width: usize,
+    cfg: &TuiConfig,
+) -> Vec<Line<'static>> {
     let t = theme();
     let card_width = width.saturating_sub(4).min(64);
     let indent = " ".repeat(width.saturating_sub(card_width) / 2);
@@ -1441,8 +1892,7 @@ fn welcome_lines(height: usize, width: usize, cfg: &TuiConfig) -> Vec<Line<'stat
     let content = vec![
         Line::from(vec![
             Span::raw(indent.clone()),
-            Span::styled("orca", t.strong),
-            Span::styled(" harness", t.dim),
+            Span::styled("orcacode", t.strong),
             Span::styled(format!("  v{}", env!("CARGO_PKG_VERSION")), t.dim),
         ]),
         Line::from(vec![
@@ -1463,7 +1913,10 @@ fn welcome_lines(height: usize, width: usize, cfg: &TuiConfig) -> Vec<Line<'stat
             Span::styled("  /help commands · /models switch model", t.dim),
         ]),
     ];
-    let top = height.saturating_sub(content.len()) / 2;
+    // Centre against the full terminal height, but never push the bottom
+    // of the card past the transcript clip the welcome is drawn into.
+    let top =
+        (full_height.saturating_sub(content.len()) / 2).min(clip.saturating_sub(content.len()));
     std::iter::repeat_n(Line::from(""), top)
         .chain(content)
         .collect()
@@ -1490,7 +1943,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
     let projected = projected_transcript(app, width);
     app.scroll = app.scroll.min(projected.len().saturating_sub(height));
     let visible = if projected.is_empty() && !app.running() {
-        welcome_lines(height, width, &app.cfg)
+        let full_height = frame.area().height as usize;
+        welcome_lines(full_height, height, width, &app.cfg)
     } else {
         let (start, end) = view::scroll_window(projected.len(), height, app.scroll);
         projected[start..end].to_vec()
@@ -1554,11 +2008,10 @@ fn draw(frame: &mut Frame, app: &mut App) {
         "enter send · ctrl+o expand · pgup scroll"
     };
     let status = format!(
-        " {} · {} · in {} out {}{}{} · {} · {}",
+        " {} · {} · {}{}{} · {} · {}",
         app.cfg.model_name,
         state,
-        app.tokens_in,
-        app.tokens_out,
+        context_segment(app.context_tokens, app.context_window),
         stats_segments(&app.cfg.stats),
         queue_segment(app.prompt_queue.len()),
         hint,
@@ -1584,14 +2037,14 @@ fn workspace_status_name(workspace: &str) -> &str {
 }
 
 /// Status-line segments for live background work; empty when idle so the
-/// line stays quiet. `kernel` is unnumbered (it is 0 or 1).
+/// line stays quiet. `pykernel` is unnumbered (it is 0 or 1).
 fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> String {
     let mut out = String::new();
     if stats.processes() > 0 {
         out.push_str(&format!(" · procs {}", stats.processes()));
     }
     if stats.kernels() > 0 {
-        out.push_str(" · kernel");
+        out.push_str(" · pykernel");
     }
     if stats.agents() > 0 {
         out.push_str(&format!(" · agents {}", stats.agents()));
@@ -1667,7 +2120,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 view::truncate_line(&request.detail, width.saturating_sub(6))
             ))),
             Line::from(Span::styled(
-                "    [y] allow once   [a] always allow this tool   [n] deny",
+                "    [y] allow once   [a] always (this session)   [A] always (save for workspace)   [n] deny",
                 t.dim,
             )),
         ];
@@ -1676,7 +2129,12 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         return match overlay {
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
             Overlay::Providers { index } => provider_lines(*index, width),
+            Overlay::Themes { index } => theme_picker_lines(*index, width),
+            Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
+            Overlay::Settings { index } => settings_lines(app, *index, width),
+            Overlay::Approvals { tools, index } => approvals_lines(tools, *index, width),
+            Overlay::Extensions { index } => extensions_picker_lines(*index, width),
         };
     }
     if app.palette_query().is_some() {
@@ -1706,7 +2164,11 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         }
         return lines;
     }
-    queue_lines(app, width)
+    let mut lines = queue_lines(app, width);
+    if let Some(summary) = &app.last_turn_summary {
+        lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
+    }
+    lines
 }
 
 fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -1873,7 +2335,7 @@ fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
             .sum::<Duration>();
         lines.push(Line::from(Span::styled(
             format!(
-                "  ▸ Thinking · {} · {}",
+                "  • Thinking · {} · {}",
                 elapsed_label(thinking_elapsed),
                 plural(thinking_count, "update")
             ),
@@ -1893,7 +2355,7 @@ fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
             theme().dim
         };
         lines.push(Line::from(Span::styled(
-            format!("  ▸ Work · {}", parts.join(" · ")),
+            format!("  • Work · {}", parts.join(" · ")),
             style,
         )));
     }
@@ -1919,10 +2381,14 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
                 .reasoning_started
                 .map(|started| started.elapsed())
                 .unwrap_or_default();
-        let marker = if live && current_thinking {
-            "▾"
+        let marker = if live {
+            if app.spinner_frame.is_multiple_of(2) {
+                "•"
+            } else {
+                " "
+            }
         } else {
-            "▸"
+            "•"
         };
         lines.push(Line::from(Span::styled(
             format!(
@@ -1959,9 +2425,14 @@ fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
         .count();
     let running = app.activity_tools.len() - complete;
     let header = if live {
-        format!("  ▾ Work · ✓ {complete} · □ {running}")
+        let dot = if app.spinner_frame.is_multiple_of(2) {
+            "•"
+        } else {
+            " "
+        };
+        format!("  {dot} Work · ✓ {complete} · □ {running}")
     } else {
-        format!("  ▾ Work · {}", plural(app.activity_tools.len(), "tool"))
+        format!("  • Work · {}", plural(app.activity_tools.len(), "tool"))
     };
     lines.push(Line::from(Span::styled(header, t.dim)));
 
@@ -2201,6 +2672,27 @@ fn model_picker_lines(picker: &ModelPicker, height: usize, width: usize) -> Vec<
     lines
 }
 
+/// Compact token count for the status line: 950, 1.2k, 41.9k, 1.0m.
+fn fmt_tokens(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => format!("{:.1}k", n as f64 / 1_000.0),
+        _ => format!("{:.1}m", n as f64 / 1_000_000.0),
+    }
+}
+
+/// The status-line context segment: percentage of the model's window when
+/// known (`ctx 33%`), a plain count only when no window is discoverable.
+/// Exact figures live behind /usage, never here.
+fn context_segment(tokens: u64, window: Option<u64>) -> String {
+    match window {
+        Some(window) if window > 0 => {
+            format!("ctx {}%", (100 * tokens / window).min(999))
+        }
+        _ => format!("ctx ~{}", fmt_tokens(tokens)),
+    }
+}
+
 fn provider_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let mut lines = vec![
@@ -2232,12 +2724,176 @@ fn provider_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// The /usage panel: same tray styling as the provider and theme
+/// pickers, but read-only — nothing to select, esc/enter/q closes.
+fn usage_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let total = app.tokens_in + app.tokens_out + app.cache_read_total + app.cache_write_total;
+    let context = match app.context_window {
+        Some(window) if window > 0 => format!(
+            "{} / {} ({}%)",
+            app.context_tokens,
+            window,
+            (100 * app.context_tokens / window).min(999),
+        ),
+        _ => format!("~{} (window unknown)", app.context_tokens),
+    };
+    let mut lines = vec![
+        Line::from(Span::styled("  Session usage · esc close", t.dim)),
+        Line::from(""),
+    ];
+    let rows = [
+        ("model", app.cfg.model_name.clone()),
+        ("context", context),
+        ("input", app.tokens_in.to_string()),
+        ("output", app.tokens_out.to_string()),
+        ("cache read", app.cache_read_total.to_string()),
+        ("cache write", app.cache_write_total.to_string()),
+        ("total", total.to_string()),
+        ("model steps", app.usage_steps.to_string()),
+    ];
+    for (label, value) in rows {
+        let text = format!("  {label:<12} {value}");
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            t.dim,
+        )));
+    }
+    lines
+}
+
+fn theme_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let current = view::theme_name();
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Select theme · ↑↓ navigate · enter use · esc close",
+            t.dim,
+        )),
+        Line::from(""),
+    ];
+    for (index, name) in view::ThemeName::ALL.iter().enumerate() {
+        let is_selected = index == selected.min(view::ThemeName::ALL.len() - 1);
+        let marker = if is_selected { "▸ " } else { "  " };
+        let note = if *name == current { "current" } else { "" };
+        let text = format!("  {marker}{:<16} {:<16} {note}", name.label(), name.slug());
+        let style = if is_selected { t.strong } else { t.dim };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            style,
+        )));
+    }
+    lines
+}
+
+/// The /settings tray: current values for the persisted preferences,
+/// enter drills into the matching picker.
+fn settings_lines(app: &App, selected: usize, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let provider = app.cfg.provider;
+    let key_status = match provider.key_env() {
+        None => "not needed".to_string(),
+        Some(env) if provider.env_key().is_some() => format!("from ${env}"),
+        Some(_) if provider.stored_key().is_some() => "saved in config".to_string(),
+        Some(_) => "not set".to_string(),
+    };
+    let approvals = crate::config::stored_approvals(&app.cfg.workspace_root);
+    let approvals_status = if approvals.is_empty() {
+        "none saved".to_string()
+    } else {
+        approvals.join(", ")
+    };
+    let rows = [
+        ("provider", provider.label().to_string()),
+        ("model", app.cfg.model_name.clone()),
+        ("theme", view::theme_name().label().to_string()),
+        ("api key", key_status),
+        ("approvals", approvals_status),
+    ];
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Settings · ↑↓ navigate · enter change · esc close",
+            t.dim,
+        )),
+        Line::from(""),
+    ];
+    for (index, (name, value)) in rows.iter().enumerate() {
+        let marker = if index == selected { "▸ " } else { "  " };
+        let text = format!("  {marker}{name:<10} {value}");
+        let style = if index == selected { t.strong } else { t.dim };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            style,
+        )));
+    }
+    if let Some(path) = crate::config::config_path() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&format!("  saved to {}", path.display()), width),
+            t.dim,
+        )));
+    }
+    lines
+}
+
+/// This workspace's saved always-allowed tools; enter revokes the
+/// selected one so it prompts again.
+fn approvals_lines(tools: &[String], selected: usize, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Saved approvals (this workspace) · ↑↓ navigate · enter revoke · esc close",
+            t.dim,
+        )),
+        Line::from(""),
+    ];
+    for (index, tool) in tools.iter().enumerate() {
+        let marker = if index == selected { "▸ " } else { "  " };
+        let style = if index == selected { t.strong } else { t.dim };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&format!("  {marker}{tool}"), width),
+            style,
+        )));
+    }
+    lines
+}
+
+/// The harness extension catalog with live on/off state; enter toggles
+/// the selected extension and the list stays open.
+fn extensions_picker_lines(selected: usize, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Extensions · ↑↓ navigate · enter toggle · esc close",
+            t.dim,
+        )),
+        Line::from(""),
+    ];
+    let last = crate::extensions::EXTENSIONS.len() - 1;
+    for (index, spec) in crate::extensions::EXTENSIONS.iter().enumerate() {
+        let is_selected = index == selected.min(last);
+        let marker = if is_selected { "▸ " } else { "  " };
+        let state = if crate::extensions::is_enabled(spec) {
+            "on "
+        } else {
+            "off"
+        };
+        let text = format!("  {marker}{:<12} {state}  {}", spec.name, spec.description);
+        let style = if is_selected { t.strong } else { t.dim };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            style,
+        )));
+    }
+    lines
+}
+
 fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static>> {
     let t = theme();
     vec![
         Line::from(Span::styled(
             format!(
-                "  {} API key (kept for this session only) · enter confirm · esc cancel",
+                "  {} API key (saved for future sessions) · enter confirm · esc cancel",
                 provider.label()
             ),
             t.warn,
@@ -2267,6 +2923,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -2592,6 +3250,66 @@ mod tests {
         );
     }
 
+    /// A finished turn reports its wall time and how many tool calls it made;
+    /// a failed or interrupted run does not.
+    #[test]
+    fn run_done_reports_turn_duration_and_tool_calls() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        for id in ["c1", "c2"] {
+            handle_harness_event(
+                &mut app,
+                HarnessEvent::ToolCall {
+                    tool_call_id: id.into(),
+                    tool_name: "shell".into(),
+                    input: serde_json::json!({"command": "true"}),
+                },
+                80,
+            );
+            handle_harness_event(
+                &mut app,
+                HarnessEvent::ToolResult {
+                    tool_call_id: id.into(),
+                    tool_name: "shell".into(),
+                    output: serde_json::json!(""),
+                    is_error: false,
+                },
+                80,
+            );
+        }
+        handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
+        let summary = app.last_turn_summary.clone().expect("summary recorded");
+        assert!(summary.starts_with("Turn took"), "{summary}");
+        assert!(summary.contains("s and took 2 tool calls"), "{summary}");
+        assert!(
+            !pending_texts(&app).iter().any(|t| t.contains("Turn took")),
+            "summary stays out of the transcript"
+        );
+        let rail: Vec<String> = live_lines(&app, 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            rail.iter().any(|t| t.contains(&summary)),
+            "summary rendered in the rail above the composer: {rail:?}"
+        );
+
+        let mut failed = test_app();
+        failed.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        handle_ui_msg(&mut failed, UiMsg::RunDone(Err("cancelled".into())), &tx, 80);
+        assert!(
+            failed.last_turn_summary.is_none(),
+            "no summary on an interrupted run"
+        );
+    }
+
     #[test]
     fn failed_run_pauses_the_queue_until_empty_enter_resumes_it() {
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -2663,6 +3381,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -2696,6 +3416,127 @@ mod tests {
     }
 
     #[test]
+    fn compact_command_reaches_the_worker_and_reports_the_result() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "/compact".into();
+        submit(&mut app, &tx, 80);
+        assert!(
+            matches!(rx.try_recv(), Ok(WorkerCmd::Compact)),
+            "/compact sends the worker command"
+        );
+
+        let report = orca_harness_extensions::CompactReport {
+            messages_before: 41,
+            messages_after: 2,
+            bytes_before: 130_574,
+            bytes_after: 1_264,
+            est_tokens_before: 32_643,
+            est_tokens_after: 316,
+            head_messages: 40,
+            tail_messages: 0,
+            elided_results: 16,
+            elided_bytes: 116_177,
+            elided_call_ids: vec!["c1".into()],
+            summary: "summary".into(),
+            files_read: vec![],
+            files_modified: vec![],
+        };
+        app.context_tokens = 32_643;
+        handle_ui_msg(&mut app, UiMsg::Compacted(Ok(report)), &tx, 80);
+        let text = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("compacted: 41 -> 2 messages"), "{text}");
+        assert!(text.contains("16 tool outputs"), "{text}");
+        assert!(text.contains("recoverable via read_tool_result"), "{text}");
+        assert_eq!(
+            app.context_tokens, 316,
+            "the status-line context meter reflects the compacted size"
+        );
+    }
+
+    #[test]
+    fn context_meter_tracks_the_latest_step_not_the_session_total() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        for (input, output) in [(1_000, 50), (1_200, 80)] {
+            handle_ui_msg(
+                &mut app,
+                UiMsg::Event(HarnessEvent::Usage {
+                    usage: orca_harness_core::Usage {
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_read_tokens: 0,
+                        cache_create_tokens: 0,
+                    },
+                }),
+                &tx,
+                80,
+            );
+        }
+        assert_eq!(app.tokens_in, 2_200, "session total accumulates");
+        assert_eq!(
+            app.context_tokens, 1_280,
+            "context meter is the latest step's input + output"
+        );
+
+        // A tool result lands before the next model step: pi-style
+        // trailing estimate (bytes/4) until real usage overwrites it.
+        let output = serde_json::json!({"content": "x".repeat(396)});
+        let bytes = serde_json::to_string(&output).unwrap().len() as u64;
+        handle_ui_msg(
+            &mut app,
+            UiMsg::Event(HarnessEvent::ToolResult {
+                tool_call_id: "c9".into(),
+                tool_name: "read_file".into(),
+                output,
+                is_error: false,
+            }),
+            &tx,
+            80,
+        );
+        assert_eq!(app.context_tokens, 1_280 + bytes / 4);
+    }
+
+    #[test]
+    fn context_segment_shows_percentage_when_the_window_is_known() {
+        assert_eq!(context_segment(41_881, Some(128_000)), "ctx 32%");
+        assert_eq!(context_segment(500, None), "ctx ~500");
+        assert_eq!(context_segment(2_350, Some(0)), "ctx ~2.4k");
+    }
+
+    #[test]
+    fn slash_usage_opens_a_read_only_tray_and_esc_closes_it() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.tokens_in = 250_798;
+        app.tokens_out = 3_609;
+        app.cache_read_total = 12;
+        app.cache_write_total = 3;
+        app.usage_steps = 6;
+        app.context_tokens = 41_881;
+        app.context_window = Some(128_000);
+        slash_command(&mut app, "usage", &tx, 100);
+        assert!(matches!(app.overlay, Some(Overlay::Usage)));
+
+        let text = flat_lines(&live_lines(&app, 100));
+        assert!(text.contains("Session usage"), "{text}");
+        assert!(text.contains("41881 / 128000 (32%)"), "{text}");
+        assert!(text.contains("input        250798"), "{text}");
+        assert!(text.contains("cache read   12"), "{text}");
+        assert!(text.contains("total        254422"), "{text}");
+        assert!(text.contains("model steps  6"), "{text}");
+
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(app.overlay.is_none(), "esc dismisses the tray");
+        assert!(rx.try_recv().is_err(), "the tray never talks to the worker");
+    }
+
+    #[test]
     fn later_turns_have_no_divider_or_trailing_spine() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
@@ -2721,7 +3562,7 @@ mod tests {
             .expect("second prompt");
         assert_eq!(texts[second - 1], "", "one row separates turns: {texts:?}");
         assert!(
-            second < 2 || texts[second - 2] != "",
+            second < 2 || !texts[second - 2].is_empty(),
             "spacing stays to one row: {texts:?}"
         );
         assert_eq!(app.turn_count, 2);
@@ -2992,7 +3833,6 @@ mod tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!expanded.contains("▸ Work · 1 tool"));
         assert!(expanded.contains("shell $ cargo test"));
         let tool = expanded.find("shell $ cargo test").expect("expanded tool");
         let answer = expanded.find("Everything passed.").expect("answer");
@@ -3249,12 +4089,14 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "gpt-oss:20b".into(),
             workspace_name: "/workspace/orca-harness".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
-        assert!(screen.contains("orca harness"), "title missing: {screen}");
+        assert!(screen.contains("orcacode"), "title missing: {screen}");
         assert!(
             screen.contains(concat!("v", env!("CARGO_PKG_VERSION"))),
             "version missing: {screen}"
@@ -3276,6 +4118,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "gpt-oss:20b".into(),
             workspace_name: "/workspace/orca-harness".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -3309,6 +4153,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -3344,6 +4190,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -3362,6 +4210,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -3390,6 +4240,8 @@ mod tests {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
             workspace_name: "/workspace".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         });
@@ -3541,6 +4393,11 @@ mod tests {
             }
             other => panic!("expected SetProvider, got {:?}", other.is_ok()),
         }
+        // The key survives to the next session via the config file.
+        assert_eq!(
+            crate::config::stored_key("openrouter").as_deref(),
+            Some("sk-or-abc")
+        );
     }
 
     #[test]
@@ -3549,6 +4406,193 @@ mod tests {
         let mut app = test_app();
         slash_command(&mut app, "provider", &tx, 80);
         assert!(matches!(app.overlay, Some(Overlay::Providers { index: 0 })));
+    }
+
+    #[test]
+    fn settings_menu_drills_into_the_matching_pickers() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        slash_command(&mut app, "settings", &tx, 80);
+        assert!(matches!(app.overlay, Some(Overlay::Settings { index: 0 })));
+
+        // Provider row: opens the provider picker preselected on the
+        // active provider (local sits at index 2).
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Providers { index: 2 })));
+
+        // Model row: kicks off the same fetch-then-pick flow as /models.
+        app.overlay = Some(Overlay::Settings { index: 1 });
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ListModels { .. })));
+        assert_eq!(app.picker_pending.as_deref(), Some(""));
+
+        // Theme row: opens the theme picker.
+        app.overlay = Some(Overlay::Settings { index: 2 });
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Themes { .. })));
+
+        // Api key row on a keyless provider closes with an explanation.
+        app.overlay = Some(Overlay::Settings { index: 3 });
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+        assert!(rx.try_recv().is_err(), "no command for a keyless provider");
+    }
+
+    #[test]
+    fn capital_a_saves_the_approval_and_settings_can_revoke_it() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+
+        // With nothing saved, the settings approvals row just explains.
+        app.overlay = Some(Overlay::Settings { index: 4 });
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+
+        // Capital A persists the tool for this workspace.
+        let (respond, mut answer) = tokio::sync::oneshot::channel();
+        app.approval = Some(crate::msg::ApprovalRequest {
+            tool_name: "shell".into(),
+            detail: "shell $ ls".into(),
+            respond,
+        });
+        handle_approval_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+        );
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            ApprovalResponse::AllowAlwaysSave
+        );
+        assert_eq!(crate::config::stored_approvals("/test-ws"), ["shell"]);
+
+        // Lowercase a stays session-only: nothing new is persisted.
+        let (respond, mut answer) = tokio::sync::oneshot::channel();
+        app.approval = Some(crate::msg::ApprovalRequest {
+            tool_name: "write_file".into(),
+            detail: "write_file x".into(),
+            respond,
+        });
+        handle_approval_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        );
+        assert_eq!(answer.try_recv().unwrap(), ApprovalResponse::AllowAlways);
+        assert_eq!(crate::config::stored_approvals("/test-ws"), ["shell"]);
+
+        // The settings approvals row opens the list; enter revokes.
+        app.overlay = Some(Overlay::Settings { index: 4 });
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Approvals { .. })));
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none(), "removing the last entry closes");
+        assert!(crate::config::stored_approvals("/test-ws").is_empty());
+    }
+
+    #[test]
+    fn slash_theme_opens_a_picker_preselected_on_the_active_theme() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        slash_command(&mut app, "theme", &tx, 80);
+        let current = view::theme_name();
+        let expected = view::ThemeName::ALL
+            .iter()
+            .position(|name| *name == current)
+            .unwrap();
+        match &app.overlay {
+            Some(Overlay::Themes { index }) => assert_eq!(*index, expected),
+            other => panic!("expected theme overlay, got {}", other.is_some()),
+        }
+
+        let listing = flat_lines(&live_lines(&app, 100));
+        assert!(listing.contains("Select theme"), "{listing}");
+        assert!(listing.contains("Dracula"), "{listing}");
+        assert!(listing.contains("current"), "{listing}");
+
+        // Down then up returns to the active theme; enter re-applies it,
+        // closes the overlay, and notes the choice. No worker involved.
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Up);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+        assert!(rx.try_recv().is_err(), "theme switching is UI-local");
+        assert_eq!(view::theme_name(), current);
+        let notes = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(notes.contains("theme set to"), "{notes}");
+    }
+}
+
+#[cfg(test)]
+mod theme_command_tests {
+    use super::*;
+
+    fn theme_app() -> App {
+        App::new(TuiConfig {
+            model_name: "m".into(),
+            workspace_name: "w".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+        })
+    }
+
+    /// One test, single-threaded, because the theme is process-global: it
+    /// must not interleave with any other mutating test. Ends by restoring
+    /// the default so later tests see a clean state.
+    #[test]
+    fn theme_command_switches_and_rejects() {
+        let mut app = theme_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        for (cmd, expected) in [
+            ("theme dracula", view::ThemeName::Dracula),
+            ("theme solarized-dark", view::ThemeName::SolarizedDark),
+            ("theme one-dark", view::ThemeName::OneDark),
+            ("theme monokai", view::ThemeName::Monokai),
+            ("theme nord", view::ThemeName::Nord),
+            ("theme default", view::ThemeName::Default),
+            ("theme mono", view::ThemeName::Mono),
+        ] {
+            slash_command(&mut app, cmd, &worker, 80);
+            assert_eq!(view::theme_name(), expected, "command {cmd}");
+        }
+
+        // Unknown names are rejected and leave the theme unchanged.
+        slash_command(&mut app, "theme midnight", &worker, 80);
+        assert_eq!(
+            view::theme_name(),
+            view::ThemeName::Mono,
+            "unchanged on garbage"
+        );
+
+        // Bare form only reports; it must not change the value.
+        slash_command(&mut app, "theme", &worker, 80);
+        assert_eq!(
+            view::theme_name(),
+            view::ThemeName::Mono,
+            "bare form does not change"
+        );
+        let text = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Mono"), "reports current name: {text}");
+
+        // Restore the default so other tests (and the view) see clean state.
+        slash_command(&mut app, "theme color", &worker, 80); // legacy alias
+        assert_eq!(
+            view::theme_name(),
+            view::ThemeName::Default,
+            "color stays a legacy alias for default"
+        );
     }
 }
 
@@ -3561,6 +4605,8 @@ mod subagents_command_tests {
         App::new(TuiConfig {
             model_name: "m".into(),
             workspace_name: "w".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: depth,
             stats: orca_harness_tools::BackgroundStats::new(),
         })
@@ -3589,6 +4635,121 @@ mod subagents_command_tests {
 }
 
 #[cfg(test)]
+mod extensions_command_tests {
+    use super::*;
+
+    fn ext_app() -> App {
+        App::new(TuiConfig {
+            model_name: "m".into(),
+            workspace_name: "w".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+        })
+    }
+
+    fn printed(app: &App) -> String {
+        app.pending_history
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn bare_form_opens_the_picker_and_enter_toggles_in_place() {
+        let mut app = ext_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "extensions", &worker, 80);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::Extensions { index: 0 })
+        ));
+
+        // Same rendered shape as the other pickers: every extension with
+        // its live state and a selection marker.
+        let lines = live_lines(&app, 80)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone().into_owned()))
+            .collect::<String>();
+        assert!(lines.contains("truncation"), "lists truncation: {lines}");
+        assert!(lines.contains("retry"), "lists retry: {lines}");
+        assert!(lines.contains("enter toggle"), "shows key hint: {lines}");
+
+        // Enter on the first row (truncation, default on) turns it off,
+        // asks the worker to rebuild, and keeps the picker open.
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, key, &worker);
+        assert_eq!(crate::config::stored_extension("truncation"), Some(false));
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadExtensions)));
+        assert!(matches!(app.overlay, Some(Overlay::Extensions { .. })));
+
+        // A second enter toggles it right back on.
+        handle_overlay_key(&mut app, key, &worker);
+        assert_eq!(crate::config::stored_extension("truncation"), Some(true));
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadExtensions)));
+
+        // Down then enter toggles the second row (retry, default off).
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, down, &worker);
+        handle_overlay_key(&mut app, key, &worker);
+        assert_eq!(crate::config::stored_extension("retry"), Some(true));
+
+        // Esc closes like every other overlay.
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, esc, &worker);
+        assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn typed_form_saves_the_toggle_and_reloads() {
+        let mut app = ext_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "extensions enable retry", &worker, 80);
+        assert_eq!(crate::config::stored_extension("retry"), Some(true));
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadExtensions)));
+        assert!(printed(&app).contains("extension retry enabled"));
+
+        slash_command(&mut app, "extensions disable truncation", &worker, 80);
+        assert_eq!(crate::config::stored_extension("truncation"), Some(false));
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadExtensions)));
+
+        // "add" and "delete" are accepted aliases.
+        slash_command(&mut app, "extensions delete retry", &worker, 80);
+        assert_eq!(crate::config::stored_extension("retry"), Some(false));
+        slash_command(&mut app, "extensions add truncation", &worker, 80);
+        assert_eq!(crate::config::stored_extension("truncation"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn bad_input_reports_and_sends_nothing() {
+        let mut app = ext_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "extensions enable nope", &worker, 80);
+        assert!(printed(&app).contains("unknown extension: nope"));
+        assert!(
+            printed(&app).contains("truncation, retry"),
+            "names the valid set: {}",
+            printed(&app)
+        );
+
+        slash_command(&mut app, "extensions frobnicate retry", &worker, 80);
+        assert!(printed(&app).contains("usage: /extensions"));
+
+        assert!(rx.try_recv().is_err(), "bad input sends nothing");
+    }
+}
+
+#[cfg(test)]
 mod stats_segment_tests {
     use super::*;
 
@@ -3601,7 +4762,7 @@ mod stats_segment_tests {
         stats.inc_agents();
         assert_eq!(stats_segments(&stats), " · procs 2 · agents 1");
         stats.inc_kernels();
-        assert_eq!(stats_segments(&stats), " · procs 2 · kernel · agents 1");
+        assert_eq!(stats_segments(&stats), " · procs 2 · pykernel · agents 1");
     }
 }
 
@@ -3615,6 +4776,8 @@ mod nested_rail_tests {
         App::new(TuiConfig {
             model_name: "m".into(),
             workspace_name: "w".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
         })
@@ -3665,7 +4828,7 @@ mod nested_rail_tests {
             "inner line must carry a tree branch so ownership is unambiguous: {inner_line:?}"
         );
         let outer_line = text.lines().find(|l| l.contains("subagent")).unwrap();
-        let branch_col = |l: &str| l.find(|c| c == '└' || c == '├').unwrap();
+        let branch_col = |l: &str| l.find(['└', '├']).unwrap();
         assert!(
             branch_col(inner_line) > branch_col(outer_line),
             "inner branch must sit deeper than the subagent's own branch:\n{outer_line}\n{inner_line}"

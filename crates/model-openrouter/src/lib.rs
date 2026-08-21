@@ -25,7 +25,9 @@ pub struct OpenRouterModel {
 impl OpenRouterModel {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
-            inner: OpenAiModel::new(model).base_url(OPENROUTER_BASE_URL),
+            inner: OpenAiModel::new(model)
+                .base_url(OPENROUTER_BASE_URL)
+                .usage_accounting(true),
             base_url: OPENROUTER_BASE_URL.into(),
             api_key: None,
         }

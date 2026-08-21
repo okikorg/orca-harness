@@ -1,4 +1,4 @@
-//! `kernel` — stateful Python compute.
+//! `pykernel` — stateful Python compute.
 //!
 //! Where `process` can drive `python3 -i` line by line, the interactive
 //! REPL wedges on multi-line input. The kernel never talks to the REPL:
@@ -79,7 +79,7 @@ struct Session {
     restart_notice: bool,
 }
 
-pub struct KernelTool {
+pub struct PyKernelTool {
     python: String,
     working_dir: Option<String>,
     max_output_bytes: usize,
@@ -92,13 +92,13 @@ pub struct KernelTool {
     stats: BackgroundStats,
 }
 
-impl Default for KernelTool {
+impl Default for PyKernelTool {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for KernelTool {
+impl Drop for PyKernelTool {
     fn drop(&mut self) {
         let pgid = self.live_pgid.lock().unwrap().take();
         if let Some(pgid) = pgid {
@@ -108,7 +108,7 @@ impl Drop for KernelTool {
     }
 }
 
-impl KernelTool {
+impl PyKernelTool {
     pub fn new() -> Self {
         Self {
             python: "python3".into(),
@@ -358,10 +358,10 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 #[async_trait]
-impl Tool for KernelTool {
+impl Tool for PyKernelTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "kernel".into(),
+            name: "pykernel".into(),
             description: "Execute Python in a persistent kernel: variables, imports, and \
                 functions survive across calls, so build state incrementally and reuse it. \
                 Multi-line code is fine. Nothing is auto-echoed — `print()` what you want \

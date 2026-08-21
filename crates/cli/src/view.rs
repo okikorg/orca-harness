@@ -2,14 +2,83 @@
 //! one-liners the transcript shows, and assistant markdown into styled
 //! lines. No terminal state — unit-testable.
 
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
+use syntect_tui::into_span;
+use two_face::{
+    re_exports::syntect::{
+        easy::HighlightLines, highlighting::Theme as SyntaxTheme, parsing::SyntaxSet,
+    },
+    theme::{EmbeddedLazyThemeSet, EmbeddedThemeName},
+};
 
-/// Named styles used across the UI. Monochrome is the default; `color`
-/// restores the tinted look via `--theme color`.
+/// Recognised theme identifiers (plus the default colour theme).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeName {
+    Default,
+    Mono,
+    Dracula,
+    SolarizedDark,
+    OneDark,
+    Monokai,
+    Nord,
+}
+
+impl ThemeName {
+    pub const ALL: [ThemeName; 7] = [
+        Self::Default,
+        Self::Mono,
+        Self::Dracula,
+        Self::SolarizedDark,
+        Self::OneDark,
+        Self::Monokai,
+        Self::Nord,
+    ];
+
+    /// The CLI-facing identifier, as accepted by `from_str`.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Mono => "mono",
+            Self::Dracula => "dracula",
+            Self::SolarizedDark => "solarized-dark",
+            Self::OneDark => "one-dark",
+            Self::Monokai => "monokai",
+            Self::Nord => "nord",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "default" | "color" => Some(Self::Default),
+            "mono" => Some(Self::Mono),
+            "dracula" => Some(Self::Dracula),
+            "solarized-dark" | "solarized" => Some(Self::SolarizedDark),
+            "one-dark" | "onedark" => Some(Self::OneDark),
+            "monokai" => Some(Self::Monokai),
+            "nord" => Some(Self::Nord),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Mono => "Mono",
+            Self::Dracula => "Dracula",
+            Self::SolarizedDark => "Solarized Dark",
+            Self::OneDark => "One Dark",
+            Self::Monokai => "Monokai",
+            Self::Nord => "Nord",
+        }
+    }
+}
+
+/// Named styles used across the UI. Default is the colored theme;
+/// `--theme mono` keeps the interface colorless when requested.
 pub struct Theme {
     /// Secondary chrome: borders, hints, tool summaries, status line.
     pub dim: Style,
@@ -40,7 +109,7 @@ pub fn mono_theme() -> Theme {
     }
 }
 
-pub fn color_theme() -> Theme {
+pub fn default_theme() -> Theme {
     Theme {
         dim: Style::default().fg(Color::DarkGray),
         accent: Style::default().fg(Color::Cyan),
@@ -54,15 +123,128 @@ pub fn color_theme() -> Theme {
     }
 }
 
-static THEME: OnceLock<Theme> = OnceLock::new();
-
-/// Install the theme once at startup; later calls are ignored.
-pub fn set_theme(theme: Theme) {
-    let _ = THEME.set(theme);
+// https://draculatheme.com
+fn dracula_theme() -> Theme {
+    Theme {
+        dim: Style::default().fg(Color::Rgb(98, 114, 164)), // comment
+        accent: Style::default().fg(Color::Rgb(255, 121, 198)), // pink
+        strong: Style::default()
+            .fg(Color::Rgb(189, 147, 249))
+            .add_modifier(Modifier::BOLD), // purple bold
+        warn: Style::default()
+            .fg(Color::Rgb(241, 250, 140))
+            .add_modifier(Modifier::BOLD), // yellow bold
+        error: Style::default().fg(Color::Rgb(255, 85, 85)), // red
+        success: Style::default().fg(Color::Rgb(80, 250, 123)), // green
+        code: Style::default().fg(Color::Rgb(139, 233, 253)), // cyan
+    }
 }
 
-pub fn theme() -> &'static Theme {
-    THEME.get_or_init(mono_theme)
+// https://ethanschoonover.com/solarized  (dark variant)
+fn solarized_dark_theme() -> Theme {
+    Theme {
+        dim: Style::default().fg(Color::Rgb(131, 148, 150)), // base0
+        accent: Style::default().fg(Color::Rgb(38, 139, 210)), // blue
+        strong: Style::default()
+            .fg(Color::Rgb(147, 161, 161))
+            .add_modifier(Modifier::BOLD), // base1 bold
+        warn: Style::default()
+            .fg(Color::Rgb(181, 137, 0))
+            .add_modifier(Modifier::BOLD), // yellow bold
+        error: Style::default().fg(Color::Rgb(220, 50, 47)), // red
+        success: Style::default().fg(Color::Rgb(133, 153, 0)), // green
+        code: Style::default().fg(Color::Rgb(42, 161, 152)), // cyan
+    }
+}
+
+// Atom One Dark
+fn one_dark_theme() -> Theme {
+    Theme {
+        dim: Style::default().fg(Color::Rgb(92, 99, 112)), // comment
+        accent: Style::default().fg(Color::Rgb(97, 175, 239)), // blue
+        strong: Style::default()
+            .fg(Color::Rgb(229, 192, 123))
+            .add_modifier(Modifier::BOLD), // yellow bold
+        warn: Style::default()
+            .fg(Color::Rgb(209, 154, 102))
+            .add_modifier(Modifier::BOLD), // orange bold
+        error: Style::default().fg(Color::Rgb(224, 108, 117)), // red
+        success: Style::default().fg(Color::Rgb(152, 195, 121)), // green
+        code: Style::default().fg(Color::Rgb(86, 182, 194)), // cyan
+    }
+}
+
+// Monokai
+fn monokai_theme() -> Theme {
+    Theme {
+        dim: Style::default().fg(Color::Rgb(117, 113, 94)), // comment
+        accent: Style::default().fg(Color::Rgb(166, 226, 46)), // green-bright
+        strong: Style::default()
+            .fg(Color::Rgb(249, 38, 114))
+            .add_modifier(Modifier::BOLD), // pink bold
+        warn: Style::default()
+            .fg(Color::Rgb(230, 219, 116))
+            .add_modifier(Modifier::BOLD), // yellow bold
+        error: Style::default().fg(Color::Rgb(249, 38, 114)), // pink
+        success: Style::default().fg(Color::Rgb(166, 226, 46)), // green
+        code: Style::default().fg(Color::Rgb(102, 217, 239)), // cyan
+    }
+}
+
+// Nord
+fn nord_theme() -> Theme {
+    Theme {
+        dim: Style::default().fg(Color::Rgb(76, 86, 106)), // nord3
+        accent: Style::default().fg(Color::Rgb(136, 192, 208)), // nord8
+        strong: Style::default()
+            .fg(Color::Rgb(216, 222, 233))
+            .add_modifier(Modifier::BOLD), // nord4 bold
+        warn: Style::default()
+            .fg(Color::Rgb(235, 203, 139))
+            .add_modifier(Modifier::BOLD), // nord13 bold
+        error: Style::default().fg(Color::Rgb(191, 97, 106)), // nord11
+        success: Style::default().fg(Color::Rgb(163, 190, 140)), // nord14
+        code: Style::default().fg(Color::Rgb(136, 192, 208)), // nord8
+    }
+}
+
+pub fn theme_for(name: ThemeName) -> Theme {
+    match name {
+        ThemeName::Default => default_theme(),
+        ThemeName::Mono => mono_theme(),
+        ThemeName::Dracula => dracula_theme(),
+        ThemeName::SolarizedDark => solarized_dark_theme(),
+        ThemeName::OneDark => one_dark_theme(),
+        ThemeName::Monokai => monokai_theme(),
+        ThemeName::Nord => nord_theme(),
+    }
+}
+
+static THEME: RwLock<Option<ThemeName>> = RwLock::new(None);
+
+/// Install the theme at startup. If already set, replaces it (allows
+/// runtime switching via `/theme`).
+fn install_theme(theme: ThemeName) {
+    if let Ok(mut guard) = THEME.write() {
+        *guard = Some(theme);
+    }
+}
+
+pub fn set_theme(theme: ThemeName) {
+    install_theme(theme);
+}
+
+/// Return the current theme name, or Color if none set.
+pub fn theme_name() -> ThemeName {
+    THEME
+        .read()
+        .ok()
+        .and_then(|g| *g)
+        .unwrap_or(ThemeName::Default)
+}
+
+pub fn theme() -> Theme {
+    theme_for(theme_name())
 }
 
 /// Render assistant markdown into styled, wrapped lines. Handles the
@@ -72,24 +254,31 @@ pub fn theme() -> &'static Theme {
 pub fn markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let dim = theme().dim;
-    let mut in_code = false;
     let raw_lines: Vec<&str> = text.split('\n').collect();
     let mut index = 0;
     while index < raw_lines.len() {
         let raw = raw_lines[index];
         let trimmed = raw.trim_start();
-        if trimmed.starts_with("```") {
-            in_code = !in_code;
-            index += 1;
-            continue;
-        }
-        if in_code {
-            let code = truncate_line(raw, width.saturating_sub(indent.len() + 2).max(8));
-            out.push(Line::from(vec![
-                Span::styled(format!("{indent}│ "), dim),
-                Span::styled(code, theme().code.remove_modifier(Modifier::ITALIC)),
-            ]));
-            index += 1;
+        if let Some(info) = trimmed.strip_prefix("```") {
+            let language = info.split_whitespace().next().unwrap_or_default();
+            let code_start = index + 1;
+            let code_end = raw_lines[code_start..]
+                .iter()
+                .position(|line| line.trim_start().starts_with("```"))
+                .map(|offset| code_start + offset)
+                .unwrap_or(raw_lines.len());
+            out.extend(render_code_block(
+                &raw_lines[code_start..code_end],
+                language,
+                width,
+                indent,
+                &theme(),
+            ));
+            index = if code_end < raw_lines.len() {
+                code_end + 1
+            } else {
+                code_end
+            };
             continue;
         }
         if let Some(header) = parse_table_row(raw) {
@@ -180,6 +369,110 @@ pub fn markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'stati
         index += 1;
     }
     out
+}
+
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+static SYNTAX_THEMES: OnceLock<EmbeddedLazyThemeSet> = OnceLock::new();
+
+fn syntax_set() -> &'static SyntaxSet {
+    SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
+}
+
+fn syntax_theme() -> &'static SyntaxTheme {
+    SYNTAX_THEMES
+        .get_or_init(two_face::theme::extra)
+        .get(EmbeddedThemeName::Base16OceanDark)
+}
+
+fn render_code_block(
+    lines: &[&str],
+    language: &str,
+    width: usize,
+    indent: &str,
+    selected_theme: &Theme,
+) -> Vec<Line<'static>> {
+    let code_width = width.saturating_sub(indent.chars().count() + 2).max(8);
+    let fallback_style = selected_theme.code.remove_modifier(Modifier::ITALIC);
+    let fallback = || {
+        lines
+            .iter()
+            .map(|raw| {
+                Line::from(vec![
+                    Span::styled(format!("{indent}│ "), selected_theme.dim),
+                    Span::styled(truncate_line(raw, code_width), fallback_style),
+                ])
+            })
+            .collect()
+    };
+
+    if selected_theme.code.fg.is_none() {
+        return fallback();
+    }
+    let language = language.trim().trim_start_matches("language-");
+    if language.is_empty() || matches!(language, "text" | "txt" | "plain" | "plaintext") {
+        return fallback();
+    }
+    let Some(syntax) = syntax_set().find_syntax_by_token(language) else {
+        return fallback();
+    };
+
+    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    let mut output = Vec::with_capacity(lines.len());
+    for raw in lines {
+        let code = raw.trim_end();
+        let line_with_ending = format!("{code}\n");
+        let highlighted = match highlighter.highlight_line(&line_with_ending, syntax_set()) {
+            Ok(highlighted) => highlighted,
+            Err(_) => return fallback(),
+        };
+        let mut spans = vec![Span::styled(format!("{indent}│ "), selected_theme.dim)];
+        let mut code_spans = Vec::with_capacity(highlighted.len());
+        for segment in highlighted {
+            let content = segment.1.trim_end_matches(['\r', '\n']);
+            if content.is_empty() {
+                continue;
+            }
+            let converted = into_span((segment.0, content));
+            match converted {
+                Ok(span) => {
+                    let mut style = span.style;
+                    style.bg = None;
+                    code_spans.push(Span::styled(span.content.into_owned(), style));
+                }
+                Err(_) => code_spans.push(Span::styled(content.to_string(), fallback_style)),
+            }
+        }
+        spans.extend(truncate_styled_line(code_spans, code_width));
+        output.push(Line::from(spans));
+    }
+    output
+}
+
+fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    if total <= max {
+        return spans;
+    }
+
+    let mut remaining = max.saturating_sub(1);
+    let mut output = Vec::new();
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let span_width = span.content.chars().count();
+        if span_width <= remaining {
+            remaining -= span_width;
+            output.push(span);
+            continue;
+        }
+        let clipped: String = span.content.chars().take(remaining).collect();
+        output.push(Span::styled(clipped, span.style));
+        break;
+    }
+    let ellipsis_style = output.last().map(|span| span.style).unwrap_or_default();
+    output.push(Span::styled("…", ellipsis_style));
+    output
 }
 
 fn is_horizontal_rule(line: &str) -> bool {
@@ -678,6 +971,16 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn default_view_theme_uses_the_colored_palette() {
+        // Palettes are pure; the active theme is process-global and can be
+        // switched by the TUI, so assert on the palette itself rather than
+        // the global (tests run in parallel and may switch it).
+        let t = theme_for(ThemeName::Default);
+        assert_eq!(t.accent.fg, Some(Color::Cyan));
+        assert_eq!(t.code.fg, Some(Color::Cyan));
+    }
+
+    #[test]
     fn truncate_flattens_and_cuts_with_ellipsis() {
         assert_eq!(truncate_line("hello", 10), "hello");
         assert_eq!(truncate_line("hello world", 8), "hello w…");
@@ -841,8 +1144,8 @@ mod tests {
             .iter()
             .find(|s| s.content.as_ref().trim() == "code")
             .expect("code span");
-        // Monochrome default: inline code is italic, not tinted.
-        assert!(code.style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(code.style.fg, Some(Color::Cyan));
+        assert!(!code.style.add_modifier.contains(Modifier::ITALIC));
         let text = flat(&lines[0]);
         assert!(!text.contains("**"), "markers stripped: {text}");
         assert!(!text.contains('`'), "markers stripped: {text}");
@@ -863,6 +1166,68 @@ mod tests {
     }
 
     #[test]
+    fn rust_fences_render_with_multiple_token_colors() {
+        let source = "pub fn greet(name: &str) -> bool { name == \"orca\" }";
+        let lines = markdown_lines(&format!("```rust\n{source}\n```"), 100, "  ");
+        let code_line = lines.first().expect("highlighted code line");
+
+        assert_eq!(flat(code_line), format!("  │ {source}"));
+
+        let token_colors: Vec<Color> = code_line
+            .spans
+            .iter()
+            .skip(1)
+            .filter_map(|span| span.style.fg)
+            .collect();
+        assert!(
+            token_colors
+                .iter()
+                .enumerate()
+                .any(|(index, color)| token_colors[index + 1..].iter().any(|next| next != color)),
+            "expected more than one syntax color: {code_line:?}"
+        );
+    }
+
+    #[test]
+    fn monochrome_code_blocks_do_not_emit_token_colors() {
+        let lines = render_code_block(
+            &["pub fn greet() -> bool { true }"],
+            "rust",
+            100,
+            "  ",
+            &mono_theme(),
+        );
+
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| span.style.fg.is_none() || span.content.contains('│')),
+            "monochrome code must stay colorless: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_code_does_not_corrupt_following_line_highlights() {
+        let source = [
+            "let value = 1; /* a deliberately long comment that closes here */",
+            "pub fn next() {}",
+        ];
+        let narrow = render_code_block(&source, "rust", 30, "  ", &default_theme());
+        let wide = render_code_block(&source, "rust", 120, "  ", &default_theme());
+
+        let pub_color = |lines: &[Line<'static>]| {
+            lines[1]
+                .spans
+                .iter()
+                .find(|span| span.content.contains("pub"))
+                .and_then(|span| span.style.fg)
+        };
+        assert_eq!(pub_color(&narrow), pub_color(&wide));
+        assert!(flat(&narrow[0]).ends_with('…'));
+    }
+
+    #[test]
     fn markdown_bullets_and_headers() {
         let lines = markdown_lines("## Title\n- item one\n* item two", 80, "  ");
         let texts: Vec<String> = lines.iter().map(flat).collect();
@@ -876,14 +1241,14 @@ mod tests {
     #[test]
     fn markdown_ordered_sections_render_nested_emphasis_without_markers() {
         let lines = markdown_lines(
-            "1. **Agent**\n8. **Host / CLI (`orca`)**\n   continued explanation",
+            "1. **Agent**\n8. **Host / CLI (`orcacode`)**\n   continued explanation",
             80,
             "  ",
         );
         let texts: Vec<String> = lines.iter().map(flat).collect();
 
         assert_eq!(texts[0], "  1. Agent");
-        assert_eq!(texts[1], "  8. Host / CLI (orca)");
+        assert_eq!(texts[1], "  8. Host / CLI (orcacode)");
         assert_eq!(texts[2], "     continued explanation");
         assert!(
             texts
@@ -978,11 +1343,10 @@ mod tests {
                 .iter()
                 .flat_map(|line| &line.spans)
                 .find(|span| {
-                    span.content.as_ref() == code_word
-                        && span.style.add_modifier.contains(Modifier::ITALIC)
+                    span.content.as_ref() == code_word && span.style.fg == Some(Color::Cyan)
                 })
                 .unwrap_or_else(|| panic!("inline code word {code_word}"));
-            assert!(code.style.add_modifier.contains(Modifier::ITALIC));
+            assert_eq!(code.style.fg, Some(Color::Cyan));
         }
     }
 

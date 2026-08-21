@@ -1,10 +1,12 @@
-//! `orca` — the interactive terminal host for Orca Harness.
+//! `orcacode` — the interactive terminal host for Orca Harness.
 //!
-//! Interactive: `orca` starts a streaming REPL with tool approvals.
-//! Headless:    `orca -p "prompt"` runs once and streams to stdout.
+//! Interactive: `orcacode` starts a streaming REPL with tool approvals.
+//! Headless:    `orcacode -p "prompt"` runs once and streams to stdout.
 
 mod approval;
 mod commands;
+mod config;
+mod extensions;
 mod headless;
 mod msg;
 mod tui;
@@ -17,11 +19,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Limits, Message, Model, ToolResult};
-use orca_harness_extensions::{EventStream, ReadToolResultTool, Truncation, TruncationStore};
+use orca_harness_extensions::{
+    compact, CompactConfig, EventStream, ReadToolResultTool, ToolRetry, Truncation, TruncationStore,
+};
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
 use orca_harness_tools::{
-    core_tools, BackgroundStats, KernelTool, ProcessTool, SubagentDepth, SubagentSpawn,
+    core_tools, BackgroundStats, ProcessTool, PyKernelTool, SubagentDepth, SubagentSpawn,
     SubagentTool, Workspace,
 };
 use orca_harness_tools_web::{Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool};
@@ -30,11 +34,11 @@ use crate::approval::Approval;
 use crate::msg::{Provider, UiMsg, WorkerCmd};
 
 const USAGE: &str = "\
-orca — terminal host for Orca Harness
+orcacode — terminal host for Orca Harness
 
 USAGE:
-  orca [OPTIONS]                interactive session
-  orca [OPTIONS] -p \"prompt\"    headless single run (streams to stdout)
+  orcacode [OPTIONS]                interactive session
+  orcacode [OPTIONS] -p \"prompt\"    headless single run (streams to stdout)
 
 OPTIONS:
   --model NAME       model id (env ORCA_MODEL; default qwen3.5:9b,
@@ -52,13 +56,21 @@ OPTIONS:
   --max-steps N      model invocations per run (default 48)
   --subagent-depth N subagent nesting levels, 1-5 (env ORCA_SUBAGENT_DEPTH;
                      default 1; /subagents adjusts it live in the TUI)
-  --theme NAME       mono (default) or color
+  --theme NAME       theme: default, mono, dracula,
+                     solarized-dark, one-dark, monokai, nord
   --json             headless: emit NDJSON harness events on stdout
   --auto-approve     headless: allow shell/write/edit without approval
   -p, --prompt TEXT  headless prompt
   -h, --help         show this help
 
-In the TUI, /models [filter] opens the model catalog and picker.
+In the TUI, /models [filter] opens the model catalog and picker and
+/settings shows and changes the provider, model, theme, and api key.
+API keys entered in the TUI, the active provider, the theme, and the
+last model picked per provider are saved to
+~/.config/orcacode/config.json and reused on later runs; flags and
+environment variables above always win over the saved values.
+Approval prompts accept y (once), a (always, this session), A (always,
+saved for this workspace only; revoke in /settings), and n (deny).
 ";
 
 #[derive(Clone)]
@@ -103,7 +115,7 @@ fn parse_args() -> Result<Config, String> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
-    let mut theme = std::env::var("ORCA_THEME").unwrap_or_else(|_| "mono".into());
+    let mut theme = std::env::var("ORCA_THEME").ok();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -129,7 +141,7 @@ fn parse_args() -> Result<Config, String> {
                     .parse()
                     .map_err(|_| "--subagent-depth expects a number".to_string())?
             }
-            "--theme" => theme = value("--theme")?,
+            "--theme" => theme = Some(value("--theme")?),
             "--json" => json = true,
             "--auto-approve" => auto_approve = true,
             "-p" | "--prompt" => prompt = Some(value("-p")?),
@@ -141,15 +153,25 @@ fn parse_args() -> Result<Config, String> {
         }
     }
 
-    // An explicit --api-key wins; otherwise each endpoint has its own env.
-    let api_key = api_key.or_else(|| {
-        let env = if openrouter {
-            "OPENROUTER_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
-        };
-        std::env::var(env).ok()
-    });
+    // The provider saved by the last session applies only when nothing
+    // explicit picked one (--openrouter, --base-url, or ORCA_BASE_URL).
+    let stored_provider = if openrouter || base_url.is_some() {
+        None
+    } else {
+        config::stored_provider().and_then(|label| Provider::from_label(&label))
+    };
+    let openrouter = openrouter || stored_provider == Some(Provider::OpenRouter);
+    let provider = if openrouter {
+        Provider::OpenRouter
+    } else if stored_provider == Some(Provider::Local) {
+        Provider::Local
+    } else {
+        Provider::OpenAi
+    };
+
+    // An explicit --api-key wins; otherwise the endpoint's env var, then
+    // a key saved to the config file by a previous session.
+    let api_key = api_key.or_else(|| provider.resolve_key());
     let firecrawl_key = firecrawl_key.or_else(|| std::env::var("FIRECRAWL_API_KEY").ok());
     let base_url = base_url.unwrap_or_else(|| {
         if openrouter {
@@ -160,14 +182,17 @@ fn parse_args() -> Result<Config, String> {
             "http://localhost:11434/v1".into()
         }
     });
-    let model = model.unwrap_or_else(|| {
-        if openrouter {
-            // OpenRouter's auto-router: always a valid id.
-            "openrouter/auto".into()
-        } else {
-            "qwen3.5:9b".into()
-        }
-    });
+    let model = model
+        .or_else(|| config::stored_model(provider.label()))
+        .unwrap_or_else(|| {
+            if openrouter {
+                // OpenRouter's auto-router: always a valid id.
+                "openrouter/auto".into()
+            } else {
+                "qwen3.5:9b".into()
+            }
+        });
+    let theme = resolve_theme(theme);
 
     Ok(Config {
         model,
@@ -186,6 +211,24 @@ fn parse_args() -> Result<Config, String> {
     })
 }
 
+/// The canonicalized workspace root, used as the key for this
+/// workspace's saved tool approvals. Canonicalizing keeps the key
+/// stable however the directory was spelled on the command line.
+fn workspace_scope(ws: &Workspace) -> String {
+    ws.root()
+        .canonicalize()
+        .unwrap_or_else(|_| ws.root().to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// --theme and ORCA_THEME beat the saved preference; default otherwise.
+fn resolve_theme(explicit: Option<String>) -> String {
+    explicit
+        .or_else(config::stored_theme)
+        .unwrap_or_else(|| "default".into())
+}
+
 fn system_prompt(ws: &Workspace, web_search: bool) -> String {
     let web_tools = if web_search {
         ", web_fetch (fetch a URL as markdown), web_search, and web_crawl \
@@ -194,9 +237,9 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
         ", and web_fetch (fetch a URL as markdown)"
     };
     format!(
-        "You are Orca, a coding agent operating in the workspace at {root} on {os}. \
+        "You are Orca Code, a coding agent operating in the workspace at {root} on {os}. \
          You act through tools: shell, process (persistent sessions and background \
-         processes), kernel (persistent Python — variables survive across calls; \
+         processes), pykernel (persistent Python — variables survive across calls; \
          print what you need to see), subagent (spawn an independent agent with its \
          own context and tools for a self-contained task; parallel calls fan out), \
          read_file, write_file, edit_file, list_dir, grep, glob, \
@@ -205,13 +248,27 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          run commands to verify your work. Keep responses brief and concrete: report \
          what you did and what you found.\n\
          \n\
-         Tool calls issued in the same response execute concurrently. Before acting, \
-         plan the batch: decide everything you can learn or do right now that does not \
-         depend on another call's result, and issue all of those calls together in one \
-         response — reading several files, running independent searches, or executing \
-         unrelated commands should be one batch, not a sequence of turns. Serialize \
-         only when a call's input genuinely requires another call's output. Writes to \
-         the same file are ordered for you; unrelated writes are safe to batch.",
+         Plan before every tool call. Ask what you already know, what you still need, \
+         and what the smallest set of calls is that gets it. Never fire a call whose \
+         result you have no plan to use, and never re-derive something a previous \
+         call already told you.\n\
+         \n\
+         Use the harness's full concurrency. Tool calls issued in the same response \
+         execute concurrently. Before acting, plan the batch: decide everything you \
+         can learn or do right now that does not depend on another call's result, and \
+         issue all of those calls together in one response — reading several files, \
+         running independent searches, executing unrelated commands, or fanning out \
+         several subagents should be one batch, not a sequence of turns. Serialize \
+         only when a call's input genuinely requires another call's output. Push \
+         long-running work into background processes and keep working while it runs. \
+         Writes to the same file are ordered for you; unrelated writes are safe to \
+         batch.\n\
+         \n\
+         Use pykernel as your working state. Its variables persist across calls, so \
+         parse, compute, and accumulate there instead of re-running shell pipelines \
+         to re-derive the same data: load results into variables once, refine them in \
+         later calls, and keep intermediate findings (file lists, parsed output, \
+         counters, partial conclusions) alive in the kernel rather than in your head.",
         root = ws.root().display(),
         os = std::env::consts::OS,
     )
@@ -249,7 +306,7 @@ impl Endpoint {
             Provider::OpenRouter => {
                 let mut model = OpenRouterModel::new(self.model.as_str())
                     .base_url(self.base_url.clone())
-                    .title("orca");
+                    .title("orcacode");
                 if let Some(key) = &self.api_key {
                     model = model.api_key(key.clone());
                 }
@@ -267,6 +324,61 @@ impl Endpoint {
     }
 }
 
+/// Discover the active model's context window from the endpoint, best
+/// effort, and report it to the UI. OpenRouter's catalog carries
+/// `context_length`; a local ollama exposes it via the native
+/// `/api/show`. Plain OpenAI endpoints publish nothing — `None`.
+fn spawn_window_probe(endpoint: &Endpoint, ui: mpsc::UnboundedSender<UiMsg>) {
+    let base_url = endpoint.base_url.clone();
+    let api_key = endpoint.api_key.clone();
+    let model = endpoint.model.clone();
+    tokio::spawn(async move {
+        let window = if base_url.contains("openrouter") {
+            openrouter::list_models(&base_url, api_key.as_deref())
+                .await
+                .ok()
+                .and_then(|models| models.into_iter().find(|m| m.id == model))
+                .and_then(|m| m.context_length)
+        } else if base_url.contains("localhost:11434") || base_url.contains("127.0.0.1:11434") {
+            ollama_context_window(&base_url, &model).await
+        } else {
+            None
+        };
+        let _ = ui.send(UiMsg::ContextWindow(window));
+    });
+}
+
+/// Ollama native `/api/show`: prefer an explicit `num_ctx` parameter (the
+/// serving window) over the model's trained maximum (`*.context_length`).
+async fn ollama_context_window(base_url: &str, model: &str) -> Option<u64> {
+    let host = base_url.trim_end_matches('/').trim_end_matches("/v1");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let body: serde_json::Value = client
+        .post(format!("{host}/api/show"))
+        .json(&serde_json::json!({"model": model}))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let num_ctx = body["parameters"].as_str().and_then(|params| {
+        params.lines().find_map(|line| {
+            let mut parts = line.split_whitespace();
+            (parts.next() == Some("num_ctx")).then(|| parts.next()?.parse().ok())?
+        })
+    });
+    num_ctx.or_else(|| {
+        body["model_info"]
+            .as_object()?
+            .iter()
+            .find_map(|(key, value)| key.ends_with(".context_length").then(|| value.as_u64())?)
+    })
+}
+
 /// Owns the Agent and the conversation; runs prompts sent by the UI.
 /// `build` produces a fresh agent for the current endpoint; the
 /// conversation context survives model and provider swaps.
@@ -275,6 +387,7 @@ async fn worker<F>(
     system: String,
     mut endpoint: Endpoint,
     build: F,
+    store: TruncationStore,
     mut commands: mpsc::UnboundedReceiver<WorkerCmd>,
     ui: mpsc::UnboundedSender<UiMsg>,
 ) where
@@ -282,6 +395,7 @@ async fn worker<F>(
 {
     let mut context = Context::new();
     context.push_system(&system);
+    spawn_window_probe(&endpoint, ui.clone());
     while let Some(command) = commands.recv().await {
         match command {
             WorkerCmd::Run { prompt, cancel } => {
@@ -296,6 +410,13 @@ async fn worker<F>(
             WorkerCmd::Clear => {
                 context = Context::new();
                 context.push_system(&system);
+            }
+            WorkerCmd::Compact => {
+                let result = compact(&mut context, &store, &CompactConfig::default())
+                    .map_err(|e| e.to_string());
+                if ui.send(UiMsg::Compacted(result)).is_err() {
+                    return;
+                }
             }
             WorkerCmd::ListModels { filter } => {
                 // Detached: a slow catalog fetch must not wedge the worker
@@ -318,7 +439,11 @@ async fn worker<F>(
             }
             WorkerCmd::SetModel { id } => {
                 endpoint.model = id;
+                // Best-effort preference cache; a failed write only means
+                // the next session starts on the provider default.
+                let _ = config::save_model(endpoint.provider.label(), &endpoint.model);
                 agent = build(&endpoint);
+                spawn_window_probe(&endpoint, ui.clone());
                 if ui
                     .send(UiMsg::ModelChanged(endpoint.model.clone()))
                     .is_err()
@@ -329,16 +454,23 @@ async fn worker<F>(
             WorkerCmd::SetProvider { provider, api_key } => {
                 endpoint.provider = provider;
                 endpoint.base_url = provider.base_url().into();
-                endpoint.api_key = api_key.or_else(|| provider.env_key());
+                endpoint.api_key = api_key.or_else(|| provider.resolve_key());
                 endpoint.model = provider.default_model().into();
+                let _ = config::save_provider(provider.label());
                 agent = build(&endpoint);
+                spawn_window_probe(&endpoint, ui.clone());
                 let changed = UiMsg::ProviderChanged {
-                    provider: provider.label(),
+                    provider,
                     model: endpoint.model.clone(),
                 };
                 if ui.send(changed).is_err() {
                     return;
                 }
+            }
+            WorkerCmd::ReloadExtensions => {
+                // The UI already saved the toggle; build_agent reads the
+                // config, so rebuilding is all that is left to do.
+                agent = build(&endpoint);
             }
         }
     }
@@ -399,11 +531,13 @@ async fn main() -> ExitCode {
         }
     };
 
-    match cfg.theme.as_str() {
-        "mono" => view::set_theme(view::mono_theme()),
-        "color" => view::set_theme(view::color_theme()),
-        other => {
-            eprintln!("unknown theme: {other} (expected mono or color)");
+    match view::ThemeName::from_str(&cfg.theme) {
+        Some(name) => view::set_theme(name),
+        None => {
+            eprintln!(
+                "unknown theme: {} (expected default, mono, dracula, solarized-dark, one-dark, monokai, or nord)",
+                cfg.theme
+            );
             return ExitCode::FAILURE;
         }
     }
@@ -444,11 +578,15 @@ async fn run_mode(cfg: Config) -> ExitCode {
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
+    // One store for the whole session: agent rebuilds (model/provider
+    // swaps) keep it, so read_tool_result and /compact recovery survive.
+    let store = TruncationStore::default();
     let build = {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
         let subagent_depth = subagent_depth.clone();
         let stats = stats.clone();
+        let store = store.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
@@ -458,15 +596,19 @@ async fn run_mode(cfg: Config) -> ExitCode {
                 &ui_tx,
                 &subagent_depth,
                 &stats,
+                &store,
             )
         }
     };
     let agent = build(&endpoint);
-    tokio::spawn(worker(agent, system, endpoint, build, cmd_rx, ui_tx));
+    let initial_provider = endpoint.provider;
+    tokio::spawn(worker(agent, system, endpoint, build, store, cmd_rx, ui_tx));
 
     let tui_cfg = tui::TuiConfig {
         model_name: cfg.model.clone(),
         workspace_name: cfg.workspace.display().to_string(),
+        workspace_root: workspace_scope(&ws),
+        provider: initial_provider,
         subagent_depth,
         stats,
     };
@@ -486,6 +628,7 @@ fn build_agent<M: Model + Clone + 'static>(
     ui: &mpsc::UnboundedSender<UiMsg>,
     subagent_depth: &SubagentDepth,
     stats: &BackgroundStats,
+    store: &TruncationStore,
 ) -> Agent<M> {
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
@@ -494,13 +637,20 @@ fn build_agent<M: Model + Clone + 'static>(
             let _ = ui.send(UiMsg::Event(event));
         }
     });
-    let store = TruncationStore::default();
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
-        .extension(Approval::new(ui.clone()))
-        .extension(Truncation::new(16_000).store(store.clone()))
-        .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store)))
+        .extension(Approval::new(ui.clone(), workspace_scope(ws)));
+    if extensions::enabled("truncation") {
+        agent = agent.extension(Truncation::new(16_000).store(store.clone()));
+    }
+    if extensions::enabled("retry") {
+        agent = agent.extension(ToolRetry::new(3));
+    }
+    // read_tool_result stays registered even with truncation off so
+    // outputs trimmed before the toggle remain pageable.
+    agent = agent
+        .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store.clone())))
         .tool_arc(std::sync::Arc::new(WebFetchTool::new(UrlPolicy::strict())));
     if let Some(key) = &cfg.firecrawl_key {
         let fc = std::sync::Arc::new(Firecrawl::new(key.clone()));
@@ -520,7 +670,7 @@ fn build_agent<M: Model + Clone + 'static>(
             .stats(stats.clone()),
     ));
     agent = agent.tool_arc(std::sync::Arc::new(
-        KernelTool::new().working_dir(root).stats(stats.clone()),
+        PyKernelTool::new().working_dir(root).stats(stats.clone()),
     ));
     let ui_events = ui.clone();
     let subagent = SubagentTool::new(model_for_subagents, ws)
@@ -549,6 +699,15 @@ fn build_agent<M: Model + Clone + 'static>(
 mod main_tests {
     use super::*;
 
+    #[test]
+    fn theme_prefers_explicit_then_stored_then_default() {
+        assert_eq!(resolve_theme(None), "default");
+        assert_eq!(resolve_theme(Some("mono".to_string())), "mono");
+        crate::config::save_theme("nord").unwrap();
+        assert_eq!(resolve_theme(None), "nord");
+        assert_eq!(resolve_theme(Some("mono".to_string())), "mono");
+    }
+
     /// The prompt must keep telling the model to plan and batch independent
     /// calls — dropping this silently reverts the agent to one call per turn.
     #[test]
@@ -573,9 +732,20 @@ mod main_tests {
     }
 
     #[test]
-    fn system_prompt_advertises_kernel_and_subagent() {
+    fn system_prompt_advertises_pykernel_and_subagent() {
         let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
-        assert!(prompt.contains("kernel"));
+        assert!(prompt.contains("pykernel"));
+        assert!(!prompt.contains("processes), kernel (persistent Python"));
         assert!(prompt.contains("subagent"));
+    }
+
+    /// The prompt must keep telling the model to plan ahead of each call and
+    /// to lean on pykernel's persistent variables for intermediate state.
+    #[test]
+    fn system_prompt_instructs_planning_and_pykernel_state() {
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
+        assert!(prompt.contains("Plan before every tool call"));
+        assert!(prompt.contains("pykernel as your working state"));
+        assert!(prompt.contains("fanning out"));
     }
 }

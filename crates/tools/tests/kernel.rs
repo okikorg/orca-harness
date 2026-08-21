@@ -4,12 +4,12 @@
 use serde_json::json;
 
 use orca_harness_core::{CancellationToken, Concurrency, Tool, ToolContext};
-use orca_harness_tools::KernelTool;
+use orca_harness_tools::PyKernelTool;
 
 fn ctx() -> ToolContext {
     ToolContext {
         call_id: "t".into(),
-        tool_name: "kernel".into(),
+        tool_name: "pykernel".into(),
         cancellation: CancellationToken::new(),
         deadline: None,
     }
@@ -34,7 +34,7 @@ macro_rules! require_python {
 #[tokio::test]
 async fn state_persists_across_calls() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     let out = k.call(json!({"code": "x = 41"}), &ctx()).await.unwrap();
     assert_eq!(out["state"], "ok");
     assert_eq!(out["output"], "");
@@ -49,7 +49,7 @@ async fn state_persists_across_calls() {
 #[tokio::test]
 async fn multiline_code_runs_verbatim() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     // Blank lines inside a def are exactly what wedged the interactive REPL.
     let code = "def double(n):\n\n    return n * 2\n\nprint(double(21))";
     let out = k.call(json!({"code": code}), &ctx()).await.unwrap();
@@ -60,7 +60,7 @@ async fn multiline_code_runs_verbatim() {
 #[tokio::test]
 async fn errors_report_traceback_and_preserve_state() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     k.call(json!({"code": "kept = 'alive'"}), &ctx())
         .await
         .unwrap();
@@ -81,7 +81,7 @@ async fn errors_report_traceback_and_preserve_state() {
 #[tokio::test]
 async fn stderr_is_captured_in_order() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     let out = k
         .call(
             json!({"code": "import sys\nprint('a')\nprint('b', file=sys.stderr)\nprint('c')"}),
@@ -94,14 +94,14 @@ async fn stderr_is_captured_in_order() {
 
 #[test]
 fn kernel_calls_are_serial() {
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     assert_eq!(k.concurrency(&json!({"code": "1"})), Concurrency::Serial);
 }
 
 #[tokio::test]
 async fn timeout_kills_kernel_and_next_call_restarts_fresh() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     k.call(json!({"code": "y = 7"}), &ctx()).await.unwrap();
     let out = k
         .call(
@@ -124,7 +124,7 @@ async fn timeout_kills_kernel_and_next_call_restarts_fresh() {
 #[tokio::test]
 async fn reset_discards_state_without_restart_notice_afterwards() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     k.call(json!({"code": "z = 1"}), &ctx()).await.unwrap();
     let out = k.call(json!({"action": "reset"}), &ctx()).await.unwrap();
     assert_eq!(out["restarted"], true);
@@ -141,7 +141,7 @@ async fn reset_discards_state_without_restart_notice_afterwards() {
 #[tokio::test]
 async fn kernel_crash_is_detected_and_reported() {
     require_python!();
-    let k = KernelTool::new();
+    let k = PyKernelTool::new();
     k.call(json!({"code": "import os"}), &ctx()).await.unwrap();
     // os._exit skips the driver loop entirely — the process just dies.
     // Same-turn shape may surface as the timeout-recovery path (stdout
@@ -162,7 +162,7 @@ async fn dropping_kernel_tool_kills_the_kernel() {
     std::fs::create_dir_all(&dir).unwrap();
     let pid_file = dir.join("kernel.pid");
     {
-        let k = KernelTool::new();
+        let k = PyKernelTool::new();
         let code = format!(
             "import os\nopen({:?}, 'w').write(str(os.getpid()))",
             pid_file.to_str().unwrap()
@@ -194,7 +194,7 @@ async fn kernel_stats_track_liveness() {
     require_python!();
     let stats = orca_harness_tools::BackgroundStats::new();
     {
-        let k = KernelTool::new().stats(stats.clone());
+        let k = PyKernelTool::new().stats(stats.clone());
         assert_eq!(stats.kernels(), 0);
         k.call(json!({"code": "a = 1"}), &ctx()).await.unwrap();
         assert_eq!(stats.kernels(), 1);

@@ -36,6 +36,7 @@
 //! # Ok(()) }
 //! ```
 
+mod compact;
 mod events;
 mod policy;
 mod read_tool_result;
@@ -43,6 +44,7 @@ mod retry;
 mod truncation;
 mod usage;
 
+pub use compact::{compact, CompactConfig, CompactError, CompactReport};
 pub use events::{EventSink, EventStream, HarnessEvent};
 pub use policy::{PolicyOutcome, PolicyRule, ToolPolicy};
 pub use read_tool_result::ReadToolResultTool;

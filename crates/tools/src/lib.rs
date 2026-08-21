@@ -4,7 +4,7 @@
 //! commands on the host (or a target machine / container), keep
 //! long-lived processes and interactive sessions alive across calls, and
 //! read, write, edit, list, glob, and search files. Two workflow tools
-//! build on the same primitives: [`KernelTool`] (persistent Python
+//! build on the same primitives: [`PyKernelTool`] (persistent Python
 //! compute — state survives across calls) and [`SubagentTool`] (spawn
 //! independent in-process agents, with nesting governed by a shared
 //! [`SubagentDepth`]). A separate [`fs_admin_tools`] bundle adds
@@ -51,7 +51,7 @@ use orca_harness_core::Tool;
 pub use files::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use glob::GlobTool;
-pub use kernel::KernelTool;
+pub use kernel::PyKernelTool;
 pub use process::ProcessTool;
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};

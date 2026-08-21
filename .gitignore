@@ -1,2 +1,9 @@
 target/
+
+# macOS
 .DS_Store
+
+# Generated benchmark / report artifacts
+compact_*.html
+compact_report*.json
+answer.txt

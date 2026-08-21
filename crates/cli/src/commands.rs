@@ -24,6 +24,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
+        name: "compact",
+        description: "compact the conversation: elide tool outputs, keep a capped summary",
+        category: "Session",
+        takes_args: false,
+    },
+    CommandSpec {
         name: "queue",
         description: "show the prompt queue, or clear waiting prompts",
         category: "Session",
@@ -54,8 +60,32 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
+        name: "extensions",
+        description: "toggle harness extensions (no argument opens the picker)",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
+        name: "usage",
+        description: "session token totals, cache traffic, and context occupancy",
+        category: "Session",
+        takes_args: false,
+    },
+    CommandSpec {
         name: "quit",
-        description: "exit orca",
+        description: "exit orcacode",
+        category: "General",
+        takes_args: false,
+    },
+    CommandSpec {
+        name: "theme",
+        description: "pick a color theme (no argument opens the picker)",
+        category: "General",
+        takes_args: true,
+    },
+    CommandSpec {
+        name: "settings",
+        description: "view and change provider, model, theme, and api key",
         category: "General",
         takes_args: false,
     },
@@ -104,20 +134,27 @@ mod tests {
     fn prefix_matches_rank_before_substring_matches() {
         // "el" prefixes nothing but appears inside "help" and "models".
         assert_eq!(names(&filter_commands("el")), vec!["help", "models"]);
-        // "m" prefixes "models" and appears nowhere else.
-        assert_eq!(names(&filter_commands("m")), vec!["models"]);
-        // "e" prefixes "expand"; appears inside every other command except
-        // "quit"... which it doesn't contain.
+        // "m" prefixes "models" and appears inside "compact" and "theme".
+        assert_eq!(
+            names(&filter_commands("m")),
+            vec!["models", "compact", "theme"]
+        );
+        // "e" prefixes "expand" and "extensions"; appears inside every
+        // other command except "quit"... which it doesn't contain.
         assert_eq!(
             names(&filter_commands("e")),
             vec![
                 "expand",
+                "extensions",
                 "help",
                 "clear",
                 "queue",
                 "models",
                 "provider",
-                "subagents"
+                "subagents",
+                "usage",
+                "theme",
+                "settings"
             ]
         );
     }

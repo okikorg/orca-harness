@@ -12,10 +12,18 @@ use crate::tool::{ToolCall, ToolSchema};
 /// Token accounting for one model invocation, self-reported by the
 /// adapter. The kernel never inspects it; extensions (metering, billing,
 /// event streams) consume it via `after_model`.
+///
+/// Adapters must normalize to these semantics (providers disagree):
+/// `input_tokens` is UNCACHED prompt tokens only — cache reads and writes
+/// are reported separately, never double-counted. OpenAI-style
+/// `prompt_tokens` includes cached tokens and must be reduced; Anthropic
+/// `input_tokens` already excludes them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
+    /// Prompt tokens actually processed (excluding cache reads/writes).
     pub input_tokens: u64,
+    /// Completion tokens, including any provider-reported reasoning.
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_create_tokens: u64,
@@ -27,6 +35,13 @@ impl Usage {
         self.output_tokens += other.output_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
         self.cache_create_tokens += other.cache_create_tokens;
+    }
+
+    /// The context this step occupied: everything the model saw (cached
+    /// or not) plus what it produced — which the next request re-sends.
+    /// This is the figure a context meter or compaction threshold reads.
+    pub fn context_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_create_tokens
     }
 }
 
