@@ -18,6 +18,16 @@ fn rel_arg<'a>(input: &'a Value, key: &str) -> Result<&'a str, ToolError> {
         .ok_or_else(|| ToolError::msg(format!("`{key}` (string) is required")))
 }
 
+/// Move a string argument out of the input (leaving `null` behind).
+/// Owned strings hit tokio's zero-copy `fs::write` fast path; a borrowed
+/// `&str` would be deep-copied to a fresh buffer on every call.
+fn take_string_arg(input: &mut Value, key: &str) -> Result<String, ToolError> {
+    match input.get_mut(key).map(Value::take) {
+        Some(Value::String(s)) => Ok(s),
+        _ => Err(ToolError::msg(format!("`{key}` (string) is required"))),
+    }
+}
+
 /// `read_file` — return a text file's contents.
 pub struct ReadFileTool {
     ws: Workspace,
@@ -105,13 +115,11 @@ impl Tool for WriteFileTool {
         }
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        let rel = rel_arg(&input, "path")?;
-        let content = input
-            .get("content")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::msg("`content` (string) is required"))?;
-        let path = self.ws.resolve(rel)?;
+    async fn call(&self, mut input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
+        let rel = rel_arg(&input, "path")?.to_owned();
+        let content = take_string_arg(&mut input, "content")?;
+        let bytes = content.len();
+        let path = self.ws.resolve(&rel)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -120,7 +128,7 @@ impl Tool for WriteFileTool {
         fs::write(&path, content)
             .await
             .map_err(|e| ToolError::msg(format!("write failed: {e}")))?;
-        Ok(json!({ "path": rel, "bytesWritten": content.len() }))
+        Ok(json!({ "path": rel, "bytesWritten": bytes }))
     }
 }
 
@@ -194,10 +202,38 @@ impl Tool for EditFileTool {
         } else {
             content.replacen(old, new, 1)
         };
-        fs::write(&path, &updated)
+        // Owned String: tokio's zero-copy fast path (a borrow would be
+        // deep-copied onto the blocking pool).
+        fs::write(&path, updated)
             .await
             .map_err(|e| ToolError::msg(format!("write failed: {e}")))?;
         Ok(json!({ "path": rel, "replacements": if replace_all { count } else { 1 } }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_string_arg;
+    use serde_json::json;
+
+    /// The write path hands content to tokio's `fs::write`, whose
+    /// zero-copy fast path needs an OWNED String — taking it out of the
+    /// input must move the buffer, never copy it.
+    #[test]
+    fn take_string_arg_moves_the_buffer_out_of_the_input() {
+        let mut input = json!({"content": "x".repeat(1024), "path": "a.txt"});
+        let original_ptr = input["content"].as_str().unwrap().as_ptr();
+
+        let taken = take_string_arg(&mut input, "content").unwrap();
+        assert_eq!(taken.as_ptr(), original_ptr, "must move, not copy");
+        assert!(input["content"].is_null(), "the input no longer owns it");
+        assert_eq!(input["path"], "a.txt", "other fields untouched");
+    }
+
+    #[test]
+    fn take_string_arg_rejects_missing_or_non_string() {
+        assert!(take_string_arg(&mut json!({}), "content").is_err());
+        assert!(take_string_arg(&mut json!({"content": 7}), "content").is_err());
     }
 }
 

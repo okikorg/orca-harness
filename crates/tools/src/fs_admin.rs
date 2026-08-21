@@ -113,9 +113,18 @@ impl Tool for RenameFileTool {
         }
     }
 
-    fn concurrency(&self, _input: &Value) -> Concurrency {
-        // Mutates two paths at once; serialize rather than under-key.
-        Concurrency::Serial
+    fn concurrency(&self, input: &Value) -> Concurrency {
+        // Mutates two paths at once: key on both so it serializes against
+        // writes to either path without excluding the whole batch.
+        match (
+            input.get("from").and_then(Value::as_str),
+            input.get("to").and_then(Value::as_str),
+        ) {
+            (Some(from), Some(to)) => {
+                Concurrency::Keys(vec![format!("file:{from}"), format!("file:{to}")])
+            }
+            _ => Concurrency::Serial,
+        }
     }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {

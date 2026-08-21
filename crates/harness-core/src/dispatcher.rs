@@ -73,7 +73,13 @@ impl Dispatcher {
         validate_pairing(&calls)?;
 
         let n = calls.len();
-        let calls: Arc<[ToolCall]> = calls.into();
+        let mut calls = calls;
+        // After this phase, a call's arguments are observable only through
+        // around_tool / after_tool hooks. With neither subscribed, each
+        // executing call's arguments MOVE into its job — a large payload
+        // (1 MiB write_file content) is never deep-copied.
+        let strip_arguments = extensions.around_tool_chain().is_empty()
+            && extensions.after_tool_subscribers().is_empty();
         // Results land in their original call slot; `executed` marks slots
         // whose tool actually ran (denied/unresolved calls skip after_tool).
         let mut slots: Vec<Option<ToolResult>> = (0..n).map(|_| None).collect();
@@ -83,7 +89,7 @@ impl Dispatcher {
         let mut grouping = Grouping::default();
         let mut has_serial = false;
         let mut job_count = 0usize;
-        for (index, call) in calls.iter().enumerate() {
+        for (index, call) in calls.iter_mut().enumerate() {
             let Some(tool) = tools.get(&call.name) else {
                 slots[index] = Some(ToolResult::error(
                     call,
@@ -92,12 +98,12 @@ impl Dispatcher {
                 continue;
             };
 
-            let mut input = call.arguments.clone();
+            let mut rewritten = None;
             let mut denied = None;
             for ext in extensions.before_tool_subscribers() {
                 match ext.before_tool(call).await? {
                     ToolDecision::Continue => {}
-                    ToolDecision::Rewrite(new_input) => input = new_input,
+                    ToolDecision::Rewrite(new_input) => rewritten = Some(new_input),
                     ToolDecision::Deny { reason } => {
                         denied = Some(reason);
                         break;
@@ -108,6 +114,11 @@ impl Dispatcher {
                 slots[index] = Some(ToolResult::error(call, format!("denied: {reason}")));
                 continue;
             }
+            let input = match rewritten {
+                Some(new_input) => new_input,
+                None if strip_arguments => std::mem::take(&mut call.arguments),
+                None => call.arguments.clone(),
+            };
 
             let concurrency = tool.concurrency(&input);
             has_serial |= matches!(concurrency, Concurrency::Serial);
@@ -122,6 +133,7 @@ impl Dispatcher {
                 concurrency,
             );
         }
+        let calls: Arc<[ToolCall]> = calls.into();
 
         // Phase 2 — concurrent execution. Synchronization is only
         // constructed when it can actually constrain this batch.
@@ -136,6 +148,9 @@ impl Dispatcher {
         });
 
         if job_count > 0 {
+            // Multi-key merges can leave drained chains behind; drop them
+            // so they neither spawn no-op tasks nor claim the inline slot.
+            grouping.chains.retain(|chain| !chain.is_empty());
             // Hold back one unit to run inline in this task (prefer a
             // lone single; a chain otherwise): the dispatcher would only
             // idle in `join_next`, and a single-call batch then never
@@ -346,6 +361,43 @@ impl Grouping {
                     self.chains.push(vec![job]);
                 }
             },
+            Concurrency::Keys(keys) if keys.is_empty() => self.singles.push(job),
+            Concurrency::Keys(keys) => {
+                // Every chain any key belongs to must serialize with this
+                // job: merge them into one (per-key call order survives —
+                // each chain's internal order is kept, and this job is
+                // appended after all of them).
+                let mut slots: Vec<usize> = keys
+                    .iter()
+                    .filter_map(|k| self.keyed.get(k).copied())
+                    .collect();
+                slots.sort_unstable();
+                slots.dedup();
+                let target = match slots.split_first() {
+                    None => {
+                        self.chains.push(Vec::new());
+                        self.chains.len() - 1
+                    }
+                    Some((&first, rest)) => {
+                        for &slot in rest {
+                            let bridged = std::mem::take(&mut self.chains[slot]);
+                            self.chains[first].extend(bridged);
+                        }
+                        if !rest.is_empty() {
+                            for slot in self.keyed.values_mut() {
+                                if rest.contains(slot) {
+                                    *slot = first;
+                                }
+                            }
+                        }
+                        first
+                    }
+                };
+                for key in keys {
+                    self.keyed.insert(key, target);
+                }
+                self.chains[target].push(job);
+            }
             Concurrency::Serial => {
                 job.exclusive = true;
                 match self.serial {

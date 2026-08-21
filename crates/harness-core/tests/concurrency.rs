@@ -600,6 +600,317 @@ async fn fanout_wall_clock_is_parallel_not_serial() {
     );
 }
 
+/// Multi-key calls: a call carrying several keys serializes against every
+/// chain any of its keys belongs to. Chains bridged by such a call merge
+/// into one ordered chain — per-key call order is preserved.
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_keyed_calls_merge_chains_and_preserve_order() {
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+
+    let probe = ConcurrencyProbe::new();
+    let keyed = {
+        let probe = probe.clone();
+        FnTool::new(
+            "locker",
+            "multi-keyed",
+            json!({"type": "object"}),
+            move |_input, ctx| {
+                let probe = probe.clone();
+                async move {
+                    let _guard = probe.enter(&ctx.call_id);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    Ok(Value::Null)
+                }
+            },
+        )
+        .concurrency(|input| {
+            Concurrency::Keys(
+                input["keys"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|k| k.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(keyed));
+
+    // a0 opens chain A, b0 opens chain B, ab bridges them (merging the
+    // chains), a1 lands in the merged chain.
+    let batch = vec![
+        call("a0", "locker", json!({"keys": ["A"]})),
+        call("b0", "locker", json!({"keys": ["B"]})),
+        call("ab", "locker", json!({"keys": ["A", "B"]})),
+        call("a1", "locker", json!({"keys": ["A"]})),
+    ];
+    let results = Dispatcher::new()
+        .execute(
+            batch,
+            &tools,
+            &ExtensionRegistry::new(),
+            &CancellationToken::new(),
+            None,
+            4,
+        )
+        .await
+        .unwrap();
+    assert!(results.iter().all(|r| !r.is_error));
+
+    assert_eq!(
+        probe.max_in_flight(),
+        1,
+        "all four calls share a key transitively; none may overlap"
+    );
+    assert_eq!(
+        probe.started(),
+        vec!["a0", "b0", "ab", "a1"],
+        "merged chain preserves call order"
+    );
+}
+
+/// Multi-key calls with fully disjoint key sets still fan out.
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_keyed_calls_with_disjoint_keys_overlap() {
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+
+    let probe = ConcurrencyProbe::new();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let keyed = {
+        let probe = probe.clone();
+        let barrier = barrier.clone();
+        FnTool::new(
+            "locker",
+            "multi-keyed",
+            json!({"type": "object"}),
+            move |_input, ctx| {
+                let probe = probe.clone();
+                let barrier = barrier.clone();
+                async move {
+                    let _guard = probe.enter(&ctx.call_id);
+                    // Deadlocks unless both disjoint-key calls overlap.
+                    barrier.wait().await;
+                    Ok(Value::Null)
+                }
+            },
+        )
+        .concurrency(|input| {
+            Concurrency::Keys(
+                input["keys"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|k| k.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(keyed));
+
+    let batch = vec![
+        call("x", "locker", json!({"keys": ["A", "B"]})),
+        call("y", "locker", json!({"keys": ["C", "D"]})),
+    ];
+    let results = timeout(
+        RUN_TIMEOUT,
+        Dispatcher::new().execute(
+            batch,
+            &tools,
+            &ExtensionRegistry::new(),
+            &CancellationToken::new(),
+            None,
+            2,
+        ),
+    )
+    .await
+    .expect("disjoint multi-key calls must overlap, not deadlock")
+    .unwrap();
+    assert!(results.iter().all(|r| !r.is_error));
+    assert_eq!(probe.max_in_flight(), 2);
+}
+
+/// With no around_tool/after_tool subscribers, nothing can observe a
+/// call's arguments after dispatch begins — so the dispatcher must MOVE
+/// them into the tool rather than deep-copying (a 1 MiB write_file
+/// payload would otherwise be cloned per call). Pointer identity of the
+/// string buffer proves the move: a clone can never share the buffer
+/// while the original is still alive in the batch.
+#[tokio::test(flavor = "multi_thread")]
+async fn arguments_move_into_tools_when_no_hooks_observe_them() {
+    use std::sync::atomic::AtomicUsize;
+
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+
+    let arguments = json!({"content": "x".repeat(64 * 1024)});
+    let original_ptr = arguments["content"].as_str().unwrap().as_ptr() as usize;
+
+    let received_ptr = Arc::new(AtomicUsize::new(0));
+    let sink = {
+        let received_ptr = received_ptr.clone();
+        FnTool::new(
+            "sink",
+            "records buffer identity",
+            json!({"type": "object"}),
+            move |input, _ctx| {
+                let received_ptr = received_ptr.clone();
+                async move {
+                    let ptr = input["content"].as_str().unwrap().as_ptr() as usize;
+                    received_ptr.store(ptr, Ordering::SeqCst);
+                    Ok(Value::Null)
+                }
+            },
+        )
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(sink));
+
+    let results = Dispatcher::new()
+        .execute(
+            vec![call("c0", "sink", arguments)],
+            &tools,
+            &ExtensionRegistry::new(),
+            &CancellationToken::new(),
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(!results[0].is_error);
+    assert_eq!(
+        received_ptr.load(Ordering::SeqCst),
+        original_ptr,
+        "tool must receive the original buffer (moved), not a clone"
+    );
+}
+
+/// Guard for the move optimization: when an after_tool subscriber exists,
+/// it must still observe the call's original arguments.
+#[tokio::test(flavor = "multi_thread")]
+async fn after_tool_hooks_still_see_original_arguments() {
+    use async_trait::async_trait;
+    use orca_harness_core::{
+        Dispatcher, Extension, ExtensionError, ExtensionRegistry, Subscriptions, ToolCall,
+        ToolRegistry, ToolResult,
+    };
+
+    struct SeesArgs(Mutex<Vec<Value>>);
+
+    #[async_trait]
+    impl Extension for SeesArgs {
+        fn name(&self) -> &str {
+            "sees_args"
+        }
+        fn subscriptions(&self) -> Subscriptions {
+            Subscriptions::none().after_tool()
+        }
+        async fn after_tool(
+            &self,
+            call: &ToolCall,
+            result: ToolResult,
+        ) -> Result<ToolResult, ExtensionError> {
+            self.0.lock().unwrap().push(call.arguments.clone());
+            Ok(result)
+        }
+    }
+
+    let echo = FnTool::new(
+        "echo",
+        "echo",
+        json!({"type": "object"}),
+        |input, _ctx| async move { Ok(input) },
+    );
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(echo));
+
+    let sees = Arc::new(SeesArgs(Mutex::new(Vec::new())));
+    let mut extensions = ExtensionRegistry::new();
+    extensions.register(sees.clone());
+
+    let results = Dispatcher::new()
+        .execute(
+            vec![call("c0", "echo", json!({"payload": "intact"}))],
+            &tools,
+            &extensions,
+            &CancellationToken::new(),
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(!results[0].is_error);
+    assert_eq!(
+        sees.0.lock().unwrap().as_slice(),
+        &[json!({"payload": "intact"})],
+        "after_tool must observe the original arguments"
+    );
+}
+
+/// Guard for the move optimization: an around_tool wrapper receives the
+/// call by reference and must still see its original arguments.
+#[tokio::test(flavor = "multi_thread")]
+async fn around_tool_hooks_still_see_original_arguments() {
+    use async_trait::async_trait;
+    use orca_harness_core::{
+        Dispatcher, Extension, ExtensionRegistry, Next, Subscriptions, ToolCall, ToolContext,
+        ToolError, ToolRegistry,
+    };
+
+    struct WrapsArgs(Mutex<Vec<Value>>);
+
+    #[async_trait]
+    impl Extension for WrapsArgs {
+        fn name(&self) -> &str {
+            "wraps_args"
+        }
+        fn subscriptions(&self) -> Subscriptions {
+            Subscriptions::none().around_tool()
+        }
+        async fn around_tool<'a>(
+            &self,
+            call: &ToolCall,
+            input: Value,
+            _ctx: &ToolContext,
+            next: Next<'a>,
+        ) -> Result<Value, ToolError> {
+            self.0.lock().unwrap().push(call.arguments.clone());
+            next.run(input).await
+        }
+    }
+
+    let echo = FnTool::new(
+        "echo",
+        "echo",
+        json!({"type": "object"}),
+        |input, _ctx| async move { Ok(input) },
+    );
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(echo));
+
+    let wraps = Arc::new(WrapsArgs(Mutex::new(Vec::new())));
+    let mut extensions = ExtensionRegistry::new();
+    extensions.register(wraps.clone());
+
+    let results = Dispatcher::new()
+        .execute(
+            vec![call("c0", "echo", json!({"payload": "intact"}))],
+            &tools,
+            &extensions,
+            &CancellationToken::new(),
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(!results[0].is_error);
+    assert_eq!(
+        wraps.0.lock().unwrap().as_slice(),
+        &[json!({"payload": "intact"})],
+        "around_tool must observe the original arguments"
+    );
+}
+
 /// 100-way fan-out: every one of the 100 calls blocks on a shared barrier
 /// until all 100 are in flight at once, so the run can only complete if
 /// the dispatcher genuinely executes them concurrently (any cap or

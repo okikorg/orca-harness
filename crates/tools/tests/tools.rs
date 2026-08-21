@@ -36,6 +36,24 @@ fn ctx() -> ToolContext {
     }
 }
 
+/// A rename mutates exactly two paths: it must key on both (serializing
+/// against writes to either path) instead of excluding the whole batch.
+#[test]
+fn rename_keys_on_both_paths_not_globally_exclusive() {
+    let (ws, dir) = temp_ws();
+    let rename = RenameFileTool::new(ws);
+    assert_eq!(
+        rename.concurrency(&json!({"from": "a.txt", "to": "b/c.txt"})),
+        orca_harness_core::Concurrency::Keys(vec!["file:a.txt".into(), "file:b/c.txt".into()])
+    );
+    // Malformed input still falls back to exclusive.
+    assert_eq!(
+        rename.concurrency(&json!({"from": "a.txt"})),
+        orca_harness_core::Concurrency::Serial
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn write_then_read_roundtrips() {
     let (ws, dir) = temp_ws();

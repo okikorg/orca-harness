@@ -28,6 +28,12 @@ pub enum Concurrency {
     /// Calls sharing a key are serialized in call order; unrelated calls
     /// continue concurrently.
     Keyed(String),
+    /// Like [`Keyed`](Concurrency::Keyed) but the call holds several keys
+    /// at once (e.g. a rename touching two paths): it serializes, in call
+    /// order, against every call sharing any of its keys. Chains bridged
+    /// by such a call merge into one; an empty key list means
+    /// [`Parallel`](Concurrency::Parallel).
+    Keys(Vec<String>),
 }
 
 /// Model-facing description of a tool. `parameters` is a JSON Schema.

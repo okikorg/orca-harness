@@ -379,9 +379,11 @@ impl Tool for PyKernelTool {
         }
     }
 
-    /// One kernel, one stdin: calls serialize in call order.
+    /// One kernel, one stdin: kernel calls serialize in call order — but
+    /// only against each other. Keyed (not Serial) so a slow exec never
+    /// stalls unrelated calls in the same batch.
     fn concurrency(&self, _input: &Value) -> Concurrency {
-        Concurrency::Serial
+        Concurrency::Keyed("pykernel".into())
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolError> {

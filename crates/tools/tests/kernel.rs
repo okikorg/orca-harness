@@ -92,10 +92,62 @@ async fn stderr_is_captured_in_order() {
     assert_eq!(out["output"].as_str().unwrap().trim(), "a\nb\nc");
 }
 
+/// One kernel, one stdin: kernel calls serialize against each other in
+/// call order — but only against each other, not the whole batch.
 #[test]
-fn kernel_calls_are_serial() {
+fn kernel_calls_are_keyed_not_globally_exclusive() {
     let k = PyKernelTool::new();
-    assert_eq!(k.concurrency(&json!({"code": "1"})), Concurrency::Serial);
+    assert_eq!(
+        k.concurrency(&json!({"code": "1"})),
+        Concurrency::Keyed("pykernel".into())
+    );
+}
+
+/// A slow kernel exec must not stall unrelated parallel calls: batch wall
+/// clock tracks max(kernel, shells), not their sum.
+#[tokio::test(flavor = "multi_thread")]
+async fn kernel_exec_overlaps_unrelated_tools_in_one_batch() {
+    require_python!();
+    use std::sync::Arc;
+
+    use orca_harness_core::testing::call;
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+    use orca_harness_tools::ShellTool;
+
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(PyKernelTool::new()));
+    tools.register(Arc::new(ShellTool::local()));
+
+    let batch = vec![
+        call(
+            "k",
+            "pykernel",
+            json!({"code": "import time\ntime.sleep(0.4)\nprint('k')"}),
+        ),
+        call("s0", "shell", json!({"command": "sleep 0.4"})),
+        call("s1", "shell", json!({"command": "sleep 0.4"})),
+    ];
+    let started = std::time::Instant::now();
+    let results = Dispatcher::new()
+        .execute(
+            batch,
+            &tools,
+            &ExtensionRegistry::new(),
+            &CancellationToken::new(),
+            None,
+            3,
+        )
+        .await
+        .unwrap();
+    let wall = started.elapsed();
+
+    for r in &results {
+        assert!(!r.is_error, "{} failed: {}", r.call_id, r.output);
+    }
+    assert!(
+        wall < std::time::Duration::from_millis(700),
+        "kernel must overlap the shells (~400ms), not exclude them (800ms+); took {wall:?}"
+    );
 }
 
 #[tokio::test]
