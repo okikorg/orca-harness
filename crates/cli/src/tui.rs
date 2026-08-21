@@ -3829,6 +3829,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         // A transcript taller than any viewport so scrolling has room.
         for i in 0..100 {
@@ -4494,6 +4495,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         app.prompt_queue.push_back("inspect the failure".into());
 
@@ -5202,6 +5204,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
@@ -5231,6 +5234,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
 
         let rows = rendered_rows(&mut app, 100, 24);
@@ -5266,6 +5270,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -5303,6 +5308,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         app.transcript.push(Line::from("final answer"));
 
@@ -5323,6 +5329,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -5353,6 +5360,7 @@ mod tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -5777,6 +5785,7 @@ mod theme_command_tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         })
     }
 
@@ -5847,6 +5856,7 @@ mod subagents_command_tests {
             provider: Provider::Local,
             subagent_depth: depth,
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         })
     }
 
@@ -5884,6 +5894,7 @@ mod extensions_command_tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         })
     }
 
@@ -6018,6 +6029,7 @@ mod nested_rail_tests {
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
         })
     }
 
