@@ -38,6 +38,8 @@ const EXPAND_MAX_LINES: usize = 200;
 const TRANSCRIPT_CAP: usize = 5000;
 const INSPECTOR_PREVIEW_LINES: usize = 240;
 const INSPECTOR_PREVIEW_CHARS: usize = 32 * 1024;
+const INSPECTOR_OUTPUT_HEAD: usize = 16;
+const INSPECTOR_OUTPUT_TAIL: usize = 6;
 const SCROLL_PAGE: usize = 10;
 const PALETTE_ROWS: usize = 8;
 const PICKER_ROWS: usize = 10;
@@ -2363,19 +2365,17 @@ fn tool_inspector_header_lines(tool: &ToolActivity) -> Vec<Line<'static>> {
 fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let inner = width.saturating_sub(4).max(16);
-    let mut lines = vec![Line::from(Span::styled("  INPUT", t.dim))];
-    let input =
-        serde_json::to_string_pretty(&tool.input).unwrap_or_else(|_| tool.input.to_string());
-    lines.extend(view::highlighted_code_lines(&input, "json", inner, "  "));
+    let mut lines = vec![Line::from(Span::styled("  › input", t.dim))];
+    append_inspector_input(&mut lines, tool, inner);
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  OUTPUT", t.dim)));
+    lines.push(Line::from(Span::styled("  · output", t.dim)));
     if let Some(output) = &tool.output {
         let language = inspector_output_language(tool, output);
-        let (expanded, omitted) = if language == Some("json") {
-            shallow_json_preview(output)
-        } else {
-            inspector_output_preview(&tool.tool_name, output)
-        };
+        if let Some(facts) = inspector_code_facts(tool, output, language) {
+            lines.push(Line::from(Span::styled(format!("  {facts}"), t.dim)));
+        }
+        let (expanded, omitted) =
+            inspector_output_preview(&tool.tool_name, output, language, tool.is_error);
         if tool.is_error {
             push_inspector_text(&mut lines, &expanded, inner, t.error);
         } else if let Some(language) = language {
@@ -2388,11 +2388,7 @@ fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'sta
         if omitted {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!(
-                    "  Preview limited to {} lines / {} KiB",
-                    INSPECTOR_PREVIEW_LINES,
-                    INSPECTOR_PREVIEW_CHARS / 1024
-                ),
+                "  More output omitted · /expand n shows the full result",
                 t.dim,
             )));
         }
@@ -2400,6 +2396,86 @@ fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'sta
         lines.push(Line::from(Span::styled("  Waiting for result", t.dim)));
     }
     lines
+}
+
+fn append_inspector_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
+    let path = tool.input.get("path").and_then(serde_json::Value::as_str);
+    let content = tool
+        .input
+        .get("content")
+        .and_then(serde_json::Value::as_str);
+    if let (Some(path), Some(content)) = (path, content) {
+        let language = language_for_path(path).unwrap_or("text");
+        let line_count = content.lines().count();
+        let line_label = if line_count == 1 { "line" } else { "lines" };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {path} · {language} · {line_count} {line_label} · {}",
+                inspector_size_label(content.len() as u64)
+            ),
+            theme().dim,
+        )));
+        let (preview, omitted) = limit_inspector_preview(content);
+        if language == "text" {
+            push_inspector_text(lines, &preview, width, Style::default());
+        } else {
+            lines.extend(view::highlighted_code_lines(
+                &preview, language, width, "  ",
+            ));
+        }
+        if omitted {
+            lines.push(Line::from(Span::styled(
+                "  More input omitted",
+                theme().dim,
+            )));
+        }
+        return;
+    }
+
+    let input =
+        serde_json::to_string_pretty(&tool.input).unwrap_or_else(|_| tool.input.to_string());
+    lines.extend(view::highlighted_code_lines(&input, "json", width, "  "));
+}
+
+fn inspector_code_facts(
+    tool: &ToolActivity,
+    output: &serde_json::Value,
+    language: Option<&str>,
+) -> Option<String> {
+    if tool.tool_name != "read_file" || tool.is_error {
+        return None;
+    }
+    let content = output.get("content")?.as_str()?;
+    let language = language?;
+    let lines = content.lines().count();
+    let bytes = output
+        .get("bytes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(content.len() as u64);
+    let truncated = output
+        .get("truncated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let range = match lines {
+        0 => "empty".to_owned(),
+        1 => "1 line".to_owned(),
+        count => format!("{count} lines"),
+    };
+    let suffix = if truncated { " · truncated" } else { "" };
+    Some(format!(
+        "{language} · {range} · {}{suffix}",
+        inspector_size_label(bytes)
+    ))
+}
+
+fn inspector_size_label(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn shallow_json_preview(output: &serde_json::Value) -> (String, bool) {
@@ -2445,9 +2521,225 @@ fn shallow_json_preview(output: &serde_json::Value) -> (String, bool) {
     (text, omitted || size_omitted)
 }
 
-fn inspector_output_preview(tool_name: &str, output: &serde_json::Value) -> (String, bool) {
-    let expanded = view::expand_output(tool_name, output).join("\n");
-    limit_inspector_preview(&expanded)
+fn inspector_output_preview(
+    tool_name: &str,
+    output: &serde_json::Value,
+    language: Option<&str>,
+    is_error: bool,
+) -> (String, bool) {
+    if is_error {
+        return (view::tool_result_summary(tool_name, output, true), false);
+    }
+    match classify_inspector_output(output, language) {
+        InspectorOutputKind::Execution => shell_inspector_preview(output),
+        InspectorOutputKind::Collection { field, label } => {
+            collection_inspector_preview(output, field, label)
+        }
+        InspectorOutputKind::Process => process_inspector_preview(output),
+        InspectorOutputKind::Mutation => mutation_inspector_preview(output),
+        InspectorOutputKind::Structured => shallow_json_preview(output),
+        InspectorOutputKind::Text => {
+            let expanded = inspector_text_content(output);
+            limit_inspector_preview(&expanded)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InspectorOutputKind {
+    Execution,
+    Collection {
+        field: &'static str,
+        label: &'static str,
+    },
+    Process,
+    Mutation,
+    Structured,
+    Text,
+}
+
+fn classify_inspector_output(
+    output: &serde_json::Value,
+    language: Option<&str>,
+) -> InspectorOutputKind {
+    if output.get("stdout").is_some() || output.get("stderr").is_some() {
+        InspectorOutputKind::Execution
+    } else if output
+        .get("entries")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        InspectorOutputKind::Collection {
+            field: "entries",
+            label: "entries",
+        }
+    } else if output
+        .get("matches")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        InspectorOutputKind::Collection {
+            field: "matches",
+            label: "matches",
+        }
+    } else if output
+        .get("processes")
+        .is_some_and(serde_json::Value::is_array)
+        || (output.get("id").is_some()
+            && (output.get("running").is_some() || output.get("output").is_some()))
+    {
+        InspectorOutputKind::Process
+    } else if output.get("bytesWritten").is_some() || output.get("replacements").is_some() {
+        InspectorOutputKind::Mutation
+    } else if output.is_string()
+        || output
+            .get("content")
+            .is_some_and(serde_json::Value::is_string)
+    {
+        InspectorOutputKind::Text
+    } else if language == Some("json") || output.is_object() || output.is_array() {
+        InspectorOutputKind::Structured
+    } else {
+        InspectorOutputKind::Text
+    }
+}
+
+fn inspector_text_content(output: &serde_json::Value) -> String {
+    output
+        .as_str()
+        .or_else(|| output.get("content").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .unwrap_or_else(|| output.to_string())
+}
+
+fn mutation_inspector_preview(output: &serde_json::Value) -> (String, bool) {
+    let path = output
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .map(|path| format!("{path} · "))
+        .unwrap_or_default();
+    if let Some(bytes) = output
+        .get("bytesWritten")
+        .and_then(serde_json::Value::as_u64)
+    {
+        return (
+            format!("{path}wrote {}", inspector_size_label(bytes)),
+            false,
+        );
+    }
+    if let Some(replacements) = output
+        .get("replacements")
+        .and_then(serde_json::Value::as_u64)
+    {
+        let label = if replacements == 1 {
+            "replacement"
+        } else {
+            "replacements"
+        };
+        return (format!("{path}{replacements} {label}"), false);
+    }
+    shallow_json_preview(output)
+}
+
+fn shell_inspector_preview(output: &serde_json::Value) -> (String, bool) {
+    let exit = output
+        .get("exitCode")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default();
+    let stdout = output
+        .get("stdout")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let stderr = output
+        .get("stderr")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let stdout_count = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    let stderr_count = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    let mut text = format!("exit {exit}");
+    if stdout_count > 0 {
+        text.push_str(&format!(" · {stdout_count} stdout"));
+    }
+    if stderr_count > 0 {
+        text.push_str(&format!(" · {stderr_count} stderr"));
+    }
+    let mut detail: Vec<&str> = stdout
+        .lines()
+        .chain(stderr.lines())
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    detail.dedup_by(|a, b| a.trim() == b.trim());
+    let (shown, omitted) = informative_line_window(&detail);
+    if !shown.is_empty() {
+        text.push('\n');
+        text.push_str(&shown.join("\n"));
+    }
+    let (text, size_omitted) = limit_inspector_preview(&text);
+    (text, omitted || size_omitted)
+}
+
+fn collection_inspector_preview(
+    output: &serde_json::Value,
+    field: &str,
+    label: &str,
+) -> (String, bool) {
+    let Some(items) = output.get(field).and_then(serde_json::Value::as_array) else {
+        return shallow_json_preview(output);
+    };
+    let values: Vec<String> = items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| item.to_string())
+        })
+        .collect();
+    let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+    let (shown, window_omitted) = informative_line_window(&refs);
+    let truncated = output
+        .get("truncated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let mut text = format!("{} {label}", items.len());
+    if !shown.is_empty() {
+        text.push('\n');
+        text.push_str(&shown.join("\n"));
+    }
+    (text, truncated || window_omitted)
+}
+
+fn process_inspector_preview(output: &serde_json::Value) -> (String, bool) {
+    let mut text = view::tool_result_summary("process", output, false);
+    let detail = output
+        .get("output")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let lines: Vec<&str> = detail
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let (shown, omitted) = informative_line_window(&lines);
+    if !shown.is_empty() {
+        text.push('\n');
+        text.push_str(&shown.join("\n"));
+    }
+    let (text, size_omitted) = limit_inspector_preview(&text);
+    (text, omitted || size_omitted)
+}
+
+fn informative_line_window<'a>(lines: &[&'a str]) -> (Vec<&'a str>, bool) {
+    let limit = INSPECTOR_OUTPUT_HEAD + INSPECTOR_OUTPUT_TAIL;
+    if lines.len() <= limit {
+        return (lines.to_vec(), false);
+    }
+    let mut shown = lines[..INSPECTOR_OUTPUT_HEAD].to_vec();
+    shown.extend_from_slice(&lines[lines.len() - INSPECTOR_OUTPUT_TAIL..]);
+    (shown, true)
 }
 
 fn limit_inspector_preview(expanded: &str) -> (String, bool) {
@@ -2479,32 +2771,16 @@ fn limit_inspector_preview(expanded: &str) -> (String, bool) {
     (preview, omitted)
 }
 
-fn inspector_output_language<'a>(
+fn inspector_output_language(
     tool: &ToolActivity,
-    output: &'a serde_json::Value,
-) -> Option<&'a str> {
+    output: &serde_json::Value,
+) -> Option<&'static str> {
     let path = tool
         .input
         .get("path")
         .or_else(|| tool.input.get("file_path"))
         .and_then(serde_json::Value::as_str);
-    if let Some(extension) = path.and_then(|path| Path::new(path).extension()?.to_str()) {
-        let language = match extension.to_ascii_lowercase().as_str() {
-            "rs" => "rust",
-            "js" | "jsx" => "javascript",
-            "ts" | "tsx" => "typescript",
-            "py" => "python",
-            "go" => "go",
-            "sh" | "bash" | "zsh" => "bash",
-            "json" => "json",
-            "toml" => "toml",
-            "yaml" | "yml" => "yaml",
-            "md" => "markdown",
-            "html" => "html",
-            "css" => "css",
-            "sql" => "sql",
-            _ => return None,
-        };
+    if let Some(language) = path.and_then(language_for_path) {
         return Some(language);
     }
     if (output.is_object() || output.is_array())
@@ -2516,6 +2792,26 @@ fn inspector_output_language<'a>(
         Some("json")
     } else {
         None
+    }
+}
+
+fn language_for_path(path: &str) -> Option<&'static str> {
+    let extension = Path::new(path).extension()?.to_str()?;
+    match extension.to_ascii_lowercase().as_str() {
+        "rs" => Some("rust"),
+        "js" | "jsx" => Some("javascript"),
+        "ts" | "tsx" => Some("typescript"),
+        "py" => Some("python"),
+        "go" => Some("go"),
+        "sh" | "bash" | "zsh" => Some("bash"),
+        "json" => Some("json"),
+        "toml" => Some("toml"),
+        "yaml" | "yml" => Some("yaml"),
+        "md" => Some("markdown"),
+        "html" => Some("html"),
+        "css" => Some("css"),
+        "sql" => Some("sql"),
+        _ => None,
     }
 }
 
@@ -3605,10 +3901,117 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        let (preview, omitted) = inspector_output_preview("read_file", &output);
+        let (preview, omitted) = inspector_output_preview("read_file", &output, None, false);
         assert!(omitted);
         assert!(preview.len() <= INSPECTOR_PREVIEW_CHARS);
         assert!(preview.lines().count() <= INSPECTOR_PREVIEW_LINES);
+    }
+
+    #[test]
+    fn inspector_shell_output_leads_with_signal_and_keeps_the_tail() {
+        let stdout = (0..40)
+            .map(|line| format!("build line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let output = serde_json::json!({
+            "stdout": stdout,
+            "stderr": "",
+            "exitCode": 0,
+            "success": true
+        });
+        let (preview, omitted) = inspector_output_preview("shell", &output, None, false);
+        assert!(preview.starts_with("exit 0 · 40 stdout\n"));
+        assert!(preview.contains("build line 0"));
+        assert!(preview.contains("build line 39"));
+        assert!(!preview.contains("build line 20"));
+        assert!(omitted);
+    }
+
+    #[test]
+    fn inspector_collection_output_shows_count_without_json_scaffolding() {
+        let output = serde_json::json!({
+            "query": "ToolActivity",
+            "matches": ["src/tui.rs:181", "src/tui.rs:1861"],
+            "truncated": false
+        });
+        let (preview, omitted) = inspector_output_preview("grep", &output, Some("json"), false);
+        assert_eq!(preview, "2 matches\nsrc/tui.rs:181\nsrc/tui.rs:1861");
+        assert!(!omitted);
+    }
+
+    #[test]
+    fn inspector_classifies_results_by_shape_not_tool_name() {
+        let execution = serde_json::json!({
+            "stdout": "compiled",
+            "stderr": "",
+            "exitCode": 0
+        });
+        let (preview, _) = inspector_output_preview("custom_runner", &execution, None, false);
+        assert_eq!(preview, "exit 0 · 1 stdout\ncompiled");
+
+        let mutation = serde_json::json!({"path": "src/lib.rs", "bytesWritten": 2048});
+        let (preview, _) = inspector_output_preview("custom_writer", &mutation, None, false);
+        assert_eq!(preview, "src/lib.rs · wrote 2.0 KiB");
+    }
+
+    #[test]
+    fn inspector_json_source_renders_content_instead_of_its_envelope() {
+        let output = serde_json::json!({
+            "content": "{\n  \"name\": \"orca\"\n}",
+            "bytes": 20,
+            "truncated": false
+        });
+        let (preview, omitted) = inspector_output_preview("anything", &output, Some("json"), false);
+        assert_eq!(preview, "{\n  \"name\": \"orca\"\n}");
+        assert!(!omitted);
+    }
+
+    #[test]
+    fn inspector_source_output_reports_language_shape_and_size() {
+        let tool = ToolActivity {
+            call_id: "read-1".into(),
+            call_line: "read_file src/main.rs".into(),
+            tool_name: "read_file".into(),
+            input: serde_json::json!({"path": "src/main.rs"}),
+            started: Instant::now(),
+            elapsed: Some(Duration::from_millis(1)),
+            output: None,
+            is_error: false,
+            approval: None,
+        };
+        let output = serde_json::json!({
+            "content": "fn main() {\n    println!(\"orca\");\n}\n",
+            "bytes": 2048,
+            "truncated": false
+        });
+        assert_eq!(
+            inspector_code_facts(&tool, &output, Some("rust")).as_deref(),
+            Some("rust · 3 lines · 2.0 KiB")
+        );
+    }
+
+    #[test]
+    fn inspector_write_input_renders_source_instead_of_escaped_json() {
+        let tool = ToolActivity {
+            call_id: "write-1".into(),
+            call_line: "write_file README.md".into(),
+            tool_name: "write_file".into(),
+            input: serde_json::json!({
+                "path": "README.md",
+                "content": "# Orca\n\n    indented code\n"
+            }),
+            started: Instant::now(),
+            elapsed: Some(Duration::from_millis(1)),
+            output: Some(serde_json::json!({"path": "README.md", "bytesWritten": 26})),
+            is_error: false,
+            approval: None,
+        };
+        let inspector = flat_lines(&tool_inspector_lines(&tool, 80));
+        assert!(inspector.contains("README.md · markdown · 3 lines · 26 B"));
+        assert!(inspector.contains("# Orca"));
+        assert!(inspector.contains("    indented code"));
+        assert!(!inspector.contains("\\n"));
+        assert!(inspector.contains("README.md · wrote 26 B"));
     }
 
     #[test]

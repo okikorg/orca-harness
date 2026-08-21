@@ -463,13 +463,13 @@ pub fn highlighted_code_lines(
         source
             .lines()
             .flat_map(|raw| {
-                textwrap::wrap(raw, code_width)
+                wrap_styled_verbatim(&[(raw.to_owned(), fallback_style)], code_width)
                     .into_iter()
-                    .map(|part| {
-                        Line::from(vec![
-                            Span::styled(format!("{indent}│ "), selected_theme.dim),
-                            Span::styled(part.into_owned(), fallback_style),
-                        ])
+                    .map(|wrapped| {
+                        let mut spans =
+                            vec![Span::styled(format!("{indent}│ "), selected_theme.dim)];
+                        spans.extend(wrapped);
+                        Line::from(spans)
                     })
                     .collect::<Vec<_>>()
             })
@@ -505,13 +505,44 @@ pub fn highlighted_code_lines(
                 Err(_) => segments.push((content.to_string(), fallback_style)),
             }
         }
-        for wrapped in wrap_styled(&segments, code_width) {
+        for wrapped in wrap_styled_verbatim(&segments, code_width) {
             let mut spans = vec![Span::styled(format!("{indent}│ "), selected_theme.dim)];
             spans.extend(wrapped);
             output.push(Line::from(spans));
         }
     }
     output
+}
+
+/// Hard-wrap styled code without collapsing leading or repeated whitespace.
+fn wrap_styled_verbatim(segments: &[(String, Style)], width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    let mut lines = vec![Vec::new()];
+    let mut current_len = 0usize;
+    for (text, style) in segments {
+        let mut chunk = String::new();
+        for character in text.chars() {
+            if current_len == width {
+                if !chunk.is_empty() {
+                    lines
+                        .last_mut()
+                        .expect("one line exists")
+                        .push(Span::styled(std::mem::take(&mut chunk), *style));
+                }
+                lines.push(Vec::new());
+                current_len = 0;
+            }
+            chunk.push(character);
+            current_len += 1;
+        }
+        if !chunk.is_empty() {
+            lines
+                .last_mut()
+                .expect("one line exists")
+                .push(Span::styled(chunk, *style));
+        }
+    }
+    lines
 }
 
 fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
@@ -1271,6 +1302,20 @@ mod tests {
             .flat_map(|line| line.spans.iter().filter_map(|span| span.style.fg))
             .collect();
         assert!(colors.len() > 1, "syntax colors applied: {lines:?}");
+    }
+
+    #[test]
+    fn inspector_code_preserves_indentation_and_blank_lines() {
+        set_theme(ThemeName::Default);
+        let source = "fn main() {\n    if ready {\n        run();\n    }\n\n    finish();\n}";
+        let rendered = highlighted_code_lines(source, "rust", 80, "  ")
+            .iter()
+            .map(flat)
+            .collect::<Vec<_>>();
+        assert_eq!(rendered[1], "  │     if ready {");
+        assert_eq!(rendered[2], "  │         run();");
+        assert_eq!(rendered[4], "  │ ");
+        assert_eq!(rendered[5], "  │     finish();");
     }
 
     #[test]
