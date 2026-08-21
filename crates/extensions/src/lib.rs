@@ -41,6 +41,7 @@ mod events;
 mod policy;
 mod read_tool_result;
 mod retry;
+mod session;
 mod truncation;
 mod usage;
 
@@ -49,5 +50,9 @@ pub use events::{EventSink, EventStream, HarnessEvent};
 pub use policy::{PolicyOutcome, PolicyRule, ToolPolicy};
 pub use read_tool_result::ReadToolResultTool;
 pub use retry::{RetryModel, ToolRetry};
+pub use session::{
+    new_session_id, workspace_key, LoadedSession, SessionError, SessionFile, SessionHandler,
+    SessionMeta, SESSION_FORMAT_VERSION,
+};
 pub use truncation::{Truncation, TruncationStore};
 pub use usage::{UsageHandle, UsageMeter};
