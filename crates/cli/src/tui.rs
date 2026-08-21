@@ -1000,7 +1000,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             PickerEvent::Action { key: 'd', row } => {
                 let session = &sessions[row];
                 if current_session.as_deref() == Some(session.meta.id.as_str()) {
-                    After::Note("the active session cannot be deleted (use /clear first)".into())
+                    After::Note(
+                        "the active session cannot be deleted (use /clear to empty it)".into(),
+                    )
                 } else {
                     match std::fs::remove_file(&session.path) {
                         Ok(()) => {
@@ -1705,7 +1707,7 @@ fn slash_command(
             for entry in [
                 "/help        show this help",
                 "/expand [n]  full output of the n-th latest tool call (1 = latest)",
-                "/clear       reset the conversation, start a new session, stop background work",
+                "/clear       reset the conversation, empty the session, stop background work",
                 "/compact     compact the conversation (elide tool outputs, capped summary)",
                 "/usage       session token totals, cache traffic, and context occupancy",
                 "/sessions [id] resume a recorded session (no argument opens the picker)",
@@ -1829,10 +1831,10 @@ fn handle_ui_msg(
         UiMsg::Notice(text) => {
             app.push_line(Line::from(Span::styled(text, theme().dim)));
         }
-        UiMsg::SessionStarted { id } => {
+        UiMsg::SessionCleared { id } => {
             app.cfg.session_id = Some(id.clone());
             app.push_line(Line::from(Span::styled(
-                format!("new session {id} · background work stopped"),
+                format!("session {id} cleared · background work stopped"),
                 theme().dim,
             )));
         }

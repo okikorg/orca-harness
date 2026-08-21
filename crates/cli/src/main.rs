@@ -436,13 +436,17 @@ async fn worker<F>(
                 context = Context::new();
                 context.push_system(&system);
                 if let Some(session) = &session {
-                    match session.start_new() {
-                        Ok(id) => {
-                            let _ = ui.send(UiMsg::SessionStarted { id });
+                    // Same session, emptied in place: /clear does not
+                    // litter the sessions directory with rotations.
+                    match session.reset() {
+                        Ok(()) => {
+                            let _ = ui.send(UiMsg::SessionCleared {
+                                id: session.session_id(),
+                            });
                         }
                         Err(err) => {
                             let _ =
-                                ui.send(UiMsg::Notice(format!("session file not rotated: {err}")));
+                                ui.send(UiMsg::Notice(format!("session file not cleared: {err}")));
                         }
                     }
                 }

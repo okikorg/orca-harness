@@ -117,8 +117,8 @@ pub enum UiMsg {
         id: String,
         messages: Vec<orca_harness_core::Message>,
     },
-    /// /clear rotated to a fresh session file with this id.
-    SessionStarted {
+    /// /clear emptied the current session file in place.
+    SessionCleared {
         id: String,
     },
     /// The active model's context window, discovered from the endpoint.

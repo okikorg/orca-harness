@@ -19,7 +19,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "clear",
-        description: "reset the conversation, start a new session, and stop background work",
+        description: "reset the conversation, empty the session, and stop background work",
         category: "Session",
         takes_args: false,
     },

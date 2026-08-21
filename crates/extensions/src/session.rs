@@ -216,7 +216,8 @@ struct Recorder {
 
 /// Records the transcript as the run progresses. Registered as an
 /// Extension; hosts also drive it directly (`sync` after post-run
-/// repairs, `start_new` for /clear, `switch_to` for /sessions).
+/// repairs, `reset` for /clear, `switch_to` for /sessions, and
+/// `start_new` for hosts that prefer rotation over in-place clears).
 pub struct SessionHandler {
     inner: Mutex<Recorder>,
     warn: Box<dyn Fn(&str) + Send + Sync>,
@@ -290,6 +291,18 @@ impl SessionHandler {
         rec.cursor = 0;
         rec.disabled = false;
         Ok(rec.meta.id.clone())
+    }
+
+    /// Empty the current session in place (used by /clear): the file is
+    /// truncated back to its header — same id, same path — and
+    /// recording restarts from zero.
+    pub fn reset(&self) -> std::io::Result<()> {
+        let mut rec = self.inner.lock().unwrap();
+        let file = rewrite(&rec.path, &rec.meta, &[])?;
+        rec.file = file;
+        rec.cursor = 0;
+        rec.disabled = false;
+        Ok(())
     }
 
     /// Switch recording to a previously recorded session (used by
@@ -694,6 +707,34 @@ mod tests {
         let second = SessionFile::load(&handler.path()).unwrap();
         assert_eq!(second.context.messages().len(), 1);
         assert_eq!(SessionFile::list(&dir).len(), 2);
+    }
+
+    #[test]
+    fn reset_empties_the_session_in_place() {
+        let dir = temp_dir("reset");
+        let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+        let id = handler.session_id();
+        let path = handler.path();
+        let mut context = Context::new();
+        context.push_system("sys");
+        context.push_user("hi");
+        handler.sync(&context);
+
+        handler.reset().unwrap();
+        assert_eq!(handler.session_id(), id, "same session id");
+        assert_eq!(handler.path(), path, "same file");
+        let loaded = SessionFile::load(&path).unwrap();
+        assert_eq!(loaded.context.messages().len(), 0);
+
+        // Recording restarts from zero on the same file.
+        let mut fresh = Context::new();
+        fresh.push_system("sys2");
+        handler.sync(&fresh);
+        assert_eq!(
+            SessionFile::load(&path).unwrap().context.messages().len(),
+            1
+        );
+        assert_eq!(SessionFile::list(&dir).len(), 1, "no new file");
     }
 
     #[test]
