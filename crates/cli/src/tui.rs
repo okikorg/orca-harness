@@ -1570,6 +1570,72 @@ fn slash_command(
             return;
         }
     }
+    if let Some(rest) = command.strip_prefix("sessions") {
+        let arg = rest.trim();
+        let Some(base) = crate::config::sessions_dir() else {
+            app.push_line(Line::from(Span::styled(
+                "no home directory for session storage",
+                theme().error,
+            )));
+            return;
+        };
+        let dir = base.join(orca_harness_extensions::workspace_key(&app.cfg.workspace_root));
+        let sessions = orca_harness_extensions::SessionFile::list(&dir);
+        if arg.is_empty() {
+            if sessions.is_empty() {
+                app.push_line(Line::from(Span::styled(
+                    "no recorded sessions for this workspace",
+                    dim,
+                )));
+                return;
+            }
+            for session in sessions.iter().take(20) {
+                let current = app.cfg.session_id.as_deref() == Some(session.meta.id.as_str());
+                let marker = if current { "  (current)" } else { "" };
+                app.push_line(Line::from(Span::styled(
+                    format!(
+                        "{}  {}  {}{marker}",
+                        session.meta.id,
+                        age_label(session.meta.created_at),
+                        session.meta.model,
+                    ),
+                    dim,
+                )));
+            }
+            app.push_line(Line::from(Span::styled(
+                "/sessions <id> resumes one (a unique prefix works)",
+                dim,
+            )));
+            return;
+        }
+        match sessions.iter().find(|s| s.meta.id.starts_with(arg)) {
+            Some(session) => {
+                if worker
+                    .send(WorkerCmd::LoadSession {
+                        path: session.path.clone(),
+                    })
+                    .is_err()
+                {
+                    app.push_line(Line::from(Span::styled(
+                        "worker is gone; restart orcacode",
+                        theme().error,
+                    )));
+                } else {
+                    app.push_line(Line::from(Span::styled(
+                        format!("loading session {}…", session.meta.id),
+                        dim,
+                    )));
+                }
+            }
+            None => {
+                app.push_line(Line::from(Span::styled(
+                    format!("no session matching {arg} — /sessions lists them"),
+                    theme().error,
+                )));
+            }
+        }
+        return;
+    }
     if let Some(rest) = command.strip_prefix("theme") {
         let arg = rest.trim();
         if arg.is_empty() {
@@ -1635,6 +1701,7 @@ fn slash_command(
                 "/clear       reset the conversation context",
                 "/compact     compact the conversation (elide tool outputs, capped summary)",
                 "/usage       session token totals, cache traffic, and context occupancy",
+                "/sessions [id] list recorded sessions, or resume one",
                 "/queue [clear] show or clear waiting prompts",
                 "/models [f]  pick a model from the endpoint's catalog",
                 "/provider    switch provider (openrouter, openai, local)",

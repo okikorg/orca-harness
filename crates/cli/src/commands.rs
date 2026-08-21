@@ -89,6 +89,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         category: "General",
         takes_args: false,
     },
+    CommandSpec {
+        name: "sessions",
+        description: "list recorded sessions for this workspace, or resume one by id",
+        category: "Session",
+        takes_args: true,
+    },
 ];
 
 /// Filter the registry against what the user typed after `/`. Only the
@@ -154,7 +160,8 @@ mod tests {
                 "subagents",
                 "usage",
                 "theme",
-                "settings"
+                "settings",
+                "sessions"
             ]
         );
     }
