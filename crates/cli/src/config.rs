@@ -42,6 +42,12 @@ pub fn config_path() -> Option<PathBuf> {
     Some(dir.join("config.json"))
 }
 
+/// The sessions directory, or `None` when no home directory is
+/// resolvable. Sessions live next to the config file.
+pub fn sessions_dir() -> Option<PathBuf> {
+    Some(config_path()?.parent()?.join("sessions"))
+}
+
 /// The saved API key for a provider label, ignoring blank values.
 pub fn stored_key(provider: &str) -> Option<String> {
     stored_str(Some("api_keys"), provider)

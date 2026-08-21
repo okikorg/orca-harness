@@ -20,7 +20,8 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Limits, Message, Model, ToolResult};
 use orca_harness_extensions::{
-    compact, CompactConfig, EventStream, ReadToolResultTool, Truncation, TruncationStore,
+    compact, workspace_key, CompactConfig, EventStream, ReadToolResultTool, SessionFile,
+    SessionHandler, Truncation, TruncationStore,
 };
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
@@ -58,6 +59,9 @@ OPTIONS:
                      default 1; /subagents adjusts it live in the TUI)
   --theme NAME       theme: default, mono, dracula,
                      solarized-dark, one-dark, monokai, nord
+  --continue         resume the latest recorded session for this workspace
+  --resume ID        resume a recorded session by id (a unique prefix works)
+  --no-session       do not record this session to disk
   --json             headless: emit NDJSON harness events on stdout
   --auto-approve     headless: allow shell/write/edit without approval
   -p, --prompt TEXT  headless prompt
@@ -71,6 +75,8 @@ last model picked per provider are saved to
 environment variables above always win over the saved values.
 Approval prompts accept y (once), a (always, this session), A (always,
 saved for this workspace only; revoke in /settings), and n (deny).
+Sessions are recorded under ~/.config/orcacode/sessions/ per workspace;
+/sessions in the TUI lists and resumes them.
 ";
 
 #[derive(Clone)]
@@ -87,6 +93,9 @@ pub struct Config {
     pub auto_approve: bool,
     pub max_steps: u32,
     pub subagent_depth: u32,
+    pub continue_latest: bool,
+    pub resume_id: Option<String>,
+    pub no_session: bool,
     pub theme: String,
 }
 
@@ -115,6 +124,9 @@ fn parse_args() -> Result<Config, String> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
+    let mut continue_latest = false;
+    let mut resume_id: Option<String> = None;
+    let mut no_session = false;
     let mut theme = std::env::var("ORCA_THEME").ok();
 
     let mut args = std::env::args().skip(1);
@@ -142,6 +154,9 @@ fn parse_args() -> Result<Config, String> {
                     .map_err(|_| "--subagent-depth expects a number".to_string())?
             }
             "--theme" => theme = Some(value("--theme")?),
+            "--continue" => continue_latest = true,
+            "--resume" => resume_id = Some(value("--resume")?),
+            "--no-session" => no_session = true,
             "--json" => json = true,
             "--auto-approve" => auto_approve = true,
             "-p" | "--prompt" => prompt = Some(value("-p")?),
@@ -207,6 +222,9 @@ fn parse_args() -> Result<Config, String> {
         auto_approve,
         max_steps,
         subagent_depth,
+        continue_latest,
+        resume_id,
+        no_session,
         theme,
     })
 }
@@ -558,6 +576,36 @@ async fn main() -> ExitCode {
     }
 
     run_mode(cfg).await
+}
+
+/// Create a fresh session file, or resume one when --continue/--resume
+/// asked. Errors are fatal at startup: recording (or the requested
+/// resume) cannot happen, and silently running without it would lose
+/// the transcript the user asked to keep.
+fn open_session(cfg: &Config, ws: &Workspace) -> Result<(SessionHandler, Option<Context>), String> {
+    let base = config::sessions_dir().ok_or("no home directory for session storage")?;
+    let scope = workspace_scope(ws);
+    let dir = base.join(workspace_key(&scope));
+    if cfg.continue_latest || cfg.resume_id.is_some() {
+        let sessions = SessionFile::list(&dir);
+        let picked = match &cfg.resume_id {
+            Some(id) => sessions
+                .into_iter()
+                .find(|s| s.meta.id.starts_with(id.as_str())),
+            None => sessions.into_iter().next(),
+        };
+        let picked =
+            picked.ok_or_else(|| format!("no session to resume under {}", dir.display()))?;
+        let (handler, loaded) = SessionHandler::resume(&picked.path).map_err(|e| e.to_string())?;
+        for warning in &loaded.warnings {
+            eprintln!("warning: {warning}");
+        }
+        Ok((handler, Some(loaded.context)))
+    } else {
+        let handler =
+            SessionHandler::create(&dir, &scope, &cfg.model).map_err(|e| e.to_string())?;
+        Ok((handler, None))
+    }
 }
 
 /// Headless or interactive. The endpoint (provider, base url, key, model)
