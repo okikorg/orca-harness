@@ -1808,9 +1808,10 @@ fn handle_ui_msg(
             reset_conversation_ui(app);
             app.cfg.session_id = Some(id.clone());
             app.push_line(Line::from(Span::styled(
-                format!("resumed session {id} ({messages} messages)"),
+                format!("resumed session {id} ({} messages)", messages.len()),
                 theme().dim,
             )));
+            replay_transcript(app, &messages, width);
         }
         UiMsg::ProviderChanged { provider, model } => {
             app.cfg.provider = provider;
@@ -3505,6 +3506,60 @@ fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
         ]));
     }
     lines
+}
+
+/// Re-render a recorded transcript into the UI: user turns carry the
+/// spine, assistant text lands as markdown, and tool activity collapses
+/// to the dim call/result summaries. The live activity rail is not
+/// reconstructed — replay is a readable history, not a re-run.
+fn replay_transcript(app: &mut App, messages: &[orca_harness_core::Message], width: usize) {
+    use orca_harness_core::Message;
+    for message in messages {
+        match message {
+            Message::System { .. } => {}
+            Message::User { content } => {
+                app.push_line(Line::from(""));
+                app.push_wrapped(content, "┃ ", theme().strong, width);
+                app.turn_count += 1;
+            }
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
+                if let Some(text) = content {
+                    if !text.trim().is_empty() {
+                        app.push_markdown_block(text, width, BlockSpacing::Section);
+                    }
+                }
+                for call in tool_calls {
+                    let line = format!("• {}", view::tool_call_line(&call.name, &call.arguments));
+                    app.push_line(Line::from(Span::styled(
+                        view::truncate_line(&line, width),
+                        theme().dim,
+                    )));
+                }
+            }
+            Message::Tool { results } => {
+                for result in results {
+                    let line = format!(
+                        "  {}",
+                        view::tool_result_summary(
+                            &result.tool_name,
+                            &result.output,
+                            result.is_error
+                        )
+                    );
+                    app.push_line(Line::from(Span::styled(
+                        view::truncate_line(&line, width),
+                        theme().dim,
+                    )));
+                }
+            }
+        }
+    }
+    // Replay is history, not a live model phase: the next real turn
+    // starts with a clean vertical rhythm.
+    app.assistant_started = false;
 }
 
 /// Reset every piece of per-conversation UI state. Used by /clear and
@@ -6095,6 +6150,55 @@ mod extensions_command_tests {
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         handle_overlay_key(&mut app, esc, &worker);
         assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_loaded_replays_the_transcript() {
+        let mut app = ext_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let call = orca_harness_core::ToolCall {
+            id: "c1".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"command": "ls"}),
+        };
+        let messages = vec![
+            orca_harness_core::Message::System {
+                content: "sys".into(),
+            },
+            orca_harness_core::Message::User {
+                content: "first prompt".into(),
+            },
+            orca_harness_core::Message::Assistant {
+                content: None,
+                tool_calls: vec![call.clone()],
+            },
+            orca_harness_core::Message::Tool {
+                results: vec![orca_harness_core::ToolResult::ok(
+                    &call,
+                    serde_json::json!({"stdout": "a\n", "success": true}),
+                )],
+            },
+            orca_harness_core::Message::Assistant {
+                content: Some("the answer".into()),
+                tool_calls: vec![],
+            },
+        ];
+        handle_ui_msg(
+            &mut app,
+            UiMsg::SessionLoaded {
+                id: "s1".into(),
+                messages,
+            },
+            &worker,
+            80,
+        );
+
+        assert_eq!(app.cfg.session_id.as_deref(), Some("s1"));
+        let text = printed(&app);
+        assert!(text.contains("resumed session s1 (5 messages)"), "{text}");
+        assert!(text.contains("┃ first prompt"), "spine replayed: {text}");
+        assert!(text.contains("shell"), "tool call replayed: {text}");
+        assert!(text.contains("the answer"), "answer replayed: {text}");
     }
 }
 

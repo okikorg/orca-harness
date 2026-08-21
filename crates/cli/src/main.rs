@@ -476,7 +476,7 @@ async fn worker<F>(
                         context = loaded.context;
                         let _ = ui.send(UiMsg::SessionLoaded {
                             id: loaded.meta.id,
-                            messages: context.messages().len(),
+                            messages: context.messages().to_vec(),
                         });
                     }
                     Err(err) => {
@@ -705,12 +705,13 @@ async fn run_mode(cfg: Config) -> ExitCode {
     };
     let context = match resumed {
         // A recorded transcript already begins with its system prompt.
+        // SessionLoaded replays it into the transcript once the TUI
+        // starts draining the channel.
         Some(context) => {
-            let _ = ui_tx.send(UiMsg::Notice(format!(
-                "resumed session {} ({} messages)",
-                session.as_ref().map(|s| s.session_id()).unwrap_or_default(),
-                context.messages().len()
-            )));
+            let _ = ui_tx.send(UiMsg::SessionLoaded {
+                id: session.as_ref().map(|s| s.session_id()).unwrap_or_default(),
+                messages: context.messages().to_vec(),
+            });
             context
         }
         None => {

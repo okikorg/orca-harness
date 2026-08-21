@@ -111,10 +111,11 @@ pub enum UiMsg {
     /// A one-line status notice for the transcript (session warnings,
     /// load failures).
     Notice(String),
-    /// The worker adopted a previously recorded session.
+    /// The worker adopted a previously recorded session; the transcript
+    /// is replayed into the UI.
     SessionLoaded {
         id: String,
-        messages: usize,
+        messages: Vec<orca_harness_core::Message>,
     },
     /// /clear rotated to a fresh session file with this id.
     SessionStarted {
