@@ -67,9 +67,9 @@ and matches the NDJSON precedent in `events.rs`.
 
 ### Extension behavior
 
-Subscriptions: `before_model`, `after_model`, `on_agent_end` only. The
-handler keeps a cursor — the count of messages already persisted —
-behind a `Mutex`.
+Subscriptions: `before_model` and `on_agent_end` only. The handler
+keeps a cursor — the count of messages already persisted — behind a
+`Mutex`.
 
 On each hook, compare `context.messages().len()` to the cursor:
 
@@ -80,9 +80,11 @@ On each hook, compare `context.messages().len()` to the cursor:
 - `len == cursor`: no-op.
 
 Hook coverage: `before_model` catches the user prompt and prior tool
-results (both are in the context before the model call); `after_model`
-catches assistant turns; `on_agent_end` is the final flush and also
-covers `Agent::run` paths that end without a further model call.
+results (both are in the context before the model call).
+`after_model` is not used: the kernel runs it before the assistant
+message is pushed to the context (`agent_loop.rs`), so there is never
+anything new to record there; the next `before_model` or the final
+`on_agent_end` catches assistant turns.
 
 ### Resume
 

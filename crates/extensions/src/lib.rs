@@ -14,6 +14,8 @@
 //! - [`ToolRetry`] / [`RetryModel`] — retry failing tools (an extension)
 //!   and transient model errors (a `Model` decorator).
 //! - [`UsageMeter`] — accumulate self-reported token usage across a run.
+//! - [`SessionHandler`] — record the transcript to an append-only JSONL
+//!   file and resume it later; durable memory as an Extension concern.
 //!
 //! Each subscribes only to the hooks it needs, so registering one it does
 //! not use costs nothing on the kernel's hot path.
