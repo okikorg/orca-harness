@@ -758,6 +758,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_agent<M: Model + Clone + 'static>(
     model: M,
     cfg: &Config,

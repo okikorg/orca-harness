@@ -112,7 +112,10 @@ pub enum UiMsg {
     /// load failures).
     Notice(String),
     /// The worker adopted a previously recorded session.
-    SessionLoaded { id: String, messages: usize },
+    SessionLoaded {
+        id: String,
+        messages: usize,
+    },
     /// The active model's context window, discovered from the endpoint.
     ContextWindow(Option<u64>),
     /// The worker switched provider and reset the model to its default.

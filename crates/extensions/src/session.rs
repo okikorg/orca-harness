@@ -60,7 +60,11 @@ static SESSION_SEQ: AtomicU32 = AtomicU32::new(0);
 /// with pid and a process-local sequence to break same-second ties.
 pub fn new_session_id() -> String {
     let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("{:010}-{:05x}-{seq}", unix_now(), std::process::id() & 0xf_ffff)
+    format!(
+        "{:010}-{:05x}-{seq}",
+        unix_now(),
+        std::process::id() & 0xf_ffff
+    )
 }
 
 /// A filesystem-safe directory name for a workspace path: a readable
@@ -219,11 +223,7 @@ pub struct SessionHandler {
 }
 
 impl SessionHandler {
-    pub fn create(
-        dir: impl Into<PathBuf>,
-        workspace: &str,
-        model: &str,
-    ) -> std::io::Result<Self> {
+    pub fn create(dir: impl Into<PathBuf>, workspace: &str, model: &str) -> std::io::Result<Self> {
         let dir = dir.into();
         let meta = SessionMeta {
             v: SESSION_FORMAT_VERSION,
@@ -375,7 +375,10 @@ impl Extension for SessionHandler {
 fn open_new(dir: &Path, meta: &SessionMeta) -> std::io::Result<(PathBuf, File)> {
     fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.jsonl", meta.id));
-    let mut file = OpenOptions::new().create_new(true).append(true).open(&path)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .append(true)
+        .open(&path)?;
     write_header(&mut file, meta)?;
     Ok((path, file))
 }

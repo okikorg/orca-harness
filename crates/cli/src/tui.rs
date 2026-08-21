@@ -1579,7 +1579,9 @@ fn slash_command(
             )));
             return;
         };
-        let dir = base.join(orca_harness_extensions::workspace_key(&app.cfg.workspace_root));
+        let dir = base.join(orca_harness_extensions::workspace_key(
+            &app.cfg.workspace_root,
+        ));
         let sessions = orca_harness_extensions::SessionFile::list(&dir);
         if arg.is_empty() {
             if sessions.is_empty() {

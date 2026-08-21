@@ -56,7 +56,9 @@ orca-harness/
 │   │                     # for swapping the search backend)
 │   ├── extensions/       # critical extensions: event stream, tool
 │   │                     # policy, truncation (+ store paired with the
-│   │                     # read_tool_result tool), retry, usage metering
+│   │                     # read_tool_result tool), retry, usage metering,
+│   │                     # session recording/resume (JSONL transcripts,
+│   │                     # --continue / --resume / /sessions)
 │   └── cli/              # `orcacode`: interactive terminal host (streaming
 │                         # REPL, tool approvals, headless mode)
 ```
@@ -91,7 +93,10 @@ from `/settings`. Prompts submitted during a run wait in a FIFO rail
 above the activity indicator and start automatically in submission order;
 `/queue clear` discards the waiting prompts. Esc cancels in-flight runs
 (killing spawned subprocesses) and pauses the queue, and the conversation
-persists across turns. `ORCA_MODEL`,
+persists across turns. Sessions are recorded per workspace under
+`~/.config/orcacode/sessions/` as append-only JSONL; `--continue` resumes
+the latest, `--resume <id>` a specific one, `/sessions` lists and resumes
+them from the TUI, and `--no-session` opts out. `ORCA_MODEL`,
 `ORCA_BASE_URL`, and
 `OPENAI_API_KEY` (or `--model`, `--base-url`, `--api-key`) select the
 endpoint. API keys entered in the TUI, the active provider, the theme, and

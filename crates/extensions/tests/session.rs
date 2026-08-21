@@ -59,7 +59,11 @@ async fn records_a_tool_round_and_resumes_it() {
     let sessions = SessionFile::list(&dir);
     assert_eq!(sessions.len(), 1);
     let loaded = SessionFile::load(&sessions[0].path).unwrap();
-    assert!(loaded.warnings.is_empty(), "warnings: {:?}", loaded.warnings);
+    assert!(
+        loaded.warnings.is_empty(),
+        "warnings: {:?}",
+        loaded.warnings
+    );
     assert_eq!(
         serde_json::to_string(loaded.context.messages()).unwrap(),
         serde_json::to_string(context.messages()).unwrap(),
