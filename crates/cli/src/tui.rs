@@ -5,8 +5,9 @@
 //! scroll the in-app transcript buffer.
 
 use std::collections::VecDeque;
+use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -61,6 +62,9 @@ pub struct TuiConfig {
     pub stats: orca_harness_tools::BackgroundStats,
     /// The recording session's id, if recording; `/sessions` marks it.
     pub session_id: Option<String>,
+    /// Shared handle onto the connected MCP servers; `/mcp` reads each
+    /// one's tool count and connection error from it.
+    pub mcp: crate::mcp::McpServers,
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
@@ -69,6 +73,42 @@ struct ModelPicker {
     models: Vec<ModelInfo>,
     filter: String,
     index: usize,
+}
+
+/// Workspace-relative file and directory inserted into the composer by
+/// the `@` mention picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocationEntry {
+    path: String,
+    directory: bool,
+}
+
+struct LocationPicker {
+    entries: Vec<LocationEntry>,
+    query: String,
+    /// Character offset of the `@` that opened this picker.
+    token_start: usize,
+    picker: ListPicker,
+}
+
+impl LocationPicker {
+    fn filtered(&self) -> Vec<&LocationEntry> {
+        let needle = self.query.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|entry| needle.is_empty() || entry.path.to_lowercase().contains(&needle))
+            .take(PICKER_ROWS)
+            .collect()
+    }
+
+    fn selected(&self) -> Option<LocationEntry> {
+        self.filtered().get(self.picker.index()).cloned().cloned()
+    }
+
+    fn sync_len(&mut self) {
+        let len = self.filtered().len();
+        self.picker.set_len(len);
+    }
 }
 
 impl ModelPicker {
@@ -95,6 +135,8 @@ impl ModelPicker {
 enum Overlay {
     /// Model selector over the fetched catalog.
     Models(ModelPicker),
+    /// Workspace file/folder selector opened by typing `@` in the composer.
+    Locations(LocationPicker),
     /// Provider selector (openrouter, openai, local).
     Providers { picker: ListPicker },
     /// Theme selector over `view::ThemeName::ALL`.
@@ -115,6 +157,13 @@ enum Overlay {
     },
     /// The harness extension catalog; enter toggles the selected one.
     Extensions { picker: ListPicker },
+    /// The configured MCP servers; space (or enter) toggles the
+    /// selected one on or off. Rows come from the config, so a toggle
+    /// redraws immediately while the reconnect runs behind it.
+    Mcp {
+        servers: Vec<crate::config::McpServer>,
+        picker: ListPicker,
+    },
     /// Recorded sessions for this workspace; enter resumes the selection.
     Sessions {
         sessions: Vec<orca_harness_extensions::SessionFile>,
@@ -707,9 +756,20 @@ fn handle_terminal_event(
             app.composer.insert(at, c);
             app.cursor += 1;
             app.palette_index = 0;
+            if c == '@' && mention_starts_at(&app.composer, app.cursor - 1) {
+                let entries = workspace_locations(Path::new(&app.cfg.workspace_root));
+                app.overlay = Some(Overlay::Locations(LocationPicker {
+                    picker: ListPicker::new(entries.len()),
+                    entries,
+                    query: String::new(),
+                    token_start: app.cursor - 1,
+                }));
+            }
         }
         KeyCode::Backspace => {
-            if app.cursor > 0 {
+            if remove_location_mention_before_cursor(&mut app.composer, &mut app.cursor) {
+                app.palette_index = 0;
+            } else if app.cursor > 0 {
                 let at = byte_index(&app.composer, app.cursor - 1);
                 app.composer.remove(at);
                 app.cursor -= 1;
@@ -784,6 +844,11 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
         SendWithNote(WorkerCmd, String),
         /// Close and start the /models fetch-then-pick flow.
         FetchModels,
+        /// Close and replace the active `@query` with a workspace path.
+        InsertLocation {
+            token_start: usize,
+            entry: LocationEntry,
+        },
     }
     // Read before the overlay borrow: the settings rows need these.
     let current_provider = app.cfg.provider;
@@ -832,6 +897,45 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             picker.index = picker.index.min(len.saturating_sub(1));
             after
         }
+        Overlay::Locations(location) => match key.code {
+            KeyCode::Tab => match location.selected() {
+                Some(entry) => After::InsertLocation {
+                    token_start: location.token_start,
+                    entry,
+                },
+                None => After::Nothing,
+            },
+            _ => match location.picker.on_key(key.code) {
+                PickerEvent::Activated(_) => match location.selected() {
+                    Some(entry) => After::InsertLocation {
+                        token_start: location.token_start,
+                        entry,
+                    },
+                    None => After::Nothing,
+                },
+                PickerEvent::Moved | PickerEvent::Action { .. } => After::Nothing,
+                PickerEvent::Ignored => match key.code {
+                    KeyCode::Char(c) => {
+                        location.query.push(c);
+                        let at = byte_index(&app.composer, app.cursor);
+                        app.composer.insert(at, c);
+                        app.cursor += 1;
+                        location.sync_len();
+                        After::Nothing
+                    }
+                    KeyCode::Backspace if !location.query.is_empty() => {
+                        location.query.pop();
+                        let at = byte_index(&app.composer, app.cursor - 1);
+                        app.composer.remove(at);
+                        app.cursor -= 1;
+                        location.sync_len();
+                        After::Nothing
+                    }
+                    KeyCode::Backspace => After::Close,
+                    _ => After::Nothing,
+                },
+            },
+        },
         Overlay::Providers { picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => {
                 let provider = Provider::ALL[index];
@@ -993,6 +1097,38 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
+        Overlay::Mcp { servers, picker } => {
+            // Space toggles rather than arming an action strip: this
+            // picker has exactly one action, so the strip would be a
+            // keystroke of ceremony. Enter does the same, matching
+            // /extensions.
+            let row = match key.code {
+                KeyCode::Char(' ') | KeyCode::Enter if !servers.is_empty() => Some(picker.index()),
+                _ => match picker.on_key(key.code) {
+                    PickerEvent::Activated(index) => Some(index),
+                    _ => None,
+                },
+            };
+            match row {
+                Some(index) => {
+                    let server = &mut servers[index];
+                    let enabled = !server.enabled;
+                    match crate::config::set_mcp_enabled(&server.name, enabled) {
+                        // Stay open so several servers can be toggled;
+                        // the row redraws from this copy at once while
+                        // the reconnect runs behind the overlay.
+                        Ok(_) => {
+                            server.enabled = enabled;
+                            After::Send(WorkerCmd::ReloadMcp)
+                        }
+                        Err(err) => {
+                            After::CloseWithNote(format!("could not update the config: {err}"))
+                        }
+                    }
+                }
+                None => After::Nothing,
+            }
+        }
         Overlay::Sessions { sessions, picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::LoadSession {
                 path: sessions[index].path.clone(),
@@ -1049,19 +1185,19 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                 Ok(_) => format!("view set to {}", mode.label()),
                 Err(err) => format!("view set to {} (not saved: {err})", mode.label()),
             };
-            app.push_line(Line::from(Span::styled(note, theme().dim)));
+            push_notice(app, note);
         }
         After::CloseWithNote(note) => {
             app.overlay = None;
-            app.push_line(Line::from(Span::styled(note, theme().dim)));
+            push_notice(app, note);
         }
         After::Note(note) => {
-            app.push_line(Line::from(Span::styled(note, theme().dim)));
+            push_notice(app, note);
         }
         After::SendWithNote(cmd, note) => {
             app.overlay = None;
             send_or_report(app, worker, cmd);
-            app.push_line(Line::from(Span::styled(note, theme().dim)));
+            push_notice(app, note);
         }
         After::FetchModels => {
             app.overlay = None;
@@ -1080,6 +1216,15 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             } else {
                 app.push_line(Line::from(Span::styled("fetching models…", theme().dim)));
             }
+        }
+        After::InsertLocation { token_start, entry } => {
+            let start_byte = byte_index(&app.composer, token_start);
+            let end_byte = byte_index(&app.composer, app.cursor);
+            let suffix = if entry.directory { "/" } else { "" };
+            let mention = format!("@{}{suffix} ", entry.path);
+            app.composer.replace_range(start_byte..end_byte, &mention);
+            app.cursor = token_start + mention.chars().count();
+            app.overlay = None;
         }
     }
 }
@@ -1100,6 +1245,16 @@ fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
     filtered
         .get(app.palette_index.min(filtered.len().saturating_sub(1)))
         .copied()
+}
+
+/// A compact transcript notification: the shared accent glyph makes status
+/// changes scannable without increasing their visual weight.
+fn push_notice(app: &mut App, text: impl Into<String>) {
+    let t = theme();
+    app.push_line(Line::from(vec![
+        Span::styled("› ", t.accent),
+        Span::styled(text.into(), t.dim),
+    ]));
 }
 
 fn handle_approval_key(app: &mut App, key: KeyEvent) {
@@ -1136,7 +1291,7 @@ fn handle_approval_key(app: &mut App, key: KeyEvent) {
                             request.tool_name
                         ),
                     };
-                app.push_line(Line::from(Span::styled(note, theme().dim)));
+                push_notice(app, note);
             }
             if let Some(activity) = app.activity_tools.iter_mut().rev().find(|activity| {
                 activity.tool_name == request.tool_name && activity.output.is_none()
@@ -1556,6 +1711,31 @@ fn slash_command(
             return;
         }
     }
+    if let Some(rest) = command.strip_prefix("mcp") {
+        if rest.is_empty() {
+            // Same interface as /extensions: a picker overlay where
+            // space toggles the selected server. With nothing
+            // configured the overlay would be a dead end, so the hint
+            // stands in for it.
+            let servers = crate::config::stored_mcp_servers();
+            if servers.is_empty() {
+                app.push_line(Line::from(Span::styled(
+                    "no MCP servers configured — /mcp add <name> <command>",
+                    dim,
+                )));
+                return;
+            }
+            app.overlay = Some(Overlay::Mcp {
+                picker: ListPicker::new(servers.len()),
+                servers,
+            });
+            return;
+        }
+        if let Some(args) = rest.strip_prefix(' ') {
+            mcp_command(app, args, worker);
+            return;
+        }
+    }
     if let Some(rest) = command.strip_prefix("models") {
         if rest.is_empty() || rest.starts_with(' ') {
             // Fetch the full catalog; the argument seeds the picker's
@@ -1661,7 +1841,7 @@ fn slash_command(
                     Ok(_) => format!("theme set to {}", name.label()),
                     Err(err) => format!("theme set to {} (not saved: {err})", name.label()),
                 };
-                app.push_line(Line::from(Span::styled(note, dim)));
+                push_notice(app, note);
             }
             None => {
                 app.push_line(Line::from(Span::styled(
@@ -1717,8 +1897,10 @@ fn slash_command(
                 "/settings    view and change provider, model, theme, api key",
                 "/subagents [n] show or set subagent nesting depth (1-5)",
                 "/extensions  toggle harness extensions (no argument opens the picker)",
+                "/mcp         toggle MCP servers · add <name> <command> · remove <name>",
                 "/quit        exit",
                 "/theme [name] pick a color theme (no argument opens the picker)",
+                "@path        add a workspace file or folder to the prompt",
                 "keys: enter send or queue · esc cancel run · ctrl+o reveal latest work tree",
                 "      pgup/pgdn scroll · ctrl+c quit · up/down history",
                 "approvals: y allow once · a always (session) · A always (saved for this workspace) · n deny",
@@ -1731,6 +1913,107 @@ fn slash_command(
                 format!("unknown command: /{other}"),
                 theme().error,
             )));
+        }
+    }
+}
+
+/// The typed `/mcp add|remove` forms: edit the config, then ask the
+/// worker to reconnect and rebuild — the same save-then-reload shape as
+/// the typed /extensions form.
+fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
+    let dim = theme().dim;
+    let usage = "usage: /mcp [add <name> <command> | remove <name>]";
+    let mut parts = args.split_whitespace();
+    match parts.next() {
+        Some("add") => {
+            let name = parts.next().unwrap_or("");
+            let launch = parts.collect::<Vec<_>>().join(" ");
+            if name.is_empty() || launch.is_empty() {
+                app.push_line(Line::from(Span::styled(usage, theme().error)));
+                return;
+            }
+            // The name becomes part of the model-facing tool names
+            // (mcp__<name>__<tool>), so keep it identifier-shaped.
+            if !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                app.push_line(Line::from(Span::styled(
+                    format!("invalid server name: {name} — letters, digits, - and _ only"),
+                    theme().error,
+                )));
+                return;
+            }
+            // Editing a server that the user turned off must not
+            // quietly turn it back on, so say what actually happens
+            // rather than promising a connection that will not run.
+            let disabled = crate::config::stored_mcp_servers()
+                .iter()
+                .any(|server| server.name == name && !server.enabled);
+            match crate::config::save_mcp_server(name, &launch) {
+                Ok(_) => {
+                    let note = if disabled {
+                        format!("mcp server {name} updated — still off, space in /mcp enables it")
+                    } else {
+                        format!("mcp server {name} added — connecting…")
+                    };
+                    app.push_line(Line::from(Span::styled(note, dim)));
+                    if worker.send(WorkerCmd::ReloadMcp).is_err() {
+                        app.push_line(Line::from(Span::styled(
+                            "worker is gone; restart orcacode",
+                            theme().error,
+                        )));
+                    }
+                }
+                Err(err) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("mcp server {name} not added (save failed: {err})"),
+                        theme().error,
+                    )));
+                }
+            }
+        }
+        Some("remove" | "delete" | "rm") => {
+            let name = parts.next().unwrap_or("");
+            let servers = crate::config::stored_mcp_servers();
+            if !servers.iter().any(|server| server.name == name) {
+                let known = match servers.len() {
+                    0 => "none configured".to_string(),
+                    _ => servers
+                        .iter()
+                        .map(|server| server.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
+                app.push_line(Line::from(Span::styled(
+                    format!("unknown mcp server: {name} — configured: {known}"),
+                    theme().error,
+                )));
+                return;
+            }
+            match crate::config::remove_mcp_server(name) {
+                Ok(_) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("mcp server {name} removed (applies to the next run)"),
+                        dim,
+                    )));
+                    if worker.send(WorkerCmd::ReloadMcp).is_err() {
+                        app.push_line(Line::from(Span::styled(
+                            "worker is gone; restart orcacode",
+                            theme().error,
+                        )));
+                    }
+                }
+                Err(err) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("mcp server {name} not removed (save failed: {err})"),
+                        theme().error,
+                    )));
+                }
+            }
+        }
+        _ => {
+            app.push_line(Line::from(Span::styled(usage, theme().error)));
         }
     }
 }
@@ -1829,22 +2112,22 @@ fn handle_ui_msg(
             }
         },
         UiMsg::Notice(text) => {
-            app.push_line(Line::from(Span::styled(text, theme().dim)));
+            push_notice(app, text);
         }
         UiMsg::SessionCleared { id } => {
             app.cfg.session_id = Some(id.clone());
-            app.push_line(Line::from(Span::styled(
+            push_notice(
+                app,
                 format!("session {id} cleared · background work stopped"),
-                theme().dim,
-            )));
+            );
         }
         UiMsg::SessionLoaded { id, messages } => {
             reset_conversation_ui(app);
             app.cfg.session_id = Some(id.clone());
-            app.push_line(Line::from(Span::styled(
+            push_notice(
+                app,
                 format!("resumed session {id} ({} messages)", messages.len()),
-                theme().dim,
-            )));
+            );
             replay_transcript(app, &messages, width);
         }
         UiMsg::ProviderChanged { provider, model } => {
@@ -2260,7 +2543,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 });
             }
             (
-                tool_inspector_header_lines(tool),
+                tool_inspector_header_lines(tool, inspector_width),
                 app.split_inspector_cache
                     .as_ref()
                     .map(|cache| cache.lines.clone())
@@ -2318,7 +2601,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         } else if !app.prompt_queue.is_empty() {
             "queue paused · enter to resume"
         } else {
-            "ask anything · /help for commands"
+            "ask anything · @ add files · /help commands"
         };
         Line::from(vec![
             Span::styled("│ ", theme().accent),
@@ -2360,7 +2643,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else if !app.prompt_queue.is_empty() {
         "enter resume · /queue clear"
     } else {
-        "enter send · ctrl+o expand · pgup scroll"
+        "enter send · @ paths · ctrl+o expand · pgup scroll"
     };
     let status = format!(
         " {} · {} · {}{}{} · {} · {}",
@@ -2417,12 +2700,12 @@ fn workspace_status_name(workspace: &str) -> &str {
 
 #[cfg(test)]
 fn tool_inspector_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
-    let mut lines = tool_inspector_header_lines(tool);
+    let mut lines = tool_inspector_header_lines(tool, width);
     lines.extend(tool_inspector_body_lines(tool, width));
     lines
 }
 
-fn tool_inspector_header_lines(tool: &ToolActivity) -> Vec<Line<'static>> {
+fn tool_inspector_header_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
     let (status, status_style) = match &tool.output {
@@ -2430,17 +2713,43 @@ fn tool_inspector_header_lines(tool: &ToolActivity) -> Vec<Line<'static>> {
         Some(_) => ("completed", t.success),
         None => ("running", t.accent),
     };
+    let raw_name = tool.tool_name.to_uppercase();
+    let duration = elapsed_label(elapsed);
+    let right_width = status.chars().count() + duration.chars().count() + 2;
+    let available = width.saturating_sub(4);
+    let name = view::truncate_line(&raw_name, available.saturating_sub(right_width + 1).max(8));
+    let gap = available
+        .saturating_sub(name.chars().count() + right_width)
+        .max(1);
     vec![
         Line::from(vec![
-            Span::styled("  ○ ", t.dim),
-            Span::styled(tool.tool_name.to_uppercase(), t.strong),
+            Span::styled(format!("  {name}"), t.strong),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(status, status_style),
+            Span::styled(format!("  {duration}"), t.dim),
         ]),
-        Line::from(vec![
-            Span::styled(format!("  {status}"), status_style),
-            Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
-        ]),
+        Line::from(Span::styled(
+            format!("  {}", inspector_action_label(&tool.tool_name)),
+            t.dim,
+        )),
         Line::from(""),
     ]
+}
+
+fn inspector_action_label(tool_name: &str) -> &'static str {
+    match tool_name {
+        "shell" | "exec_command" => "Run a shell command",
+        "read_file" => "Read a file",
+        "write_file" => "Write a file",
+        "edit_file" => "Edit a file",
+        "list_dir" => "List a directory",
+        "grep" => "Search workspace text",
+        "glob" => "Find workspace paths",
+        "process" => "Manage a background process",
+        "pykernel" => "Run Python in the persistent kernel",
+        "subagent" => "Delegate a focused task",
+        _ => "Inspect tool input and output",
+    }
 }
 
 fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
@@ -2468,15 +2777,23 @@ fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'sta
         }
         if omitted {
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  More output omitted · /expand n shows the full result",
-                t.dim,
-            )));
+            lines.push(inspector_omitted_line(inner, "output omitted", "/expand n"));
         }
     } else {
-        lines.push(Line::from(Span::styled("  Waiting for result", t.dim)));
+        lines.push(Line::from(Span::styled("  waiting for result", t.dim)));
     }
     lines
+}
+
+fn inspector_omitted_line(width: usize, label: &str, action: &str) -> Line<'static> {
+    let gap = width
+        .saturating_sub(label.chars().count() + action.chars().count())
+        .max(2);
+    Line::from(vec![
+        Span::styled(format!("  {label}"), theme().dim),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(action.to_string(), theme().accent),
+    ])
 }
 
 fn append_inspector_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
@@ -2908,6 +3225,7 @@ fn empty_tool_inspector_lines() -> Vec<Line<'static>> {
 }
 
 fn push_inspector_text(lines: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    let text = view::sanitize_cells(text);
     for source in text.lines() {
         let wrapped = textwrap::wrap(source, width.saturating_sub(2).max(8));
         if wrapped.is_empty() {
@@ -3012,6 +3330,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     if let Some(overlay) = &app.overlay {
         return match overlay {
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
+            Overlay::Locations(picker) => location_picker_lines(picker, width),
             Overlay::Providers { picker } => provider_lines(picker, width),
             Overlay::Themes { picker } => theme_picker_lines(picker, width),
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
@@ -3020,6 +3339,9 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Settings { picker } => settings_lines(app, picker, width),
             Overlay::Approvals { tools, picker } => approvals_lines(tools, picker, width),
             Overlay::Extensions { picker } => extensions_picker_lines(picker, width),
+            Overlay::Mcp { servers, picker } => {
+                mcp_picker_lines(servers, &app.cfg.mcp, picker, width)
+            }
             Overlay::Sessions { sessions, picker } => {
                 sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
@@ -3057,6 +3379,129 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
     }
     lines
+}
+
+fn mention_starts_at(composer: &str, at: usize) -> bool {
+    at == 0
+        || composer
+            .chars()
+            .nth(at.saturating_sub(1))
+            .is_some_and(char::is_whitespace)
+}
+
+/// Remove the complete `@path` token immediately before the cursor. The
+/// picker inserts one trailing space, which is removed with the mention so a
+/// single Backspace cleanly undoes the selection.
+fn remove_location_mention_before_cursor(composer: &mut String, cursor: &mut usize) -> bool {
+    if *cursor == 0 {
+        return false;
+    }
+    let chars: Vec<char> = composer.chars().collect();
+    let token_end = if chars.get(*cursor - 1).is_some_and(|c| c.is_whitespace()) {
+        *cursor - 1
+    } else {
+        *cursor
+    };
+    if token_end == 0 {
+        return false;
+    }
+    let token_start = chars[..token_end]
+        .iter()
+        .rposition(|c| c.is_whitespace())
+        .map_or(0, |index| index + 1);
+    if chars.get(token_start) != Some(&'@') || token_end == token_start + 1 {
+        return false;
+    }
+
+    let start_byte = byte_index(composer, token_start);
+    let end_byte = byte_index(composer, *cursor);
+    composer.replace_range(start_byte..end_byte, "");
+    *cursor = token_start;
+    true
+}
+
+/// Enumerate a bounded set of workspace-relative paths without following
+/// symlinks. Build/dependency metadata directories are omitted so `@` stays
+/// focused on files an agent can meaningfully work with.
+fn workspace_locations(root: &Path) -> Vec<LocationEntry> {
+    const MAX_LOCATIONS: usize = 5_000;
+    const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".next", "dist"];
+
+    fn visit(root: &Path, dir: &Path, entries: &mut Vec<LocationEntry>) {
+        if entries.len() >= MAX_LOCATIONS {
+            return;
+        }
+        let Ok(children) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut children: Vec<_> = children.filter_map(Result::ok).collect();
+        children.sort_by_key(|entry| entry.file_name());
+        for child in children {
+            if entries.len() >= MAX_LOCATIONS {
+                break;
+            }
+            let Ok(kind) = child.file_type() else {
+                continue;
+            };
+            let name = child.file_name();
+            let name = name.to_string_lossy();
+            if kind.is_dir() && SKIP_DIRS.contains(&name.as_ref()) {
+                continue;
+            }
+            let path: PathBuf = child.path();
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            entries.push(LocationEntry {
+                path: relative
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/"),
+                directory: kind.is_dir(),
+            });
+            if kind.is_dir() {
+                visit(root, &path, entries);
+            }
+        }
+    }
+
+    let mut entries = Vec::new();
+    visit(root, root, &mut entries);
+    entries.sort_by(|left, right| {
+        right
+            .directory
+            .cmp(&left.directory)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    entries
+}
+
+fn location_picker_lines(picker: &LocationPicker, width: usize) -> Vec<Line<'static>> {
+    let filtered = picker.filtered();
+    if filtered.is_empty() {
+        return vec![Line::from(Span::styled(
+            format!("  No workspace paths match @{} · esc close", picker.query),
+            theme().dim,
+        ))];
+    }
+    let header = if picker.query.is_empty() {
+        "Files and folders · type to filter · enter add · esc close".to_string()
+    } else {
+        format!(
+            "Files and folders matching @{} · enter add · esc close",
+            picker.query
+        )
+    };
+    picker.picker.lines(
+        &header,
+        filtered.into_iter().map(|entry| {
+            if entry.directory {
+                format!("{}/", entry.path)
+            } else {
+                entry.path.clone()
+            }
+        }),
+        width,
+    )
 }
 
 fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -3864,6 +4309,201 @@ fn extensions_picker_lines(picker: &ListPicker, width: usize) -> Vec<Line<'stati
     )
 }
 
+/// Stands in for a credential in a rendered launch command.
+const REDACTED: &str = "<redacted>";
+
+/// Argument flags whose value is a credential.
+const SECRET_FLAGS: &[&str] = &[
+    "--header",
+    "-H",
+    "--api-key",
+    "--apikey",
+    "--auth",
+    "--bearer",
+    "--password",
+    "--secret",
+    "--token",
+];
+
+/// Query-parameter and header names whose value is a credential.
+const SECRET_NAMES: &[&str] = &[
+    "access_token",
+    "api-key",
+    "api_key",
+    "apikey",
+    "authorization",
+    "key",
+    "password",
+    "proxy-authorization",
+    "secret",
+    "token",
+    "x-api-key",
+];
+
+/// Literal credential shapes recognized wherever they appear, so a bare
+/// token pasted as a positional argument is caught too.
+const SECRET_PREFIXES: &[&str] = &[
+    "AIza",
+    "AKIA",
+    "Bearer",
+    "dop_v1_",
+    "ghp_",
+    "gho_",
+    "ghr_",
+    "ghs_",
+    "ghu_",
+    "github_pat_",
+    "glpat-",
+    "hf_",
+    "sk-",
+    "sk_",
+    "xoxa-",
+    "xoxb-",
+    "xoxp-",
+    "xoxs-",
+    "ya29.",
+];
+
+/// True for a value that is really an environment reference (`${VAR}`).
+/// These name a variable rather than carrying its value, so masking them
+/// would hide the one thing the user needs to see — which variable the
+/// server depends on — while protecting nothing.
+fn is_env_reference(value: &str) -> bool {
+    value.contains("${")
+}
+
+/// Mask a value known to be a credential, keeping env references.
+fn mask_secret(value: &str) -> String {
+    if value.is_empty() || is_env_reference(value) {
+        value.to_string()
+    } else {
+        REDACTED.to_string()
+    }
+}
+
+/// Mask `name:value` / `name=value` when the name is credential-bearing,
+/// keeping the name so the row still says what is being sent.
+fn mask_pair(word: &str, separators: &[char]) -> Option<String> {
+    let (name, value) = word.split_at_checked(word.find(separators)?)?;
+    let (sep, value) = value.split_at(1);
+    SECRET_NAMES
+        .contains(&name.to_ascii_lowercase().as_str())
+        .then(|| format!("{name}{sep}{}", mask_secret(value)))
+}
+
+/// A launch command with literal credentials masked, for display only.
+/// The stored command is untouched — this exists so a token pasted into
+/// `/mcp add` is not left on screen for anyone glancing at the terminal.
+fn redact_command(command: &str) -> String {
+    let mut words = Vec::new();
+    let mut value_is_secret = false;
+    for word in command.split_whitespace() {
+        let rendered = if value_is_secret {
+            // The value of a `--header`-style flag: `Name:value` keeps
+            // its name, anything else is masked whole.
+            mask_pair(word, &[':', '=']).unwrap_or_else(|| mask_secret(word))
+        } else if let Some(masked) = mask_flag_value(word).or_else(|| mask_url(word)) {
+            masked
+        } else if SECRET_PREFIXES
+            .iter()
+            .any(|prefix| word.starts_with(prefix) && word.len() > prefix.len())
+        {
+            mask_secret(word)
+        } else {
+            word.to_string()
+        };
+        value_is_secret = SECRET_FLAGS.contains(&word);
+        words.push(rendered);
+    }
+    words.join(" ")
+}
+
+/// `--api-key=secret` and friends, where flag and value share a word.
+fn mask_flag_value(word: &str) -> Option<String> {
+    let (flag, value) = word.split_once('=')?;
+    SECRET_FLAGS
+        .contains(&flag)
+        .then(|| format!("{flag}={}", mask_secret(value)))
+}
+
+/// Credentials carried inside a URL: `https://user:token@host` userinfo
+/// and `?api_key=…` query parameters.
+fn mask_url(word: &str) -> Option<String> {
+    let (scheme, rest) = word.split_once("://")?;
+    let (authority, path) = match rest.find('/') {
+        Some(cut) => rest.split_at(cut),
+        None => (rest, ""),
+    };
+    let authority = match authority.rsplit_once('@') {
+        // Keep the user, mask the password half of `user:password`.
+        Some((userinfo, host)) => match userinfo.split_once(':') {
+            Some((user, password)) => format!("{user}:{}@{host}", mask_secret(password)),
+            None => format!("{userinfo}@{host}"),
+        },
+        None => authority.to_string(),
+    };
+    let path = match path.split_once('?') {
+        Some((route, query)) => {
+            let masked: Vec<String> = query
+                .split('&')
+                .map(|param| mask_pair(param, &['=']).unwrap_or_else(|| param.to_string()))
+                .collect();
+            format!("{route}?{}", masked.join("&"))
+        }
+        None => path.to_string(),
+    };
+    Some(format!("{scheme}://{authority}{path}"))
+}
+
+/// The configured MCP servers: state, tool count, launch command.
+///
+/// On/off comes from `servers` (the overlay's own copy, updated the
+/// instant the toggle is saved) so a press redraws now; the tool count
+/// comes from the shared handle and lags by one reconnect, showing `…`
+/// until the worker reports. A server that failed to connect shows why
+/// instead of a count. Commands are redacted: the config may hold a
+/// literal token, and this list is the one place it would be on screen.
+fn mcp_picker_lines(
+    servers: &[crate::config::McpServer],
+    mcp: &crate::mcp::McpServers,
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let name_width = servers
+        .iter()
+        .map(|server| server.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(4, 16);
+    let rows = servers.iter().map(|server| {
+        let (count, why) = if !server.enabled {
+            (String::new(), String::new())
+        } else {
+            match mcp.state(&server.name) {
+                Some(crate::mcp::McpState::Connected(1)) => ("1 tool".into(), String::new()),
+                Some(crate::mcp::McpState::Connected(n)) => (format!("{n} tools"), String::new()),
+                // The reason goes after the command, not in the count
+                // column: an error is far too long to keep the columns
+                // aligned, and it would push the command off the row.
+                Some(crate::mcp::McpState::Failed(err)) => ("failed".into(), format!("  — {err}")),
+                None => ("…".into(), String::new()),
+            }
+        };
+        let state = if server.enabled { "on " } else { "off" };
+        format!(
+            "{:<name_width$}  {state}  {:<9}  {}{why}",
+            server.name,
+            count,
+            redact_command(&server.command)
+        )
+    });
+    picker.lines(
+        "MCP servers · ↑↓ navigate · space toggle · esc close",
+        rows,
+        width,
+    )
+}
+
 /// Recorded sessions for this workspace, newest first; enter resumes
 /// the selected one. Same interface as /provider and /theme.
 fn sessions_picker_lines(
@@ -3932,6 +4572,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         // A transcript taller than any viewport so scrolling has room.
         for i in 0..100 {
@@ -4152,6 +4793,37 @@ mod tests {
     }
 
     #[test]
+    fn inspector_output_with_tabs_and_ansi_renders_clean_cells() {
+        // du/ls emit tab-separated columns and some tools emit ANSI color;
+        // raw control bytes in a cell desync the terminal cursor from the
+        // draw buffer and leave ghost cells behind.
+        let tool = ToolActivity {
+            call_id: "shell-1".into(),
+            call_line: "shell $ du -sh ~/.nvm/*".into(),
+            tool_name: "shell".into(),
+            input: serde_json::json!({"command": "du -sh ~/.nvm/*"}),
+            started: Instant::now(),
+            elapsed: Some(Duration::from_millis(1)),
+            output: Some(serde_json::json!({
+                "stdout": "205M\t/Users/akashswamy/.nvm/versions\n\u{1b}[31m12K\u{1b}[0m\t/tmp/x\n",
+                "stderr": "",
+                "exitCode": 0
+            })),
+            is_error: false,
+            approval: None,
+        };
+        for line in tool_inspector_lines(&tool, 80) {
+            for span in &line.spans {
+                assert!(
+                    !span.content.contains(|c: char| c.is_control()),
+                    "control byte reached a cell: {:?}",
+                    span.content
+                );
+            }
+        }
+    }
+
+    #[test]
     fn inspector_json_preview_stops_after_one_level() {
         let output = serde_json::json!({
             "ok": true,
@@ -4172,6 +4844,18 @@ mod tests {
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect()
+    }
+
+    #[test]
+    fn notifications_use_the_shared_leading_glyph() {
+        let mut app = test_app();
+
+        push_notice(&mut app, "theme set to default");
+
+        let notice = app.pending_history.last().expect("notification line");
+        assert_eq!(line_text(notice), "› theme set to default");
+        assert_eq!(notice.spans[0].style, theme().accent);
+        assert_eq!(notice.spans[1].style, theme().dim);
     }
 
     #[test]
@@ -4598,6 +5282,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         app.prompt_queue.push_back("inspect the failure".into());
 
@@ -5307,6 +5992,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
@@ -5337,6 +6023,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
 
         let rows = rendered_rows(&mut app, 100, 24);
@@ -5373,6 +6060,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -5411,6 +6099,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         app.transcript.push(Line::from("final answer"));
 
@@ -5432,6 +6121,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -5463,6 +6153,7 @@ mod tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -5509,6 +6200,85 @@ mod tests {
                 pricing: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn at_opens_the_standard_location_picker_and_filters_as_you_type() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        press(&mut app, &tx, KeyCode::Char('@'));
+        let Some(Overlay::Locations(location)) = app.overlay.as_mut() else {
+            panic!("expected @ to open the location picker");
+        };
+        location.entries = vec![
+            LocationEntry {
+                path: "crates/cli/src/tui.rs".into(),
+                directory: false,
+            },
+            LocationEntry {
+                path: "README.md".into(),
+                directory: false,
+            },
+        ];
+        location.sync_len();
+
+        press(&mut app, &tx, KeyCode::Char('t'));
+
+        let Some(Overlay::Locations(location)) = &app.overlay else {
+            panic!("location picker should remain open");
+        };
+        assert_eq!(app.composer, "@t");
+        assert_eq!(location.query, "t");
+        assert_eq!(location.filtered().len(), 1);
+    }
+
+    #[test]
+    fn tab_inserts_the_selected_folder_mention() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "work in @cr".into();
+        app.cursor = app.composer.chars().count();
+        app.overlay = Some(Overlay::Locations(LocationPicker {
+            entries: vec![LocationEntry {
+                path: "crates/cli".into(),
+                directory: true,
+            }],
+            query: "cr".into(),
+            token_start: 8,
+            picker: ListPicker::new(1),
+        }));
+
+        press(&mut app, &tx, KeyCode::Tab);
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "work in @crates/cli/ ");
+        assert_eq!(app.cursor, app.composer.chars().count());
+    }
+
+    #[test]
+    fn backspace_removes_an_inserted_location_mention_in_one_go() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "work in @crates/cli/ ".into();
+        app.cursor = app.composer.chars().count();
+
+        press(&mut app, &tx, KeyCode::Backspace);
+
+        assert_eq!(app.composer, "work in ");
+        assert_eq!(app.cursor, app.composer.chars().count());
+    }
+
+    #[test]
+    fn at_inside_a_word_does_not_open_the_location_picker() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "user".into();
+        app.cursor = 4;
+
+        press(&mut app, &tx, KeyCode::Char('@'));
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "user@");
     }
 
     #[test]
@@ -5736,14 +6506,18 @@ mod tests {
 
         let inspector = flat_lines(&tool_inspector_lines(&app.activity_tools[0], 50));
         assert!(
-            inspector.contains("○ SHELL"),
+            inspector.contains("SHELL") && inspector.contains("running"),
             "tool identity repeats: {inspector}"
+        );
+        assert!(
+            inspector.contains("Run a shell command"),
+            "tool action is explained: {inspector}"
         );
         assert!(
             inspector.contains("cargo test"),
             "input is expanded: {inspector}"
         );
-        assert!(inspector.contains("Waiting for result"));
+        assert!(inspector.contains("waiting for result"));
 
         handle_terminal_event(
             &mut app,
@@ -5914,6 +6688,7 @@ mod theme_command_tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         })
     }
 
@@ -5985,6 +6760,7 @@ mod subagents_command_tests {
             subagent_depth: depth,
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         })
     }
 
@@ -6023,6 +6799,7 @@ mod extensions_command_tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         })
     }
 
@@ -6289,6 +7066,321 @@ mod extensions_command_tests {
 }
 
 #[cfg(test)]
+mod mcp_command_tests {
+    use super::*;
+
+    fn mcp_app() -> App {
+        App::new(TuiConfig {
+            model_name: "m".into(),
+            workspace_name: "w".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
+            mcp: Default::default(),
+        })
+    }
+
+    fn printed(app: &App) -> String {
+        app.pending_history
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn press(app: &mut App, tx: &mpsc::UnboundedSender<WorkerCmd>, code: KeyCode) {
+        handle_terminal_event(
+            app,
+            CtEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+            tx,
+            80,
+        );
+    }
+
+    /// The overlay as drawn, one string per line.
+    fn overlay_text(app: &App) -> String {
+        live_lines(app, 120)
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn add_list_and_remove_round_trip_through_config_and_reload() {
+        let mut app = mcp_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Bare form with nothing configured points at the add syntax
+        // rather than opening an overlay with no rows to toggle.
+        slash_command(&mut app, "mcp", &worker, 80);
+        assert!(printed(&app).contains("no MCP servers configured"));
+        assert!(app.overlay.is_none());
+
+        // Add saves the command verbatim (arguments included) and asks
+        // the worker to reconnect.
+        slash_command(
+            &mut app,
+            "mcp add docs npx -y some-server /tmp",
+            &worker,
+            80,
+        );
+        let stored = crate::config::stored_mcp_servers();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].name, "docs");
+        assert_eq!(stored[0].command, "npx -y some-server /tmp");
+        assert!(stored[0].enabled, "a new server starts on");
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadMcp)));
+        assert!(printed(&app).contains("mcp server docs added"));
+
+        // Bare form now opens the picker, listing state and command.
+        // The count is "…" until a reload reports one.
+        slash_command(&mut app, "mcp", &worker, 80);
+        assert!(matches!(app.overlay, Some(Overlay::Mcp { .. })));
+        let text = overlay_text(&app);
+        assert!(text.contains("space toggle"), "{text}");
+        assert!(text.contains("docs  on   …"), "{text}");
+        assert!(text.contains("npx -y some-server /tmp"), "{text}");
+        press(&mut app, &worker, KeyCode::Esc);
+
+        // Remove drops it and reconnects; "rm" and "delete" are aliases.
+        slash_command(&mut app, "mcp remove docs", &worker, 80);
+        assert!(crate::config::stored_mcp_servers().is_empty());
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadMcp)));
+        assert!(printed(&app).contains("mcp server docs removed"));
+    }
+
+    /// Space toggles the selected row: the config is written, the
+    /// worker is asked to reconnect, and the overlay stays open showing
+    /// the new state at once.
+    #[tokio::test]
+    async fn space_toggles_the_selected_server_and_the_overlay_stays_open() {
+        let mut app = mcp_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::config::save_mcp_server("docs", "run docs").unwrap();
+        crate::config::save_mcp_server("fetch", "run fetch").unwrap();
+
+        slash_command(&mut app, "mcp", &worker, 80);
+        // Config order is the map's: docs, then fetch.
+        press(&mut app, &worker, KeyCode::Down);
+        press(&mut app, &worker, KeyCode::Char(' '));
+
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadMcp)));
+        assert!(
+            matches!(app.overlay, Some(Overlay::Mcp { .. })),
+            "toggling keeps the overlay open for the next row"
+        );
+        let stored = crate::config::stored_mcp_servers();
+        assert!(stored[0].enabled, "the unselected row is untouched");
+        assert!(!stored[1].enabled, "fetch is now off");
+
+        // The row redraws immediately, without waiting for the reload,
+        // and an off server shows no tool count.
+        let text = overlay_text(&app);
+        assert!(text.contains("docs   on   …"), "{text}");
+        assert!(text.contains("fetch  off"), "{text}");
+        assert!(!text.contains("fetch  off  …"), "off rows drop the count");
+
+        // Enter toggles too, matching /extensions muscle memory.
+        press(&mut app, &worker, KeyCode::Enter);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadMcp)));
+        assert!(crate::config::stored_mcp_servers()[1].enabled);
+        assert!(overlay_text(&app).contains("fetch  on"));
+
+        press(&mut app, &worker, KeyCode::Esc);
+        assert!(app.overlay.is_none());
+    }
+
+    /// Tool counts and connection errors come off the shared handle the
+    /// worker reloads. The reason goes after the command so a long error
+    /// never truncates the row before the command is visible.
+    #[tokio::test]
+    async fn rows_report_tool_counts_and_connection_errors() {
+        let mut app = mcp_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::config::save_mcp_server("ghost", "orca-no-such-binary-xyz").unwrap();
+        app.cfg.mcp.reload().await;
+
+        slash_command(&mut app, "mcp", &worker, 80);
+        let text = overlay_text(&app);
+        assert!(text.contains("ghost  on   failed"), "{text}");
+        assert!(
+            text.contains("failed     orca-no-such-binary-xyz"),
+            "the command survives the error: {text}"
+        );
+        assert!(text.contains("spawn failed"), "the reason is shown: {text}");
+    }
+
+    /// Env references survive redaction — they name a variable, they do
+    /// not carry it — so the row still says which one a server needs.
+    #[test]
+    fn redaction_keeps_env_references_and_the_rest_of_the_command() {
+        let command = "npx -y mcp-remote https://api.githubcopilot.com/mcp/readonly \
+                       --header Authorization:${AUTH_HEADER}";
+        assert_eq!(redact_command(command), command);
+    }
+
+    #[test]
+    fn redaction_masks_literal_credentials_in_every_shape() {
+        // The shape a user actually produces: `--header` values cannot
+        // contain spaces (the command is whitespace-split), so a pasted
+        // credential arrives glued to the header name. The name survives
+        // so the row still says what is being sent.
+        assert_eq!(
+            redact_command("npx mcp-remote https://x.dev/mcp --header Authorization:ghp_realtoken"),
+            "npx mcp-remote https://x.dev/mcp --header Authorization:<redacted>"
+        );
+        // Being an Authorization value is enough on its own — the value
+        // need not look token-shaped.
+        assert_eq!(
+            redact_command("x --header Authorization:Bearer"),
+            "x --header Authorization:<redacted>"
+        );
+        // An unrecognized header name masks the whole word rather than
+        // guessing which half is the secret; losing the name is the safe
+        // direction.
+        assert_eq!(
+            redact_command("x --header X-Custom-Auth:ghp_realtoken"),
+            "x --header <redacted>"
+        );
+        // Flag and value in one word.
+        assert_eq!(
+            redact_command("some-server --api-key=sk-abc123"),
+            "some-server --api-key=<redacted>"
+        );
+        // Flag and value split across words.
+        assert_eq!(
+            redact_command("some-server --token sk-abc123"),
+            "some-server --token <redacted>"
+        );
+        // A bare token as a positional argument.
+        assert_eq!(
+            redact_command("some-server github_pat_11ABCDE"),
+            "some-server <redacted>"
+        );
+        // Credentials inside the URL: query parameter and userinfo.
+        assert_eq!(
+            redact_command("npx mcp-remote https://x.dev/sse?api_key=abc123&mode=fast"),
+            "npx mcp-remote https://x.dev/sse?api_key=<redacted>&mode=fast"
+        );
+        assert_eq!(
+            redact_command("npx mcp-remote https://user:hunter2@x.dev/mcp"),
+            "npx mcp-remote https://user:<redacted>@x.dev/mcp"
+        );
+    }
+
+    /// Redaction must not chew up ordinary commands: no flags, no
+    /// tokens, nothing that merely looks like one.
+    #[test]
+    fn redaction_leaves_ordinary_commands_alone() {
+        for command in [
+            "uvx mcp-server-fetch",
+            "npx -y @modelcontextprotocol/server-everything",
+            "npx -y mcp-remote https://mcp.context7.com/mcp",
+            "npx -y mcp-remote https://gitmcp.io/okikorg/orca",
+            "github-mcp-server stdio --toolsets repos,issues",
+        ] {
+            assert_eq!(redact_command(command), command, "mangled: {command}");
+        }
+    }
+
+    /// The overlay renders the redacted form, never the stored one.
+    #[tokio::test]
+    async fn the_picker_never_renders_a_literal_token() {
+        let mut app = mcp_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::config::save_mcp_server(
+            "github",
+            "npx -y mcp-remote https://x.dev/mcp --header Authorization:ghp_supersecret",
+        )
+        .unwrap();
+
+        slash_command(&mut app, "mcp", &worker, 80);
+        let text = overlay_text(&app);
+        assert!(!text.contains("ghp_supersecret"), "token on screen: {text}");
+        assert!(text.contains("Authorization:<redacted>"), "{text}");
+        // The config keeps the real value — this is display-only.
+        assert!(crate::config::stored_mcp_servers()[0]
+            .command
+            .contains("ghp_supersecret"));
+    }
+
+    /// The sequence the overlay exists for: toggle on, the row shows `…`
+    /// while the reconnect runs, and the count lands once it reports.
+    #[tokio::test]
+    async fn a_toggled_on_server_moves_from_the_placeholder_to_its_state() {
+        let mut app = mcp_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::config::save_mcp_server("ghost", "orca-no-such-binary-xyz").unwrap();
+        crate::config::set_mcp_enabled("ghost", false).unwrap();
+        app.cfg.mcp.reload().await;
+
+        slash_command(&mut app, "mcp", &worker, 80);
+        assert!(overlay_text(&app).contains("ghost  off"));
+
+        // Toggling on redraws as on with no state yet; the worker has
+        // not reconnected.
+        press(&mut app, &worker, KeyCode::Char(' '));
+        assert!(overlay_text(&app).contains("ghost  on   …"));
+
+        // The worker's reload resolves it, with the overlay still open.
+        app.cfg.mcp.reload().await;
+        let text = overlay_text(&app);
+        assert!(!text.contains('…'), "the placeholder resolves: {text}");
+        assert!(text.contains("ghost  on   failed"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn bad_input_reports_and_sends_nothing() {
+        let mut app = mcp_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // add needs both a name and a command.
+        slash_command(&mut app, "mcp add", &worker, 80);
+        slash_command(&mut app, "mcp add docs", &worker, 80);
+        assert!(printed(&app).contains("usage: /mcp"));
+
+        // Names feed the model-facing tool prefix, so junk is rejected.
+        slash_command(&mut app, "mcp add bad/name run it", &worker, 80);
+        assert!(printed(&app).contains("invalid server name: bad/name"));
+
+        // Removing something that was never added names the valid set.
+        slash_command(&mut app, "mcp remove nope", &worker, 80);
+        assert!(printed(&app).contains("unknown mcp server: nope"));
+
+        // Re-adding a server the user turned off edits it without
+        // enabling it, and says so rather than claiming to connect.
+        crate::config::save_mcp_server("docs", "run docs").unwrap();
+        crate::config::set_mcp_enabled("docs", false).unwrap();
+        slash_command(&mut app, "mcp add docs run other", &worker, 80);
+        let stored = crate::config::stored_mcp_servers();
+        assert_eq!(stored[0].command, "run other");
+        assert!(!stored[0].enabled, "an edit is not an enable");
+        assert!(printed(&app).contains("mcp server docs updated — still off"));
+        crate::config::remove_mcp_server("docs").unwrap();
+        while rx.try_recv().is_ok() {}
+
+        slash_command(&mut app, "mcp frobnicate", &worker, 80);
+        assert!(printed(&app).contains("usage: /mcp"));
+
+        assert!(crate::config::stored_mcp_servers().is_empty());
+        assert!(rx.try_recv().is_err(), "bad input sends nothing");
+    }
+}
+
+#[cfg(test)]
 mod stats_segment_tests {
     use super::*;
 
@@ -6320,6 +7412,7 @@ mod nested_rail_tests {
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
+            mcp: Default::default(),
         })
     }
 

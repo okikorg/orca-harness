@@ -6,6 +6,7 @@ members = [
     "crates/model-openrouter",
     "crates/tools",
     "crates/tools-web",
+    "crates/tools-mcp",
     "crates/extensions",
     "crates/cli",
 ]

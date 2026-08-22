@@ -66,6 +66,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
+        name: "mcp",
+        description: "toggle MCP servers, add <name> <command>, or remove <name>",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
         name: "usage",
         description: "session token totals, cache traffic, and context occupancy",
         category: "Session",
@@ -140,10 +146,11 @@ mod tests {
     fn prefix_matches_rank_before_substring_matches() {
         // "el" prefixes nothing but appears inside "help" and "models".
         assert_eq!(names(&filter_commands("el")), vec!["help", "models"]);
-        // "m" prefixes "models" and appears inside "compact" and "theme".
+        // "m" prefixes "models" and "mcp"; appears inside "compact" and
+        // "theme".
         assert_eq!(
             names(&filter_commands("m")),
-            vec!["models", "compact", "theme"]
+            vec!["models", "mcp", "compact", "theme"]
         );
         // "e" prefixes "expand" and "extensions"; appears inside every
         // other command except "quit"... which it doesn't contain.

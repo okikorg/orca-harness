@@ -95,6 +95,16 @@ pub async fn run<M: Model + Clone + 'static>(
         SubagentTool::new(model_for_subagents, ws)
             .max_depth(SubagentDepth::new(cfg.subagent_depth)),
     ));
+    // Configured MCP servers join headless runs too; connect status goes
+    // to stderr with the rest of the tool activity, and a server that
+    // fails to connect is skipped, never fatal.
+    let mcp = crate::mcp::McpServers::new();
+    for line in mcp.reload().await {
+        eprintln!("{line}");
+    }
+    for tool in mcp.tools() {
+        agent = agent.tool_arc(tool);
+    }
 
     let cancel = CancellationToken::new();
     let cancel_on_signal = cancel.clone();

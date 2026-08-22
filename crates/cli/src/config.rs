@@ -15,9 +15,16 @@
 //!   "theme": "nord",
 //!   "view": "split",
 //!   "approvals": { "/abs/workspace/root": ["shell", "write_file"] },
-//!   "extensions": { "truncation": true, "retry": false }
+//!   "extensions": { "truncation": true, "retry": false },
+//!   "mcp": {
+//!     "docs": { "command": "npx -y mcp-remote https://…", "enabled": true },
+//!     "fetch": "uvx mcp-server-fetch"
+//!   }
 //! }
 //! ```
+//!
+//! An MCP entry may be a bare command string (always enabled) or the
+//! object form above; toggling one in `/mcp` promotes it to the object.
 
 use std::fs;
 use std::io;
@@ -146,6 +153,94 @@ pub fn remove_approval(workspace: &str, tool: &str) -> io::Result<PathBuf> {
     mutate_section("approvals", workspace, move |entry| {
         if let Some(tools) = entry.as_array_mut() {
             tools.retain(|t| t.as_str() != Some(&tool));
+        }
+    })
+}
+
+/// One configured MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    /// Disabled servers stay configured but are not connected, so the
+    /// /mcp overlay can toggle one off without losing its command.
+    pub enabled: bool,
+}
+
+/// Configured MCP servers, blank commands ignored. The config map is
+/// ordered, so listings and reconnect order are deterministic.
+///
+/// Both entry shapes are accepted: a bare command string (always
+/// enabled — the shape written before toggles existed) and the object
+/// form `{"command": "...", "enabled": false}`.
+pub fn stored_mcp_servers() -> Vec<McpServer> {
+    let Some(root) = load_root() else {
+        return Vec::new();
+    };
+    root["mcp"]
+        .as_object()
+        .map(|servers| {
+            servers
+                .iter()
+                .filter_map(|(name, entry)| {
+                    let command = match entry {
+                        Value::Object(fields) => fields.get("command")?.as_str()?,
+                        other => other.as_str()?,
+                    }
+                    .trim();
+                    (!command.is_empty()).then(|| McpServer {
+                        name: name.clone(),
+                        command: command.to_string(),
+                        // Anything but an explicit `false` is enabled,
+                        // so a hand-edited config never silently hides
+                        // a server.
+                        enabled: entry["enabled"] != json!(false),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Save (or replace) an MCP server's launch command, keeping whatever
+/// enabled state it already had; the worker reconnects so it applies to
+/// the next run.
+pub fn save_mcp_server(name: &str, command: &str) -> io::Result<PathBuf> {
+    let command = command.to_string();
+    mutate_section("mcp", name, move |entry| {
+        let enabled = entry["enabled"] != json!(false);
+        *entry = json!({ "command": command, "enabled": enabled });
+    })
+}
+
+/// Enable or disable a configured server without forgetting its
+/// command. Unknown names are a no-op — the caller lists first.
+pub fn set_mcp_enabled(name: &str, enabled: bool) -> io::Result<PathBuf> {
+    let name = name.to_string();
+    mutate_root(move |root| {
+        let Some(entry) = root
+            .get_mut("mcp")
+            .and_then(Value::as_object_mut)
+            .and_then(|servers| servers.get_mut(&name))
+        else {
+            return;
+        };
+        // Promote the bare-string shape on first toggle.
+        if let Some(command) = entry.as_str() {
+            *entry = json!({ "command": command });
+        }
+        if let Some(fields) = entry.as_object_mut() {
+            fields.insert("enabled".into(), json!(enabled));
+        }
+    })
+}
+
+/// Forget a configured MCP server; the next reconnect drops its tools.
+pub fn remove_mcp_server(name: &str) -> io::Result<PathBuf> {
+    let name = name.to_string();
+    mutate_root(move |root| {
+        if let Some(servers) = root.get_mut("mcp").and_then(Value::as_object_mut) {
+            servers.remove(&name);
         }
     })
 }
@@ -387,6 +482,104 @@ mod tests {
         // Non-boolean garbage reads as unset, not as a state.
         seed(r#"{"extensions": {"retry": "yes"}}"#);
         assert_eq!(stored_extension("retry"), None);
+    }
+
+    /// A (name, command, enabled) view of the stored servers.
+    #[cfg(test)]
+    fn listed() -> Vec<(String, String, bool)> {
+        stored_mcp_servers()
+            .into_iter()
+            .map(|s| (s.name, s.command, s.enabled))
+            .collect()
+    }
+
+    #[test]
+    fn mcp_servers_round_trip_and_are_removable() {
+        assert!(stored_mcp_servers().is_empty());
+
+        save_mcp_server("docs", "npx -y some-server /tmp").unwrap();
+        save_mcp_server("db", "uvx db-server").unwrap();
+        assert_eq!(
+            listed(),
+            [
+                ("db".to_string(), "uvx db-server".to_string(), true),
+                (
+                    "docs".to_string(),
+                    "npx -y some-server /tmp".to_string(),
+                    true
+                ),
+            ]
+        );
+
+        // Re-adding a name replaces its command.
+        save_mcp_server("docs", "npx -y other-server").unwrap();
+        assert_eq!(listed()[1].1, "npx -y other-server");
+
+        remove_mcp_server("docs").unwrap();
+        assert_eq!(stored_mcp_servers().len(), 1);
+        // Removing an unknown name is a no-op, not an error.
+        remove_mcp_server("nope").unwrap();
+        assert_eq!(stored_mcp_servers().len(), 1);
+        // Servers coexist with the other sections.
+        save_key("openai", "sk-1").unwrap();
+        assert_eq!(stored_mcp_servers().len(), 1);
+
+        // Blank or unusable commands read as absent, not as servers:
+        // a blank string, a number, an object with no command, and an
+        // object whose command is blank.
+        seed(
+            r#"{"mcp": {
+                "a": "  ",
+                "b": 7,
+                "c": "run c",
+                "d": {"enabled": true},
+                "e": {"command": " "},
+                "f": {"command": "run f", "enabled": false}
+            }}"#,
+        );
+        assert_eq!(
+            listed(),
+            [
+                ("c".to_string(), "run c".to_string(), true),
+                ("f".to_string(), "run f".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn toggling_preserves_the_command_and_promotes_the_string_shape() {
+        // The bare-string shape written before toggles existed reads as
+        // enabled and survives a disable.
+        seed(r#"{"mcp": {"docs": "npx -y some-server"}}"#);
+        assert_eq!(
+            listed(),
+            [("docs".into(), "npx -y some-server".into(), true)]
+        );
+
+        set_mcp_enabled("docs", false).unwrap();
+        assert_eq!(
+            listed(),
+            [("docs".to_string(), "npx -y some-server".to_string(), false)]
+        );
+
+        // Re-saving a disabled server's command keeps it disabled: an
+        // edit is not an enable.
+        save_mcp_server("docs", "npx -y other-server").unwrap();
+        assert_eq!(
+            listed(),
+            [("docs".to_string(), "npx -y other-server".to_string(), false)]
+        );
+
+        set_mcp_enabled("docs", true).unwrap();
+        assert!(listed()[0].2);
+
+        // Toggling a name that is not configured is a no-op, not an
+        // error and not a new entry.
+        set_mcp_enabled("nope", false).unwrap();
+        assert_eq!(stored_mcp_servers().len(), 1);
+        seed("{}");
+        set_mcp_enabled("nope", false).unwrap();
+        assert!(stored_mcp_servers().is_empty());
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod components;
 mod config;
 mod extensions;
 mod headless;
+mod mcp;
 mod msg;
 mod tui;
 mod view;
@@ -408,6 +409,7 @@ async fn worker<F>(
     mut endpoint: Endpoint,
     build: F,
     store: TruncationStore,
+    mcp: mcp::McpServers,
     session: Option<Arc<SessionHandler>>,
     mut context: Context,
     mut commands: mpsc::UnboundedReceiver<WorkerCmd>,
@@ -540,6 +542,14 @@ async fn worker<F>(
             WorkerCmd::ReloadExtensions => {
                 // The UI already saved the toggle; build_agent reads the
                 // config, so rebuilding is all that is left to do.
+                agent = build(&endpoint);
+            }
+            WorkerCmd::ReloadMcp => {
+                // The UI already saved the add/remove; reconnect, report
+                // per server, and rebuild so the tool set matches.
+                for line in mcp.reload().await {
+                    let _ = ui.send(UiMsg::Notice(line));
+                }
                 agent = build(&endpoint);
             }
         }
@@ -728,6 +738,13 @@ async fn run_mode(cfg: Config) -> ExitCode {
     // One store for the whole session: agent rebuilds (model/provider
     // swaps) keep it, so read_tool_result and /compact recovery survive.
     let store = TruncationStore::default();
+    // Connect the configured MCP servers before the first build so their
+    // tools are in the first agent; status lines land in the transcript
+    // once the TUI starts draining the channel.
+    let mcp = mcp::McpServers::new();
+    for line in mcp.reload().await {
+        let _ = ui_tx.send(UiMsg::Notice(line));
+    }
     let build = {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
@@ -735,6 +752,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         let stats = stats.clone();
         let store = store.clone();
         let session = session.clone();
+        let mcp = mcp.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
@@ -746,14 +764,18 @@ async fn run_mode(cfg: Config) -> ExitCode {
                 &stats,
                 &store,
                 &session,
+                &mcp,
             )
         }
     };
     let agent = build(&endpoint);
     let initial_provider = endpoint.provider;
     let session_id = session.as_ref().map(|s| s.session_id());
+    // The TUI reads per-server tool counts off the same handle the
+    // worker reloads; /mcp renders whatever the last reload recorded.
+    let tui_mcp = mcp.clone();
     tokio::spawn(worker(
-        agent, system, endpoint, build, store, session, context, cmd_rx, ui_tx,
+        agent, system, endpoint, build, store, mcp, session, context, cmd_rx, ui_tx,
     ));
 
     let tui_cfg = tui::TuiConfig {
@@ -764,6 +786,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         subagent_depth,
         stats,
         session_id,
+        mcp: tui_mcp,
     };
     match tui::run(tui_cfg, cmd_tx, ui_rx).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -784,6 +807,7 @@ fn build_agent<M: Model + Clone + 'static>(
     stats: &BackgroundStats,
     store: &TruncationStore,
     session: &Option<Arc<SessionHandler>>,
+    mcp: &mcp::McpServers,
 ) -> Agent<M> {
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
@@ -815,6 +839,9 @@ fn build_agent<M: Model + Clone + 'static>(
         agent = agent
             .tool_arc(std::sync::Arc::new(WebSearchTool::new(fc.clone())))
             .tool_arc(std::sync::Arc::new(WebCrawlTool::new(fc)));
+    }
+    for tool in mcp.tools() {
+        agent = agent.tool_arc(tool);
     }
     for tool in core_tools(ws) {
         agent = agent.tool_arc(tool);

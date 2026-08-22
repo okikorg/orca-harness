@@ -163,4 +163,8 @@ pub enum WorkerCmd {
     /// Rebuild the agent so the extension toggles saved in the config
     /// apply to the next run (the conversation context is kept).
     ReloadExtensions,
+    /// Reconnect the MCP servers saved in the config and rebuild the
+    /// agent so their tools apply to the next run (the conversation
+    /// context is kept).
+    ReloadMcp,
 }
