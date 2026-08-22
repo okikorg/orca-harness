@@ -7,6 +7,7 @@ members = [
     "crates/tools",
     "crates/tools-web",
     "crates/tools-mcp",
+    "crates/tools-skills",
     "crates/extensions",
     "crates/cli",
 ]
