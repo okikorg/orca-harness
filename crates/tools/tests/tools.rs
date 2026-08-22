@@ -179,6 +179,18 @@ async fn shell_reports_nonzero_exit_without_erroring() {
     assert_eq!(out["stderr"], json!("oops\n"));
 }
 
+/// `sh -c ""` exits 0 doing nothing; accepting it would report success
+/// for a command that never existed.
+#[tokio::test]
+async fn shell_rejects_an_empty_command() {
+    let shell = ShellTool::local();
+    let err = shell
+        .call(json!({"command": "   "}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("empty"), "got: {err}");
+}
+
 #[tokio::test]
 async fn shell_times_out() {
     let shell = ShellTool::local().timeout(Some(Duration::from_millis(150)));
@@ -431,6 +443,45 @@ async fn glob_matches_bare_anchored_and_recursive_patterns() {
         .unwrap();
     assert_eq!(out["matches"], json!(["src/a.rs", "src/deep/b.rs"]));
     assert_eq!(out["truncated"], json!(false));
+    assert!(
+        out.get("skippedDirs").is_none(),
+        "a clean walk reports no skips"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// An unreadable directory must be counted and reported, never silently
+/// dropped: the caller has to be able to tell "no match" from "could
+/// not look".
+#[cfg(unix)]
+#[tokio::test]
+async fn glob_counts_unreadable_directories_instead_of_dropping_them() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (ws, dir) = temp_ws();
+    let write = WriteFileTool::new(ws.clone());
+    for path in ["open/a.rs", "sealed/b.rs"] {
+        write
+            .call(json!({"path": path, "content": "x"}), &ctx())
+            .await
+            .unwrap();
+    }
+    let sealed = dir.join("sealed");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&sealed).is_ok() {
+        // Running as root: permission bits don't bite, the scenario
+        // cannot be built. Restore and bail.
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    }
+
+    let glob = GlobTool::new(ws.clone());
+    let out = glob.call(json!({"pattern": "*.rs"}), &ctx()).await.unwrap();
+    assert_eq!(out["matches"], json!(["open/a.rs"]));
+    assert_eq!(out["skippedDirs"], json!(1), "the sealed dir is reported");
+
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -468,6 +519,50 @@ async fn process_polls_a_background_command_until_output_arrives() {
     assert!(
         polled["output"].as_str().unwrap().contains("done"),
         "poll should wake on output, got: {polled}"
+    );
+}
+
+#[tokio::test]
+async fn process_spawn_rejects_an_empty_command() {
+    let tool = ProcessTool::local();
+    let err = tool
+        .call(json!({"action": "spawn", "command": ""}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("empty"), "got: {err}");
+}
+
+/// Once a poll reports `running: false` with no more buffered output,
+/// the story must be complete: output may never trickle in afterwards.
+/// Guards the exit-vs-drain window where a snapshot could pair "exited"
+/// with output still in the pipes.
+#[tokio::test]
+async fn process_exit_reports_never_hide_trailing_output() {
+    let tool = ProcessTool::local();
+    // Outlives spawn's settle window so the exit lands mid-polling.
+    let out = tool
+        .call(
+            json!({"action": "spawn", "command": "sleep 0.7; echo tail-marker"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    let id = out["id"].as_str().unwrap().to_string();
+    let mut collected = out["output"].as_str().unwrap().to_string();
+
+    for _ in 0..100 {
+        let polled = tool
+            .call(json!({"action": "poll", "id": id, "waitMs": 200}), &ctx())
+            .await
+            .unwrap();
+        collected.push_str(polled["output"].as_str().unwrap());
+        if polled["running"] == json!(false) && polled["moreOutput"] == json!(false) {
+            break;
+        }
+    }
+    assert!(
+        collected.contains("tail-marker"),
+        "an exit report must include all output, got: {collected:?}"
     );
 }
 

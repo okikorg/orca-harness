@@ -111,6 +111,10 @@ impl Tool for GlobTool {
 
         let mut matches = Vec::new();
         let mut truncated = false;
+        // Directories the walk could not open or finish reading. Counted
+        // and reported, never swallowed: a caller must be able to tell
+        // "no match" from "could not look".
+        let mut skipped_dirs: u64 = 0;
         let mut stack = vec![start.clone()];
 
         'outer: while let Some(dir) = stack.pop() {
@@ -119,9 +123,22 @@ impl Tool for GlobTool {
             }
             let mut rd = match fs::read_dir(&dir).await {
                 Ok(rd) => rd,
-                Err(_) => continue,
+                Err(_) => {
+                    skipped_dirs += 1;
+                    continue;
+                }
             };
-            while let Ok(Some(entry)) = rd.next_entry().await {
+            loop {
+                let entry = match rd.next_entry().await {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => break,
+                    Err(_) => {
+                        // Iteration died mid-directory; the rest of this
+                        // directory is unseen.
+                        skipped_dirs += 1;
+                        break;
+                    }
+                };
                 let name = entry.file_name();
                 if matches!(
                     name.to_str(),
@@ -156,7 +173,11 @@ impl Tool for GlobTool {
         }
 
         matches.sort();
-        Ok(json!({ "pattern": pattern, "matches": matches, "truncated": truncated }))
+        let mut out = json!({ "pattern": pattern, "matches": matches, "truncated": truncated });
+        if skipped_dirs > 0 {
+            out["skippedDirs"] = json!(skipped_dirs);
+        }
+        Ok(out)
     }
 }
 

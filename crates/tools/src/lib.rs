@@ -35,6 +35,7 @@
 mod files;
 mod fs_admin;
 mod glob;
+mod iogate;
 mod kernel;
 mod pgroup;
 mod process;

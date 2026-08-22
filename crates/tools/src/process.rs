@@ -206,12 +206,18 @@ impl ProcessTool {
     }
 
     fn snapshot(&self, id: &str, proc: &Proc) -> Value {
+        // Read the exit slot once, and before draining: `running` and
+        // `exitCode` must describe the same instant, and reading liveness
+        // first means an exit racing this snapshot shows up as "still
+        // running, output partial" (the next poll completes the story)
+        // rather than "exited" with output still in flight.
+        let exit = *proc.exit.lock().unwrap();
         let (output, dropped, more) = proc.buf.lock().unwrap().drain(self.max_output_bytes);
         let mut out = json!({
             "id": id,
             "output": output,
-            "running": proc.running(),
-            "exitCode": proc.exit_code(),
+            "running": exit.is_none(),
+            "exitCode": exit.flatten(),
             "moreOutput": more,
         });
         if dropped > 0 {
@@ -225,6 +231,9 @@ impl ProcessTool {
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`command` (string) is required for spawn"))?;
+        if command_str.trim().is_empty() {
+            return Err(ToolError::msg("`command` must not be empty"));
+        }
 
         if self.manager.procs.lock().unwrap().len() >= self.max_processes {
             return Err(ToolError::msg(format!(
@@ -335,6 +344,7 @@ impl ProcessTool {
 
         // Give fast-failing commands a chance to report immediately.
         let _ = tokio::time::timeout(self.settle, proc.done.cancelled()).await;
+        settle_exit(&proc).await;
         Ok(self.snapshot(&id, &proc))
     }
 
@@ -360,6 +370,7 @@ impl ProcessTool {
                 _ = tokio::time::sleep(wait) => {}
             }
         }
+        settle_exit(&proc).await;
         Ok(self.snapshot(&id, &proc))
     }
 
@@ -407,6 +418,7 @@ impl ProcessTool {
             _ = proc.done.cancelled() => {}
             _ = tokio::time::sleep(self.settle) => {}
         }
+        settle_exit(&proc).await;
         Ok(self.snapshot(&id, &proc))
     }
 
@@ -442,6 +454,18 @@ impl ProcessTool {
             .collect();
         entries.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
         json!({ "processes": entries })
+    }
+}
+
+/// Between a child's exit and `done` (readers drained, waiter finished)
+/// there is a window where a snapshot would pair "exited" with output
+/// still in the pipes — the poll race that misreports a process's final
+/// state. Callers about to snapshot an exited process wait the window
+/// out; the waiter fires `done` within its ~200ms drain grace, so the
+/// timeout is only a backstop against an aborted waiter.
+async fn settle_exit(proc: &Proc) {
+    if !proc.running() && !proc.done.is_cancelled() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), proc.done.cancelled()).await;
     }
 }
 

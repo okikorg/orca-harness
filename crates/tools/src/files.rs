@@ -63,6 +63,7 @@ impl Tool for ReadFileTool {
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         let path = self.ws.resolve(rel_arg(&input, "path")?)?;
+        let _io = crate::iogate::fs_permit().await;
         let bytes = fs::read(&path)
             .await
             .map_err(|e| ToolError::msg(format!("read failed: {e}")))?;
@@ -120,6 +121,7 @@ impl Tool for WriteFileTool {
         let content = take_string_arg(&mut input, "content")?;
         let bytes = content.len();
         let path = self.ws.resolve(&rel)?;
+        let _io = crate::iogate::fs_permit().await;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -184,6 +186,7 @@ impl Tool for EditFileTool {
             return Err(ToolError::msg("`old` must not be empty"));
         }
         let path = self.ws.resolve(rel)?;
+        let _io = crate::iogate::fs_permit().await;
         let content = fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::msg(format!("read failed: {e}")))?;
@@ -264,6 +267,7 @@ impl Tool for ListDirTool {
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         let rel = input.get("path").and_then(Value::as_str).unwrap_or(".");
         let dir = self.ws.resolve(rel)?;
+        let _io = crate::iogate::fs_permit().await;
         let mut entries = fs::read_dir(&dir)
             .await
             .map_err(|e| ToolError::msg(format!("read_dir failed: {e}")))?;

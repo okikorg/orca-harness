@@ -193,6 +193,11 @@ impl Tool for ShellTool {
             .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`command` (string) is required"))?;
+        if command_str.trim().is_empty() {
+            // `sh -c ""` exits 0 doing nothing; succeeding silently would
+            // tell the model its (missing) command worked.
+            return Err(ToolError::msg("`command` must not be empty"));
+        }
 
         let mut child = self
             .build_command(command_str)

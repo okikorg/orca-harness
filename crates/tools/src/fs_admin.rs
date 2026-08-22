@@ -63,6 +63,7 @@ impl Tool for CopyFileTool {
         let to_rel = rel_arg(&input, "to")?;
         let from = self.ws.resolve(from_rel)?;
         let to = self.ws.resolve(to_rel)?;
+        let _io = crate::iogate::fs_permit().await;
         let meta = fs::metadata(&from)
             .await
             .map_err(|e| ToolError::msg(format!("source not readable: {e}")))?;
@@ -132,6 +133,7 @@ impl Tool for RenameFileTool {
         let to_rel = rel_arg(&input, "to")?;
         let from = self.ws.resolve(from_rel)?;
         let to = self.ws.resolve(to_rel)?;
+        let _io = crate::iogate::fs_permit().await;
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -195,6 +197,7 @@ impl Tool for DeleteFileTool {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let path = self.ws.resolve(rel)?;
+        let _io = crate::iogate::fs_permit().await;
         let meta = fs::symlink_metadata(&path)
             .await
             .map_err(|e| ToolError::msg(format!("not found: {e}")))?;
@@ -246,6 +249,7 @@ impl Tool for CreateFolderTool {
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         let rel = rel_arg(&input, "path")?;
         let path = self.ws.resolve(rel)?;
+        let _io = crate::iogate::fs_permit().await;
         fs::create_dir_all(&path)
             .await
             .map_err(|e| ToolError::msg(format!("mkdir failed: {e}")))?;
@@ -283,6 +287,7 @@ impl Tool for FileInfoTool {
     async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         let rel = rel_arg(&input, "path")?;
         let path = self.ws.resolve(rel)?;
+        let _io = crate::iogate::fs_permit().await;
         let meta = match fs::symlink_metadata(&path).await {
             Ok(m) => m,
             Err(_) => return Ok(json!({ "path": rel, "exists": false })),
