@@ -1247,13 +1247,13 @@ fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
         .copied()
 }
 
-/// A compact transcript notification: the shared accent glyph makes status
-/// changes scannable without increasing their visual weight.
+/// A compact transcript notification: the hollow diamond separates system
+/// status from the `› input` / `· output` language without adding weight.
 fn push_notice(app: &mut App, text: impl Into<String>) {
     let t = theme();
     app.push_line(Line::from(vec![
-        Span::styled("› ", t.accent),
-        Span::styled(text.into(), t.dim),
+        Span::styled("◇ ", t.accent),
+        Span::styled(text.into(), Style::default()),
     ]));
 }
 
@@ -4853,9 +4853,9 @@ mod tests {
         push_notice(&mut app, "theme set to default");
 
         let notice = app.pending_history.last().expect("notification line");
-        assert_eq!(line_text(notice), "› theme set to default");
+        assert_eq!(line_text(notice), "◇ theme set to default");
         assert_eq!(notice.spans[0].style, theme().accent);
-        assert_eq!(notice.spans[1].style, theme().dim);
+        assert_eq!(notice.spans[1].style, Style::default());
     }
 
     #[test]

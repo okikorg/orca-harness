@@ -102,7 +102,7 @@ impl McpServers {
                 // reported by /mcp remove already; only disabling and
                 // re-command are worth a line here.
                 if configured.iter().any(|s| &s.name == name) {
-                    lines.push(format!("mcp {name}: disconnected"));
+                    lines.push(format!("MCP {name} disconnected"));
                 }
             }
         }
@@ -122,7 +122,7 @@ impl McpServers {
                         1 => "1 tool".to_string(),
                         n => format!("{n} tools"),
                     };
-                    lines.push(format!("mcp {}: connected, {count}", server.name));
+                    lines.push(format!("MCP {} connected · {count}", server.name));
                     Connection {
                         command: server.command.clone(),
                         tools,
@@ -130,7 +130,7 @@ impl McpServers {
                     }
                 }
                 Err(err) => {
-                    lines.push(format!("mcp {}: {err}", server.name));
+                    lines.push(format!("MCP {} · {err}", server.name));
                     Connection {
                         command: server.command.clone(),
                         tools: Vec::new(),
@@ -162,7 +162,7 @@ mod tests {
         crate::config::save_mcp_server("ghost", "orca-no-such-binary-xyz").unwrap();
         let lines = servers.reload().await;
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("mcp ghost:"), "line: {}", lines[0]);
+        assert!(lines[0].starts_with("MCP ghost ·"), "line: {}", lines[0]);
         assert!(servers.tools().is_empty());
         assert!(matches!(servers.state("ghost"), Some(McpState::Failed(_))));
     }
@@ -182,7 +182,7 @@ mod tests {
         assert!(matches!(servers.state("ghost"), Some(McpState::Failed(_))));
 
         crate::config::set_mcp_enabled("ghost", false).unwrap();
-        assert_eq!(servers.reload().await, ["mcp ghost: disconnected"]);
+        assert_eq!(servers.reload().await, ["MCP ghost disconnected"]);
         assert_eq!(servers.state("ghost"), None);
 
         crate::config::set_mcp_enabled("ghost", true).unwrap();
