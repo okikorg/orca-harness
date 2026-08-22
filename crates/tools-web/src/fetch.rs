@@ -72,6 +72,25 @@ fn is_texty(mime: &str) -> bool {
         || mime.is_empty()
 }
 
+/// Some servers omit or mislabel `Content-Type`. Detect document-shaped HTML
+/// so markup never leaks into the model response just because the header is
+/// wrong. Deliberately require a document-level marker to avoid treating plain
+/// text containing an inline tag as a full HTML page.
+fn looks_like_html(text: &str) -> bool {
+    let start = text.trim_start().get(..512).unwrap_or(text.trim_start());
+    let start = start.to_ascii_lowercase();
+    start.starts_with("<!doctype html")
+        || start.starts_with("<html")
+        || start.contains("<head")
+        || start.contains("<body")
+}
+
+fn html_to_markdown(html: &str) -> Result<String, ToolError> {
+    html_to_markdown_rs::convert(html, None)
+        .map(|result| result.content.unwrap_or_default())
+        .map_err(|e| ToolError::msg(format!("HTML conversion failed: {e}")))
+}
+
 #[async_trait]
 impl Tool for WebFetchTool {
     fn schema(&self) -> ToolSchema {
@@ -84,8 +103,7 @@ impl Tool for WebFetchTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "Absolute http(s) URL."},
-                    "raw": {"type": "boolean", "default": false, "description": "Skip HTML-to-markdown conversion."}
+                    "url": {"type": "string", "description": "Absolute http(s) URL."}
                 },
                 "required": ["url"]
             }),
@@ -97,7 +115,6 @@ impl Tool for WebFetchTool {
             .get("url")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`url` (string) is required"))?;
-        let raw = input.get("raw").and_then(Value::as_bool).unwrap_or(false);
         let mut url =
             Url::parse(url_str).map_err(|e| ToolError::msg(format!("invalid URL: {e}")))?;
 
@@ -189,13 +206,9 @@ impl Tool for WebFetchTool {
         }
 
         let text = String::from_utf8_lossy(&body).into_owned();
-        let is_html = mime.contains("html");
-        let content = if is_html && !raw {
-            htmd::HtmlToMarkdown::builder()
-                .skip_tags(vec!["script", "style", "head"])
-                .build()
-                .convert(&text)
-                .map_err(|e| ToolError::msg(format!("HTML conversion failed: {e}")))?
+        let is_html = mime.contains("html") || looks_like_html(&text);
+        let content = if is_html {
+            html_to_markdown(&text)?
         } else {
             text
         };

@@ -53,7 +53,8 @@ async fn spawn_server(responses: Vec<String>) -> SocketAddr {
 #[tokio::test]
 async fn fetch_converts_html_to_markdown() {
     let html = "<html><head><title>t</title></head><body>\
-                <h1>Title</h1><p>Hello <b>world</b></p>\
+                <nav>Home Pricing</nav><h1>Title</h1><p>Hello <b>world</b></p>\
+                <form><button>Subscribe</button></form>\
                 <script>evil()</script></body></html>";
     let addr = spawn_server(vec![http_response(
         "200 OK",
@@ -75,8 +76,41 @@ async fn fetch_converts_html_to_markdown() {
     );
     assert!(content.contains("**world**"), "bold kept: {content}");
     assert!(!content.contains("evil"), "script stripped: {content}");
+    assert!(
+        !content.contains("Pricing"),
+        "navigation stripped: {content}"
+    );
+    assert!(!content.contains("Subscribe"), "forms stripped: {content}");
+    assert!(!content.contains('<'), "HTML tags stripped: {content}");
     assert_eq!(out["status"], json!(200));
     assert_eq!(out["truncated"], json!(false));
+}
+
+#[tokio::test]
+async fn fetch_converts_html_with_a_wrong_content_type() {
+    let html = "<!doctype html><html><body><main><h1>Useful</h1><p>Context</p></main>\
+                <script>metadata()</script></body></html>";
+    let addr = spawn_server(vec![http_response("200 OK", "text/plain", "", html)]).await;
+
+    let tool = WebFetchTool::new(UrlPolicy::strict().allow_private());
+    let out = tool
+        .call(json!({"url": format!("http://{addr}/mislabelled")}), &ctx())
+        .await
+        .unwrap();
+    let content = out["content"].as_str().unwrap();
+    assert!(
+        content.contains("# Useful"),
+        "markdown heading in: {content}"
+    );
+    assert!(content.contains("Context"), "page content kept: {content}");
+    assert!(!content.contains("metadata"), "script stripped: {content}");
+    assert!(!content.contains('<'), "HTML tags stripped: {content}");
+}
+
+#[test]
+fn fetch_schema_does_not_offer_raw_html() {
+    let schema = WebFetchTool::default().schema();
+    assert!(schema.parameters["properties"].get("raw").is_none());
 }
 
 #[tokio::test]
