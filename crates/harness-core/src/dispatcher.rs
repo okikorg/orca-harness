@@ -7,6 +7,15 @@
 //! cancellation and deadlines, normalizes failures, and restores
 //! deterministic model-visible ordering.
 //!
+//! Interruptions are per-call, not per-batch: when cancellation or the
+//! run deadline fires mid-dispatch, calls that finished keep their real
+//! results and only the interrupted calls carry an error saying what
+//! stopped them and when. The run-level consequence (ending the loop)
+//! belongs to the agent loop, which checks the token and deadline before
+//! each model step. Dropping completed work would force the host to
+//! stamp every call with a synthetic error the transcript cannot
+//! distinguish from failure.
+//!
 //! Scheduling model:
 //! - every running call holds one semaphore permit (`max_parallel_tools`);
 //! - `Parallel` calls take a read lock, `Serial` calls a write lock on a
@@ -162,13 +171,13 @@ impl Dispatcher {
                 None
             };
 
-            let mut join_set: JoinSet<Result<Chain, HarnessError>> = JoinSet::new();
+            let mut join_set: JoinSet<Chain> = JoinSet::new();
             for job in grouping.singles.drain(..) {
                 let shared = shared.clone();
                 join_set.spawn(async move {
                     let index = job.index;
-                    let result = shared.run_job(job).await?;
-                    Ok(Chain::One(index, result))
+                    let result = shared.run_job(job).await;
+                    Chain::One(index, result)
                 });
             }
             for chain in grouping.chains.drain(..) {
@@ -177,9 +186,9 @@ impl Dispatcher {
                     let mut out = Vec::with_capacity(chain.len());
                     for job in chain {
                         let index = job.index;
-                        out.push((index, shared.run_job(job).await?));
+                        out.push((index, shared.run_job(job).await));
                     }
-                    Ok(Chain::Many(out))
+                    Chain::Many(out)
                 });
             }
 
@@ -191,34 +200,22 @@ impl Dispatcher {
             };
             for job in inline_jobs {
                 let index = job.index;
-                match shared.run_job(job).await {
-                    Ok(result) => {
-                        executed[index] = true;
-                        slots[index] = Some(result);
-                    }
-                    Err(err) => {
-                        failure = Some(err);
-                        join_set.abort_all();
-                        break;
-                    }
-                }
+                let result = shared.run_job(job).await;
+                executed[index] = true;
+                slots[index] = Some(result);
             }
 
             while let Some(joined) = join_set.join_next().await {
                 match joined {
-                    Ok(Ok(Chain::One(index, result))) => {
+                    Ok(Chain::One(index, result)) => {
                         executed[index] = true;
                         slots[index] = Some(result);
                     }
-                    Ok(Ok(Chain::Many(pairs))) => {
+                    Ok(Chain::Many(pairs)) => {
                         for (index, result) in pairs {
                             executed[index] = true;
                             slots[index] = Some(result);
                         }
-                    }
-                    Ok(Err(err)) => {
-                        failure.get_or_insert(err);
-                        join_set.abort_all();
                     }
                     Err(join_err) if join_err.is_cancelled() => {}
                     Err(join_err) => {
@@ -273,24 +270,34 @@ struct SharedExecution {
 }
 
 impl SharedExecution {
-    async fn run_job(&self, job: Job) -> Result<ToolResult, HarnessError> {
+    /// Execute one job to a definite result. Interruptions (cancellation,
+    /// the run deadline) land in this call's own result slot as an error
+    /// naming what stopped it and whether it had started, so completed
+    /// siblings keep their outputs.
+    async fn run_job(&self, job: Job) -> ToolResult {
+        let call = &self.calls[job.index];
         // Permit first, then lock — see module docs for why this order
         // is deadlock-free.
         let _permit = match &self.semaphore {
-            Some(semaphore) => Some(
-                self.guarded(semaphore.acquire())
-                    .await?
-                    .map_err(|e| HarnessError::Internal(e.to_string()))?,
-            ),
+            Some(semaphore) => match self.guarded(semaphore.acquire()).await {
+                Ok(Ok(permit)) => Some(permit),
+                Ok(Err(closed)) => return ToolResult::error(call, closed.to_string()),
+                Err(err) => return ToolResult::error(call, interrupted(&err, "before execution")),
+            },
             None => None,
         };
         let _lock: Option<Hold<'_>> = match &self.exclusivity {
-            Some(lock) if job.exclusive => Some(Hold::Exclusive(self.guarded(lock.write()).await?)),
-            Some(lock) => Some(Hold::Shared(self.guarded(lock.read()).await?)),
+            Some(lock) if job.exclusive => match self.guarded(lock.write()).await {
+                Ok(guard) => Some(Hold::Exclusive(guard)),
+                Err(err) => return ToolResult::error(call, interrupted(&err, "before execution")),
+            },
+            Some(lock) => match self.guarded(lock.read()).await {
+                Ok(guard) => Some(Hold::Shared(guard)),
+                Err(err) => return ToolResult::error(call, interrupted(&err, "before execution")),
+            },
             None => None,
         };
 
-        let call = &self.calls[job.index];
         let ctx = crate::tool::ToolContext {
             call_id: call.id.clone(),
             tool_name: call.name.clone(),
@@ -303,11 +310,11 @@ impl SharedExecution {
             tool: job.tool.as_ref(),
             ctx: &ctx,
         };
-        let outcome = self.guarded(next.run(job.input)).await?;
-        Ok(match outcome {
-            Ok(output) => ToolResult::ok(call, output),
-            Err(err) => ToolResult::error(call, err.message),
-        })
+        match self.guarded(next.run(job.input)).await {
+            Ok(Ok(output)) => ToolResult::ok(call, output),
+            Ok(Err(err)) => ToolResult::error(call, err.message),
+            Err(err) => ToolResult::error(call, interrupted(&err, "during execution")),
+        }
     }
 
     /// Race a future against cancellation and the run deadline.
@@ -336,6 +343,16 @@ impl SharedExecution {
 enum Hold<'a> {
     Shared(#[allow(dead_code)] tokio::sync::RwLockReadGuard<'a, ()>),
     Exclusive(#[allow(dead_code)] tokio::sync::RwLockWriteGuard<'a, ()>),
+}
+
+/// The model-visible message for a call the kernel had to interrupt.
+/// `phase` tells the model whether the tool ran at all.
+fn interrupted(err: &HarnessError, phase: &str) -> String {
+    match err {
+        HarnessError::Cancelled => format!("cancelled {phase}"),
+        HarnessError::DeadlineExceeded => format!("run deadline exceeded {phase}"),
+        other => format!("{other} {phase}"),
+    }
 }
 
 /// Groups jobs so that each chain runs sequentially in call order while

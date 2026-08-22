@@ -351,6 +351,43 @@ async fn max_parallel_tools_limit_is_enforced() {
     );
 }
 
+/// The default limits impose no parallelism ceiling: 20 calls that all
+/// block on one barrier can only finish if every one of them is in
+/// flight at once. (A bounded default — the old 8 — deadlocks this.)
+#[tokio::test(flavor = "multi_thread")]
+async fn default_limits_fan_out_unbounded() {
+    const N: usize = 20;
+    let barrier = Arc::new(tokio::sync::Barrier::new(N));
+    let fanout = {
+        let barrier = barrier.clone();
+        FnTool::new(
+            "fanout",
+            "barrier tool",
+            json!({"type": "object"}),
+            move |_input, _ctx| {
+                let barrier = barrier.clone();
+                async move {
+                    barrier.wait().await;
+                    Ok(Value::Null)
+                }
+            },
+        )
+    };
+    let model = ScriptedModel::tool_round(
+        (0..N)
+            .map(|i| call(&format!("call_{i}"), "fanout", json!({})))
+            .collect(),
+        "done",
+    );
+    // Deliberately no .limits(): the default must not cap the fan-out.
+    let agent = Agent::new(model).tool(fanout);
+    let answer = timeout(RUN_TIMEOUT, agent.run("default width"))
+        .await
+        .expect("a bounded default would deadlock the barrier")
+        .unwrap();
+    assert_eq!(answer, "done");
+}
+
 /// Cancelling the run token terminates a fan-out whose tools would
 /// otherwise sleep forever.
 #[tokio::test(flavor = "multi_thread")]
@@ -525,6 +562,151 @@ async fn tools_can_observe_cancellation_cooperatively() {
     // against the dispatcher's own select, so only assert the signal
     // reached the tool context by construction of the test above).
     let _ = saw_cancel.load(Ordering::SeqCst);
+}
+
+/// An interruption mid-batch must not discard completed sibling results:
+/// the finished call keeps its real output; only the interrupted call
+/// carries an error saying what stopped it. (Previously one cancelled
+/// call failed the whole dispatch and every result was dropped.)
+#[tokio::test(flavor = "multi_thread")]
+async fn cancellation_preserves_completed_sibling_results() {
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+
+    let token = CancellationToken::new();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let fast = {
+        let barrier = barrier.clone();
+        FnTool::new(
+            "fast",
+            "returns once both are in flight",
+            json!({"type": "object"}),
+            move |_input, _ctx| {
+                let barrier = barrier.clone();
+                async move {
+                    barrier.wait().await;
+                    Ok(json!({"ok": true}))
+                }
+            },
+        )
+    };
+    let hang = {
+        let barrier = barrier.clone();
+        let token = token.clone();
+        FnTool::new(
+            "hang",
+            "cancels the run, then never returns",
+            json!({"type": "object"}),
+            move |_input, _ctx| {
+                let barrier = barrier.clone();
+                let token = token.clone();
+                async move {
+                    barrier.wait().await;
+                    // Let the fast sibling finish well before the cancel.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    token.cancel();
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Ok(Value::Null)
+                }
+            },
+        )
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(fast));
+    tools.register(Arc::new(hang));
+
+    let results = timeout(
+        RUN_TIMEOUT,
+        Dispatcher::new().execute(
+            vec![
+                call("c_fast", "fast", json!({})),
+                call("c_hang", "hang", json!({})),
+            ],
+            &tools,
+            &ExtensionRegistry::new(),
+            &token,
+            None,
+            4,
+        ),
+    )
+    .await
+    .expect("cancellation must resolve the batch, not hang it")
+    .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert!(
+        !results[0].is_error,
+        "completed call keeps its result: {:?}",
+        results[0]
+    );
+    assert_eq!(results[0].output, json!({"ok": true}));
+    assert!(results[1].is_error);
+    assert!(
+        results[1].output["error"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled"),
+        "interrupted call must say so: {:?}",
+        results[1]
+    );
+}
+
+/// Same batch-honesty guarantee for the run deadline: the call that
+/// finished under the deadline keeps its output, the one that blew it
+/// gets a deadline error.
+#[tokio::test(flavor = "multi_thread")]
+async fn deadline_preserves_completed_sibling_results() {
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+
+    let fast = FnTool::new(
+        "fast",
+        "instant",
+        json!({"type": "object"}),
+        |_input, _ctx| async move { Ok(json!({"ok": true})) },
+    );
+    let slow = FnTool::new(
+        "slow",
+        "sleeps 1h",
+        json!({"type": "object"}),
+        |_input, _ctx| async move {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            Ok(Value::Null)
+        },
+    );
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(fast));
+    tools.register(Arc::new(slow));
+
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
+    let results = timeout(
+        RUN_TIMEOUT,
+        Dispatcher::new().execute(
+            vec![
+                call("c_fast", "fast", json!({})),
+                call("c_slow", "slow", json!({})),
+            ],
+            &tools,
+            &ExtensionRegistry::new(),
+            &CancellationToken::new(),
+            Some(deadline),
+            4,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(!results[0].is_error, "got: {:?}", results[0]);
+    assert_eq!(results[0].output, json!({"ok": true}));
+    assert!(results[1].is_error);
+    assert!(
+        results[1].output["error"]
+            .as_str()
+            .unwrap()
+            .contains("deadline"),
+        "got: {:?}",
+        results[1]
+    );
 }
 
 /// Duplicate or empty call ids violate call/result pairing and are
