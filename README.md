@@ -5,19 +5,23 @@ privileged path tiny and adds capabilities through Extensions.
 
 > **The loop is sacred. Everything around it is extensible.**
 
-Orca Harness is an execution primitive, not the whole Orca platform. It is a
+Orca Harness is an execution primitive, not the whole Orca product. It is a
 standalone Cargo workspace inside the monorepo: nothing in the Go control
 plane or the Node sidecars depends on it, and it depends on nothing here.
+
+For a visual walkthrough of the design — the loop, dispatcher, extensions,
+tools, lifecycle, performance, and boundary — see
+[`docs/design.html`](docs/design.html).
 
 ## Boundary
 
 | Owner                      | Responsibilities                                                                                                                                                                                         |
 | :------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **The Harness owns**       | agent configuration, context, model invocation, the loop, tool dispatch, concurrent execution, cancellation, deadlines, limits, call/result pairing, deterministic ordering, and the Extension lifecycle |
-| **The Orca platform owns** | distributed scheduling, durable sessions, microVM lifecycle, networking, tenancy, fleet management, and control-plane APIs                                                                               |
+| **The surrounding system** | distributed scheduling, durable sessions, microVM lifecycle, networking, tenancy, fleet management, and control-plane APIs                                                                                |
 
 ```text
-            ORCA PLATFORM
+         AROUND THE HARNESS
 ┌────────────────────────────────────┐
 │  scheduling  sessions  isolation   │
 │  persistence  networking  scaling  │
@@ -189,7 +193,7 @@ results to the model:
 registering an unused one costs nothing on the hot path:
 
 - **EventStream** — turns the lifecycle into a typed `HarnessEvent` stream
-  delivered to a sink (closure or channel). Tags mirror a platform NDJSON
+  delivered to a sink (closure or channel). Tags mirror a standard NDJSON
   union (`assistant_delta`, `reasoning_delta`, `assistant`, `tool_call`,
   `tool_result`, `usage`, `result`, `error`) so a host can serialize them
   directly. This is the main seam for building on the harness.
@@ -266,6 +270,10 @@ started:
 ```bash
 cargo run --release --example fanout_probe -- 100 300   # batch size, iterations
 ```
+
+`./benchmarks/kernel.sh` runs that probe across batch sizes, records the
+results as JSON and holds them to a budget; `./benchmarks/startup.sh` does
+the same for the CLI's cold start. See [benchmarks/](benchmarks/).
 
 Measured on a 4-core Linux box (release build, tokio multi-thread):
 
@@ -360,7 +368,7 @@ up to a dozen node processes to Codex, omp, and Claude Code alike).
 Codex, Claude Code, and omp bundle a JavaScript runtime (Bun/Node); pi runs
 on a Node process — hence the order-of-magnitude gaps on both axes. A
 pure-Rust kernel sits next to `fx`, not next to the JS-bundled agents, which
-is what makes it cheap to embed as a platform's execution primitive
+is what makes it cheap to embed as a system's execution primitive
 (`ORCA_HARNESS_BIN`) and to run many agents per host.
 
 ## Develop
@@ -374,6 +382,8 @@ cargo run -p orca-harness-tools --example agent_with_tools
 cargo bench              # criterion suite: dispatch latency, fan-out,
                          # extension overhead, keyed scheduling
 cargo clippy --workspace --all-targets
+./benchmarks/kernel.sh   # dispatch + real-tool probes, budget-checked
+./benchmarks/startup.sh  # orcacode cold start, budget-checked
 ```
 
 From the repo root: `make harness-test` / `make harness-bench`.
@@ -393,4 +403,4 @@ errors — plus the OpenAI-compatible adapter and a basic benchmark suite.
 
 Deliberately not in the kernel: durable sessions, workflow DAGs, queues,
 planners, distributed scheduling, built-in memory, UI. Those belong to the
-platform, to Extensions, or to hosts like the `orcacode` CLI.
+surrounding system, to Extensions, or to hosts like the `orcacode` CLI.

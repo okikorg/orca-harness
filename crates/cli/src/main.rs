@@ -875,6 +875,15 @@ async fn run_mode(cfg: Config) -> ExitCode {
         }
     };
     let agent = build(&endpoint);
+    // Everything above is the cold-start path — arg parse, config load,
+    // skills scan, system prompt, session open, MCP connect, agent build.
+    // Everything below needs a terminal, so `ORCA_BENCH` stops here: it is
+    // what lets `benchmarks/startup.sh` time the whole startup without a
+    // TTY. Nothing else in the binary reads it.
+    if std::env::var("ORCA_BENCH").is_ok_and(|v| !v.trim().is_empty() && v != "0") {
+        eprintln!("ORCA_BENCH set: exiting after startup, before the terminal UI");
+        return ExitCode::SUCCESS;
+    }
     let initial_provider = endpoint.provider;
     let session_id = session.as_ref().map(|s| s.session_id());
     // The TUI reads per-server tool counts off the same handle the

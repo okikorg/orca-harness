@@ -7,3 +7,6 @@ target/
 compact_*.html
 compact_report*.json
 answer.txt
+benchmarks/results/**/*.json
+benchmarks/results/**/*.txt
+__pycache__/
