@@ -520,6 +520,7 @@ fn wrap_styled_verbatim(segments: &[(String, Style)], width: usize) -> Vec<Vec<S
     let mut lines = vec![Vec::new()];
     let mut current_len = 0usize;
     for (text, style) in segments {
+        let text = sanitize_cells(text);
         let mut chunk = String::new();
         for character in text.chars() {
             if current_len == width {
@@ -784,6 +785,7 @@ fn wrap_styled(segments: &[(String, Style)], width: usize) -> Vec<Vec<Span<'stat
     let mut current_len = 0usize;
     let mut pending_space = false;
     for (text, style) in segments {
+        let text = sanitize_cells(text);
         let mut word = String::new();
         for character in text.chars() {
             if character.is_whitespace() {
@@ -910,10 +912,71 @@ pub fn expand_output(name: &str, output: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Make arbitrary text safe to place in terminal cells: tabs expand to
+/// four-column stops, ANSI escape sequences are removed whole, and any
+/// other control character is dropped. A raw control byte in a cell is
+/// forwarded verbatim to the terminal, which moves the real cursor out
+/// of sync with the draw buffer; the differ then never repaints the
+/// cells the drift touched and ghost artifacts persist on screen.
+pub fn sanitize_cells(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(|c| c.is_control() && c != '\n') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut column = 0usize;
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        match character {
+            '\n' => {
+                out.push('\n');
+                column = 0;
+            }
+            '\t' => {
+                let pad = 4 - column % 4;
+                out.extend(std::iter::repeat_n(' ', pad));
+                column += pad;
+            }
+            '\u{1b}' => skip_escape_sequence(&mut chars),
+            c if c.is_control() => {}
+            c => {
+                out.push(c);
+                column += 1;
+            }
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Consume the rest of an ANSI escape sequence whose ESC was just read:
+/// CSI (`ESC [ … final-byte`), OSC (`ESC ] … BEL` or `ESC \`), or a
+/// single-character escape.
+fn skip_escape_sequence(chars: &mut std::str::Chars) {
+    match chars.next() {
+        Some('[') => {
+            for c in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    break;
+                }
+            }
+        }
+        Some(']') => {
+            let mut previous = ' ';
+            for c in chars.by_ref() {
+                if c == '\u{7}' || (previous == '\u{1b}' && c == '\\') {
+                    break;
+                }
+                previous = c;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Truncate to `max` chars, appending an ellipsis when cut. Multi-line
 /// input is flattened to its first line first.
 pub fn truncate_line(s: &str, max: usize) -> String {
-    let line = s.lines().next().unwrap_or("").trim_end();
+    let sanitized = sanitize_cells(s);
+    let line = sanitized.lines().next().unwrap_or("").trim_end();
     if line.chars().count() <= max {
         return line.to_string();
     }
@@ -1083,6 +1146,53 @@ mod tests {
         assert_eq!(truncate_line("hello", 10), "hello");
         assert_eq!(truncate_line("hello world", 8), "hello w…");
         assert_eq!(truncate_line("line one\nline two", 20), "line one");
+    }
+
+    #[test]
+    fn sanitize_expands_tabs_to_stops_and_drops_controls() {
+        // A raw tab in a cell moves the real terminal cursor to the next
+        // tab stop while the draw buffer budgets one column, desyncing
+        // the two and leaving ghost cells the differ never repaints.
+        assert_eq!(sanitize_cells("205M\t/Users/x"), "205M    /Users/x");
+        assert_eq!(sanitize_cells("ab\tc"), "ab  c");
+        assert_eq!(sanitize_cells("a\u{8}b\u{7}c\r"), "abc");
+        assert_eq!(sanitize_cells("plain text"), "plain text");
+        assert_eq!(
+            sanitize_cells("keeps\nnewlines\tok"),
+            "keeps\nnewlines    ok"
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_ansi_escape_sequences_whole() {
+        assert_eq!(sanitize_cells("\u{1b}[31mred\u{1b}[0m plain"), "red plain");
+        assert_eq!(sanitize_cells("\u{1b}]0;title\u{7}body"), "body");
+        assert_eq!(sanitize_cells("dangling\u{1b}"), "dangling");
+    }
+
+    #[test]
+    fn truncate_line_never_passes_control_bytes_through() {
+        assert_eq!(truncate_line("205M\t/tmp", 20), "205M    /tmp");
+        assert_eq!(truncate_line("\u{1b}[1mbold\u{1b}[0m", 20), "bold");
+    }
+
+    #[test]
+    fn code_lines_render_tabs_as_spaces_not_raw_cells() {
+        let lines = highlighted_code_lines("205M\t/Users/x\n12K\t/tmp/y\n", "text", 60, "");
+        for line in &lines {
+            for span in &line.spans {
+                assert!(
+                    !span.content.contains(|c: char| c.is_control()),
+                    "control byte reached a cell: {:?}",
+                    span.content
+                );
+            }
+        }
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(joined.contains("205M    /Users/x"));
     }
 
     #[test]
