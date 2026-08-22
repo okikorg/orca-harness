@@ -28,5 +28,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 futures-util = { version = "0.3", default-features = false }
 criterion = { version = "0.5", features = ["async_tokio"] }
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+
 [profile.bench]
 debug = true
