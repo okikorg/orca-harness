@@ -102,6 +102,9 @@ pub enum UiMsg {
     Approval(ApprovalRequest),
     /// The worker finished a run: final answer or error text.
     RunDone(Result<String, String>),
+    /// A user-invoked `!` shell command finished. Its tool result has
+    /// already been appended to the model context by the worker.
+    ShellDone,
     /// The endpoint's model catalog (already filtered), or the fetch error.
     Models(Result<Vec<ModelInfo>, String>),
     /// The worker switched the active model to this id.
@@ -145,6 +148,13 @@ pub enum WorkerCmd {
         prompt: String,
         cancel: CancellationToken,
     },
+    /// Run a user-entered `!` command as a synthetic shell tool call and
+    /// retain the paired call/result in model-visible context.
+    Shell {
+        command: String,
+        working_dir: String,
+        cancel: CancellationToken,
+    },
     /// Reset the conversation to just the system prompt.
     Clear,
     /// Deterministically compact the conversation in place.
@@ -167,4 +177,12 @@ pub enum WorkerCmd {
     /// agent so their tools apply to the next run (the conversation
     /// context is kept).
     ReloadMcp,
+    /// Rescan the skill directories and rebuild the agent so the
+    /// catalog the model sees matches what is on disk (the conversation
+    /// context is kept).
+    ReloadSkills,
+    /// Copy skills in from a folder or a repository, then rescan and
+    /// rebuild. Runs in the worker because cloning is slow and must not
+    /// block the interface.
+    InstallSkill { source: String, here: bool },
 }

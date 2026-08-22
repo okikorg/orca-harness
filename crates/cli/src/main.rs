@@ -11,6 +11,7 @@ mod extensions;
 mod headless;
 mod mcp;
 mod msg;
+mod skills;
 mod tui;
 mod view;
 
@@ -22,8 +23,8 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Limits, Message, Model, ToolResult};
 use orca_harness_extensions::{
-    compact, workspace_key, CompactConfig, EventStream, ReadToolResultTool, SessionFile,
-    SessionHandler, Truncation, TruncationStore,
+    compact, workspace_key, CompactConfig, EventStream, HarnessEvent, ReadToolResultTool,
+    SessionFile, SessionHandler, Truncation, TruncationStore,
 };
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
@@ -249,6 +250,12 @@ fn resolve_theme(explicit: Option<String>) -> String {
         .unwrap_or_else(|| "default".into())
 }
 
+/// The `skill` tool is deliberately absent from this list. Whether it is
+/// registered depends on what is on disk and on `/skills` toggles, both
+/// of which change mid-session — and this string is built once and
+/// re-pushed verbatim by `WorkerCmd::Clear`, so anything conditional
+/// written here goes stale. The tool's own description explains what a
+/// skill is and lists the catalog, and that is rebuilt with the agent.
 fn system_prompt(ws: &Workspace, web_search: bool) -> String {
     let web_tools = if web_search {
         ", web_fetch (fetch a URL as markdown), web_search, and web_crawl \
@@ -410,6 +417,7 @@ async fn worker<F>(
     build: F,
     store: TruncationStore,
     mcp: mcp::McpServers,
+    skills: skills::Skills,
     session: Option<Arc<SessionHandler>>,
     mut context: Context,
     mut commands: mpsc::UnboundedReceiver<WorkerCmd>,
@@ -417,6 +425,7 @@ async fn worker<F>(
 ) where
     F: Fn(&Endpoint) -> Agent<Arc<dyn Model>>,
 {
+    let mut user_shell_call_id = 0_u64;
     spawn_window_probe(&endpoint, ui.clone());
     while let Some(command) = commands.recv().await {
         match command {
@@ -431,6 +440,55 @@ async fn worker<F>(
                 }
                 let done = UiMsg::RunDone(result.map_err(|e| e.to_string()));
                 if ui.send(done).is_err() {
+                    return;
+                }
+            }
+            WorkerCmd::Shell {
+                command,
+                working_dir,
+                cancel,
+            } => {
+                use orca_harness_core::{Tool, ToolCall, ToolContext, ToolResult};
+
+                user_shell_call_id += 1;
+                let call = ToolCall {
+                    id: format!("user-shell-{user_shell_call_id}"),
+                    name: "shell".into(),
+                    arguments: serde_json::json!({ "command": command }),
+                };
+                context.push_user(format!(
+                    "!{}",
+                    call.arguments["command"].as_str().unwrap_or_default()
+                ));
+                context.push_assistant_tool_calls(None, vec![call.clone()]);
+                let _ = ui.send(UiMsg::Event(HarnessEvent::ToolCall {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    input: call.arguments.clone(),
+                }));
+
+                let tool = orca_harness_tools::ShellTool::local().working_dir(working_dir);
+                let tool_context = ToolContext {
+                    call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    cancellation: cancel,
+                    deadline: None,
+                };
+                let result = match tool.call(call.arguments.clone(), &tool_context).await {
+                    Ok(output) => ToolResult::ok(&call, output),
+                    Err(err) => ToolResult::error(&call, err.to_string()),
+                };
+                let _ = ui.send(UiMsg::Event(HarnessEvent::ToolResult {
+                    tool_call_id: result.call_id.clone(),
+                    tool_name: result.tool_name.clone(),
+                    output: result.output.clone(),
+                    is_error: result.is_error,
+                }));
+                context.append_tool_results(vec![result]);
+                if let Some(session) = &session {
+                    session.sync(&context);
+                }
+                if ui.send(UiMsg::ShellDone).is_err() {
                     return;
                 }
             }
@@ -548,6 +606,31 @@ async fn worker<F>(
                 // The UI already saved the add/remove; reconnect, report
                 // per server, and rebuild so the tool set matches.
                 for line in mcp.reload().await {
+                    let _ = ui.send(UiMsg::Notice(line));
+                }
+                agent = build(&endpoint);
+            }
+            WorkerCmd::InstallSkill { source, here } => {
+                match skills.add(&source, here).await {
+                    Ok(lines) => {
+                        for line in lines {
+                            let _ = ui.send(UiMsg::Notice(line));
+                        }
+                    }
+                    Err(err) => {
+                        let _ = ui.send(UiMsg::Notice(format!("skills add failed: {err}")));
+                    }
+                }
+                for line in skills.reload() {
+                    let _ = ui.send(UiMsg::Notice(line));
+                }
+                agent = build(&endpoint);
+            }
+            WorkerCmd::ReloadSkills => {
+                // Rescan (cheap) and rebuild, so a skill created or
+                // toggled while the session is open reaches the model's
+                // catalog. Silent when nothing about the scan changed.
+                for line in skills.reload() {
                     let _ = ui.send(UiMsg::Notice(line));
                 }
                 agent = build(&endpoint);
@@ -674,6 +757,11 @@ fn open_session(cfg: &Config, ws: &Workspace) -> Result<(SessionHandler, Option<
 /// lives in the worker and can be switched from the TUI at runtime.
 async fn run_mode(cfg: Config) -> ExitCode {
     let ws = Workspace::new(&cfg.workspace);
+    // Scanned before the prompt is built: whether the `skill` tool gets
+    // advertised depends on whether any skill was found, and the scan is
+    // a handful of read_dir calls.
+    let skills = skills::Skills::for_session(&cfg.workspace);
+    let skill_notices = skills.reload();
     let system = system_prompt(&ws, cfg.firecrawl_key.is_some());
     let endpoint = Endpoint::from_config(&cfg);
     let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
@@ -696,8 +784,19 @@ async fn run_mode(cfg: Config) -> ExitCode {
             Some((handler, resumed)) => (Some(Arc::new(handler)), resumed),
             None => (None, None),
         };
-        let code =
-            headless::run(&cfg, endpoint.build_model(), &ws, &system, handler, resumed).await;
+        for line in &skill_notices {
+            eprintln!("{line}");
+        }
+        let code = headless::run(
+            &cfg,
+            endpoint.build_model(),
+            &ws,
+            &system,
+            handler,
+            resumed,
+            &skills,
+        )
+        .await;
         return ExitCode::from(code as u8);
     }
 
@@ -745,6 +844,11 @@ async fn run_mode(cfg: Config) -> ExitCode {
     for line in mcp.reload().await {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
+    // The skills scan already ran (the system prompt depended on it);
+    // replay whatever it had to say now that there is a transcript.
+    for line in skill_notices {
+        let _ = ui_tx.send(UiMsg::Notice(line));
+    }
     let build = {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
@@ -753,6 +857,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         let store = store.clone();
         let session = session.clone();
         let mcp = mcp.clone();
+        let skills = skills.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
@@ -765,6 +870,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
                 &store,
                 &session,
                 &mcp,
+                &skills,
             )
         }
     };
@@ -774,8 +880,9 @@ async fn run_mode(cfg: Config) -> ExitCode {
     // The TUI reads per-server tool counts off the same handle the
     // worker reloads; /mcp renders whatever the last reload recorded.
     let tui_mcp = mcp.clone();
+    let tui_skills = skills.clone();
     tokio::spawn(worker(
-        agent, system, endpoint, build, store, mcp, session, context, cmd_rx, ui_tx,
+        agent, system, endpoint, build, store, mcp, skills, session, context, cmd_rx, ui_tx,
     ));
 
     let tui_cfg = tui::TuiConfig {
@@ -787,6 +894,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
         stats,
         session_id,
         mcp: tui_mcp,
+        skills: tui_skills,
     };
     match tui::run(tui_cfg, cmd_tx, ui_rx).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -808,6 +916,7 @@ fn build_agent<M: Model + Clone + 'static>(
     store: &TruncationStore,
     session: &Option<Arc<SessionHandler>>,
     mcp: &mcp::McpServers,
+    skills: &skills::Skills,
 ) -> Agent<M> {
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
@@ -841,6 +950,11 @@ fn build_agent<M: Model + Clone + 'static>(
             .tool_arc(std::sync::Arc::new(WebCrawlTool::new(fc)));
     }
     for tool in mcp.tools() {
+        agent = agent.tool_arc(tool);
+    }
+    // One `skill` tool carrying the whole catalog, or none at all when
+    // nothing was found or everything is switched off.
+    if let Some(tool) = skills.tool() {
         agent = agent.tool_arc(tool);
     }
     for tool in core_tools(ws) {
@@ -924,6 +1038,18 @@ mod main_tests {
         let with = system_prompt(&ws, true);
         assert!(with.contains("web_search"));
         assert!(with.contains("web_crawl"));
+    }
+
+    /// `skill` is the one registered tool the prompt must *not* name.
+    /// Whether it exists depends on the skill folders and on /skills
+    /// toggles, both of which move mid-session, while this string is
+    /// built once and re-pushed verbatim by /clear — so a mention here
+    /// would eventually advertise a tool that is not registered. The
+    /// tool's own description carries the explanation and the catalog.
+    #[test]
+    fn system_prompt_leaves_skills_to_the_tool_description() {
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
+        assert!(!prompt.contains("skill"), "{prompt}");
     }
 
     #[test]

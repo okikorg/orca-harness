@@ -19,12 +19,17 @@
 //!   "mcp": {
 //!     "docs": { "command": "npx -y mcp-remote https://…", "enabled": true },
 //!     "fetch": "uvx mcp-server-fetch"
-//!   }
+//!   },
+//!   "skills": { "release": false }
 //! }
 //! ```
 //!
 //! An MCP entry may be a bare command string (always enabled) or the
 //! object form above; toggling one in `/mcp` promotes it to the object.
+//!
+//! Skills are discovered on disk rather than declared, so the `skills`
+//! section holds overrides only: a name appears there only once the user
+//! has turned it off in `/skills`.
 
 use std::fs;
 use std::io;
@@ -111,6 +116,30 @@ pub fn stored_extension(name: &str) -> Option<bool> {
 /// Save an extension override; agent rebuilds honor it from then on.
 pub fn save_extension(name: &str, enabled: bool) -> io::Result<PathBuf> {
     mutate_section("extensions", name, move |entry| *entry = json!(enabled))
+}
+
+/// The saved on/off override for a discovered skill. `None` means the
+/// user never touched it, which reads as on — a skill dropped into one
+/// of the skill directories works with no second step.
+pub fn stored_skill_enabled(name: &str) -> Option<bool> {
+    load_root()?["skills"][name].as_bool()
+}
+
+/// Save a skill override; the next rescan and agent rebuild honor it.
+pub fn save_skill_enabled(name: &str, enabled: bool) -> io::Result<PathBuf> {
+    mutate_section("skills", name, move |entry| *entry = json!(enabled))
+}
+
+/// Forget a skill's override entirely — used when the skill itself is
+/// deleted, so reinstalling the same name later does not come back
+/// silently switched off.
+pub fn forget_skill(name: &str) -> io::Result<PathBuf> {
+    let name = name.to_string();
+    mutate_root(move |root| {
+        if let Some(skills) = root.get_mut("skills").and_then(Value::as_object_mut) {
+            skills.remove(&name);
+        }
+    })
 }
 
 /// Tools the user chose to always allow in this workspace (keyed by the
@@ -482,6 +511,28 @@ mod tests {
         // Non-boolean garbage reads as unset, not as a state.
         seed(r#"{"extensions": {"retry": "yes"}}"#);
         assert_eq!(stored_extension("retry"), None);
+    }
+
+    #[test]
+    fn skill_overrides_default_on_and_round_trip() {
+        // Nothing saved reads as "no override", which callers treat as on.
+        assert_eq!(stored_skill_enabled("release"), None);
+
+        save_skill_enabled("release", false).unwrap();
+        save_skill_enabled("review", true).unwrap();
+        assert_eq!(stored_skill_enabled("release"), Some(false));
+        assert_eq!(stored_skill_enabled("review"), Some(true));
+
+        // Re-enabling flips just the one entry, and skills coexist with
+        // the other sections.
+        save_skill_enabled("release", true).unwrap();
+        save_key("openai", "sk-1").unwrap();
+        assert_eq!(stored_skill_enabled("release"), Some(true));
+        assert_eq!(stored_key("openai").as_deref(), Some("sk-1"));
+
+        // Non-boolean garbage reads as unset, not as a state.
+        seed(r#"{"skills": {"release": "off"}}"#);
+        assert_eq!(stored_skill_enabled("release"), None);
     }
 
     /// A (name, command, enabled) view of the stored servers.

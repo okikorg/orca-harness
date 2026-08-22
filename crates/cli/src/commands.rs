@@ -72,6 +72,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
+        name: "skills",
+        description: "list and toggle skills, add <source>, create <name>, remove <name>",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
         name: "usage",
         description: "session token totals, cache traffic, and context occupancy",
         category: "Session",

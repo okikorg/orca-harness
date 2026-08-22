@@ -21,6 +21,7 @@ pub async fn run<M: Model + Clone + 'static>(
     system_prompt: &str,
     session: Option<Arc<orca_harness_extensions::SessionHandler>>,
     resumed: Option<Context>,
+    skills: &crate::skills::Skills,
 ) -> i32 {
     let model_for_subagents = model.clone();
     let json = cfg.json;
@@ -103,6 +104,11 @@ pub async fn run<M: Model + Clone + 'static>(
         eprintln!("{line}");
     }
     for tool in mcp.tools() {
+        agent = agent.tool_arc(tool);
+    }
+    // Skills join headless runs on the same terms: the caller scanned
+    // before building the system prompt and reported anything broken.
+    if let Some(tool) = skills.tool() {
         agent = agent.tool_arc(tool);
     }
 

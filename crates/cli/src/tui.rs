@@ -47,6 +47,13 @@ const PALETTE_ROWS: usize = 8;
 const PICKER_ROWS: usize = 10;
 const LIVE_TOOL_ROWS: usize = 8;
 const QUEUE_PREVIEW_ROWS: usize = 3;
+
+/// The active theme is process-global, so the test that switches it and
+/// the tests that assert theme-derived colors must not interleave. Both
+/// take this lock; without it they race whenever the harness happens to
+/// schedule them together.
+#[cfg(test)]
+static THEME_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub struct TuiConfig {
     pub model_name: String,
     pub workspace_name: String,
@@ -65,6 +72,9 @@ pub struct TuiConfig {
     /// Shared handle onto the connected MCP servers; `/mcp` reads each
     /// one's tool count and connection error from it.
     pub mcp: crate::mcp::McpServers,
+    /// Shared handle onto the scanned skills; `/skills` renders the
+    /// catalog, the shadowed copies, and the parse failures from it.
+    pub skills: crate::skills::Skills,
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
@@ -164,6 +174,13 @@ enum Overlay {
         servers: Vec<crate::config::McpServer>,
         picker: ListPicker,
     },
+    /// The skills found on disk; space (or enter) turns the selected one
+    /// on or off. Rows are a snapshot of the last scan, so a toggle
+    /// redraws immediately while the rescan runs behind it.
+    Skills {
+        entries: Vec<crate::skills::SkillEntry>,
+        picker: ListPicker,
+    },
     /// Recorded sessions for this workspace; enter resumes the selection.
     Sessions {
         sessions: Vec<orca_harness_extensions::SessionFile>,
@@ -180,6 +197,20 @@ const SESSION_ACTIONS: &[PickerAction] = &[PickerAction {
     key: 'd',
     label: "delete",
 }];
+
+/// Row actions in the /skills picker. Enter still toggles — the common
+/// case stays one key — and space reveals the rest, so deleting a skill
+/// is never one stray keystroke away.
+const SKILL_ACTIONS: &[PickerAction] = &[
+    PickerAction {
+        key: 't',
+        label: "toggle",
+    },
+    PickerAction {
+        key: 'd',
+        label: "delete",
+    },
+];
 
 /// A finished tool call kept around so the user can expand its full
 /// output later with `/expand n`.
@@ -640,6 +671,11 @@ fn handle_terminal_event(
                 MouseEventKind::ScrollDown if over_inspector => {
                     app.split_scroll = app.split_scroll.saturating_add(3)
                 }
+                // An open palette is a list, not part of the transcript:
+                // the wheel moves its selection rather than scrolling
+                // the conversation out from under it.
+                MouseEventKind::ScrollUp if app.palette_query().is_some() => palette_move(app, -1),
+                MouseEventKind::ScrollDown if app.palette_query().is_some() => palette_move(app, 1),
                 MouseEventKind::ScrollUp => app.scroll += 3,
                 MouseEventKind::ScrollDown => app.scroll = app.scroll.saturating_sub(3),
                 _ => {}
@@ -711,6 +747,14 @@ fn handle_terminal_event(
         }
         KeyCode::PageDown if app.split_focused => {
             app.split_scroll = app.split_scroll.saturating_add(SCROLL_PAGE as u16);
+        }
+        // Page keys belong to the palette while it is open, for the same
+        // reason the wheel does: the list is what the user is looking at.
+        KeyCode::PageUp if app.palette_query().is_some() => {
+            palette_move(app, -(PALETTE_ROWS as isize))
+        }
+        KeyCode::PageDown if app.palette_query().is_some() => {
+            palette_move(app, PALETTE_ROWS as isize)
         }
         KeyCode::PageUp => app.scroll += SCROLL_PAGE,
         KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(SCROLL_PAGE),
@@ -788,21 +832,15 @@ fn handle_terminal_event(
         KeyCode::Home => app.cursor = 0,
         KeyCode::End => app.cursor = app.composer.chars().count(),
         KeyCode::Up => {
-            if let Some(query) = app.palette_query() {
-                let len = filter_commands(query).len();
-                if len > 0 {
-                    app.palette_index = app.palette_index.min(len - 1).saturating_sub(1);
-                }
+            if app.palette_query().is_some() {
+                palette_move(app, -1);
             } else {
                 history_nav(app, -1);
             }
         }
         KeyCode::Down => {
-            if let Some(query) = app.palette_query() {
-                let len = filter_commands(query).len();
-                if len > 0 {
-                    app.palette_index = (app.palette_index + 1).min(len - 1);
-                }
+            if app.palette_query().is_some() {
+                palette_move(app, 1);
             } else {
                 history_nav(app, 1);
             }
@@ -844,6 +882,10 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
         SendWithNote(WorkerCmd, String),
         /// Close and start the /models fetch-then-pick flow.
         FetchModels,
+        /// Delete an installed skill, then rescan. Deferred out of the
+        /// overlay match because it needs `app` (the shared handle, the
+        /// config, the transcript), which the match holds borrowed.
+        RemoveSkill(String),
         /// Close and replace the active `@query` with a workspace path.
         InsertLocation {
             token_start: usize,
@@ -1129,6 +1171,60 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                 None => After::Nothing,
             }
         }
+        Overlay::Skills { entries, picker } => match picker.on_key(key.code) {
+            // Space reveals the action strip; enter keeps the toggle one
+            // key away, since that is what the list is mostly for.
+            // Deleting sits behind the strip on purpose: it is the only
+            // action here that touches the filesystem. It also needs
+            // `app` — the shared handle, the config, the transcript —
+            // which this match holds borrowed, so it is handed to the
+            // apply step below.
+            PickerEvent::Action { key: 'd', row } => After::RemoveSkill(entries[row].name.clone()),
+            event => {
+                let row = match event {
+                    PickerEvent::Activated(index) => Some(index),
+                    PickerEvent::Action { key: 't', row } => Some(row),
+                    _ => None,
+                };
+                match row {
+                    Some(index) => {
+                        let entry = &mut entries[index];
+                        match &entry.state {
+                            // A row that never loaded has nothing to
+                            // switch on; saying why beats a toggle that
+                            // does nothing.
+                            crate::skills::SkillState::Failed { reason, .. } => {
+                                After::Note(format!("skill {} did not load: {reason}", entry.name))
+                            }
+                            crate::skills::SkillState::Shadowed { root, by } => {
+                                After::Note(format!(
+                                    "skill {} in {root} is shadowed by the copy in {by} — \
+                                     rename it to use both",
+                                    entry.name
+                                ))
+                            }
+                            crate::skills::SkillState::Loaded { .. } => {
+                                let enabled = !entry.enabled;
+                                match crate::config::save_skill_enabled(&entry.name, enabled) {
+                                    // Stay open so several can be
+                                    // toggled; the row redraws from this
+                                    // copy at once while the rescan runs
+                                    // behind it.
+                                    Ok(_) => {
+                                        entry.enabled = enabled;
+                                        After::Send(WorkerCmd::ReloadSkills)
+                                    }
+                                    Err(err) => After::CloseWithNote(format!(
+                                        "could not update the config: {err}"
+                                    )),
+                                }
+                            }
+                        }
+                    }
+                    None => After::Nothing,
+                }
+            }
+        },
         Overlay::Sessions { sessions, picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::LoadSession {
                 path: sessions[index].path.clone(),
@@ -1199,6 +1295,20 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             send_or_report(app, worker, cmd);
             push_notice(app, note);
         }
+        After::RemoveSkill(name) => {
+            // The rescan that follows is the worker's, and it lands
+            // later; drop the row now so the list matches what the user
+            // just did. An unremovable skill keeps its row and says why.
+            if remove_skill(app, &name, worker) {
+                if let Some(Overlay::Skills { entries, picker }) = &mut app.overlay {
+                    entries.retain(|entry| entry.name != name);
+                    picker.set_len(entries.len());
+                    if entries.is_empty() {
+                        app.overlay = None;
+                    }
+                }
+            }
+        }
         After::FetchModels => {
             app.overlay = None;
             app.picker_pending = Some(String::new());
@@ -1238,6 +1348,21 @@ fn send_or_report(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, cmd:
     }
 }
 
+/// Move the palette selection by `delta` rows, clamped to the filtered
+/// list. Arrow keys, page keys, and the wheel all go through here so
+/// they cannot disagree about the bounds; the rendered window follows
+/// the selection, so this is what scrolling the list means.
+fn palette_move(app: &mut App, delta: isize) {
+    let Some(query) = app.palette_query() else {
+        return;
+    };
+    let Some(last) = filter_commands(query).len().checked_sub(1) else {
+        return;
+    };
+    let current = app.palette_index.min(last) as isize;
+    app.palette_index = current.saturating_add(delta).clamp(0, last as isize) as usize;
+}
+
 /// The highlighted palette entry, if the palette is open and non-empty.
 fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
     let query = app.palette_query()?;
@@ -1247,13 +1372,13 @@ fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
         .copied()
 }
 
-/// A compact transcript notification: the hollow diamond separates system
-/// status from the `› input` / `· output` language without adding weight.
+/// A compact transcript notification: the dot keeps system status scannable
+/// without giving it the visual weight of transcript content.
 fn push_notice(app: &mut App, text: impl Into<String>) {
     let t = theme();
     app.push_line(Line::from(vec![
-        Span::styled("◇ ", t.accent),
-        Span::styled(text.into(), Style::default()),
+        Span::styled("• ", t.accent),
+        Span::styled(text.into(), t.dim),
     ]));
 }
 
@@ -1362,7 +1487,65 @@ fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, width: usize
         return;
     }
 
-    start_prompt(app, worker, prompt, width);
+    start_submission(app, worker, prompt, width);
+}
+
+fn start_submission(
+    app: &mut App,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    prompt: String,
+    width: usize,
+) -> bool {
+    if let Some(command) = prompt.strip_prefix('!') {
+        start_shell(
+            app,
+            worker,
+            prompt.clone(),
+            command.trim().to_string(),
+            width,
+        )
+    } else {
+        start_prompt(app, worker, prompt, width)
+    }
+}
+
+fn start_shell(
+    app: &mut App,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    prompt: String,
+    command: String,
+    width: usize,
+) -> bool {
+    if command.is_empty() {
+        push_notice(app, "usage: !command");
+        return false;
+    }
+    let cancel = CancellationToken::new();
+    if worker
+        .send(WorkerCmd::Shell {
+            command,
+            working_dir: app.cfg.workspace_root.clone(),
+            cancel: cancel.clone(),
+        })
+        .is_err()
+    {
+        app.push_line(Line::from(Span::styled(
+            "worker is gone; restart orcacode",
+            theme().error,
+        )));
+        return false;
+    }
+    app.reset_activity();
+    if app.turn_count > 0 {
+        app.push_line(Line::from(""));
+    }
+    app.push_wrapped(&prompt, "┃ ", theme().strong, width);
+    app.turn_count += 1;
+    app.run = RunState::Running {
+        started: Instant::now(),
+        cancel,
+    };
+    true
 }
 
 /// Start one prompt and commit it to the transcript only after the worker
@@ -1413,7 +1596,7 @@ fn start_next_queued_prompt(
     let Some(prompt) = app.prompt_queue.front().cloned() else {
         return false;
     };
-    if !start_prompt(app, worker, prompt, width) {
+    if !start_submission(app, worker, prompt, width) {
         return false;
     }
     app.prompt_queue.pop_front();
@@ -1736,6 +1919,12 @@ fn slash_command(
             return;
         }
     }
+    if let Some(rest) = command.strip_prefix("skills") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            skills_command(app, rest.trim(), worker);
+            return;
+        }
+    }
     if let Some(rest) = command.strip_prefix("models") {
         if rest.is_empty() || rest.starts_with(' ') {
             // Fetch the full catalog; the argument seeds the picker's
@@ -1898,6 +2087,9 @@ fn slash_command(
                 "/subagents [n] show or set subagent nesting depth (1-5)",
                 "/extensions  toggle harness extensions (no argument opens the picker)",
                 "/mcp         toggle MCP servers · add <name> <command> · remove <name>",
+                "/skills      list and toggle skills (space reveals toggle/delete)",
+                "/skills add <source>   install from owner/repo, a url, or a local folder",
+                "/skills create <name>  scaffold a new skill · remove <name> · reload",
                 "/quit        exit",
                 "/theme [name] pick a color theme (no argument opens the picker)",
                 "@path        add a workspace file or folder to the prompt",
@@ -1913,6 +2105,196 @@ fn slash_command(
                 format!("unknown command: /{other}"),
                 theme().error,
             )));
+        }
+    }
+}
+
+/// `/skills [add <source> | create <name> | remove <name> | show <name>
+/// | reload]`.
+///
+/// `add` takes what the `npx skills` ecosystem takes — `owner/repo`,
+/// `owner/repo@skill`, a GitHub or skills.sh URL, a local folder, even a
+/// pasted `npx skills add …` line — and installs beside `config.json`
+/// unless `--here` puts it in the project. `create` scaffolds a new one
+/// in the project. Cloning happens in the worker, so the interface stays
+/// responsive.
+fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
+    let dim = theme().dim;
+    let mut parts = args.split_whitespace();
+    match parts.next() {
+        None => {
+            let entries = app.cfg.skills.catalog();
+            if entries.is_empty() {
+                for line in [
+                    "no skills yet:",
+                    "  /skills add <owner/repo>   install from a repository or folder",
+                    "  /skills create <name>      scaffold one in .orca/skills",
+                    "found automatically in .orca/skills, skills, .claude/skills,",
+                    ".agents/skills, .codex/skills, .opencode/skills — and the same under ~",
+                ] {
+                    app.push_line(Line::from(Span::styled(line, dim)));
+                }
+                return;
+            }
+            app.overlay = Some(Overlay::Skills {
+                picker: ListPicker::new(entries.len()).actions(SKILL_ACTIONS),
+                entries,
+            });
+        }
+        Some("add" | "install") => {
+            let rest = args
+                .split_once(char::is_whitespace)
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
+            // `--here` is consumed here rather than in the parser: it is
+            // about where this host puts things, not about the source.
+            let here = rest.split_whitespace().any(|token| token == "--here");
+            let source: String = rest
+                .split_whitespace()
+                .filter(|token| *token != "--here")
+                .collect::<Vec<_>>()
+                .join(" ");
+            if source.is_empty() {
+                for line in [
+                    "usage: /skills add <source> [--skill <name>] [--list] [--here]",
+                    "  source: owner/repo · owner/repo@skill · a github or skills.sh url ·",
+                    "          a local folder · a pasted `npx skills add …` line",
+                    "  --here installs into .orca/skills instead of your config folder",
+                ] {
+                    app.push_line(Line::from(Span::styled(line, dim)));
+                }
+                return;
+            }
+            let cmd = WorkerCmd::InstallSkill {
+                source: source.clone(),
+                here,
+            };
+            if worker.send(cmd).is_err() {
+                app.push_line(Line::from(Span::styled(
+                    "worker is gone; restart orcacode",
+                    theme().error,
+                )));
+            } else {
+                app.push_line(Line::from(Span::styled(format!("fetching {source}…"), dim)));
+            }
+        }
+        Some("create" | "new") => {
+            let Some(name) = parts.next() else {
+                app.push_line(Line::from(Span::styled(
+                    "usage: /skills create <name> [--global]",
+                    theme().error,
+                )));
+                return;
+            };
+            let global = parts.any(|token| token == "--global" || token == "-g");
+            match app.cfg.skills.create(name, global) {
+                Ok(path) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("created {} — edit it, then /skills reload", path.display()),
+                        dim,
+                    )));
+                    let _ = worker.send(WorkerCmd::ReloadSkills);
+                }
+                Err(err) => {
+                    app.push_line(Line::from(Span::styled(
+                        format!("skill not created: {err}"),
+                        theme().error,
+                    )));
+                }
+            }
+        }
+        Some("remove" | "delete" | "rm" | "uninstall") => {
+            let Some(name) = parts.next() else {
+                app.push_line(Line::from(Span::styled(
+                    "usage: /skills remove <name>",
+                    theme().error,
+                )));
+                return;
+            };
+            remove_skill(app, name, worker);
+        }
+        Some("reload") => {
+            // The rescan itself is the worker's, so the tool the agent
+            // carries and the catalog on screen never disagree.
+            if worker.send(WorkerCmd::ReloadSkills).is_err() {
+                app.push_line(Line::from(Span::styled(
+                    "worker is gone; restart orcacode",
+                    theme().error,
+                )));
+            } else {
+                app.push_line(Line::from(Span::styled("rescanning skills…", dim)));
+            }
+        }
+        Some("show") => {
+            let Some(name) = parts.next() else {
+                app.push_line(Line::from(Span::styled(
+                    "usage: /skills show <name>",
+                    theme().error,
+                )));
+                return;
+            };
+            let entries = app.cfg.skills.catalog();
+            let Some(entry) = entries.iter().find(|entry| entry.name == name) else {
+                let known = match entries.len() {
+                    0 => "none found".to_string(),
+                    _ => entries
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
+                app.push_line(Line::from(Span::styled(
+                    format!("unknown skill: {name} — found: {known}"),
+                    theme().error,
+                )));
+                return;
+            };
+            let detail = match &entry.state {
+                crate::skills::SkillState::Loaded { root, bytes } => format!(
+                    "{name} · {root} · {} · {}",
+                    size(*bytes),
+                    if entry.enabled { "on" } else { "off" }
+                ),
+                crate::skills::SkillState::Shadowed { root, by } => {
+                    format!("{name} · {root} · shadowed by the copy in {by}")
+                }
+                crate::skills::SkillState::Failed { root, reason } => {
+                    format!("{name} · {root} · failed — {reason}")
+                }
+            };
+            app.push_line(Line::from(Span::styled(detail, dim)));
+            if !entry.description.is_empty() {
+                app.push_line(Line::from(Span::styled(
+                    format!("  {}", entry.description),
+                    dim,
+                )));
+            }
+        }
+        Some(other) => {
+            app.push_line(Line::from(Span::styled(
+                format!(
+                    "unknown /skills argument: {other} — usage: /skills \
+                     [add <source> | create <name> | remove <name> | show <name> | reload]"
+                ),
+                theme().error,
+            )));
+        }
+    }
+}
+
+/// Delete an installed skill and rescan. Shared by the typed form and
+/// the overlay's action strip, so both refuse the same things: only what
+/// this host installed is deletable.
+fn remove_skill(app: &mut App, name: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) -> bool {
+    match app.cfg.skills.remove(name) {
+        Ok(note) => {
+            push_notice(app, note);
+            let _ = worker.send(WorkerCmd::ReloadSkills);
+            true
+        }
+        Err(err) => {
+            push_notice(app, err);
+            false
         }
     }
 }
@@ -2182,6 +2564,20 @@ fn handle_ui_msg(
                 start_next_queued_prompt(app, worker, width);
             }
         }
+        UiMsg::ShellDone => {
+            app.commit_activity(width);
+            let elapsed = match &app.run {
+                RunState::Running { started, .. } => Some(started.elapsed()),
+                RunState::Idle => None,
+            };
+            app.run = RunState::Idle;
+            app.approval = None;
+            if let Some(elapsed) = elapsed {
+                app.last_turn_summary =
+                    Some(format!("Shell command took {:.1}s", elapsed.as_secs_f64()));
+            }
+            start_next_queued_prompt(app, worker, width);
+        }
     }
 }
 
@@ -2436,17 +2832,16 @@ fn welcome_lines(
     let content = vec![
         Line::from(vec![
             Span::raw(indent.clone()),
-            Span::styled("orcacode", t.strong),
+            Span::styled("▀▄ ", t.accent),
+            Span::styled("ORCACODE", t.strong),
             Span::styled(format!("  v{}", env!("CARGO_PKG_VERSION")), t.dim),
         ]),
         Line::from(vec![
             Span::raw(indent.clone()),
             Span::styled("A small, fast agent runtime for your terminal", t.dim),
         ]),
-        Line::from(""),
         row("model", &cfg.model_name),
         row("workspace", &cfg.workspace_name),
-        Line::from(""),
         Line::from(vec![
             Span::raw(indent.clone()),
             Span::styled("› ", t.accent),
@@ -2505,7 +2900,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         projected_transcript(app, transcript_width)
     };
-    if projected.is_empty() && !app.running() {
+    // Connector startup notices are transcript history, but they should not
+    // displace the empty-state welcome before the user begins a conversation.
+    // Keep them recorded in the background and reveal the transcript on the
+    // first real turn.
+    if app.turn_count == 0 && !app.running() {
         let full_height = frame.area().height as usize;
         let welcome = welcome_lines(full_height, height, transcript_width, &app.cfg);
         frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
@@ -3342,6 +3741,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Mcp { servers, picker } => {
                 mcp_picker_lines(servers, &app.cfg.mcp, picker, width)
             }
+            Overlay::Skills { entries, picker } => skills_picker_lines(entries, picker, width),
             Overlay::Sessions { sessions, picker } => {
                 sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
@@ -4504,6 +4904,55 @@ fn mcp_picker_lines(
     )
 }
 
+/// The skills found on disk: state, where each came from, and what it
+/// is for.
+///
+/// On/off comes from `entries` (the overlay's own copy, updated the
+/// instant the toggle is saved) so a press redraws now. Rows that could
+/// not load, or that lost a name collision to an earlier root, are
+/// listed too — a skill that silently is not there is the failure mode
+/// worth spending a row on.
+fn skills_picker_lines(
+    entries: &[crate::skills::SkillEntry],
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let name_width = entries
+        .iter()
+        .map(|entry| entry.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(4, 20);
+    let rows = entries.iter().map(|entry| {
+        let (state, detail) = match &entry.state {
+            crate::skills::SkillState::Loaded { root, bytes } => (
+                if entry.enabled { "on " } else { "off" },
+                format!("{root}  {}  {}", size(*bytes), entry.description),
+            ),
+            crate::skills::SkillState::Shadowed { root, by } => {
+                ("—  ", format!("{root}  shadowed by {by}"))
+            }
+            crate::skills::SkillState::Failed { root, reason } => {
+                ("—  ", format!("{root}  failed — {reason}"))
+            }
+        };
+        format!("{:<name_width$}  {state}  {detail}", entry.name)
+    });
+    picker.lines(
+        "Skills · ↑↓ navigate · space toggle · esc close",
+        rows,
+        width,
+    )
+}
+
+/// Compact byte count for a picker row: `840b`, `1.2k`.
+fn size(bytes: u64) -> String {
+    match bytes {
+        0..=1023 => format!("{bytes}b"),
+        _ => format!("{:.1}k", bytes as f64 / 1024.0),
+    }
+}
+
 /// Recorded sessions for this workspace, newest first; enter resumes
 /// the selected one. Same interface as /provider and /theme.
 fn sessions_picker_lines(
@@ -4573,6 +5022,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         // A transcript taller than any viewport so scrolling has room.
         for i in 0..100 {
@@ -4608,6 +5058,77 @@ mod tests {
         let scrolled = app.scroll;
         handle_terminal_event(&mut app, mouse(MouseEventKind::ScrollDown), &tx, 80);
         assert!(app.scroll < scrolled, "wheel down scrolls forward");
+    }
+
+    /// The palette shows a window onto the command list, so navigating
+    /// past the last visible row has to slide it. Arrow keys, page keys,
+    /// and the wheel all drive the same selection; before this, only the
+    /// arrows did, and the wheel and page keys scrolled the transcript
+    /// behind the open palette instead.
+    #[test]
+    fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "/".into();
+        app.cursor = 1;
+        let total = filter_commands("").len();
+        assert!(
+            total > PALETTE_ROWS,
+            "this test needs more commands than fit: {total}"
+        );
+
+        // The window starts at the top and stays there while the
+        // selection is inside it.
+        let window = |app: &App| flat_lines(&palette_lines(app, PALETTE_ROWS + 2, 100));
+        assert!(window(&app).contains(&format!("1-{PALETTE_ROWS}")));
+
+        // One step past the last visible row slides the window by one.
+        for _ in 0..PALETTE_ROWS {
+            handle_terminal_event(
+                &mut app,
+                CtEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                &tx,
+                80,
+            );
+        }
+        assert_eq!(app.palette_index, PALETTE_ROWS);
+        assert!(
+            window(&app).contains(&format!("2-{}", PALETTE_ROWS + 1)),
+            "{}",
+            window(&app)
+        );
+        assert_eq!(app.scroll, 0, "the transcript stays put");
+
+        // Page keys move a screenful of the list, not of the transcript.
+        handle_terminal_event(
+            &mut app,
+            CtEvent::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            &tx,
+            80,
+        );
+        assert_eq!(app.palette_index, 0);
+        assert_eq!(app.scroll, 0, "page keys do not reach the transcript");
+        handle_terminal_event(
+            &mut app,
+            CtEvent::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            &tx,
+            80,
+        );
+        assert_eq!(app.palette_index, PALETTE_ROWS);
+
+        // The wheel does the same, one row at a time, and is clamped.
+        handle_terminal_event(&mut app, mouse(MouseEventKind::ScrollUp), &tx, 80);
+        assert_eq!(app.palette_index, PALETTE_ROWS - 1);
+        assert_eq!(app.scroll, 0, "the wheel does not reach the transcript");
+        for _ in 0..total * 2 {
+            handle_terminal_event(&mut app, mouse(MouseEventKind::ScrollDown), &tx, 80);
+        }
+        assert_eq!(app.palette_index, total - 1, "clamped at the last entry");
+        for _ in 0..total * 2 {
+            handle_terminal_event(&mut app, mouse(MouseEventKind::ScrollUp), &tx, 80);
+        }
+        assert_eq!(app.palette_index, 0, "clamped at the first entry");
+        assert_eq!(app.scroll, 0);
     }
 
     #[test]
@@ -4848,14 +5369,15 @@ mod tests {
 
     #[test]
     fn notifications_use_the_shared_leading_glyph() {
+        let _theme = THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let mut app = test_app();
 
         push_notice(&mut app, "theme set to default");
 
         let notice = app.pending_history.last().expect("notification line");
-        assert_eq!(line_text(notice), "◇ theme set to default");
+        assert_eq!(line_text(notice), "• theme set to default");
         assert_eq!(notice.spans[0].style, theme().accent);
-        assert_eq!(notice.spans[1].style, Style::default());
+        assert_eq!(notice.spans[1].style, theme().dim);
     }
 
     #[test]
@@ -5083,6 +5605,88 @@ mod tests {
     }
 
     #[test]
+    fn bang_prompt_dispatches_a_shell_tool_in_the_workspace() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "!git status --short".into();
+        app.cursor = app.composer.chars().count();
+
+        submit(&mut app, &tx, 80);
+
+        match rx.try_recv() {
+            Ok(WorkerCmd::Shell {
+                command,
+                working_dir,
+                ..
+            }) => {
+                assert_eq!(command, "git status --short");
+                assert_eq!(working_dir, app.cfg.workspace_root);
+            }
+            other => panic!("expected shell command, got {:?}", other.is_ok()),
+        }
+        assert!(app.running());
+        assert!(app.composer.is_empty());
+        assert!(pending_texts(&app)
+            .join("\n")
+            .contains("!git status --short"));
+    }
+
+    #[test]
+    fn queued_bang_prompt_stays_a_shell_command() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        app.prompt_queue.push_back("!pwd".into());
+
+        handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(WorkerCmd::Shell { command, .. }) if command == "pwd"
+        ));
+    }
+
+    #[test]
+    fn shell_done_settles_the_tool_and_resets_the_run() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "user-shell-1".into(),
+                tool_name: "shell".into(),
+                input: serde_json::json!({"command": "pwd"}),
+            },
+            80,
+        );
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolResult {
+                tool_call_id: "user-shell-1".into(),
+                tool_name: "shell".into(),
+                output: serde_json::json!({"stdout": "/test-ws\n", "exitCode": 0}),
+                is_error: false,
+            },
+            80,
+        );
+
+        handle_ui_msg(&mut app, UiMsg::ShellDone, &tx, 80);
+
+        assert!(!app.running());
+        assert_eq!(
+            app.tool_log.last().map(|tool| tool.tool_name.as_str()),
+            Some("shell")
+        );
+    }
+
+    #[test]
     fn prompts_submitted_while_running_queue_in_fifo_order() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
@@ -5283,6 +5887,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         app.prompt_queue.push_back("inspect the failure".into());
 
@@ -5983,6 +6588,19 @@ mod tests {
     }
 
     #[test]
+    fn bang_composer_keeps_the_original_unfilled_style() {
+        let mut app = test_app();
+        app.composer = "!echo hello".into();
+        app.cursor = app.composer.chars().count();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, 22)].bg, ratatui::style::Color::Reset);
+        assert_ne!(buffer[(0, 20)].symbol(), "┌");
+    }
+
+    #[test]
     fn empty_session_has_a_useful_static_welcome() {
         let mut app = App::new(TuiConfig {
             model_name: "gpt-oss:20b".into(),
@@ -5993,10 +6611,11 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
-        assert!(screen.contains("orcacode"), "title missing: {screen}");
+        assert!(screen.contains("▀▄ ORCACODE"), "logo missing: {screen}");
         assert!(
             screen.contains(concat!("v", env!("CARGO_PKG_VERSION"))),
             "version missing: {screen}"
@@ -6014,6 +6633,25 @@ mod tests {
     }
 
     #[test]
+    fn startup_notices_stay_behind_the_welcome_until_the_first_turn() {
+        let mut app = test_app();
+        push_notice(&mut app, "MCP docs connected · 4 tools");
+        app.absorb_pending();
+
+        let screen = rendered_rows(&mut app, 90, 30).join("\n");
+
+        assert!(screen.contains("▀▄ ORCACODE"), "welcome missing: {screen}");
+        assert!(
+            !screen.contains("MCP docs connected"),
+            "startup notice should remain in the background: {screen}"
+        );
+        assert!(
+            flat_lines(&app.transcript).contains("MCP docs connected"),
+            "startup notice should remain recorded"
+        );
+    }
+
+    #[test]
     fn status_line_starts_with_model_and_ends_with_workspace_name() {
         let mut app = App::new(TuiConfig {
             model_name: "gpt-oss:20b".into(),
@@ -6024,6 +6662,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
 
         let rows = rendered_rows(&mut app, 100, 24);
@@ -6061,6 +6700,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -6100,6 +6740,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         app.transcript.push(Line::from("final answer"));
 
@@ -6122,6 +6763,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -6154,6 +6796,7 @@ mod tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -6689,6 +7332,7 @@ mod theme_command_tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         })
     }
 
@@ -6697,6 +7341,7 @@ mod theme_command_tests {
     /// the default so later tests see a clean state.
     #[test]
     fn theme_command_switches_and_rejects() {
+        let _theme = THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let mut app = theme_app();
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -6761,6 +7406,7 @@ mod subagents_command_tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         })
     }
 
@@ -6800,6 +7446,7 @@ mod extensions_command_tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         })
     }
 
@@ -7079,6 +7726,7 @@ mod mcp_command_tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         })
     }
 
@@ -7413,6 +8061,7 @@ mod nested_rail_tests {
             stats: orca_harness_tools::BackgroundStats::new(),
             session_id: None,
             mcp: Default::default(),
+            skills: Default::default(),
         })
     }
 
@@ -7598,5 +8247,338 @@ mod nested_rail_tests {
             .join("\n");
         assert!(expanded.contains("inner activity"), "{expanded}");
         assert!(expanded.contains("list_dir"), "{expanded}");
+    }
+}
+
+#[cfg(test)]
+mod skills_command_tests {
+    use super::*;
+
+    /// A temp tree plus the `Skills` handle that scans it. Roots are
+    /// passed in explicitly, so a test never reaches the developer's own
+    /// ~/.claude/skills.
+    struct Fixture {
+        dir: std::path::PathBuf,
+        skills: crate::skills::Skills,
+    }
+
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "orca-tui-skills-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let skills = crate::skills::Skills::new(&dir, None, None);
+            Self { dir, skills }
+        }
+
+        fn skill(&self, name: &str, description: &str) {
+            let path = self.dir.join(".orca/skills").join(name).join("SKILL.md");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                format!("---\nname: {name}\ndescription: {description}\n---\n\nstep one\n"),
+            )
+            .unwrap();
+            self.skills.reload();
+        }
+
+        fn app(&self) -> App {
+            App::new(TuiConfig {
+                model_name: "m".into(),
+                workspace_name: "w".into(),
+                workspace_root: "/test-ws".into(),
+                provider: Provider::Local,
+                subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+                stats: orca_harness_tools::BackgroundStats::new(),
+                session_id: None,
+                mcp: Default::default(),
+                skills: self.skills.clone(),
+            })
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn printed(app: &App) -> String {
+        app.pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn overlay_text(app: &App) -> String {
+        live_lines(app, 120)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Nothing found: the bare form says how to get one instead of
+    /// opening an overlay with no rows in it.
+    #[test]
+    fn empty_catalog_points_at_add_and_create() {
+        let fixture = Fixture::new("empty");
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "skills", &worker, 80);
+        assert!(app.overlay.is_none());
+        let text = printed(&app);
+        assert!(text.contains("/skills add"), "{text}");
+        assert!(text.contains("/skills create"), "{text}");
+        assert!(text.contains(".claude/skills"), "{text}");
+    }
+
+    fn press(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, code: KeyCode) {
+        handle_terminal_event(
+            app,
+            CtEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+            worker,
+            80,
+        );
+    }
+
+    /// Space reveals the strip rather than acting, so neither toggling
+    /// nor deleting is one stray keystroke away.
+    #[test]
+    fn space_reveals_the_actions_and_t_toggles() {
+        let fixture = Fixture::new("toggle");
+        fixture.skill("release", "Cut a release");
+        let mut app = fixture.app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "skills", &worker, 80);
+        let shown = overlay_text(&app);
+        assert!(shown.contains("release"), "{shown}");
+        assert!(shown.contains("Cut a release"), "{shown}");
+        assert!(shown.contains("space actions"), "{shown}");
+
+        press(&mut app, &worker, KeyCode::Char(' '));
+        let armed = overlay_text(&app);
+        assert!(armed.contains("[t] toggle"), "{armed}");
+        assert!(armed.contains("[d] delete"), "{armed}");
+        assert_eq!(
+            crate::config::stored_skill_enabled("release"),
+            None,
+            "space itself changes nothing"
+        );
+
+        press(&mut app, &worker, KeyCode::Char('t'));
+        assert_eq!(
+            crate::config::stored_skill_enabled("release"),
+            Some(false),
+            "the action key writes the override"
+        );
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadSkills)));
+        // The overlay stays open and the row redraws off at once, while
+        // the rescan and rebuild run behind it.
+        assert!(app.overlay.is_some());
+        assert!(overlay_text(&app).contains("off"), "{}", overlay_text(&app));
+
+        // Enter keeps the one-key path for the common case.
+        press(&mut app, &worker, KeyCode::Enter);
+        assert_eq!(crate::config::stored_skill_enabled("release"), Some(true));
+    }
+
+    /// Delete removes the folder, the row, and the saved override — and
+    /// only for skills this host installed.
+    #[test]
+    fn delete_action_removes_an_installed_skill() {
+        let fixture = Fixture::new("delete");
+        fixture.skill("release", "Cut a release");
+        let mut app = fixture.app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let dir = fixture.dir.join(".orca/skills/release");
+        assert!(dir.is_dir());
+
+        slash_command(&mut app, "skills", &worker, 80);
+        press(&mut app, &worker, KeyCode::Char(' '));
+        press(&mut app, &worker, KeyCode::Char('d'));
+
+        assert!(!dir.exists(), "the folder is gone");
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadSkills)));
+        // Last row deleted: the overlay closes rather than showing an
+        // empty list.
+        assert!(app.overlay.is_none());
+        assert!(
+            printed(&app).contains("removed release"),
+            "{}",
+            printed(&app)
+        );
+    }
+
+    /// The whole loop against the real internet: install a published
+    /// skill from GitHub through `/skills add`, confirm the running
+    /// agent is offered it, then delete it from the overlay. Ignored by
+    /// default — it clones a repository and spawns the built binary
+    /// against a local model endpoint.
+    ///
+    /// Run with:
+    /// `cargo test -p orcacode --bin orcacode e2e_ -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: clones a github repository and calls a model"]
+    async fn e2e_add_use_and_remove_a_published_skill() {
+        let fixture = Fixture::new("e2e");
+        let config = fixture.dir.join("config");
+        let workspace = fixture.dir.join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("config.json"),
+            r#"{"provider": "local", "models": {"local": "gemma4:e2b-mlx"}}"#,
+        )
+        .unwrap();
+        let skills = crate::skills::Skills::new(&workspace, Some(config.clone()), None);
+        let mut app = App::new(TuiConfig {
+            model_name: "e2e".into(),
+            workspace_name: "ws".into(),
+            workspace_root: workspace.display().to_string(),
+            provider: Provider::Local,
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
+            mcp: Default::default(),
+            skills: skills.clone(),
+        });
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // 1. Add, exactly as the composer would.
+        slash_command(
+            &mut app,
+            "skills add vercel-labs/agent-skills --skill writing-guidelines",
+            &worker,
+            80,
+        );
+        let Ok(WorkerCmd::InstallSkill { source, here }) = rx.try_recv() else {
+            panic!("no install command: {}", printed(&app));
+        };
+        assert!(!here, "installs beside config.json by default");
+        // What the worker does with it.
+        let lines = skills.add(&source, here).await.expect("install");
+        println!("{}", lines.join("\n"));
+        skills.reload();
+        let installed = config.join("skills/writing-guidelines/SKILL.md");
+        assert!(installed.is_file(), "SKILL.md landed at {installed:?}");
+
+        // 2. The running agent is offered it, by name, with its blurb.
+        let tool = skills.tool().expect("a skill tool");
+        let schema = tool.schema();
+        assert_eq!(schema.name, "skill");
+        assert!(
+            schema.description.contains("writing-guidelines"),
+            "{}",
+            schema.description
+        );
+
+        // 3. A real model, given the real binary, calls it. The tool log
+        //    goes to stderr, so that is where the call shows up.
+        // The test binary lives in target/<profile>/deps/, so the CLI
+        // it was built alongside is two directories up.
+        let test_binary = std::env::current_exe().expect("test binary path");
+        let binary = test_binary
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("target dir")
+            .join("orcacode");
+        assert!(binary.is_file(), "build the binary first: {binary:?}");
+        let run = std::process::Command::new(&binary)
+            .env("ORCA_CONFIG_DIR", &config)
+            .args(["--workspace"])
+            .arg(&workspace)
+            .args([
+                "--no-session",
+                "--auto-approve",
+                "--max-steps",
+                "4",
+                "-p",
+                "Load the writing-guidelines skill and quote its first heading. \
+                 Use the skill tool.",
+            ])
+            .output()
+            .expect("run orcacode");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        println!("--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}");
+        assert!(
+            stderr.contains("skill"),
+            "the model never reached for the skill tool"
+        );
+
+        // 4. Remove it from the overlay: space reveals, d deletes.
+        slash_command(&mut app, "skills", &worker, 80);
+        let shown = overlay_text(&app);
+        assert!(shown.contains("writing-guidelines"), "{shown}");
+        press(&mut app, &worker, KeyCode::Char(' '));
+        press(&mut app, &worker, KeyCode::Char('d'));
+        assert!(
+            !config.join("skills/writing-guidelines").exists(),
+            "the folder is gone"
+        );
+        skills.reload();
+        assert!(skills.tool().is_none(), "and so is the tool");
+    }
+
+    /// A skill from a compatibility root is not this host's to delete.
+    #[test]
+    fn delete_refuses_a_skill_from_a_root_it_does_not_own() {
+        let fixture = Fixture::new("foreign");
+        let path = fixture.dir.join(".claude/skills/borrowed/SKILL.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "---\nname: borrowed\ndescription: someone else's\n---\n\nbody\n",
+        )
+        .unwrap();
+        fixture.skills.reload();
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "skills remove borrowed", &worker, 80);
+        assert!(path.is_file(), "the file must survive");
+        let text = printed(&app);
+        assert!(text.contains("only deletes what it installed"), "{text}");
+    }
+
+    #[test]
+    fn show_reports_one_skill_and_rejects_unknown_names() {
+        let fixture = Fixture::new("show");
+        fixture.skill("release", "Cut a release");
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "skills show release", &worker, 80);
+        let text = printed(&app);
+        assert!(text.contains(".orca/skills"), "{text}");
+        assert!(text.contains("Cut a release"), "{text}");
+
+        slash_command(&mut app, "skills show nope", &worker, 80);
+        let text = printed(&app);
+        assert!(text.contains("unknown skill: nope"), "{text}");
+        assert!(text.contains("found: release"), "{text}");
+    }
+
+    #[test]
+    fn reload_goes_through_the_worker_and_garbage_is_rejected() {
+        let fixture = Fixture::new("reload");
+        let mut app = fixture.app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "skills reload", &worker, 80);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadSkills)));
+        assert!(printed(&app).contains("rescanning skills"));
+
+        slash_command(&mut app, "skills wat", &worker, 80);
+        assert!(rx.try_recv().is_err(), "no command for a bad argument");
+        assert!(printed(&app).contains("unknown /skills argument: wat"));
     }
 }

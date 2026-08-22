@@ -17,6 +17,7 @@ orca-harness-model-openrouter = { path = "../model-openrouter" }
 orca-harness-tools = { path = "../tools" }
 orca-harness-tools-web = { path = "../tools-web" }
 orca-harness-tools-mcp = { path = "../tools-mcp" }
+orca-harness-tools-skills = { path = "../tools-skills" }
 orca-harness-extensions = { path = "../extensions" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
