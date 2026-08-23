@@ -1709,7 +1709,9 @@ fn start_submission(
             app,
             worker,
             prompt.clone(),
-            command.trim().to_string(),
+            // The picker also fires on `!` lines, and a shell has no use for
+            // the marker either.
+            strip_location_mentions(command.trim()),
             width,
         )
     } else {
@@ -1765,7 +1767,7 @@ fn start_prompt(
     app.context_tokens += (prompt.len() / 4) as u64;
     if worker
         .send(WorkerCmd::Run {
-            prompt: prompt.clone(),
+            prompt: strip_location_mentions(&prompt),
             cancel: cancel.clone(),
         })
         .is_err()
@@ -4172,6 +4174,37 @@ fn todo_lines(todos: &orca_harness_tools::TodoList, width: usize) -> Vec<Line<'s
         ]));
     }
     lines
+}
+
+/// Drop the `@` marker from `@path` mentions before the prompt reaches the
+/// model. The marker is composer syntax for the location picker, not part of
+/// the path: left in place the model copies it verbatim into tool arguments
+/// and every path lookup fails. The composer and transcript keep the `@` so
+/// the user still sees what they typed.
+pub(crate) fn strip_location_mentions(prompt: &str) -> String {
+    let mut out = String::with_capacity(prompt.len());
+    let mut rest = prompt;
+    while !rest.is_empty() {
+        let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (token, tail) = rest.split_at(token_end);
+        out.push_str(strip_one_mention(token));
+
+        let gap_end = tail
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(tail.len());
+        out.push_str(&tail[..gap_end]);
+        rest = &tail[gap_end..];
+    }
+    out
+}
+
+/// A mention is a whole token of the form `@path`. A second `@` means the
+/// token is an address or handle (`@user@host`), which is left untouched.
+fn strip_one_mention(token: &str) -> &str {
+    match token.strip_prefix('@') {
+        Some(path) if !path.is_empty() && !path.contains('@') => path,
+        _ => token,
+    }
 }
 
 fn mention_starts_at(composer: &str, at: usize) -> bool {
@@ -7652,6 +7685,36 @@ mod tests {
 
         assert_eq!(app.composer, "work in ");
         assert_eq!(app.cursor, app.composer.chars().count());
+    }
+
+    #[test]
+    fn submitting_a_mention_sends_a_plain_path_but_shows_the_at() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.composer = "read @docs/crate-diagram.md please".into();
+        app.cursor = app.composer.chars().count();
+
+        submit(&mut app, &tx, 80);
+
+        match rx.try_recv() {
+            Ok(WorkerCmd::Run { prompt, .. }) => {
+                assert_eq!(prompt, "read docs/crate-diagram.md please");
+            }
+            other => panic!("expected a run, got {:?}", other.is_ok()),
+        }
+        assert_eq!(
+            app.prompt_history.last().map(String::as_str),
+            Some("read @docs/crate-diagram.md please"),
+            "recall keeps what the user typed"
+        );
+    }
+
+    #[test]
+    fn addresses_and_bare_at_signs_survive_submission() {
+        assert_eq!(
+            strip_location_mentions("mail dev@example.com about @user@host and @ 5pm"),
+            "mail dev@example.com about @user@host and @ 5pm"
+        );
     }
 
     #[test]

@@ -154,7 +154,7 @@ pub async fn run<M: Model + Clone + 'static>(
     if mode.is_plan() && plan_area.open() {
         context.push_system(crate::plan::briefing(&crate::plan::today()));
     }
-    context.push_user(prompt);
+    context.push_user(crate::tui::strip_location_mentions(prompt));
 
     let result = agent.run_context(&mut context, cancel).await;
     if !json {
