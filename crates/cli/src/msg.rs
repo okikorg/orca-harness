@@ -124,6 +124,19 @@ pub enum UiMsg {
     SessionCleared {
         id: String,
     },
+    /// /rewind dropped the tail of the conversation. The transcript is
+    /// redrawn from `messages`; the session's cumulative token totals
+    /// survive, because those tokens really were spent.
+    ContextRewound {
+        messages: Vec<orca_harness_core::Message>,
+        notice: String,
+    },
+    /// /fork moved recording to a new session file. The conversation is
+    /// unchanged, so the transcript stays as it is.
+    SessionForked {
+        id: String,
+        parent: String,
+    },
     /// The active model's context window, discovered from the endpoint.
     ContextWindow(Option<u64>),
     /// The worker switched provider and reset the model to its default.
@@ -159,6 +172,13 @@ pub enum WorkerCmd {
     Clear,
     /// Deterministically compact the conversation in place.
     Compact,
+    /// Drop the last `turns` user turns from the conversation and from
+    /// the recorded session, so the conversation continues from an
+    /// earlier point.
+    Rewind { turns: usize },
+    /// Branch: continue this conversation in a new session file, leaving
+    /// the current file exactly where it was.
+    Fork,
     /// Adopt a recorded session: replace the context and record there.
     LoadSession { path: std::path::PathBuf },
     /// Fetch the endpoint's model catalog, keeping ids containing `filter`.

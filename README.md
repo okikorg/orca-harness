@@ -45,9 +45,10 @@ orca-harness/
 │   ├── model-openai/ # OpenAI-compatible chat-completions adapter
 │   ├── tools/        # core host/target tools: shell, process (persistent sessions / background
 │   │                 # processes), pykernel (persistent Python compute), subagent (in-process
-│   │                 # agent fan-out with adjustable nesting), read/write/edit/list files,
-│   │                 # grep, glob — the set that makes an agent independently useful; plus an
-│   │                 # opt-in fs-admin bundle (copy/rename/delete/mkdir/stat)
+│   │                 # agent fan-out with adjustable nesting), todo_write (the agent's task
+│   │                 # list as shared state), read/write/edit/list files (read-before-write
+│   │                 # guarded), grep, glob — the set that makes an agent independently
+│   │                 # useful; plus an opt-in fs-admin bundle (copy/rename/delete/mkdir/stat)
 │   ├── tools-web/    # opt-in web tools: web_fetch (HTML→markdown, SSRF-guarded URL policy),
 │   │                 # plus web_search and web_crawl backed by Firecrawl (provider trait for
 │   │                 # swapping the search backend)
@@ -55,12 +56,13 @@ orca-harness/
 │   │                 # in the CLI) and expose their tools as mcp__<server>__<tool>
 │   ├── extensions/   # critical extensions: event stream, tool policy, truncation (+ store
 │   │                 # paired with the read_tool_result tool), retry, usage metering, session
-│   │                 # recording/resume (JSONL transcripts, --continue / --resume / /sessions)
+│   │                 # recording/resume/fork (JSONL transcripts, --continue / --resume /
+│   │                 # /sessions / /rewind / /fork)
 │   └── cli/          # `orcacode`: interactive terminal host (streaming REPL, tool approvals,
-│                     # headless mode)
+│                     # read-only plan mode, AGENTS.md project instructions, headless mode)
 ```
 
-## Try it
+## Try it## Try it
 
 `orcacode` is a reference host proving the harness drives a real terminal
 agent. It talks to any OpenAI-compatible endpoint; with no key set it
@@ -70,6 +72,7 @@ defaults to a local Ollama server:
 cargo run --release -p orcacode                    # interactive REPL
 cargo run --release -p orcacode -- -p "..."        # headless: single prompt
 cargo run --release -p orcacode -- --json -p "..." # headless: NDJSON events
+cargo run --release -p orcacode -- --plan -p "..." # read-only: plan, change nothing
 ```
 
 ### Interactive mode
@@ -86,6 +89,23 @@ a compact summary:
   collapsed into the expandable record when they finish. The status line
   counts live background work (`procs 2 · pykernel · agents 3`).
 
+**Copying text out** — mouse capture stays off, so the terminal draws its
+own selection: drag to select and copy exactly as you would anywhere
+else. The trade is the scroll wheel, which a terminal only forwards to a
+fullscreen app under capture — `pgup`/`pgdn` scroll the transcript
+instead. For text that has already scrolled past, the clipboard reaches
+further than a drag can:
+
+| Key      | Command            | Effect                                                                    |
+| :------- | :----------------- | :------------------------------------------------------------------------ |
+| `ctrl+y` | `/copy`            | copy the last answer to the clipboard (`code` for its last fenced block, `all` for the whole transcript) |
+
+`/copy` goes through OSC 52, so it reaches the clipboard of whichever
+terminal is in front of you — including across `ssh`. Under `tmux` it
+needs `set -g set-clipboard on`.
+Copying mid-stream takes the partial answer as it stands, and says so.
+`pgup`/`pgdn` scroll the transcript; `up`/`down` recall prompt history.
+
 **Tool approvals** — gated tools (`shell`, `write_file`, `edit_file`,
 `pykernel`, `subagent`) pause behind a prompt:
 
@@ -98,6 +118,105 @@ a compact summary:
 
 Saved grants are scoped to the workspace directory — future sessions in the same directory
 skip the prompt, other directories still ask — and are listed and revocable from `/settings`.
+
+**Plan mode** — `/mode` (or `--plan` at startup) makes the session
+read-only: the agent investigates and proposes, but changes nothing.
+Bare `/mode` toggles; `/mode plan` and `/mode normal` set it directly,
+and the status line carries `· plan mode` for as long as it is on.
+
+It is an **allowlist**, not a denylist. Only `read_file`, `list_dir`,
+`grep`, `glob`, `file_info`, `read_tool_result`, `web_fetch`,
+`web_search`, `web_crawl`, `skill`, and `todo_write` run; everything else
+— `shell`, `process`, `pykernel`, `write_file`, `edit_file`, `subagent`,
+and every MCP tool — is denied with a reason that points the model at the
+plan directory instead. A denylist would have to know every tool the
+session might load, and MCP servers and skills add tools the CLI has
+never heard of, so unknown means denied.
+
+**The plan is a file, not a paragraph.** `docs/plan/` is the one writable
+directory in plan mode: `write_file` and `edit_file` pass the gate for
+markdown files directly inside it, and every other write is refused.
+
+**The agent decides whether to write a plan, and what to call it.** The
+host has no way to tell a feature request from a greeting at the moment a
+turn begins — deriving a filename from the first thing typed produces
+`docs/plan/2026-08-22-hi.md`. So the host holds the fence and nothing
+else. On the first plan-mode turn it pushes a system message with the
+rules, the directory, today's date (which the model has no other way to
+know), and the convention `docs/plan/YYYY-MM-DD-<feature-name>.md` — then
+leaves the judgment alone. A question gets an answer; work that spans
+several steps gets a file.
+
+Writing goes through the ordinary `write_file` approval prompt, so you
+are asked before anything lands on disk. Because the gate runs before
+approval, an "always allow `write_file`" grant cannot widen past this
+directory.
+
+```text
+• plan mode · read-only: the agent investigates and proposes, but changes nothing
+  …investigation…
+  write_file docs/plan/2026-08-22-rewind-command.md   [y/a/A/n]
+• normal mode · every tool is available; gated tools ask for approval
+• plan saved to docs/plan/2026-08-22-rewind-command.md
+```
+
+An episode ends when you return to normal mode, and `/mode normal` lists
+the plans that were actually written — observed from tool results, not
+guessed from the filesystem, so a denied or failed write is never
+reported as saved. It says nothing when no plan was written: looking
+around in plan mode is a legitimate use of it.
+
+Note that this repository's own plans live in `docs/superpowers/plans/`,
+the convention the `superpowers` plugin uses. `orcacode` writes to
+`docs/plan/` — one constant, `plan::PLAN_DIR`, if you would rather it
+matched.
+
+`shell` is excluded on purpose: most of what an agent wants it for while
+planning (`git log`, `cargo check`) is read-only, but deciding that from
+a command string is guesswork, and a safety mode that guesses is not one.
+The gate reads the mode on every tool call rather than at agent build, so
+flipping it mid-run applies to every call the kernel has not yet checked,
+not to the next run. A mode that took effect one turn late would be a
+safety feature that lies. It is mirrored into spawned subagents the same
+way tool retry is, so a subagent that was already running when the mode
+flipped stops acting too — a restriction that only held at depth 0 would
+not be one.
+
+**Project instructions** — standing guidance is read at startup from
+`AGENTS.md`, and all three locations apply:
+
+| File                          | Scope                           |
+| :---------------------------- | :------------------------------ |
+| `$ORCA_CONFIG_DIR/AGENTS.md`  | every workspace on this machine |
+| `<workspace>/AGENTS.md`       | this project                    |
+| `<workspace>/.orca/AGENTS.md` | this checkout, unshared         |
+
+`AGENTS.md` is the cross-agent convention, so a repository that already
+has one works with no second file. Each is capped at 32 kB and appended
+to the system prompt under a header naming its source, with the
+precedence stated to the model: instructions beat the base prompt, and a
+live request beats the instructions. Loaded files are reported in the
+transcript (`instructions · AGENTS.md (1.2 kB)`).
+
+Files are read once, at startup. `/clear` re-pushes the same composed
+prompt, so instructions survive a reset — but an **edited** `AGENTS.md`
+reaches the model on the next `orcacode`, and a **resumed** session
+(`--continue`, `--resume`, `/sessions`) keeps the system prompt recorded
+in its transcript, so changes reach it only after `/clear`.
+
+**Task list** — `todo_write` gives the agent its plan as structured state
+instead of prose it re-derives every turn. It takes the whole list on
+every call and replaces what it held, so completing an item, adding a
+step it discovered, and dropping one are all the same operation; exactly
+one item may be `in_progress`. The status line shows progress
+(`· todo 2/5`) and `/todo` prints the list:
+
+```text
+  todo · 1/3 done
+  ✓ read the failing test
+  ▸ fix the off-by-one
+  □ run the suite
+```
 
 **Queuing and cancellation** — prompts submitted during a run wait in a FIFO
 rail above the activity indicator and start automatically in submission
@@ -115,6 +234,23 @@ as append-only JSONL:
 | `/sessions`     | open a picker and resume from the TUI                                                                      |
 | `--no-session`  | opt out of recording                                                                                       |
 | `/clear`        | empty the current session in place (same id) and stop all background work (processes, pykernel, subagents) |
+| `/rewind [n]`   | drop the last `n` user turns (default 1) from the conversation and the file                                |
+| `/fork`         | continue this conversation in a new session file, leaving the current one as it is                         |
+
+`/rewind` always cuts on a user-turn boundary, so what remains can never
+end in tool calls with no results — the shape a chat-completions endpoint
+rejects. The context shrinks, so the session file is rewritten rather
+than appended to, and the transcript is redrawn from what survives. The
+session's token totals are not reset: those tokens were spent, and
+rewinding does not un-spend them. The read-before-write guard *is*
+cleared, because a dropped turn may have held the read that made a file
+overwritable.
+
+`/fork` is how a conversation branches. The current file is left exactly
+where it was and recording moves to a new one carrying the whole context
+so far, with the old session recorded as its `parent`. Rewinding and then
+forking keeps the original line intact while the new one goes somewhere
+else.
 
 **Endpoint selection** — `ORCA_MODEL`, `ORCA_BASE_URL`, and
 `OPENAI_API_KEY` (or `--model`, `--base-url`, `--api-key`) choose the
@@ -184,8 +320,39 @@ results to the model:
   rooted at a `Workspace` that rejects absolute paths and `..` escapes.
   Writes and edits are `Keyed` by path: same-file writes serialize while
   different-file writes run concurrently.
+- `todo_write` — the agent's task list as structured state, shared with the
+  host through a cloneable `TodoList` handle so a UI can render the plan
+  without parsing it out of the conversation.
 
 `core_tools(&ws)` returns the recommended default set ready to register.
+
+### Read before write
+
+`write_file` replaces a file wholesale, so a model that has not seen the
+current contents is not overwriting a file — it is deleting one and
+writing another. A `FileGuard` shared by `read_file`, `write_file`, and
+`edit_file` refuses that:
+
+| Situation                                   | Result                                     |
+| :------------------------------------------ | :----------------------------------------- |
+| the path does not exist                     | written — a create needs no prior read     |
+| read (or written) through this guard, unchanged | written                                |
+| exists, never read                          | refused: read it first, or use `edit_file` |
+| changed on disk after the read              | refused: read it again                     |
+
+`edit_file` is exempt from the check — it works from the contents it just
+read and fails when its `old` text is not there — but its write is
+stamped, so a later `write_file` to the same path is not stranded. A
+stamp is the file's own post-write modified time and length, never the
+clock.
+
+`core_tools(&ws)` wires a fresh guard. A host that rebuilds its tool set
+while one conversation continues — `orcacode` does, on every model
+switch, extension toggle, and MCP reload — should pass its own with
+`core_tools_with_guard(&ws, &guard)` so what the model read is not
+forgotten on every rebuild, and `clear()` it when the conversation resets
+(`/clear`). Tools built directly (`WriteFileTool::new(ws)`) are
+unguarded; the guard is opt-in for library users.
 
 ## Critical extensions
 

@@ -28,6 +28,12 @@ pub struct SessionMeta {
     pub created_at: u64,
     pub workspace: String,
     pub model: String,
+    /// The session this one was forked from, if any. Optional and
+    /// omitted when absent, so files written before forking existed
+    /// still load and files written after it are still readable by a
+    /// build that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -232,6 +238,7 @@ impl SessionHandler {
             created_at: unix_now(),
             workspace: workspace.to_string(),
             model: model.to_string(),
+            parent: None,
         };
         let (path, file) = open_new(&dir, &meta)?;
         Ok(Self {
@@ -276,6 +283,21 @@ impl SessionHandler {
 
     /// Rotate to a fresh session file (used by /clear). Returns the id.
     pub fn start_new(&self) -> std::io::Result<String> {
+        self.rotate(None)
+    }
+
+    /// Branch: start a fresh session file that records the current one
+    /// as its parent, and leave the current file exactly as it is. The
+    /// caller `sync`s the context it wants carried over — the new file's
+    /// cursor is zero, so the whole context is written to it.
+    pub fn fork(&self) -> std::io::Result<String> {
+        let parent = self.session_id();
+        self.rotate(Some(parent))
+    }
+
+    /// Swap the live file for a new one, optionally recording where it
+    /// came from. Recording restarts at zero either way.
+    fn rotate(&self, parent: Option<String>) -> std::io::Result<String> {
         let mut rec = self.inner.lock().unwrap();
         let meta = SessionMeta {
             v: SESSION_FORMAT_VERSION,
@@ -283,6 +305,7 @@ impl SessionHandler {
             created_at: unix_now(),
             workspace: rec.meta.workspace.clone(),
             model: rec.meta.model.clone(),
+            parent,
         };
         let (path, file) = open_new(&rec.dir, &meta)?;
         rec.meta = meta;
@@ -452,6 +475,7 @@ mod tests {
             created_at: 1_755_000_000,
             workspace: "/tmp/ws".into(),
             model: "test-model".into(),
+            parent: None,
         }
     }
 
@@ -707,6 +731,85 @@ mod tests {
         let second = SessionFile::load(&handler.path()).unwrap();
         assert_eq!(second.context.messages().len(), 1);
         assert_eq!(SessionFile::list(&dir).len(), 2);
+    }
+
+    /// Forking leaves the original file untouched and starts a new one
+    /// that names it as the parent; the caller's sync fills the branch
+    /// with whatever context it carried over.
+    #[test]
+    fn fork_branches_without_disturbing_the_original() {
+        let dir = temp_dir("fork");
+        let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+        let original_path = handler.path();
+        let original_id = handler.session_id();
+        let mut context = Context::new();
+        context.push_system("sys");
+        context.push_user("one");
+        context.push_user("two");
+        handler.sync(&context);
+
+        let forked_id = handler.fork().unwrap();
+        assert_ne!(forked_id, original_id);
+        assert_ne!(handler.path(), original_path);
+        handler.sync(&context);
+
+        // The branch holds the whole carried-over context...
+        let forked = SessionFile::load(&handler.path()).unwrap();
+        assert_eq!(forked.context.messages().len(), 3);
+        assert_eq!(forked.meta.parent.as_deref(), Some(original_id.as_str()));
+        // ...and the original is exactly as it was left.
+        let original = SessionFile::load(&original_path).unwrap();
+        assert_eq!(original.context.messages().len(), 3);
+        assert_eq!(original.meta.parent, None);
+        assert_eq!(SessionFile::list(&dir).len(), 2);
+
+        // Writing on the branch does not touch the original.
+        context.push_user("only on the branch");
+        handler.sync(&context);
+        assert_eq!(
+            SessionFile::load(&original_path)
+                .unwrap()
+                .context
+                .messages()
+                .len(),
+            3
+        );
+        assert_eq!(
+            SessionFile::load(&handler.path())
+                .unwrap()
+                .context
+                .messages()
+                .len(),
+            4
+        );
+    }
+
+    /// `parent` was added after v1 shipped: a header written without it
+    /// must still load, and one written with it must still be readable
+    /// as a v1 file.
+    #[test]
+    fn headers_without_a_parent_still_load() {
+        let dir = temp_dir("parentless");
+        let path = dir.join("legacy.jsonl");
+        fs::write(
+            &path,
+            "{\"v\":1,\"id\":\"0000000001-a-0\",\"created_at\":1,\
+             \"workspace\":\"/tmp/ws\",\"model\":\"m\"}\n",
+        )
+        .unwrap();
+        let loaded = SessionFile::load(&path).unwrap();
+        assert_eq!(loaded.meta.parent, None);
+
+        // A forked header omits nothing else and stays v1.
+        let mut forked = meta("0000000002-a-0");
+        forked.parent = Some("0000000001-a-0".into());
+        let text = serde_json::to_string(&forked).unwrap();
+        assert!(text.contains("\"parent\":\"0000000001-a-0\""));
+        assert!(text.contains("\"v\":1"));
+        // A header with no parent does not write the field at all.
+        assert!(!serde_json::to_string(&meta("x"))
+            .unwrap()
+            .contains("parent"));
     }
 
     #[test]

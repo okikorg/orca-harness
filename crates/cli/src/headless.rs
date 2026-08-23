@@ -8,12 +8,16 @@ use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
-use orca_harness_tools::{core_tools, PyKernelTool, SubagentDepth, SubagentTool, Workspace};
+use orca_harness_tools::{
+    core_tools, PyKernelTool, SubagentDepth, SubagentTool, TodoList, TodoWriteTool, Workspace,
+};
 
 use crate::approval::HeadlessGate;
+use crate::mode::{ModeHandle, PlanGate};
 use crate::view;
 use crate::Config;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run<M: Model + Clone + 'static>(
     cfg: &Config,
     model: M,
@@ -22,6 +26,9 @@ pub async fn run<M: Model + Clone + 'static>(
     session: Option<Arc<orca_harness_extensions::SessionHandler>>,
     resumed: Option<Context>,
     skills: &crate::skills::Skills,
+    mode: &ModeHandle,
+    todos: &TodoList,
+    plan_area: &crate::plan::PlanArea,
 ) -> i32 {
     let model_for_subagents = model.clone();
     let json = cfg.json;
@@ -71,10 +78,12 @@ pub async fn run<M: Model + Clone + 'static>(
     });
 
     let (meter, usage) = UsageMeter::new();
+    // PlanGate first: --plan denies before --auto-approve can allow.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
-        .extension(meter);
+        .extension(meter)
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()));
     if crate::extensions::enabled("truncation") {
         agent = agent.extension(Truncation::new(16_000));
     }
@@ -90,6 +99,7 @@ pub async fn run<M: Model + Clone + 'static>(
     for tool in core_tools(ws) {
         agent = agent.tool_arc(tool);
     }
+    agent = agent.tool_arc(Arc::new(TodoWriteTool::new(todos.clone())));
     let root = ws.root().to_string_lossy().into_owned();
     agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root)));
     agent = agent.tool_arc(Arc::new(
@@ -135,7 +145,16 @@ pub async fn run<M: Model + Clone + 'static>(
             context
         }
     };
-    context.push_user(cfg.prompt.as_deref().unwrap_or_default());
+    let prompt = cfg.prompt.as_deref().unwrap_or_default();
+    // `--plan` briefs the model the same way the interactive worker
+    // does: the rules, the writable directory, and today's date.
+    // Whether a plan file appears is the agent's call. Without
+    // --auto-approve the write is still refused by HeadlessGate —
+    // there is nobody to ask.
+    if mode.is_plan() && plan_area.open() {
+        context.push_system(crate::plan::briefing(&crate::plan::today()));
+    }
+    context.push_user(prompt);
 
     let result = agent.run_context(&mut context, cancel).await;
     if !json {

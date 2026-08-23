@@ -84,8 +84,12 @@ pub struct Theme {
     pub dim: Style,
     /// Interactive accents: prompt glyph, tool calls, spinner, banner.
     pub accent: Style,
-    /// Emphasis: user prompts, palette selection.
+    /// Emphasis: user prompts, section headers, the banner.
     pub strong: Style,
+    /// The cursor row in a picker, palette, or list. A notch below
+    /// [`Self::strong`]: a selection marks where you are, it does not
+    /// compete with the prompts and headers around it.
+    pub select: Style,
     /// Approval prompts.
     pub warn: Style,
     pub error: Style,
@@ -102,6 +106,7 @@ pub fn mono_theme() -> Theme {
         dim,
         accent: bold,
         strong: bold,
+        select: Style::default().fg(Color::Gray),
         warn: bold,
         error: bold,
         success: Style::default(),
@@ -109,17 +114,26 @@ pub fn mono_theme() -> Theme {
     }
 }
 
+/// The default theme's primary hue: a muted steel blue (#88A1BB) used
+/// for accents and inline code.
+const PRIMARY: Color = Color::Rgb(136, 161, 187);
+
+/// Desaturated brick red (#BF6C69) for errors — loud enough to spot,
+/// quiet enough to sit next to [`PRIMARY`].
+const ERROR: Color = Color::Rgb(191, 108, 105);
+
 pub fn default_theme() -> Theme {
     Theme {
         dim: Style::default().fg(Color::DarkGray),
-        accent: Style::default().fg(Color::Cyan),
+        accent: Style::default().fg(PRIMARY),
         strong: Style::default().add_modifier(Modifier::BOLD),
+        select: Style::default().fg(Color::Gray),
         warn: Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
-        error: Style::default().fg(Color::Red),
+        error: Style::default().fg(ERROR),
         success: Style::default().fg(Color::Green),
-        code: Style::default().fg(Color::Cyan),
+        code: Style::default().fg(PRIMARY),
     }
 }
 
@@ -131,6 +145,7 @@ fn dracula_theme() -> Theme {
         strong: Style::default()
             .fg(Color::Rgb(189, 147, 249))
             .add_modifier(Modifier::BOLD), // purple bold
+        select: Style::default().fg(Color::Rgb(189, 147, 249)), // purple
         warn: Style::default()
             .fg(Color::Rgb(241, 250, 140))
             .add_modifier(Modifier::BOLD), // yellow bold
@@ -148,6 +163,7 @@ fn solarized_dark_theme() -> Theme {
         strong: Style::default()
             .fg(Color::Rgb(147, 161, 161))
             .add_modifier(Modifier::BOLD), // base1 bold
+        select: Style::default().fg(Color::Rgb(147, 161, 161)), // base1
         warn: Style::default()
             .fg(Color::Rgb(181, 137, 0))
             .add_modifier(Modifier::BOLD), // yellow bold
@@ -165,6 +181,7 @@ fn one_dark_theme() -> Theme {
         strong: Style::default()
             .fg(Color::Rgb(229, 192, 123))
             .add_modifier(Modifier::BOLD), // yellow bold
+        select: Style::default().fg(Color::Rgb(229, 192, 123)), // yellow
         warn: Style::default()
             .fg(Color::Rgb(209, 154, 102))
             .add_modifier(Modifier::BOLD), // orange bold
@@ -182,6 +199,7 @@ fn monokai_theme() -> Theme {
         strong: Style::default()
             .fg(Color::Rgb(249, 38, 114))
             .add_modifier(Modifier::BOLD), // pink bold
+        select: Style::default().fg(Color::Rgb(249, 38, 114)), // pink
         warn: Style::default()
             .fg(Color::Rgb(230, 219, 116))
             .add_modifier(Modifier::BOLD), // yellow bold
@@ -199,6 +217,7 @@ fn nord_theme() -> Theme {
         strong: Style::default()
             .fg(Color::Rgb(216, 222, 233))
             .add_modifier(Modifier::BOLD), // nord4 bold
+        select: Style::default().fg(Color::Rgb(216, 222, 233)), // nord4
         warn: Style::default()
             .fg(Color::Rgb(235, 203, 139))
             .add_modifier(Modifier::BOLD), // nord13 bold
@@ -1137,8 +1156,8 @@ mod tests {
         // switched by the TUI, so assert on the palette itself rather than
         // the global (tests run in parallel and may switch it).
         let t = theme_for(ThemeName::Default);
-        assert_eq!(t.accent.fg, Some(Color::Cyan));
-        assert_eq!(t.code.fg, Some(Color::Cyan));
+        assert_eq!(t.accent.fg, Some(PRIMARY));
+        assert_eq!(t.code.fg, Some(PRIMARY));
     }
 
     #[test]
@@ -1352,7 +1371,7 @@ mod tests {
             .iter()
             .find(|s| s.content.as_ref().trim() == "code")
             .expect("code span");
-        assert_eq!(code.style.fg, Some(Color::Cyan));
+        assert_eq!(code.style.fg, Some(PRIMARY));
         assert!(!code.style.add_modifier.contains(Modifier::ITALIC));
         let text = flat(&lines[0]);
         assert!(!text.contains("**"), "markers stripped: {text}");
@@ -1582,11 +1601,9 @@ mod tests {
             let code = lines
                 .iter()
                 .flat_map(|line| &line.spans)
-                .find(|span| {
-                    span.content.as_ref() == code_word && span.style.fg == Some(Color::Cyan)
-                })
+                .find(|span| span.content.as_ref() == code_word && span.style.fg == Some(PRIMARY))
                 .unwrap_or_else(|| panic!("inline code word {code_word}"));
-            assert_eq!(code.style.fg, Some(Color::Cyan));
+            assert_eq!(code.style.fg, Some(PRIMARY));
         }
     }
 

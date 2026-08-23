@@ -3,16 +3,24 @@
 //! tail, approval prompts, the slash palette) sits above the composer,
 //! and the composer plus status line are pinned to the bottom. PgUp/PgDn
 //! scroll the in-app transcript buffer.
+//!
+//! Getting text out: mouse capture stays off, so the terminal draws its
+//! own selection and drag-to-copy works as it does anywhere else. The
+//! trade is the wheel, which a terminal only forwards to a fullscreen app
+//! under capture; PgUp/PgDn scroll instead. `/copy` (ctrl+y) writes to
+//! the clipboard through the terminal and reaches content that has
+//! scrolled past, which a drag cannot.
 
 use std::collections::VecDeque;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event as CtEvent, EventStream as CtEventStream,
-    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    DisableMouseCapture, Event as CtEvent, EventStream as CtEventStream, KeyCode, KeyEvent,
+    KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -30,6 +38,7 @@ use orca_harness_core::CancellationToken;
 use orca_harness_extensions::HarnessEvent;
 use orca_harness_model_openrouter::ModelInfo;
 
+use crate::clipboard;
 use crate::commands::{filter_commands, CommandSpec};
 use crate::components::picker::{ListPicker, PickerAction, PickerEvent};
 use crate::msg::{ApprovalRequest, ApprovalResponse, Provider, UiMsg, WorkerCmd};
@@ -45,6 +54,9 @@ const INSPECTOR_OUTPUT_TAIL: usize = 6;
 const SCROLL_PAGE: usize = 10;
 const PALETTE_ROWS: usize = 8;
 const PICKER_ROWS: usize = 10;
+/// How many sessions the /sessions picker displays at once (newest
+/// first); the cursor pages through the rest like the /models picker.
+const SESSIONS_WINDOW: usize = 5;
 const LIVE_TOOL_ROWS: usize = 8;
 const QUEUE_PREVIEW_ROWS: usize = 3;
 
@@ -75,6 +87,16 @@ pub struct TuiConfig {
     /// Shared handle onto the scanned skills; `/skills` renders the
     /// catalog, the shadowed copies, and the parse failures from it.
     pub skills: crate::skills::Skills,
+    /// Shared handle onto the session mode; `/mode` flips it and the
+    /// status line shows it. Read by the plan gate on every tool call,
+    /// so a flip applies to the call in flight, not to the next run.
+    pub mode: crate::mode::ModeHandle,
+    /// Shared handle onto the agent's task list, written by `todo_write`
+    /// and rendered by `/todo`.
+    pub todos: orca_harness_tools::TodoList,
+    /// The plan artifact the current planning episode may write. Leaving
+    /// plan mode ends the episode and reports where the plan went.
+    pub plan: crate::plan::PlanArea,
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
@@ -172,6 +194,7 @@ enum Overlay {
     /// redraws immediately while the reconnect runs behind it.
     Mcp {
         servers: Vec<crate::config::McpServer>,
+        filter: String,
         picker: ListPicker,
     },
     /// The skills found on disk; space (or enter) turns the selected one
@@ -179,6 +202,7 @@ enum Overlay {
     /// redraws immediately while the rescan runs behind it.
     Skills {
         entries: Vec<crate::skills::SkillEntry>,
+        filter: String,
         picker: ListPicker,
     },
     /// Recorded sessions for this workspace; enter resumes the selection.
@@ -387,6 +411,13 @@ struct App {
     overlay: Option<Overlay>,
     /// Filter to seed the model picker with once the catalog reply arrives.
     picker_pending: Option<String>,
+    /// Text waiting to be handed to the terminal's clipboard: decided
+    /// here, written by the run loop between frames.
+    clipboard_pending: Option<String>,
+    /// The last complete answer the model produced, kept verbatim so
+    /// `/copy` yields markdown source rather than the wrapped, styled,
+    /// syntax-highlighted lines the transcript holds.
+    last_answer: Option<String>,
 }
 
 impl App {
@@ -436,6 +467,8 @@ impl App {
             palette_index: 0,
             overlay: None,
             picker_pending: None,
+            clipboard_pending: None,
+            last_answer: None,
         }
     }
 
@@ -587,9 +620,10 @@ pub async fn run(
     mut ui_rx: mpsc::UnboundedReceiver<UiMsg>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
-    // Mouse capture makes wheel events arrive as mouse events instead of
-    // the arrow keys terminals synthesize in alternate-screen mode.
-    crossterm::execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    // Deliberately no EnableMouseCapture: a terminal under capture never
+    // draws a native selection, and being able to drag-select the
+    // transcript is worth more than the wheel. PgUp/PgDn scroll.
+    crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
@@ -641,8 +675,16 @@ pub async fn run(
                 app.quit = true;
             }
         }
+
+        // Between frames, never inside `draw`: these sequences produce no
+        // cells, so a renderer interleaving its own writes with them can
+        // split one mid-payload and leave the terminal parsing garbage.
+        flush_terminal_requests(&mut app)?;
     }
 
+    // Mouse tracking is unconditional at shutdown: the cost of a
+    // redundant disable is nothing and the cost of a missed one is a
+    // shell that reports mouse events forever.
     crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
     disable_raw_mode()?;
     println!(
@@ -650,6 +692,92 @@ pub async fn run(
         app.tokens_in, app.tokens_out
     );
     Ok(())
+}
+
+/// Apply the terminal-level requests the event handlers queued: a
+/// clipboard write. Kept out of the handlers so those stay pure and
+/// testable without a terminal; this is the only place that talks to one.
+fn flush_terminal_requests(app: &mut App) -> io::Result<()> {
+    let mut out = io::stdout();
+    if let Some(text) = app.clipboard_pending.take() {
+        out.write_all(clipboard::osc52(&text).as_bytes())?;
+        out.flush()?;
+    }
+    Ok(())
+}
+
+/// `/copy [code|all]` — push text to the terminal's clipboard.
+///
+/// Native selection only ever reaches the visible viewport, so the parts
+/// most worth copying — a long answer, a code block that scrolled past —
+/// need a path that does not go through the mouse at all.
+fn copy_command(app: &mut App, arg: &str) {
+    // Mid-stream, the newest text is still in the delta buffer and has
+    // not become an answer yet. Copying the previous turn's answer under
+    // a notice that says "last answer" would be a quiet wrong result.
+    let streaming = (!app.text.trim().is_empty()).then(|| app.text.clone());
+    let (label, text) = match arg {
+        "" | "last" | "answer" => match streaming {
+            Some(partial) => ("answer so far", Some(partial)),
+            None => ("last answer", app.last_answer.clone()),
+        },
+        "code" | "block" => match streaming.as_deref().and_then(clipboard::last_code_block) {
+            Some(block) => ("code block so far", Some(block)),
+            None => (
+                "last code block",
+                app.last_answer
+                    .as_deref()
+                    .and_then(clipboard::last_code_block),
+            ),
+        },
+        "all" | "transcript" => ("transcript", Some(transcript_text(app))),
+        other => {
+            push_error(
+                app,
+                format!("unknown /copy target: {other} — /copy [code|all]"),
+            );
+            return;
+        }
+    };
+    let Some(text) = text.filter(|t| !t.trim().is_empty()) else {
+        push_error(app, format!("nothing to copy: no {label} yet"));
+        return;
+    };
+    let bytes = text.len();
+    if bytes > clipboard::MAX_COPY_BYTES {
+        push_error(
+            app,
+            format!(
+                "{label} is {}KB — past the {}KB a terminal will accept in one clipboard write",
+                bytes / 1024,
+                clipboard::MAX_COPY_BYTES / 1024,
+            ),
+        );
+        return;
+    }
+    let lines = text.lines().count();
+    let plural = if lines == 1 { "" } else { "s" };
+    app.clipboard_pending = Some(text);
+    push_notice(
+        app,
+        format!("copied {label} ({lines} line{plural}) — under tmux this needs set-clipboard on"),
+    );
+}
+
+/// The transcript rendered back to plain text, styling and layout
+/// dropped. Trailing blank lines from block spacing go with it; a
+/// clipboard payload that ends in six empty rows is nobody's intent.
+fn transcript_text(app: &App) -> String {
+    let mut lines: Vec<String> = app
+        .transcript
+        .iter()
+        .chain(app.pending_history.iter())
+        .map(|line| line_text(line).trim_end().to_string())
+        .collect();
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 fn handle_terminal_event(
@@ -720,6 +848,9 @@ fn handle_terminal_event(
                 expand_tool(app, 1, content_width);
             }
         }
+        // Deliberately not ctrl+s (XOFF on most terminals — the app would
+        // appear to hang) and not a plain letter the composer needs.
+        KeyCode::Char('y') if ctrl => copy_command(app, ""),
         KeyCode::Tab
             if app.view_mode == ViewMode::Split
                 && width >= 100
@@ -973,7 +1104,12 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                         location.sync_len();
                         After::Nothing
                     }
-                    KeyCode::Backspace => After::Close,
+                    KeyCode::Backspace | KeyCode::Delete => {
+                        let at = byte_index(&app.composer, location.token_start);
+                        app.composer.remove(at);
+                        app.cursor = location.token_start;
+                        After::Close
+                    }
                     _ => After::Nothing,
                 },
             },
@@ -1139,15 +1275,35 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             }
             _ => After::Nothing,
         },
-        Overlay::Mcp { servers, picker } => {
+        Overlay::Mcp {
+            servers,
+            filter,
+            picker,
+        } => {
+            let indices = matching_indices(servers, filter, |server| &server.name);
             // Space toggles rather than arming an action strip: this
             // picker has exactly one action, so the strip would be a
             // keystroke of ceremony. Enter does the same, matching
             // /extensions.
             let row = match key.code {
-                KeyCode::Char(' ') | KeyCode::Enter if !servers.is_empty() => Some(picker.index()),
+                KeyCode::Char(' ') | KeyCode::Enter if !indices.is_empty() => {
+                    Some(indices[picker.index()])
+                }
                 _ => match picker.on_key(key.code) {
-                    PickerEvent::Activated(index) => Some(index),
+                    PickerEvent::Activated(index) => Some(indices[index]),
+                    PickerEvent::Ignored => {
+                        match key.code {
+                            KeyCode::Char(c) if c != ' ' => filter.push(c),
+                            KeyCode::Backspace => {
+                                filter.pop();
+                            }
+                            _ => {}
+                        }
+                        picker.set_len(
+                            matching_indices(servers, filter, |server| &server.name).len(),
+                        );
+                        return;
+                    }
                     _ => None,
                 },
             };
@@ -1171,7 +1327,11 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                 None => After::Nothing,
             }
         }
-        Overlay::Skills { entries, picker } => match picker.on_key(key.code) {
+        Overlay::Skills {
+            entries,
+            filter,
+            picker,
+        } => match picker.on_key(key.code) {
             // Space reveals the action strip; enter keeps the toggle one
             // key away, since that is what the list is mostly for.
             // Deleting sits behind the strip on purpose: it is the only
@@ -1179,11 +1339,32 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             // `app` — the shared handle, the config, the transcript —
             // which this match holds borrowed, so it is handed to the
             // apply step below.
-            PickerEvent::Action { key: 'd', row } => After::RemoveSkill(entries[row].name.clone()),
+            PickerEvent::Action { key: 'd', row } => {
+                let indices = matching_indices(entries, filter, |entry| &entry.name);
+                After::RemoveSkill(entries[indices[row]].name.clone())
+            }
             event => {
                 let row = match event {
-                    PickerEvent::Activated(index) => Some(index),
-                    PickerEvent::Action { key: 't', row } => Some(row),
+                    PickerEvent::Activated(index)
+                    | PickerEvent::Action {
+                        key: 't',
+                        row: index,
+                    } => {
+                        let indices = matching_indices(entries, filter, |entry| &entry.name);
+                        Some(indices[index])
+                    }
+                    PickerEvent::Ignored => {
+                        match key.code {
+                            KeyCode::Char(c) if c != ' ' => filter.push(c),
+                            KeyCode::Backspace => {
+                                filter.pop();
+                            }
+                            _ => {}
+                        }
+                        picker
+                            .set_len(matching_indices(entries, filter, |entry| &entry.name).len());
+                        None
+                    }
                     _ => None,
                 };
                 match row {
@@ -1225,33 +1406,49 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                 }
             }
         },
-        Overlay::Sessions { sessions, picker } => match picker.on_key(key.code) {
-            PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::LoadSession {
-                path: sessions[index].path.clone(),
-            }),
-            PickerEvent::Action { key: 'd', row } => {
-                let session = &sessions[row];
-                if current_session.as_deref() == Some(session.meta.id.as_str()) {
-                    After::Note(
-                        "the active session cannot be deleted (use /clear to empty it)".into(),
-                    )
-                } else {
-                    match std::fs::remove_file(&session.path) {
-                        Ok(()) => {
-                            let id = sessions.remove(row).meta.id;
-                            picker.set_len(sessions.len());
-                            if sessions.is_empty() {
-                                After::CloseWithNote(format!("deleted session {id}"))
-                            } else {
-                                After::Note(format!("deleted session {id}"))
+        Overlay::Sessions { sessions, picker } => {
+            // The picker only shows the last few sessions, but the
+            // navigation grammar matches /models: ↑↓ step, PgUp/PgDn
+            // page through the list.
+            match key.code {
+                KeyCode::PageUp => {
+                    picker.move_by(-(PICKER_ROWS as isize));
+                    After::Nothing
+                }
+                KeyCode::PageDown => {
+                    picker.move_by(PICKER_ROWS as isize);
+                    After::Nothing
+                }
+                _ => match picker.on_key(key.code) {
+                    PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::LoadSession {
+                        path: sessions[index].path.clone(),
+                    }),
+                    PickerEvent::Action { key: 'd', row } => {
+                        let session = &sessions[row];
+                        if current_session.as_deref() == Some(session.meta.id.as_str()) {
+                            After::Note(
+                                "the active session cannot be deleted (use /clear to empty it)"
+                                    .into(),
+                            )
+                        } else {
+                            match std::fs::remove_file(&session.path) {
+                                Ok(()) => {
+                                    let id = sessions.remove(row).meta.id;
+                                    picker.set_len(sessions.len());
+                                    if sessions.is_empty() {
+                                        After::CloseWithNote(format!("deleted session {id}"))
+                                    } else {
+                                        After::Note(format!("deleted session {id}"))
+                                    }
+                                }
+                                Err(err) => After::Note(format!("could not delete: {err}")),
                             }
                         }
-                        Err(err) => After::Note(format!("could not delete: {err}")),
                     }
-                }
+                    _ => After::Nothing,
+                },
             }
-            _ => After::Nothing,
-        },
+        }
     };
     match after {
         After::Nothing => {}
@@ -1300,9 +1497,14 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             // later; drop the row now so the list matches what the user
             // just did. An unremovable skill keeps its row and says why.
             if remove_skill(app, &name, worker) {
-                if let Some(Overlay::Skills { entries, picker }) = &mut app.overlay {
+                if let Some(Overlay::Skills {
+                    entries,
+                    filter,
+                    picker,
+                }) = &mut app.overlay
+                {
                     entries.retain(|entry| entry.name != name);
-                    picker.set_len(entries.len());
+                    picker.set_len(matching_indices(entries, filter, |entry| &entry.name).len());
                     if entries.is_empty() {
                         app.overlay = None;
                     }
@@ -1319,12 +1521,9 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                 .is_err()
             {
                 app.picker_pending = None;
-                app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orcacode",
-                    theme().error,
-                )));
+                push_error(app, "worker is gone; restart orcacode");
             } else {
-                app.push_line(Line::from(Span::styled("fetching models…", theme().dim)));
+                push_notice(app, "fetching models…");
             }
         }
         After::InsertLocation { token_start, entry } => {
@@ -1341,10 +1540,7 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
 
 fn send_or_report(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, cmd: WorkerCmd) {
     if worker.send(cmd).is_err() {
-        app.push_line(Line::from(Span::styled(
-            "worker is gone; restart orcacode",
-            theme().error,
-        )));
+        push_error(app, "worker is gone; restart orcacode");
     }
 }
 
@@ -1379,6 +1575,18 @@ fn push_notice(app: &mut App, text: impl Into<String>) {
     app.push_line(Line::from(vec![
         Span::styled("• ", t.accent),
         Span::styled(text.into(), t.dim),
+    ]));
+}
+
+/// A command that refused to do what was asked. The same leading glyph as
+/// [`push_notice`] — a failed command is still the system talking, and a
+/// line without the glyph reads as model output — with the body in the
+/// error color so severity and origin are two separate cues.
+fn push_error(app: &mut App, text: impl Into<String>) {
+    let t = theme();
+    app.push_line(Line::from(vec![
+        Span::styled("• ", t.accent),
+        Span::styled(text.into(), t.error),
     ]));
 }
 
@@ -1529,10 +1737,7 @@ fn start_shell(
         })
         .is_err()
     {
-        app.push_line(Line::from(Span::styled(
-            "worker is gone; restart orcacode",
-            theme().error,
-        )));
+        push_error(app, "worker is gone; restart orcacode");
         return false;
     }
     app.reset_activity();
@@ -1565,10 +1770,7 @@ fn start_prompt(
         })
         .is_err()
     {
-        app.push_line(Line::from(Span::styled(
-            "worker is gone; restart orcacode",
-            theme().error,
-        )));
+        push_error(app, "worker is gone; restart orcacode");
         return false;
     }
 
@@ -1608,7 +1810,7 @@ fn start_next_queued_prompt(
 fn expand_tool(app: &mut App, nth_latest: usize, width: usize) {
     let t = theme();
     let Some(record) = app.tool_log.iter().rev().nth(nth_latest.saturating_sub(1)) else {
-        app.push_line(Line::from(Span::styled("nothing to expand", t.dim)));
+        push_notice(app, "nothing to expand");
         return;
     };
     let lines = view::expand_output(&record.tool_name, &record.output);
@@ -1797,10 +1999,7 @@ fn slash_command(
             app.push_line(Line::from(Span::styled(message, dim)));
             return;
         }
-        app.push_line(Line::from(Span::styled(
-            "usage: /queue [clear]",
-            theme().error,
-        )));
+        push_error(app, "usage: /queue [clear]");
         return;
     }
     if let Some(rest) = command.strip_prefix("expand") {
@@ -1808,12 +2007,30 @@ fn slash_command(
         expand_tool(app, nth, width);
         return;
     }
+    if let Some(rest) = command.strip_prefix("mode") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            mode_command(app, rest.trim());
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("rewind") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            rewind_command(app, rest.trim(), worker);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("todo") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            todo_command(app, width);
+            return;
+        }
+    }
     if let Some(rest) = command.strip_prefix("subagents") {
         if rest.is_empty() {
-            app.push_line(Line::from(Span::styled(
+            push_notice(
+                app,
                 format!("subagent nesting depth: {}", app.cfg.subagent_depth.get()),
-                dim,
-            )));
+            );
             return;
         }
         if let Some(arg) = rest.strip_prefix(' ') {
@@ -1826,10 +2043,7 @@ fn slash_command(
                     )));
                 }
                 Err(_) => {
-                    app.push_line(Line::from(Span::styled(
-                        "usage: /subagents [1-5]",
-                        theme().error,
-                    )));
+                    push_error(app, "usage: /subagents [1-5]");
                 }
             }
             return;
@@ -1850,10 +2064,7 @@ fn slash_command(
                 Some("enable" | "add" | "on") => true,
                 Some("disable" | "remove" | "delete" | "off") => false,
                 _ => {
-                    app.push_line(Line::from(Span::styled(
-                        "usage: /extensions [enable|disable <name>]",
-                        theme().error,
-                    )));
+                    push_error(app, "usage: /extensions [enable|disable <name>]");
                     return;
                 }
             };
@@ -1864,31 +2075,28 @@ fn slash_command(
                     .map(|spec| spec.name)
                     .collect::<Vec<_>>()
                     .join(", ");
-                app.push_line(Line::from(Span::styled(
+                push_error(
+                    app,
                     format!("unknown extension: {name} — valid extensions: {known}"),
-                    theme().error,
-                )));
+                );
                 return;
             }
             let state = if enabled { "enabled" } else { "disabled" };
             match crate::config::save_extension(name, enabled) {
                 Ok(_) => {
-                    app.push_line(Line::from(Span::styled(
+                    push_notice(
+                        app,
                         format!("extension {name} {state} (applies to the next run)"),
-                        dim,
-                    )));
+                    );
                     if worker.send(WorkerCmd::ReloadExtensions).is_err() {
-                        app.push_line(Line::from(Span::styled(
-                            "worker is gone; restart orcacode",
-                            theme().error,
-                        )));
+                        push_error(app, "worker is gone; restart orcacode");
                     }
                 }
                 Err(err) => {
-                    app.push_line(Line::from(Span::styled(
+                    push_error(
+                        app,
                         format!("extension {name} not {state} (save failed: {err})"),
-                        theme().error,
-                    )));
+                    );
                 }
             }
             return;
@@ -1902,20 +2110,24 @@ fn slash_command(
             // stands in for it.
             let servers = crate::config::stored_mcp_servers();
             if servers.is_empty() {
-                app.push_line(Line::from(Span::styled(
-                    "no MCP servers configured — /mcp add <name> <command>",
-                    dim,
-                )));
+                push_notice(app, "no MCP servers configured — /mcp add <name> <command>");
                 return;
             }
             app.overlay = Some(Overlay::Mcp {
                 picker: ListPicker::new(servers.len()),
+                filter: String::new(),
                 servers,
             });
             return;
         }
         if let Some(args) = rest.strip_prefix(' ') {
             mcp_command(app, args, worker);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("copy") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            copy_command(app, rest.trim());
             return;
         }
     }
@@ -1937,12 +2149,9 @@ fn slash_command(
                 .is_err()
             {
                 app.picker_pending = None;
-                app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orcacode",
-                    theme().error,
-                )));
+                push_error(app, "worker is gone; restart orcacode");
             } else {
-                app.push_line(Line::from(Span::styled("fetching models…", dim)));
+                push_notice(app, "fetching models…");
             }
             return;
         }
@@ -1950,10 +2159,7 @@ fn slash_command(
     if let Some(rest) = command.strip_prefix("sessions") {
         let arg = rest.trim();
         let Some(base) = crate::config::sessions_dir() else {
-            app.push_line(Line::from(Span::styled(
-                "no home directory for session storage",
-                theme().error,
-            )));
+            push_error(app, "no home directory for session storage");
             return;
         };
         let dir = base.join(orca_harness_extensions::workspace_key(
@@ -1962,18 +2168,20 @@ fn slash_command(
         let sessions = orca_harness_extensions::SessionFile::list(&dir);
         if arg.is_empty() {
             if sessions.is_empty() {
-                app.push_line(Line::from(Span::styled(
-                    "no recorded sessions for this workspace",
-                    dim,
-                )));
+                push_notice(app, "no recorded sessions for this workspace");
                 return;
             }
             // Same interface as /provider and /theme: a picker overlay,
-            // preselected on the current session.
+            // preselected on the current session. The display windows to
+            // the last few sessions (newest first), and ↑↓/PgUp/PgDn
+            // navigate the whole list just like the /models picker.
             let index = sessions
                 .iter()
                 .position(|s| app.cfg.session_id.as_deref() == Some(s.meta.id.as_str()))
-                .unwrap_or(0);
+                .unwrap_or(0)
+                // An old-but-current session stays reachable; the window
+                // just opens on the newest rows.
+                .min(SESSIONS_WINDOW.saturating_sub(1));
             app.overlay = Some(Overlay::Sessions {
                 picker: ListPicker::with_selected(sessions.len(), index).actions(SESSION_ACTIONS),
                 sessions,
@@ -1988,22 +2196,16 @@ fn slash_command(
                     })
                     .is_err()
                 {
-                    app.push_line(Line::from(Span::styled(
-                        "worker is gone; restart orcacode",
-                        theme().error,
-                    )));
+                    push_error(app, "worker is gone; restart orcacode");
                 } else {
-                    app.push_line(Line::from(Span::styled(
-                        format!("loading session {}…", session.meta.id),
-                        dim,
-                    )));
+                    push_notice(app, format!("loading session {}…", session.meta.id));
                 }
             }
             None => {
-                app.push_line(Line::from(Span::styled(
+                push_error(
+                    app,
                     format!("no session matching {arg} — /sessions lists them"),
-                    theme().error,
-                )));
+                );
             }
         }
         return;
@@ -2033,12 +2235,9 @@ fn slash_command(
                 push_notice(app, note);
             }
             None => {
-                app.push_line(Line::from(Span::styled(
-                    format!(
+                push_error(app, format!(
                         "unknown theme: {arg} — valid themes: default, mono, dracula, solarized-dark, one-dark, monokai, nord"
-                    ),
-                    theme().error,
-                )));
+                    ));
             }
         }
         return;
@@ -2054,12 +2253,16 @@ fn slash_command(
         }
         "compact" => {
             if worker.send(WorkerCmd::Compact).is_err() {
-                app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orcacode",
-                    theme().error,
-                )));
+                push_error(app, "worker is gone; restart orcacode");
             } else {
-                app.push_line(Line::from(Span::styled("compacting conversation…", dim)));
+                push_notice(app, "compacting conversation…");
+            }
+        }
+        "fork" => {
+            if worker.send(WorkerCmd::Fork).is_err() {
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, "forking session…");
             }
         }
         "provider" => {
@@ -2079,6 +2282,7 @@ fn slash_command(
                 "/clear       reset the conversation, empty the session, stop background work",
                 "/compact     compact the conversation (elide tool outputs, capped summary)",
                 "/usage       session token totals, cache traffic, and context occupancy",
+                "/copy [code|all] copy the last answer, its last code block, or the transcript",
                 "/sessions [id] resume a recorded session (no argument opens the picker)",
                 "/queue [clear] show or clear waiting prompts",
                 "/models [f]  pick a model from the endpoint's catalog",
@@ -2095,18 +2299,107 @@ fn slash_command(
                 "@path        add a workspace file or folder to the prompt",
                 "keys: enter send or queue · esc cancel run · ctrl+o reveal latest work tree",
                 "      pgup/pgdn scroll · ctrl+c quit · up/down history",
+                "      ctrl+y copy last answer",
+                "copying: ctrl+y and /copy use OSC 52 (works over ssh; tmux needs set-clipboard on).",
+                "         mouse capture is off, so drag-select works; ctrl+y also reaches scrollback.",
                 "approvals: y allow once · a always (session) · A always (saved for this workspace) · n deny",
             ] {
                 app.push_line(Line::from(Span::styled(entry.to_string(), dim)));
             }
         }
         other => {
-            app.push_line(Line::from(Span::styled(
-                format!("unknown command: /{other}"),
-                theme().error,
-            )));
+            push_error(app, format!("unknown command: /{other}"));
         }
     }
+}
+
+/// `/mode [normal|plan]` — no argument toggles, which is what a mode
+/// with two states wants. The change lands on the shared handle the plan
+/// gate reads per tool call, so it takes effect on the call in flight
+/// with no agent rebuild and nothing to save.
+fn mode_command(app: &mut App, arg: &str) {
+    use crate::mode::Mode;
+    let next = if arg.is_empty() {
+        app.cfg.mode.toggle()
+    } else {
+        match Mode::from_label(arg) {
+            Some(mode) => {
+                app.cfg.mode.set(mode);
+                mode
+            }
+            None => {
+                push_error(
+                    app,
+                    format!("unknown mode: {arg} — valid modes: normal, plan"),
+                );
+                return;
+            }
+        }
+    };
+    push_notice(
+        app,
+        format!("{} mode · {}", next.label(), next.description()),
+    );
+    // Leaving plan mode ends the episode. Report the plans the agent
+    // actually wrote — observed from tool results, not guessed — and say
+    // nothing when it wrote none: plan mode is also a fine way to just
+    // look around, and announcing a missing file would be nagging.
+    if next == Mode::Normal {
+        for path in app.cfg.plan.end() {
+            push_notice(app, format!("plan saved to {path}"));
+        }
+    }
+}
+
+/// `/rewind [n]` — drop the last n user turns (default 1) from the
+/// conversation and from the recorded session, so the next prompt
+/// continues from before them.
+fn rewind_command(app: &mut App, arg: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
+    let turns = if arg.is_empty() {
+        1
+    } else {
+        match arg.parse::<usize>() {
+            Ok(0) | Err(_) => {
+                push_error(
+                    app,
+                    "usage: /rewind [n] — n is how many turns to drop (default 1)",
+                );
+                return;
+            }
+            Ok(turns) => turns,
+        }
+    };
+    if worker.send(WorkerCmd::Rewind { turns }).is_err() {
+        push_error(app, "worker is gone; restart orcacode");
+    }
+}
+
+/// `/todo` — the agent's current task list, as `todo_write` last left it.
+fn todo_command(app: &mut App, width: usize) {
+    use orca_harness_tools::TodoStatus;
+    let items = app.cfg.todos.items();
+    if items.is_empty() {
+        push_notice(app, "no task list — the agent writes one with todo_write");
+        return;
+    }
+    let t = theme();
+    let (done, total) = app.cfg.todos.progress();
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  todo", t.strong),
+        Span::styled(format!(" · {done}/{total} done"), t.dim),
+    ])];
+    for item in items {
+        let (marker, style) = match item.status {
+            TodoStatus::Completed => ("✓", t.dim),
+            TodoStatus::InProgress => ("▸", t.strong),
+            TodoStatus::Pending => ("□", t.dim),
+        };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&format!("  {marker} {}", item.content), width),
+            style,
+        )));
+    }
+    app.push_transcript_block(lines, BlockSpacing::Tight);
 }
 
 /// `/skills [add <source> | create <name> | remove <name> | show <name>
@@ -2138,6 +2431,7 @@ fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Work
             }
             app.overlay = Some(Overlay::Skills {
                 picker: ListPicker::new(entries.len()).actions(SKILL_ACTIONS),
+                filter: String::new(),
                 entries,
             });
         }
@@ -2170,45 +2464,33 @@ fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Work
                 here,
             };
             if worker.send(cmd).is_err() {
-                app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orcacode",
-                    theme().error,
-                )));
+                push_error(app, "worker is gone; restart orcacode");
             } else {
-                app.push_line(Line::from(Span::styled(format!("fetching {source}…"), dim)));
+                push_notice(app, format!("fetching {source}…"));
             }
         }
         Some("create" | "new") => {
             let Some(name) = parts.next() else {
-                app.push_line(Line::from(Span::styled(
-                    "usage: /skills create <name> [--global]",
-                    theme().error,
-                )));
+                push_error(app, "usage: /skills create <name> [--global]");
                 return;
             };
             let global = parts.any(|token| token == "--global" || token == "-g");
             match app.cfg.skills.create(name, global) {
                 Ok(path) => {
-                    app.push_line(Line::from(Span::styled(
+                    push_notice(
+                        app,
                         format!("created {} — edit it, then /skills reload", path.display()),
-                        dim,
-                    )));
+                    );
                     let _ = worker.send(WorkerCmd::ReloadSkills);
                 }
                 Err(err) => {
-                    app.push_line(Line::from(Span::styled(
-                        format!("skill not created: {err}"),
-                        theme().error,
-                    )));
+                    push_error(app, format!("skill not created: {err}"));
                 }
             }
         }
         Some("remove" | "delete" | "rm" | "uninstall") => {
             let Some(name) = parts.next() else {
-                app.push_line(Line::from(Span::styled(
-                    "usage: /skills remove <name>",
-                    theme().error,
-                )));
+                push_error(app, "usage: /skills remove <name>");
                 return;
             };
             remove_skill(app, name, worker);
@@ -2217,20 +2499,14 @@ fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Work
             // The rescan itself is the worker's, so the tool the agent
             // carries and the catalog on screen never disagree.
             if worker.send(WorkerCmd::ReloadSkills).is_err() {
-                app.push_line(Line::from(Span::styled(
-                    "worker is gone; restart orcacode",
-                    theme().error,
-                )));
+                push_error(app, "worker is gone; restart orcacode");
             } else {
-                app.push_line(Line::from(Span::styled("rescanning skills…", dim)));
+                push_notice(app, "rescanning skills…");
             }
         }
         Some("show") => {
             let Some(name) = parts.next() else {
-                app.push_line(Line::from(Span::styled(
-                    "usage: /skills show <name>",
-                    theme().error,
-                )));
+                push_error(app, "usage: /skills show <name>");
                 return;
             };
             let entries = app.cfg.skills.catalog();
@@ -2243,10 +2519,7 @@ fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Work
                         .collect::<Vec<_>>()
                         .join(", "),
                 };
-                app.push_line(Line::from(Span::styled(
-                    format!("unknown skill: {name} — found: {known}"),
-                    theme().error,
-                )));
+                push_error(app, format!("unknown skill: {name} — found: {known}"));
                 return;
             };
             let detail = match &entry.state {
@@ -2271,13 +2544,13 @@ fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Work
             }
         }
         Some(other) => {
-            app.push_line(Line::from(Span::styled(
+            push_error(
+                app,
                 format!(
                     "unknown /skills argument: {other} — usage: /skills \
                      [add <source> | create <name> | remove <name> | show <name> | reload]"
                 ),
-                theme().error,
-            )));
+            );
         }
     }
 }
@@ -2303,7 +2576,6 @@ fn remove_skill(app: &mut App, name: &str, worker: &mpsc::UnboundedSender<Worker
 /// worker to reconnect and rebuild — the same save-then-reload shape as
 /// the typed /extensions form.
 fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
-    let dim = theme().dim;
     let usage = "usage: /mcp [add <name> <command> | remove <name>]";
     let mut parts = args.split_whitespace();
     match parts.next() {
@@ -2311,7 +2583,7 @@ fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerC
             let name = parts.next().unwrap_or("");
             let launch = parts.collect::<Vec<_>>().join(" ");
             if name.is_empty() || launch.is_empty() {
-                app.push_line(Line::from(Span::styled(usage, theme().error)));
+                push_error(app, usage);
                 return;
             }
             // The name becomes part of the model-facing tool names
@@ -2320,10 +2592,10 @@ fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerC
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
             {
-                app.push_line(Line::from(Span::styled(
+                push_error(
+                    app,
                     format!("invalid server name: {name} — letters, digits, - and _ only"),
-                    theme().error,
-                )));
+                );
                 return;
             }
             // Editing a server that the user turned off must not
@@ -2339,19 +2611,16 @@ fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerC
                     } else {
                         format!("mcp server {name} added — connecting…")
                     };
-                    app.push_line(Line::from(Span::styled(note, dim)));
+                    push_notice(app, note);
                     if worker.send(WorkerCmd::ReloadMcp).is_err() {
-                        app.push_line(Line::from(Span::styled(
-                            "worker is gone; restart orcacode",
-                            theme().error,
-                        )));
+                        push_error(app, "worker is gone; restart orcacode");
                     }
                 }
                 Err(err) => {
-                    app.push_line(Line::from(Span::styled(
+                    push_error(
+                        app,
                         format!("mcp server {name} not added (save failed: {err})"),
-                        theme().error,
-                    )));
+                    );
                 }
             }
         }
@@ -2367,35 +2636,32 @@ fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerC
                         .collect::<Vec<_>>()
                         .join(", "),
                 };
-                app.push_line(Line::from(Span::styled(
+                push_error(
+                    app,
                     format!("unknown mcp server: {name} — configured: {known}"),
-                    theme().error,
-                )));
+                );
                 return;
             }
             match crate::config::remove_mcp_server(name) {
                 Ok(_) => {
-                    app.push_line(Line::from(Span::styled(
+                    push_notice(
+                        app,
                         format!("mcp server {name} removed (applies to the next run)"),
-                        dim,
-                    )));
+                    );
                     if worker.send(WorkerCmd::ReloadMcp).is_err() {
-                        app.push_line(Line::from(Span::styled(
-                            "worker is gone; restart orcacode",
-                            theme().error,
-                        )));
+                        push_error(app, "worker is gone; restart orcacode");
                     }
                 }
                 Err(err) => {
-                    app.push_line(Line::from(Span::styled(
+                    push_error(
+                        app,
                         format!("mcp server {name} not removed (save failed: {err})"),
-                        theme().error,
-                    )));
+                    );
                 }
             }
         }
         _ => {
-            app.push_line(Line::from(Span::styled(usage, theme().error)));
+            push_error(app, usage);
         }
     }
 }
@@ -2503,6 +2769,36 @@ fn handle_ui_msg(
                 format!("session {id} cleared · background work stopped"),
             );
         }
+        UiMsg::ContextRewound { messages, notice } => {
+            // The transcript is redrawn from the shortened context, but
+            // the token totals are not conversation state — they record
+            // what this session actually spent, and rewinding does not
+            // un-spend it. Occupancy is left to the next model step.
+            let spent = (
+                app.tokens_in,
+                app.tokens_out,
+                app.cache_read_total,
+                app.cache_write_total,
+                app.usage_steps,
+            );
+            reset_conversation_ui(app);
+            (
+                app.tokens_in,
+                app.tokens_out,
+                app.cache_read_total,
+                app.cache_write_total,
+                app.usage_steps,
+            ) = spent;
+            push_notice(app, notice);
+            replay_transcript(app, &messages, width);
+        }
+        UiMsg::SessionForked { id, parent } => {
+            app.cfg.session_id = Some(id.clone());
+            push_notice(
+                app,
+                format!("forked to session {id} · {parent} is left as it was"),
+            );
+        }
         UiMsg::SessionLoaded { id, messages } => {
             reset_conversation_ui(app);
             app.cfg.session_id = Some(id.clone());
@@ -2537,6 +2833,9 @@ fn handle_ui_msg(
                 };
                 if let Some(partial) = partial {
                     app.push_markdown_block(&partial, width, BlockSpacing::Section);
+                    // Interrupted output is often exactly what the user
+                    // wanted to keep — that is why they interrupted.
+                    app.last_answer = Some(partial);
                 }
             }
             app.text.clear();
@@ -2615,6 +2914,9 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             if let Some(message) = app.pending_assistant.take() {
                 if !message.trim().is_empty() {
                     app.push_markdown_block(&message, width, BlockSpacing::Tight);
+                    // Prose said on the way to a tool call is still the
+                    // most recent thing the model wrote.
+                    app.last_answer = Some(message);
                 }
             }
             let call_line = view::tool_call_line(&tool_name, &input);
@@ -2692,6 +2994,7 @@ fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
             app.text.clear();
             if !answer.trim().is_empty() {
                 app.push_markdown_block(&answer, width, BlockSpacing::Section);
+                app.last_answer = Some(answer);
             }
         }
         HarnessEvent::AgentStart | HarnessEvent::Error { .. } => {}
@@ -2819,39 +3122,46 @@ fn welcome_lines(
     cfg: &TuiConfig,
 ) -> Vec<Line<'static>> {
     let t = theme();
-    let card_width = width.saturating_sub(4).min(64);
-    let indent = " ".repeat(width.saturating_sub(card_width) / 2);
-    let value_width = card_width.saturating_sub(11);
+    let available_width = width.saturating_sub(4).min(64);
+    let value_width = available_width.saturating_sub(11);
     let row = |label: &'static str, value: &str| {
         Line::from(vec![
-            Span::raw(indent.clone()),
             Span::styled(format!("{label:<11}"), t.dim),
             Span::raw(view::truncate_line(value, value_width)),
         ])
     };
     let content = vec![
         Line::from(vec![
-            Span::raw(indent.clone()),
             Span::styled("▀▄ ", t.accent),
             Span::styled("ORCACODE", t.strong),
             Span::styled(format!("  v{}", env!("CARGO_PKG_VERSION")), t.dim),
         ]),
-        Line::from(vec![
-            Span::raw(indent.clone()),
-            Span::styled("A small, fast agent runtime for your terminal", t.dim),
-        ]),
+        Line::from(Span::styled(
+            "A small, fast agent runtime for your terminal",
+            t.dim,
+        )),
         row("model", &cfg.model_name),
         row("workspace", &cfg.workspace_name),
         Line::from(vec![
-            Span::raw(indent.clone()),
             Span::styled("› ", t.accent),
             Span::styled("Describe a task to begin", t.strong),
         ]),
-        Line::from(vec![
-            Span::raw(indent),
-            Span::styled("  /help commands · /models switch model", t.dim),
-        ]),
+        Line::from(Span::styled(
+            "  /help commands · /models switch model",
+            t.dim,
+        )),
     ];
+    // Centre the pixels the user can actually see. Previously this used
+    // the 64-column maximum even when the longest rendered row was much
+    // shorter, leaving the visible card noticeably left of centre.
+    let content_width = content.iter().map(Line::width).max().unwrap_or(0);
+    let indent = " ".repeat(width.saturating_sub(content_width) / 2);
+    let content = content.into_iter().map(|line| {
+        let mut spans = Vec::with_capacity(line.spans.len() + 1);
+        spans.push(Span::raw(indent.clone()));
+        spans.extend(line.spans);
+        Line::from(spans)
+    });
     // Centre against the full terminal height, but never push the bottom
     // of the card past the transcript clip the welcome is drawn into.
     let top =
@@ -2874,7 +3184,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
     };
     let left_width = left_root.width as usize;
     let live = live_lines(app, left_width);
-    let live_height = live.len().min(PALETTE_ROWS + 7) as u16;
+    // Let a todo rail use the available height rather than silently
+    // clipping later steps. Preserve three transcript rows plus the gap,
+    // composer, and status rows on short terminals.
+    let live_height = live
+        .len()
+        .min((left_root.height as usize).saturating_sub(6)) as u16;
     let [transcript_area, live_area, _composer_gap_area, composer_area, status_area] =
         Layout::vertical([
             Constraint::Min(3),
@@ -3041,15 +3356,22 @@ fn draw(frame: &mut Frame, app: &mut App) {
         "enter queue · esc interrupt"
     } else if !app.prompt_queue.is_empty() {
         "enter resume · /queue clear"
+    } else if app.last_answer.is_some() {
+        // Only advertise copy once there is something to copy. The
+        // status line has room for four hints, and before the first
+        // answer lands scrolling is the more useful thing to name.
+        "enter send · @ paths · ctrl+y copy · ctrl+o expand"
     } else {
         "enter send · @ paths · ctrl+o expand · pgup scroll"
     };
     let status = format!(
-        " {} · {} · {}{}{} · {} · {}",
+        " {} · {}{} · {}{}{}{} · {} · {}",
         app.cfg.model_name,
         state,
+        mode_segment(&app.cfg.mode, &app.cfg.plan),
         context_segment(app.context_tokens, app.context_window),
         stats_segments(&app.cfg.stats),
+        todo_segment(&app.cfg.todos),
         queue_segment(app.prompt_queue.len()),
         hint,
         workspace_status_name(&app.cfg.workspace_name),
@@ -3661,6 +3983,32 @@ fn queue_segment(queued: usize) -> String {
     }
 }
 
+/// Plan mode is a restriction the user cannot be allowed to forget: it
+/// sits next to the run state, not among the optional segments, and it
+/// is the one segment that never abbreviates away. Normal mode says
+/// nothing — the absence of the word is the normal case.
+///
+/// Once the agent has written a plan, the count rides along, so a landed
+/// plan is visible without waiting for `/mode normal` to list it.
+fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::PlanArea) -> String {
+    if mode.get() == crate::mode::Mode::Normal {
+        return String::new();
+    }
+    match plan.written().len() {
+        0 => " · plan mode".to_string(),
+        1 => " · plan mode · 1 plan".to_string(),
+        n => format!(" · plan mode · {n} plans"),
+    }
+}
+
+/// Progress through the agent's task list, once it has one.
+fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
+    match todos.progress() {
+        (_, 0) => String::new(),
+        (done, total) => format!(" · todo {done}/{total}"),
+    }
+}
+
 /// A compact execution rail. Prompts stay out of the transcript until
 /// they start, so the conversation preserves its actual chronology.
 fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -3738,10 +4086,16 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Settings { picker } => settings_lines(app, picker, width),
             Overlay::Approvals { tools, picker } => approvals_lines(tools, picker, width),
             Overlay::Extensions { picker } => extensions_picker_lines(picker, width),
-            Overlay::Mcp { servers, picker } => {
-                mcp_picker_lines(servers, &app.cfg.mcp, picker, width)
-            }
-            Overlay::Skills { entries, picker } => skills_picker_lines(entries, picker, width),
+            Overlay::Mcp {
+                servers,
+                filter,
+                picker,
+            } => mcp_picker_lines(servers, &app.cfg.mcp, filter, picker, width),
+            Overlay::Skills {
+                entries,
+                filter,
+                picker,
+            } => skills_picker_lines(entries, filter, picker, width),
             Overlay::Sessions { sessions, picker } => {
                 sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
@@ -3752,6 +4106,7 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     }
     if app.running() {
         let mut lines = queue_lines(app, width);
+        lines.extend(todo_lines(&app.cfg.todos, width));
         let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
         let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
             "writing"
@@ -3775,8 +4130,46 @@ fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         return lines;
     }
     let mut lines = queue_lines(app, width);
+    lines.extend(todo_lines(&app.cfg.todos, width));
     if let Some(summary) = &app.last_turn_summary {
         lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
+    }
+    lines
+}
+
+/// The task list belongs beside the live run state, where the complete
+/// plan stays visible instead of disappearing into a clipped status line.
+fn todo_lines(todos: &orca_harness_tools::TodoList, width: usize) -> Vec<Line<'static>> {
+    use orca_harness_tools::TodoStatus;
+
+    let items = todos.items();
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let done = items
+        .iter()
+        .filter(|item| item.status == TodoStatus::Completed)
+        .count();
+    let t = theme();
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  todo", t.strong),
+        Span::styled(format!(" · {done}/{} done", items.len()), t.dim),
+    ])];
+    let last = items.len().saturating_sub(1);
+    for (index, item) in items.into_iter().enumerate() {
+        let branch = if index == last { "└" } else { "├" };
+        let (marker, style) = match item.status {
+            TodoStatus::Completed => ("✓", t.dim),
+            TodoStatus::InProgress => ("▸", t.strong),
+            TodoStatus::Pending => ("□", t.dim),
+        };
+        let prefix = format!("  {branch} {marker} ");
+        let content =
+            view::truncate_line(&item.content, width.saturating_sub(prefix.chars().count()));
+        lines.push(Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(content, style),
+        ]));
     }
     lines
 }
@@ -4232,42 +4625,42 @@ fn activity_lines_selected(
         let (glyph, mut detail, status_style) = match &tool.output {
             Some(output) if tool.is_error => (
                 "×",
-                format!(
-                    "{} · {}",
-                    view::tool_result_summary(&tool.tool_name, output, true),
-                    elapsed_label(elapsed)
-                ),
+                view::tool_result_summary(&tool.tool_name, output, true),
                 t.error,
             ),
             Some(output) => (
                 "✓",
-                format!(
-                    "{} · {}",
-                    view::tool_result_summary(&tool.tool_name, output, false),
-                    elapsed_label(elapsed)
-                ),
+                view::tool_result_summary(&tool.tool_name, output, false),
                 t.dim,
             ),
-            None if live => ("□", elapsed_label(elapsed), t.dim),
-            None => ("×", elapsed_label(elapsed), t.warn),
+            None if live => ("□", String::new(), t.dim),
+            None => ("×", String::new(), t.warn),
         };
         if let Some(approval) = &tool.approval {
-            detail = format!("{approval} · {detail}");
+            detail = if detail.is_empty() {
+                approval.clone()
+            } else {
+                format!("{approval} · {detail}")
+            };
         }
         let row_width = width.min(132);
-        let detail_width = (row_width / 3).clamp(16, 48);
+        let elapsed = elapsed_label(elapsed);
+        let prefix = format!("    {branch} ");
+        let detail_width = (row_width / 3).clamp(12, 40);
         detail = view::truncate_line(&detail, detail_width);
         let selected = selected_tool == Some(index);
-        let prefix = format!("    {branch} ");
-        let status = format!(" · {detail}");
+        let status = if detail.is_empty() {
+            format!(" · {elapsed}")
+        } else {
+            format!(" · {detail} · {elapsed}")
+        };
         let fixed_width = prefix.chars().count() + 2 + status.chars().count();
         let connector_reserve = if selected { 10 } else { 0 };
         let call_width = row_width
-            .saturating_sub(fixed_width)
-            .min(width.saturating_sub(fixed_width + connector_reserve))
+            .saturating_sub(fixed_width + connector_reserve)
             .max(8);
         let call = view::truncate_line(&tool.call_line, call_width);
-        let row_style = if selected { t.strong } else { t.accent };
+        let row_style = if selected { t.select } else { t.accent };
         let mut spans = vec![
             Span::styled(prefix, t.dim),
             Span::styled(format!("{glyph} "), status_style),
@@ -4287,25 +4680,7 @@ fn activity_lines_selected(
         }
         lines.push(Line::from(spans));
         if tool.tool_name == "edit_file" {
-            let diff_width = width.saturating_sub(12).max(16);
-            if let Some(old) = tool.input.get("old").and_then(serde_json::Value::as_str) {
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        "    {continuation} - {}",
-                        view::truncate_line(old, diff_width)
-                    ),
-                    t.dim,
-                )));
-            }
-            if let Some(new) = tool.input.get("new").and_then(serde_json::Value::as_str) {
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        "    {continuation} + {}",
-                        view::truncate_line(new, diff_width)
-                    ),
-                    t.success,
-                )));
-            }
+            lines.extend(edit_diff_preview_lines(tool, width, continuation));
         }
         if tool.tool_name == "subagent" && tool.output.is_none() {
             nested_subagent_lines(app, &tool.call_id, width, continuation, &mut lines);
@@ -4327,6 +4702,58 @@ fn activity_lines_selected(
                 }
             }
         }
+    }
+    lines
+}
+
+/// Exact, source-preserving edit context beneath an `edit_file` row. Small
+/// edits remain fully visible; large replacements stay bounded so one call
+/// cannot take over the live rail.
+fn edit_diff_preview_lines(
+    tool: &ToolActivity,
+    width: usize,
+    continuation: &str,
+) -> Vec<Line<'static>> {
+    const MAX_EDIT_DIFF_ROWS: usize = 6;
+
+    let old = tool
+        .input
+        .get("old")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let new = tool
+        .input
+        .get("new")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let mut changed = old
+        .lines()
+        .map(|line| ('-', line, theme().dim))
+        .chain(new.lines().map(|line| ('+', line, theme().success)))
+        .collect::<Vec<_>>();
+    if changed.is_empty() && (!old.is_empty() || !new.is_empty()) {
+        changed.push((if old.is_empty() { '+' } else { '-' }, "", theme().dim));
+    }
+
+    let hidden = changed.len().saturating_sub(MAX_EDIT_DIFF_ROWS);
+    let prefix = format!("    {continuation} ");
+    let diff_width = width.saturating_sub(prefix.chars().count() + 2).max(16);
+    let mut lines = changed
+        .into_iter()
+        .take(MAX_EDIT_DIFF_ROWS)
+        .map(|(marker, source, style)| {
+            Line::from(vec![
+                Span::styled(prefix.clone(), theme().dim),
+                Span::styled(format!("{marker} "), style),
+                Span::styled(view::truncate_line(source, diff_width), style),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if hidden > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("{prefix}  … {hidden} more changed lines"),
+            theme().dim,
+        )));
     }
     lines
 }
@@ -4374,7 +4801,7 @@ fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<'static>> {
             .saturating_sub(left.chars().count() + spec.category.chars().count() + 2)
             .max(1);
         let (name_style, desc_style) = if is_selected {
-            (t.strong, Style::default())
+            (t.select, Style::default())
         } else {
             (t.dim, t.dim)
         };
@@ -4461,6 +4888,9 @@ fn reset_conversation_ui(app: &mut App) {
     app.turn_count = 0;
     app.reset_activity();
     app.split_snapshot = None;
+    // The answer is gone from the transcript; leaving it copyable would
+    // hand back content the user just asked to be rid of.
+    app.last_answer = None;
 }
 
 /// Compact "how long ago" label for the /sessions listing.
@@ -4522,7 +4952,7 @@ fn model_picker_lines(picker: &ModelPicker, height: usize, width: usize) -> Vec<
     for (index, model) in window {
         let is_selected = index == selected;
         let marker = if is_selected { "▸ " } else { "  " };
-        let style = if is_selected { t.strong } else { t.dim };
+        let style = if is_selected { t.select } else { t.dim };
         let text = format!("  {marker}{}", model.summary());
         lines.push(Line::from(Span::styled(
             view::truncate_line(&text, width),
@@ -4866,6 +5296,7 @@ fn mask_url(word: &str) -> Option<String> {
 fn mcp_picker_lines(
     servers: &[crate::config::McpServer],
     mcp: &crate::mcp::McpServers,
+    filter: &str,
     picker: &ListPicker,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -4875,7 +5306,9 @@ fn mcp_picker_lines(
         .max()
         .unwrap_or(0)
         .clamp(4, 16);
-    let rows = servers.iter().map(|server| {
+    let indices = matching_indices(servers, filter, |server| &server.name);
+    let rows = indices.into_iter().map(|index| {
+        let server = &servers[index];
         let (count, why) = if !server.enabled {
             (String::new(), String::new())
         } else {
@@ -4897,10 +5330,16 @@ fn mcp_picker_lines(
             redact_command(&server.command)
         )
     });
-    picker.lines(
-        "MCP servers · ↑↓ navigate · space toggle · esc close",
+    let filter_note = if filter.is_empty() {
+        "type to filter".into()
+    } else {
+        format!("filter: {filter}")
+    };
+    picker.windowed_lines(
+        &format!("MCP servers · {filter_note} · ↑↓ navigate · space toggle · esc close"),
         rows,
         width,
+        PICKER_ROWS,
     )
 }
 
@@ -4914,6 +5353,7 @@ fn mcp_picker_lines(
 /// worth spending a row on.
 fn skills_picker_lines(
     entries: &[crate::skills::SkillEntry],
+    filter: &str,
     picker: &ListPicker,
     width: usize,
 ) -> Vec<Line<'static>> {
@@ -4923,7 +5363,9 @@ fn skills_picker_lines(
         .max()
         .unwrap_or(0)
         .clamp(4, 20);
-    let rows = entries.iter().map(|entry| {
+    let indices = matching_indices(entries, filter, |entry| &entry.name);
+    let rows = indices.into_iter().map(|index| {
+        let entry = &entries[index];
         let (state, detail) = match &entry.state {
             crate::skills::SkillState::Loaded { root, bytes } => (
                 if entry.enabled { "on " } else { "off" },
@@ -4938,11 +5380,30 @@ fn skills_picker_lines(
         };
         format!("{:<name_width$}  {state}  {detail}", entry.name)
     });
-    picker.lines(
-        "Skills · ↑↓ navigate · space toggle · esc close",
+    let filter_note = if filter.is_empty() {
+        "type to filter".into()
+    } else {
+        format!("filter: {filter}")
+    };
+    picker.windowed_lines(
+        &format!("Skills · {filter_note} · ↑↓ navigate · enter toggle · esc close"),
         rows,
         width,
+        PICKER_ROWS,
     )
+}
+
+fn matching_indices<T, F>(items: &[T], filter: &str, label: F) -> Vec<usize>
+where
+    F: Fn(&T) -> &str,
+{
+    let needle = filter.to_lowercase();
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| needle.is_empty() || label(item).to_lowercase().contains(&needle))
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// Compact byte count for a picker row: `840b`, `1.2k`.
@@ -4954,7 +5415,9 @@ fn size(bytes: u64) -> String {
 }
 
 /// Recorded sessions for this workspace, newest first; enter resumes
-/// the selected one. Same interface as /provider and /theme.
+/// the selected one. Same navigation grammar as the /models picker:
+/// the newest sessions fill a bounded window, and ↑↓/PgUp/PgDn move
+/// the cursor through the entire list with the position in the header.
 fn sessions_picker_lines(
     sessions: &[orca_harness_extensions::SessionFile],
     current: Option<&str>,
@@ -4974,10 +5437,11 @@ fn sessions_picker_lines(
             session.meta.model,
         )
     });
-    picker.lines(
-        "Sessions (this workspace) · ↑↓ navigate · enter resume · esc close",
+    picker.windowed_lines(
+        "Sessions (this workspace) · ↑↓ navigate · PgUp/PgDn page · enter resume · esc close",
         rows,
         width,
+        SESSIONS_WINDOW,
     )
 }
 
@@ -5023,6 +5487,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         // A transcript taller than any viewport so scrolling has room.
         for i in 0..100 {
@@ -5058,6 +5525,130 @@ mod tests {
         let scrolled = app.scroll;
         handle_terminal_event(&mut app, mouse(MouseEventKind::ScrollDown), &tx, 80);
         assert!(app.scroll < scrolled, "wheel down scrolls forward");
+    }
+
+    fn ctrl(code: char) -> CtEvent {
+        CtEvent::Key(KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL))
+    }
+
+    /// The last notice or error the app pushed.
+    fn last_notice(app: &App) -> String {
+        app.pending_history
+            .last()
+            .map(line_text)
+            .unwrap_or_default()
+    }
+
+    /// Copy takes the markdown the model actually produced, not the
+    /// wrapped and highlighted lines the transcript holds — pasting the
+    /// rendered form would carry the transcript's own indentation.
+    #[test]
+    fn ctrl_y_copies_the_last_answer_verbatim() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.last_answer = Some("# Title\n\nsome **prose**".into());
+
+        handle_terminal_event(&mut app, ctrl('y'), &tx, 80);
+        assert_eq!(
+            app.clipboard_pending.as_deref(),
+            Some("# Title\n\nsome **prose**")
+        );
+        assert!(last_notice(&app).contains("copied last answer"));
+    }
+
+    /// Hitting copy while the model is still typing should yield what is
+    /// on screen, not the previous turn's answer under a notice claiming
+    /// otherwise — a wrong clipboard is only discovered on paste.
+    #[test]
+    fn copy_mid_stream_takes_the_partial_answer_and_names_it() {
+        let mut app = test_app();
+        app.last_answer = Some("the previous turn".into());
+        app.text = "half an answ".into();
+
+        copy_command(&mut app, "");
+        assert_eq!(app.clipboard_pending.as_deref(), Some("half an answ"));
+        assert!(last_notice(&app).contains("answer so far"));
+
+        // Once the stream closes the buffer empties and the answer stands.
+        app.text.clear();
+        app.clipboard_pending = None;
+        copy_command(&mut app, "");
+        assert_eq!(app.clipboard_pending.as_deref(), Some("the previous turn"));
+        assert!(last_notice(&app).contains("copied last answer"));
+    }
+
+    #[test]
+    fn copy_code_takes_the_last_fenced_block() {
+        let mut app = test_app();
+        app.last_answer = Some("try:\n```sh\ncargo test\n```\nthen ship".into());
+
+        copy_command(&mut app, "code");
+        assert_eq!(app.clipboard_pending.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn copy_all_flattens_the_transcript_to_plain_text() {
+        let mut app = test_app();
+        app.transcript.clear();
+        app.transcript.push(Line::from(vec![
+            Span::styled("• ", Style::default()),
+            Span::styled("hello", Style::default()),
+        ]));
+        // Block spacing leaves trailing blanks that nobody wants pasted.
+        app.transcript.push(Line::from(""));
+        app.transcript.push(Line::from(""));
+
+        copy_command(&mut app, "all");
+        assert_eq!(app.clipboard_pending.as_deref(), Some("• hello"));
+    }
+
+    /// A copy that quietly does nothing is worse than one that refuses:
+    /// the user pastes whatever was in the clipboard before and does not
+    /// notice until it matters.
+    #[test]
+    fn copy_says_so_when_there_is_nothing_to_copy() {
+        let mut app = test_app();
+        app.last_answer = None;
+
+        copy_command(&mut app, "");
+        assert!(app.clipboard_pending.is_none());
+        assert!(last_notice(&app).contains("nothing to copy"));
+
+        app.last_answer = Some("prose with no code in it".into());
+        copy_command(&mut app, "code");
+        assert!(app.clipboard_pending.is_none());
+        assert!(last_notice(&app).contains("last code block"));
+    }
+
+    /// Terminals truncate oversized OSC 52 payloads, and a half-copied
+    /// answer pastes without any sign that it was cut.
+    #[test]
+    fn copy_refuses_a_payload_the_terminal_would_truncate() {
+        let mut app = test_app();
+        app.last_answer = Some("x".repeat(clipboard::MAX_COPY_BYTES + 1));
+
+        copy_command(&mut app, "");
+        assert!(app.clipboard_pending.is_none());
+        assert!(last_notice(&app).contains("clipboard write"));
+    }
+
+    #[test]
+    fn copy_rejects_an_unknown_target() {
+        let mut app = test_app();
+        app.last_answer = Some("something".into());
+
+        copy_command(&mut app, "everything");
+        assert!(app.clipboard_pending.is_none());
+        assert!(last_notice(&app).contains("unknown /copy target"));
+    }
+
+    #[test]
+    fn clearing_the_conversation_drops_the_copyable_answer() {
+        let mut app = test_app();
+        app.last_answer = Some("gone after /clear".into());
+
+        reset_conversation_ui(&mut app);
+        assert!(app.last_answer.is_none());
     }
 
     /// The palette shows a window onto the command list, so navigating
@@ -5378,6 +5969,29 @@ mod tests {
         assert_eq!(line_text(notice), "• theme set to default");
         assert_eq!(notice.spans[0].style, theme().accent);
         assert_eq!(notice.spans[1].style, theme().dim);
+    }
+
+    /// A refused command is still the system talking. Without the shared
+    /// glyph it renders flush-left against the notices around it and
+    /// reads as model output — so the glyph is the same and only the
+    /// body carries the error color.
+    #[test]
+    fn errors_use_the_same_glyph_as_notices_with_an_error_body() {
+        let _theme = THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+        let mut app = test_app();
+
+        push_notice(&mut app, "plan mode · read-only");
+        push_error(&mut app, "unknown mode: pkan");
+
+        let notice = &app.pending_history[app.pending_history.len() - 2];
+        let error = app.pending_history.last().expect("error line");
+        assert_eq!(line_text(error), "• unknown mode: pkan");
+        // Same leading glyph, so both lines start in the same column.
+        assert_eq!(line_text(notice).chars().next(), Some('•'));
+        assert_eq!(error.spans[0].style, notice.spans[0].style);
+        // Severity is the body's job, and it differs from a notice.
+        assert_eq!(error.spans[1].style, theme().error);
+        assert_ne!(error.spans[1].style, notice.spans[1].style);
     }
 
     #[test]
@@ -5888,6 +6502,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         app.prompt_queue.push_back("inspect the failure".into());
 
@@ -6517,6 +7134,69 @@ mod tests {
     }
 
     #[test]
+    fn selected_tool_keeps_elapsed_time_next_to_the_call() {
+        let mut app = test_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "shell".into(),
+                input: serde_json::json!({"command": "cargo test --workspace"}),
+            },
+            180,
+        );
+
+        let joined = flat_lines(&activity_lines_selected(&app, 180, true, Some(0)));
+        assert!(
+            joined.contains("shell $ cargo test --workspace · "),
+            "elapsed follows the call without an alignment gap: {joined}"
+        );
+    }
+
+    #[test]
+    fn multiline_edit_preview_is_source_shaped_and_bounded() {
+        let mut app = test_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "edit_file".into(),
+                input: serde_json::json!({
+                    "path": "src/lib.rs",
+                    "old": "fn old() {\n    one();\n    two();\n    three();\n}",
+                    "new": "fn new() {\n    four();\n    five();\n}"
+                }),
+            },
+            100,
+        );
+
+        let rendered = activity_lines(&app, 100, true);
+        let joined = flat_lines(&rendered);
+        assert!(joined.contains("- fn old() {"), "old source: {joined}");
+        assert!(joined.contains("-     one();"), "indentation: {joined}");
+        assert!(joined.contains("+ fn new() {"), "new source: {joined}");
+        assert!(
+            joined.contains("… 3 more changed lines"),
+            "bounded preview: {joined}"
+        );
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| {
+                    let text = line
+                        .spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>();
+                    text.contains(" - ") || text.contains(" + ")
+                })
+                .count(),
+            6,
+            "only the preview budget is rendered"
+        );
+    }
+
+    #[test]
     fn failed_tool_expands_its_output_in_the_rail() {
         let mut app = test_app();
         handle_harness_event(
@@ -6612,6 +7292,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");
 
@@ -6630,6 +7313,25 @@ mod tests {
             "welcome hint missing: {screen}"
         );
         assert!(screen.contains("/models switch model"));
+    }
+
+    #[test]
+    fn welcome_centres_the_visible_card_not_its_maximum_width() {
+        let mut app = test_app();
+        let rows = rendered_rows(&mut app, 90, 30);
+        let subtitle = rows
+            .iter()
+            .find(|row| row.contains("A small, fast agent runtime"))
+            .expect("welcome subtitle");
+        let visible_width = "A small, fast agent runtime for your terminal"
+            .chars()
+            .count();
+
+        assert_eq!(
+            subtitle.chars().take_while(|ch| *ch == ' ').count(),
+            (90 - visible_width) / 2,
+            "the longest visible row defines the card centre: {subtitle:?}"
+        );
     }
 
     #[test]
@@ -6663,6 +7365,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
 
         let rows = rendered_rows(&mut app, 100, 24);
@@ -6701,6 +7406,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -6741,6 +7449,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         app.transcript.push(Line::from("final answer"));
 
@@ -6764,6 +7475,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -6797,6 +7511,9 @@ mod tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         app.run = RunState::Running {
             started: Instant::now(),
@@ -6873,6 +7590,32 @@ mod tests {
         assert_eq!(app.composer, "@t");
         assert_eq!(location.query, "t");
         assert_eq!(location.filtered().len(), 1);
+    }
+
+    #[test]
+    fn backspace_cancels_an_empty_location_picker_and_removes_the_at() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        press(&mut app, &tx, KeyCode::Char('@'));
+
+        press(&mut app, &tx, KeyCode::Backspace);
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "");
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn delete_cancels_an_empty_location_picker_and_removes_the_at() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        press(&mut app, &tx, KeyCode::Char('@'));
+
+        press(&mut app, &tx, KeyCode::Delete);
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "");
+        assert_eq!(app.cursor, 0);
     }
 
     #[test]
@@ -7333,6 +8076,9 @@ mod theme_command_tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         })
     }
 
@@ -7407,6 +8153,9 @@ mod subagents_command_tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         })
     }
 
@@ -7433,6 +8182,323 @@ mod subagents_command_tests {
 }
 
 #[cfg(test)]
+mod mode_rewind_todo_tests {
+    use super::*;
+    use crate::mode::{Mode, ModeHandle};
+    use orca_harness_tools::TodoList;
+
+    fn app_with(mode: ModeHandle, todos: TodoList) -> App {
+        App::new(TuiConfig {
+            model_name: "m".into(),
+            workspace_name: "w".into(),
+            workspace_root: "/test-ws".into(),
+            provider: Provider::Local,
+            subagent_depth: orca_harness_tools::SubagentDepth::new(1),
+            stats: orca_harness_tools::BackgroundStats::new(),
+            session_id: None,
+            mcp: Default::default(),
+            skills: Default::default(),
+            mode,
+            todos,
+            plan: Default::default(),
+        })
+    }
+
+    fn texts(app: &App) -> String {
+        app.pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn mode_toggles_bare_and_sets_by_name() {
+        let mode = ModeHandle::default();
+        let mut app = app_with(mode.clone(), TodoList::new());
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "mode", &worker, 80);
+        assert_eq!(mode.get(), Mode::Plan, "bare /mode toggles");
+        slash_command(&mut app, "mode", &worker, 80);
+        assert_eq!(mode.get(), Mode::Normal);
+
+        slash_command(&mut app, "mode plan", &worker, 80);
+        assert_eq!(mode.get(), Mode::Plan);
+        // Setting the mode it is already in is not a toggle.
+        slash_command(&mut app, "mode plan", &worker, 80);
+        assert_eq!(mode.get(), Mode::Plan);
+        slash_command(&mut app, "mode normal", &worker, 80);
+        assert_eq!(mode.get(), Mode::Normal);
+
+        // Garbage leaves the mode alone and says so.
+        slash_command(&mut app, "mode sideways", &worker, 80);
+        assert_eq!(mode.get(), Mode::Normal);
+        // Glyphed like every other system line, not flush-left.
+        assert!(texts(&app).contains("• unknown mode: sideways"));
+    }
+
+    /// Leaving plan mode reports the plans that were actually written,
+    /// and stays quiet when the agent decided none was warranted —
+    /// looking around in plan mode is a legitimate use of it.
+    #[tokio::test]
+    async fn leaving_plan_mode_reports_only_plans_that_were_written() {
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // An episode where the agent judged no plan was needed: silence.
+        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        slash_command(&mut app, "mode normal", &worker, 80);
+        let rendered = texts(&app);
+        assert!(rendered.contains("normal mode"), "{rendered}");
+        assert!(!rendered.contains("plan saved"), "{rendered}");
+        assert!(!rendered.contains("no plan"), "{rendered}");
+
+        // An episode where it wrote two.
+        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        app.cfg.plan.record("docs/plan/2026-08-22-first.md");
+        app.cfg.plan.record("docs/plan/2026-08-22-second.md");
+        slash_command(&mut app, "mode normal", &worker, 80);
+        let rendered = texts(&app);
+        assert!(
+            rendered.contains("plan saved to docs/plan/2026-08-22-first.md"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("plan saved to docs/plan/2026-08-22-second.md"),
+            "{rendered}"
+        );
+        assert!(app.cfg.plan.written().is_empty(), "the episode ended");
+    }
+
+    /// Entering plan mode must not claim anything about files — at that
+    /// point nobody knows whether the conversation warrants one.
+    #[tokio::test]
+    async fn entering_plan_mode_says_nothing_about_files() {
+        let mut app = app_with(ModeHandle::new(Mode::Normal), TodoList::new());
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        slash_command(&mut app, "mode plan", &worker, 80);
+        let rendered = texts(&app);
+        assert!(rendered.contains("plan mode"), "{rendered}");
+        assert!(!rendered.contains("plan saved"), "{rendered}");
+        assert!(!rendered.contains("docs/plan"), "{rendered}");
+    }
+
+    /// Plan mode is a restriction the user must not be able to lose
+    /// track of, so it is on the status line while it is on and absent
+    /// when it is not.
+    #[test]
+    fn plan_mode_shows_in_the_status_line() {
+        let mode = ModeHandle::default();
+        let plan = crate::plan::PlanArea::new();
+        assert_eq!(mode_segment(&mode, &plan), "");
+        mode.set(Mode::Plan);
+        assert_eq!(mode_segment(&mode, &plan), " · plan mode");
+        // A landed plan is visible without waiting for /mode normal.
+        plan.record("docs/plan/2026-08-22-a.md");
+        assert_eq!(mode_segment(&mode, &plan), " · plan mode · 1 plan");
+        plan.record("docs/plan/2026-08-22-b.md");
+        assert_eq!(mode_segment(&mode, &plan), " · plan mode · 2 plans");
+        // Normal mode says nothing, whatever was written.
+        mode.set(Mode::Normal);
+        assert_eq!(mode_segment(&mode, &plan), "");
+    }
+
+    /// Write a task list through the real tool, the way the model does.
+    async fn set_todos(todos: &TodoList, items: serde_json::Value) {
+        let tool = orca_harness_tools::TodoWriteTool::new(todos.clone());
+        let ctx = orca_harness_core::ToolContext {
+            call_id: "c".into(),
+            tool_name: "todo_write".into(),
+            cancellation: orca_harness_core::CancellationToken::new(),
+            deadline: None,
+        };
+        orca_harness_core::Tool::call(&tool, serde_json::json!({ "todos": items }), &ctx)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn todo_progress_shows_in_the_status_line_once_there_is_a_list() {
+        let todos = TodoList::new();
+        assert_eq!(todo_segment(&todos), "", "silent with no list");
+        set_todos(
+            &todos,
+            serde_json::json!([
+                {"content": "a", "status": "completed"},
+                {"content": "b", "status": "in_progress"},
+                {"content": "c"}
+            ]),
+        )
+        .await;
+        assert_eq!(todo_segment(&todos), " · todo 1/3");
+    }
+
+    #[tokio::test]
+    async fn todo_progress_pins_the_full_plan_in_the_live_region() {
+        let todos = TodoList::new();
+        set_todos(
+            &todos,
+            serde_json::json!([
+                {"content": "inspect the rendering", "status": "completed"},
+                {"content": "add a visible progress cue", "status": "in_progress"},
+                {"content": "verify it"}
+            ]),
+        )
+        .await;
+        let app = app_with(ModeHandle::default(), todos);
+
+        let rendered = live_lines(&app, 80)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("todo · 1/3 done"), "{rendered}");
+        assert!(rendered.contains("├ ✓ inspect the rendering"), "{rendered}");
+        assert!(
+            rendered.contains("├ ▸ add a visible progress cue"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("└ □ verify it"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn completed_todo_progress_says_complete() {
+        let todos = TodoList::new();
+        set_todos(
+            &todos,
+            serde_json::json!([
+                {"content": "inspect", "status": "completed"},
+                {"content": "verify", "status": "completed"}
+            ]),
+        )
+        .await;
+        let app = app_with(ModeHandle::default(), todos);
+
+        let rendered = live_lines(&app, 80)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("todo · 2/2 done"), "{rendered}");
+        assert!(rendered.contains("├ ✓ inspect"), "{rendered}");
+        assert!(rendered.contains("└ ✓ verify"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn todo_renders_the_list_and_says_so_when_there_is_none() {
+        let todos = TodoList::new();
+        let mut app = app_with(ModeHandle::default(), todos.clone());
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "todo", &worker, 80);
+        assert!(texts(&app).contains("no task list"));
+
+        set_todos(
+            &todos,
+            serde_json::json!([
+                {"content": "read the code", "status": "completed"},
+                {"content": "write the fix", "status": "in_progress"}
+            ]),
+        )
+        .await;
+
+        slash_command(&mut app, "todo", &worker, 80);
+        let rendered = texts(&app);
+        assert!(rendered.contains("1/2 done"), "{rendered}");
+        assert!(rendered.contains("✓ read the code"), "{rendered}");
+        assert!(rendered.contains("▸ write the fix"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn rewind_sends_the_turn_count_and_rejects_nonsense() {
+        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "rewind", &worker, 80);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::Rewind { turns: 1 })));
+
+        slash_command(&mut app, "rewind 3", &worker, 80);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::Rewind { turns: 3 })));
+
+        // Zero and garbage send nothing and explain themselves.
+        slash_command(&mut app, "rewind 0", &worker, 80);
+        slash_command(&mut app, "rewind lots", &worker, 80);
+        assert!(rx.try_recv().is_err(), "bad input sends no command");
+        assert!(texts(&app).contains("usage: /rewind"));
+    }
+
+    #[tokio::test]
+    async fn fork_asks_the_worker_to_branch() {
+        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        slash_command(&mut app, "fork", &worker, 80);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::Fork)));
+    }
+
+    /// A rewind redraws the transcript from the shortened context, but
+    /// the tokens it already spent are not conversation state.
+    #[test]
+    fn rewind_redraws_the_transcript_and_keeps_the_token_totals() {
+        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        app.tokens_in = 1200;
+        app.tokens_out = 340;
+        app.usage_steps = 4;
+        app.context_tokens = 9000;
+
+        handle_ui_msg(
+            &mut app,
+            UiMsg::ContextRewound {
+                messages: vec![
+                    orca_harness_core::Message::System {
+                        content: "sys".into(),
+                    },
+                    orca_harness_core::Message::User {
+                        content: "still here".into(),
+                    },
+                ],
+                notice: "rewound 1 turn · 2 messages dropped".into(),
+            },
+            &tx,
+            80,
+        );
+
+        let rendered = texts(&app);
+        assert!(rendered.contains("rewound 1 turn"), "{rendered}");
+        assert!(rendered.contains("still here"), "{rendered}");
+        assert_eq!(app.tokens_in, 1200, "spent tokens are not un-spent");
+        assert_eq!(app.tokens_out, 340);
+        assert_eq!(app.usage_steps, 4);
+        assert_eq!(app.turn_count, 1, "turn count follows the new transcript");
+        assert_eq!(app.context_tokens, 0, "occupancy waits for the next step");
+    }
+
+    #[test]
+    fn forking_moves_the_session_id_without_touching_the_transcript() {
+        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        app.cfg.session_id = Some("old-id".into());
+        app.turn_count = 3;
+
+        handle_ui_msg(
+            &mut app,
+            UiMsg::SessionForked {
+                id: "new-id".into(),
+                parent: "old-id".into(),
+            },
+            &tx,
+            80,
+        );
+
+        assert_eq!(app.cfg.session_id.as_deref(), Some("new-id"));
+        assert_eq!(app.turn_count, 3, "the conversation did not change");
+        let rendered = texts(&app);
+        assert!(rendered.contains("forked to session new-id"), "{rendered}");
+        assert!(rendered.contains("old-id is left as it was"), "{rendered}");
+    }
+}
+
+#[cfg(test)]
 mod extensions_command_tests {
     use super::*;
 
@@ -7447,6 +8513,9 @@ mod extensions_command_tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         })
     }
 
@@ -7558,6 +8627,7 @@ mod extensions_command_tests {
                 created_at: 0,
                 workspace: "/test-ws".into(),
                 model: model.into(),
+                parent: None,
             },
         }
     }
@@ -7663,6 +8733,44 @@ mod extensions_command_tests {
     }
 
     #[tokio::test]
+    async fn sessions_picker_windows_to_the_last_few_and_pages_like_models() {
+        let mut app = ext_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // 12 recorded sessions, newest first; the current one is not in
+        // the newest five, so the picker opens on an older row that the
+        // window would otherwise hide.
+        let sessions: Vec<_> = (0..12)
+            .map(|n| session_file(&format!("00000000{n:02}-m{n}-0"), &format!("m{n}")))
+            .collect();
+        app.cfg.session_id = Some("0000000005-m5-0".into());
+        app.overlay = Some(Overlay::Sessions {
+            sessions,
+            picker: ListPicker::with_selected(12, 5).actions(SESSION_ACTIONS),
+        });
+
+        // The window shows a bounded slice of the list with the
+        // position in the header — the /models display grammar — and
+        // the older sessions are still reachable by paging.
+        let lines = live_lines(&app, 260)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone().into_owned()))
+            .collect::<String>();
+        assert!(lines.contains("6/12"), "position shown: {lines}");
+        assert!(lines.contains("enter resume"), "key hints: {lines}");
+        assert!(lines.contains("(current)"), "marks current: {lines}");
+
+        // Page down past the window into the older rows: the cursor
+        // moves without closing the picker.
+        let pgdn = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, pgdn, &worker);
+        match &app.overlay {
+            Some(Overlay::Sessions { picker, .. }) => assert_eq!(picker.index(), 11),
+            _ => panic!("sessions overlay stays open"),
+        }
+    }
+
+    #[tokio::test]
     async fn session_loaded_replays_the_transcript() {
         let mut app = ext_app();
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -7727,6 +8835,9 @@ mod mcp_command_tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         })
     }
 
@@ -7849,6 +8960,28 @@ mod mcp_command_tests {
 
         press(&mut app, &worker, KeyCode::Esc);
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn mcp_picker_filters_by_typing_and_reports_position() {
+        let mut app = mcp_app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::config::save_mcp_server("alpha", "run alpha").unwrap();
+        crate::config::save_mcp_server("beta", "run beta").unwrap();
+
+        slash_command(&mut app, "mcp", &worker, 80);
+        assert!(overlay_text(&app).contains("1/2"));
+        press(&mut app, &worker, KeyCode::Char('b'));
+        let text = overlay_text(&app);
+        assert!(text.contains("filter: b"), "{text}");
+        assert!(text.contains("beta"), "{text}");
+        assert!(!text.contains("run alpha"), "{text}");
+        assert!(text.contains("1/1"), "{text}");
+
+        press(&mut app, &worker, KeyCode::Backspace);
+        assert!(overlay_text(&app).contains("1/2"));
+        crate::config::remove_mcp_server("alpha").unwrap();
+        crate::config::remove_mcp_server("beta").unwrap();
     }
 
     /// Tool counts and connection errors come off the shared handle the
@@ -8062,6 +9195,9 @@ mod nested_rail_tests {
             session_id: None,
             mcp: Default::default(),
             skills: Default::default(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         })
     }
 
@@ -8297,6 +9433,9 @@ mod skills_command_tests {
                 session_id: None,
                 mcp: Default::default(),
                 skills: self.skills.clone(),
+                mode: Default::default(),
+                todos: Default::default(),
+                plan: Default::default(),
             })
         }
     }
@@ -8390,6 +9529,27 @@ mod skills_command_tests {
         assert_eq!(crate::config::stored_skill_enabled("release"), Some(true));
     }
 
+    #[test]
+    fn skills_picker_filters_by_typing_and_backspace() {
+        let fixture = Fixture::new("filter");
+        fixture.skill("deploy", "Ship the application");
+        fixture.skill("review", "Review a change");
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "skills", &worker, 80);
+        assert!(overlay_text(&app).contains("1/2"));
+        press(&mut app, &worker, KeyCode::Char('r'));
+        let text = overlay_text(&app);
+        assert!(text.contains("filter: r"), "{text}");
+        assert!(text.contains("review"), "{text}");
+        assert!(!text.contains("deploy"), "{text}");
+        assert!(text.contains("1/1"), "{text}");
+
+        press(&mut app, &worker, KeyCode::Backspace);
+        assert!(overlay_text(&app).contains("1/2"));
+    }
+
     /// Delete removes the folder, the row, and the saved override — and
     /// only for skills this host installed.
     #[test]
@@ -8449,6 +9609,9 @@ mod skills_command_tests {
             session_id: None,
             mcp: Default::default(),
             skills: skills.clone(),
+            mode: Default::default(),
+            todos: Default::default(),
+            plan: Default::default(),
         });
         let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
 

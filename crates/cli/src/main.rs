@@ -4,13 +4,17 @@
 //! Headless:    `orcacode -p "prompt"` runs once and streams to stdout.
 
 mod approval;
+mod clipboard;
 mod commands;
 mod components;
 mod config;
 mod extensions;
 mod headless;
+mod instructions;
 mod mcp;
+mod mode;
 mod msg;
+mod plan;
 mod skills;
 mod tui;
 mod view;
@@ -29,13 +33,42 @@ use orca_harness_extensions::{
 use orca_harness_model_openai::OpenAiModel;
 use orca_harness_model_openrouter::{self as openrouter, OpenRouterModel};
 use orca_harness_tools::{
-    core_tools, BackgroundStats, ProcessTool, PyKernelTool, SubagentDepth, SubagentSpawn,
-    SubagentTool, Workspace,
+    core_tools_with_guard, BackgroundStats, FileGuard, ProcessTool, PyKernelTool, SubagentDepth,
+    SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
 };
 use orca_harness_tools_web::{Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool};
 
 use crate::approval::Approval;
+use crate::mode::{Mode, ModeHandle, PlanGate};
 use crate::msg::{Provider, UiMsg, WorkerCmd};
+use crate::plan::PlanArea;
+
+/// What the worker needs to open a planning episode: the live mode and
+/// the area a plan may be written to. Bundled because they only ever
+/// travel together.
+#[derive(Clone)]
+struct Planning {
+    mode: ModeHandle,
+    area: PlanArea,
+}
+
+impl Planning {
+    /// Tell the model the rules of plan mode, once per episode: what it
+    /// may not do, the one directory it may write, the naming
+    /// convention, and today's date (which it has no other way to know).
+    ///
+    /// It does **not** name a file. Whether the conversation warrants a
+    /// plan at all, and what to call it, are the agent's decisions — the
+    /// host cannot tell a feature request from a greeting at the moment
+    /// a turn begins, and guessing produced `docs/plan/…-hi.md`.
+    fn open_episode(&self, context: &mut Context) -> bool {
+        if !self.mode.is_plan() || !self.area.open() {
+            return false;
+        }
+        context.push_system(plan::briefing(&plan::today()));
+        true
+    }
+}
 
 const USAGE: &str = "\
 orcacode — terminal host for Orca Harness
@@ -62,6 +95,9 @@ OPTIONS:
                      default 1; /subagents adjusts it live in the TUI)
   --theme NAME       theme: default, mono, dracula,
                      solarized-dark, one-dark, monokai, nord
+  --plan             start in plan mode: read-only tools, and docs/plan/
+                     the only writable directory — the agent decides
+                     whether to write a plan (/mode toggles it)
   --continue         resume the latest recorded session for this workspace
   --resume ID        resume a recorded session by id (a unique prefix works)
   --no-session       do not record this session to disk
@@ -79,7 +115,10 @@ environment variables above always win over the saved values.
 Approval prompts accept y (once), a (always, this session), A (always,
 saved for this workspace only; revoke in /settings), and n (deny).
 Sessions are recorded under ~/.config/orcacode/sessions/ per workspace;
-/sessions in the TUI lists and resumes them.
+/sessions in the TUI lists and resumes them, /rewind drops the last
+turns, and /fork branches the conversation into a new session.
+Standing instructions are read at startup from AGENTS.md beside
+config.json, in the workspace, and in the workspace's .orca/ folder.
 ";
 
 #[derive(Clone)]
@@ -100,6 +139,11 @@ pub struct Config {
     pub resume_id: Option<String>,
     pub no_session: bool,
     pub theme: String,
+    /// Start read-only. Deliberately not persisted to the config file:
+    /// plan mode is a stance taken for a piece of work, not a setting,
+    /// and a session that silently came back read-only would be a
+    /// puzzle rather than a safeguard.
+    pub plan: bool,
 }
 
 impl Config {
@@ -107,6 +151,15 @@ impl Config {
         Limits {
             max_steps: self.max_steps,
             ..Limits::default()
+        }
+    }
+
+    /// The mode a session starts in.
+    pub fn mode(&self) -> Mode {
+        if self.plan {
+            Mode::Plan
+        } else {
+            Mode::Normal
         }
     }
 }
@@ -130,6 +183,7 @@ fn parse_args() -> Result<Config, String> {
     let mut continue_latest = false;
     let mut resume_id: Option<String> = None;
     let mut no_session = false;
+    let mut plan = false;
     let mut theme = std::env::var("ORCA_THEME").ok();
 
     let mut args = std::env::args().skip(1);
@@ -160,6 +214,7 @@ fn parse_args() -> Result<Config, String> {
             "--continue" => continue_latest = true,
             "--resume" => resume_id = Some(value("--resume")?),
             "--no-session" => no_session = true,
+            "--plan" => plan = true,
             "--json" => json = true,
             "--auto-approve" => auto_approve = true,
             "-p" | "--prompt" => prompt = Some(value("-p")?),
@@ -229,6 +284,7 @@ fn parse_args() -> Result<Config, String> {
         resume_id,
         no_session,
         theme,
+        plan,
     })
 }
 
@@ -270,6 +326,7 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          print what you need to see), subagent (spawn an independent agent with its \
          own context and tools for a self-contained task; parallel calls fan out), \
          read_file, write_file, edit_file, list_dir, grep, glob, \
+         todo_write (the task list for work with several steps), \
          read_tool_result (re-read the full output of a truncated result){web_tools}. \
          File paths are workspace-relative. Investigate with tools instead of guessing; \
          run commands to verify your work. Keep responses brief and concrete: report \
@@ -278,7 +335,9 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          Plan before every tool call. Ask what you already know, what you still need, \
          and what the smallest set of calls is that gets it. Never fire a call whose \
          result you have no plan to use, and never re-derive something a previous \
-         call already told you.\n\
+         call already told you. For work with several distinct steps, put the plan in \
+         todo_write and keep it current — one step in_progress, finished steps marked \
+         completed as you go — so the list always says where the work actually is.\n\
          \n\
          Use the harness's full concurrency. Tool calls issued in the same response \
          execute concurrently. Before acting, plan the batch: decide everything you \
@@ -419,6 +478,9 @@ async fn worker<F>(
     mcp: mcp::McpServers,
     skills: skills::Skills,
     session: Option<Arc<SessionHandler>>,
+    todos: TodoList,
+    files: FileGuard,
+    planning: Planning,
     mut context: Context,
     mut commands: mpsc::UnboundedReceiver<WorkerCmd>,
     ui: mpsc::UnboundedSender<UiMsg>,
@@ -430,6 +492,10 @@ async fn worker<F>(
     while let Some(command) = commands.recv().await {
         match command {
             WorkerCmd::Run { prompt, cancel } => {
+                // Briefing the model is not news for the user: the
+                // /mode line already said the session is read-only,
+                // and whether a plan file appears is up to the agent.
+                planning.open_episode(&mut context);
                 context.push_user(&prompt);
                 let result = agent.run_context(&mut context, cancel).await;
                 repair_dangling_tool_calls(&mut context);
@@ -495,6 +561,14 @@ async fn worker<F>(
             WorkerCmd::Clear => {
                 context = Context::new();
                 context.push_system(&system);
+                // The plan belonged to the conversation being cleared,
+                // and so did every "I have read this file": the model
+                // that did the reading is gone. The planning episode
+                // ends too, so a fresh conversation names a fresh file
+                // rather than appending to the last one's plan.
+                todos.clear();
+                files.clear();
+                planning.area.end();
                 if let Some(session) = &session {
                     // Same session, emptied in place: /clear does not
                     // litter the sessions directory with rotations.
@@ -523,6 +597,56 @@ async fn worker<F>(
                 }
                 if ui.send(UiMsg::Compacted(result)).is_err() {
                     return;
+                }
+            }
+            WorkerCmd::Rewind { turns } => {
+                let Some((cut, dropped_turns)) = rewind_cut(context.messages(), turns) else {
+                    let _ = ui.send(UiMsg::Notice("nothing to rewind".into()));
+                    continue;
+                };
+                let dropped_messages = context.messages().len() - cut;
+                let kept = context_from(&context.messages()[..cut]);
+                context = kept;
+                // A dropped turn may have held the read that made a file
+                // overwritable. The model can no longer see it, so the
+                // guard must not go on believing it looked.
+                files.clear();
+                // The context is shorter than what was persisted, so
+                // this rewrites the session file rather than appending.
+                if let Some(session) = &session {
+                    session.sync(&context);
+                }
+                let notice = format!(
+                    "rewound {dropped_turns} turn{} · {dropped_messages} message{} dropped",
+                    if dropped_turns == 1 { "" } else { "s" },
+                    if dropped_messages == 1 { "" } else { "s" },
+                );
+                let rewound = UiMsg::ContextRewound {
+                    messages: context.messages().to_vec(),
+                    notice,
+                };
+                if ui.send(rewound).is_err() {
+                    return;
+                }
+            }
+            WorkerCmd::Fork => {
+                let Some(session) = &session else {
+                    let _ = ui.send(UiMsg::Notice(
+                        "session recording is disabled (--no-session)".into(),
+                    ));
+                    continue;
+                };
+                let parent = session.session_id();
+                match session.fork() {
+                    Ok(id) => {
+                        // The new file starts empty: sync writes the
+                        // whole carried-over conversation into it.
+                        session.sync(&context);
+                        let _ = ui.send(UiMsg::SessionForked { id, parent });
+                    }
+                    Err(err) => {
+                        let _ = ui.send(UiMsg::Notice(format!("fork failed: {err}")));
+                    }
                 }
             }
             WorkerCmd::LoadSession { path } => {
@@ -662,6 +786,75 @@ pub(crate) async fn shutdown_signal() {
     std::future::pending::<()>().await
 }
 
+/// The extensions every spawned subagent gets: a relay that tags its
+/// events with the spawn's identity, and the same plan gate the
+/// orchestrator has.
+///
+/// The gate has to be here as well, not only on the top-level agent, for
+/// the same reason tool retry is mirrored into subagents: a restriction
+/// that only holds at depth 0 is not a restriction. Spawning is itself
+/// denied in plan mode, so this matters for one case — a subagent that
+/// was already running when the user flipped `/mode`. Without it, that
+/// inner agent would keep writing while the interface says the session
+/// changes nothing.
+fn subagent_extensions(
+    spawn: &SubagentSpawn,
+    ui: &mpsc::UnboundedSender<UiMsg>,
+    mode: &ModeHandle,
+    plan_area: &PlanArea,
+) -> Vec<Arc<dyn orca_harness_core::Extension>> {
+    let ui = ui.clone();
+    let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
+    let call_id = spawn.call_id.clone();
+    vec![
+        Arc::new(EventStream::from_fn(move |event| {
+            let _ = ui.send(UiMsg::SubagentEvent {
+                id,
+                parent_id,
+                depth,
+                call_id: call_id.clone(),
+                event,
+            });
+        })) as Arc<dyn orca_harness_core::Extension>,
+        Arc::new(PlanGate::new(mode.clone(), plan_area.clone()))
+            as Arc<dyn orca_harness_core::Extension>,
+    ]
+}
+
+/// Build a fresh context from a slice of messages. `Context` is
+/// append-only by design (it is what the model sees, not a database), so
+/// rewinding means rebuilding rather than truncating in place.
+fn context_from(messages: &[Message]) -> Context {
+    let mut context = Context::new();
+    for message in messages {
+        context.push(message.clone());
+    }
+    context
+}
+
+/// Where to cut the transcript to drop the last `turns` user turns:
+/// returns `(message index to truncate at, turns actually dropped)`, or
+/// `None` when there is no user turn to drop.
+///
+/// The cut always lands *on* a user message. Everything before one is a
+/// complete turn — assistant messages with their tool results — so the
+/// remaining transcript can never end in tool calls with no results,
+/// which a chat-completions endpoint rejects. Asking to rewind further
+/// than the conversation goes rewinds all of it rather than failing.
+fn rewind_cut(messages: &[Message], turns: usize) -> Option<(usize, usize)> {
+    let boundaries: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| matches!(message, Message::User { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    if boundaries.is_empty() {
+        return None;
+    }
+    let keep = boundaries.len().saturating_sub(turns.max(1));
+    Some((boundaries[keep], boundaries.len() - keep))
+}
+
 /// A cancelled run can leave the transcript ending in assistant tool calls
 /// with no results; chat-completions endpoints reject that shape on the
 /// next turn, so close them out with synthetic error results.
@@ -762,10 +955,28 @@ async fn run_mode(cfg: Config) -> ExitCode {
     // a handful of read_dir calls.
     let skills = skills::Skills::for_session(&cfg.workspace);
     let skill_notices = skills.reload();
-    let system = system_prompt(&ws, cfg.firecrawl_key.is_some());
+    // The base prompt is a fixed string with tests asserting its
+    // contents; the user's standing instructions are appended here, at
+    // the call site, so no AGENTS.md can ever change what that function
+    // returns. `/clear` re-pushes this composed string, so instructions
+    // survive a reset.
+    let instructions = instructions::Instructions::load(&cfg.workspace);
+    let instruction_notices = instructions.notices();
+    let mut system = system_prompt(&ws, cfg.firecrawl_key.is_some());
+    if let Some(block) = instructions.block() {
+        system.push_str(&block);
+    }
     let endpoint = Endpoint::from_config(&cfg);
     let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
     let stats = BackgroundStats::new();
+    let mode = ModeHandle::new(cfg.mode());
+    let todos = TodoList::new();
+    let files = FileGuard::new();
+    let plan_area = PlanArea::new();
+    let planning = Planning {
+        mode: mode.clone(),
+        area: plan_area.clone(),
+    };
 
     let session = if cfg.no_session {
         None
@@ -784,7 +995,7 @@ async fn run_mode(cfg: Config) -> ExitCode {
             Some((handler, resumed)) => (Some(Arc::new(handler)), resumed),
             None => (None, None),
         };
-        for line in &skill_notices {
+        for line in skill_notices.iter().chain(instruction_notices.iter()) {
             eprintln!("{line}");
         }
         let code = headless::run(
@@ -795,6 +1006,9 @@ async fn run_mode(cfg: Config) -> ExitCode {
             handler,
             resumed,
             &skills,
+            &mode,
+            &todos,
+            &plan_area,
         )
         .await;
         return ExitCode::from(code as u8);
@@ -844,9 +1058,10 @@ async fn run_mode(cfg: Config) -> ExitCode {
     for line in mcp.reload().await {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
-    // The skills scan already ran (the system prompt depended on it);
-    // replay whatever it had to say now that there is a transcript.
-    for line in skill_notices {
+    // The skills scan and the instruction load already ran (the system
+    // prompt depended on both); replay what they had to say now that
+    // there is a transcript.
+    for line in skill_notices.into_iter().chain(instruction_notices) {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
     let build = {
@@ -858,6 +1073,10 @@ async fn run_mode(cfg: Config) -> ExitCode {
         let session = session.clone();
         let mcp = mcp.clone();
         let skills = skills.clone();
+        let mode = mode.clone();
+        let todos = todos.clone();
+        let files = files.clone();
+        let plan_area = plan_area.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
@@ -871,6 +1090,10 @@ async fn run_mode(cfg: Config) -> ExitCode {
                 &session,
                 &mcp,
                 &skills,
+                &mode,
+                &todos,
+                &files,
+                &plan_area,
             )
         }
     };
@@ -890,8 +1113,22 @@ async fn run_mode(cfg: Config) -> ExitCode {
     // worker reloads; /mcp renders whatever the last reload recorded.
     let tui_mcp = mcp.clone();
     let tui_skills = skills.clone();
+    let worker_todos = todos.clone();
     tokio::spawn(worker(
-        agent, system, endpoint, build, store, mcp, skills, session, context, cmd_rx, ui_tx,
+        agent,
+        system,
+        endpoint,
+        build,
+        store,
+        mcp,
+        skills,
+        session,
+        worker_todos,
+        files,
+        planning,
+        context,
+        cmd_rx,
+        ui_tx,
     ));
 
     let tui_cfg = tui::TuiConfig {
@@ -904,6 +1141,9 @@ async fn run_mode(cfg: Config) -> ExitCode {
         session_id,
         mcp: tui_mcp,
         skills: tui_skills,
+        mode,
+        todos,
+        plan: plan_area,
     };
     match tui::run(tui_cfg, cmd_tx, ui_rx).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -926,6 +1166,10 @@ fn build_agent<M: Model + Clone + 'static>(
     session: &Option<Arc<SessionHandler>>,
     mcp: &mcp::McpServers,
     skills: &skills::Skills,
+    mode: &ModeHandle,
+    todos: &TodoList,
+    files: &FileGuard,
+    plan_area: &PlanArea,
 ) -> Agent<M> {
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
@@ -934,9 +1178,12 @@ fn build_agent<M: Model + Clone + 'static>(
             let _ = ui.send(UiMsg::Event(event));
         }
     });
+    // PlanGate before Approval: the kernel stops at the first denial, so
+    // a call plan mode refuses never reaches the user as a prompt.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
         .extension(Approval::new(ui.clone(), workspace_scope(ws)));
     if let Some(session) = session {
         agent = agent.extension_arc(session.clone());
@@ -951,6 +1198,7 @@ fn build_agent<M: Model + Clone + 'static>(
     // outputs trimmed before the toggle remain pageable.
     agent = agent
         .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store.clone())))
+        .tool_arc(std::sync::Arc::new(TodoWriteTool::new(todos.clone())))
         .tool_arc(std::sync::Arc::new(WebFetchTool::new(UrlPolicy::strict())));
     if let Some(key) = &cfg.firecrawl_key {
         let fc = std::sync::Arc::new(Firecrawl::new(key.clone()));
@@ -966,7 +1214,10 @@ fn build_agent<M: Model + Clone + 'static>(
     if let Some(tool) = skills.tool() {
         agent = agent.tool_arc(tool);
     }
-    for tool in core_tools(ws) {
+    // One guard for the whole session: the agent is rebuilt on every
+    // model switch and config reload, and what the model has read must
+    // not be forgotten each time.
+    for tool in core_tools_with_guard(ws, files) {
         agent = agent.tool_arc(tool);
     }
     let root = ws.root().to_string_lossy().into_owned();
@@ -994,20 +1245,10 @@ fn build_agent<M: Model + Clone + 'static>(
             extensions::data_failure,
         );
     }
+    let subagent_mode = mode.clone();
+    let subagent_plan = plan_area.clone();
     subagent = subagent.spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
-        let ui = ui_events.clone();
-        let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
-        let call_id = spawn.call_id.clone();
-        vec![std::sync::Arc::new(EventStream::from_fn(move |event| {
-            let _ = ui.send(UiMsg::SubagentEvent {
-                id,
-                parent_id,
-                depth,
-                call_id: call_id.clone(),
-                event,
-            });
-        }))
-            as std::sync::Arc<dyn orca_harness_core::Extension>]
+        subagent_extensions(spawn, &ui_events, &subagent_mode, &subagent_plan)
     }));
     agent = agent.tool_arc(std::sync::Arc::new(subagent));
     agent
@@ -1077,5 +1318,274 @@ mod main_tests {
         assert!(prompt.contains("Plan before every tool call"));
         assert!(prompt.contains("pykernel as your working state"));
         assert!(prompt.contains("fanning out"));
+    }
+
+    /// The task list is a registered tool, so the prompt names it and
+    /// says what keeping it current means.
+    #[test]
+    fn system_prompt_advertises_the_task_list() {
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
+        assert!(prompt.contains("todo_write"));
+        assert!(prompt.contains("in_progress"));
+    }
+
+    /// `system_prompt` is a fixed string with tests asserting what is and
+    /// is not in it; the user's instructions are appended by the caller,
+    /// never folded in, so no AGENTS.md can change what it returns.
+    #[test]
+    fn instructions_append_to_the_prompt_without_entering_it() {
+        let ws = Workspace::new(PathBuf::from("."));
+        let base = system_prompt(&ws, false);
+        let instructions = instructions::Instructions {
+            sources: vec![instructions::Source {
+                label: "AGENTS.md".into(),
+                body: "never mention skill".into(),
+                bytes: 20,
+                truncated: false,
+            }],
+        };
+        let mut composed = system_prompt(&ws, false);
+        composed.push_str(&instructions.block().unwrap());
+
+        assert!(composed.starts_with(&base), "the base prompt is unchanged");
+        assert!(composed.contains("never mention skill"));
+        // ...and the function itself still returns the base prompt only.
+        assert_eq!(system_prompt(&ws, false), base);
+    }
+
+    fn user(text: &str) -> Message {
+        Message::User {
+            content: text.into(),
+        }
+    }
+
+    fn assistant(text: &str) -> Message {
+        Message::Assistant {
+            content: Some(text.into()),
+            tool_calls: Vec::new(),
+        }
+    }
+
+    /// A three-turn conversation: system, then user/assistant pairs.
+    fn conversation() -> Vec<Message> {
+        vec![
+            Message::System {
+                content: "sys".into(),
+            },
+            user("one"),
+            assistant("a1"),
+            user("two"),
+            assistant("a2"),
+            user("three"),
+            assistant("a3"),
+        ]
+    }
+
+    #[test]
+    fn rewind_cuts_on_a_user_boundary() {
+        let messages = conversation();
+        // One turn: cut at the last user message, dropping it and what
+        // followed it.
+        assert_eq!(rewind_cut(&messages, 1), Some((5, 1)));
+        assert_eq!(rewind_cut(&messages, 2), Some((3, 2)));
+        // Every cut lands on a user message, never mid-turn.
+        for turns in 1..=3 {
+            let (cut, _) = rewind_cut(&messages, turns).unwrap();
+            assert!(matches!(messages[cut], Message::User { .. }), "{turns}");
+        }
+    }
+
+    #[test]
+    fn rewinding_past_the_start_rewinds_everything_it_can() {
+        let messages = conversation();
+        // Three turns exist; asking for ten keeps the system prompt.
+        assert_eq!(rewind_cut(&messages, 10), Some((1, 3)));
+        let (cut, dropped) = rewind_cut(&messages, 10).unwrap();
+        assert_eq!(dropped, 3);
+        let kept = context_from(&messages[..cut]);
+        assert_eq!(kept.messages().len(), 1);
+        assert!(matches!(kept.messages()[0], Message::System { .. }));
+    }
+
+    #[test]
+    fn rewinding_a_conversation_with_no_turns_is_a_no_op() {
+        let only_system = vec![Message::System {
+            content: "sys".into(),
+        }];
+        assert_eq!(rewind_cut(&only_system, 1), None);
+        assert_eq!(rewind_cut(&[], 1), None);
+    }
+
+    /// The remaining transcript must never end in tool calls with no
+    /// results — a chat-completions endpoint rejects that shape.
+    #[test]
+    fn rewind_never_leaves_dangling_tool_calls() {
+        let messages = vec![
+            Message::System {
+                content: "sys".into(),
+            },
+            user("one"),
+            Message::Assistant {
+                content: None,
+                tool_calls: vec![orca_harness_core::ToolCall {
+                    id: "c1".into(),
+                    name: "shell".into(),
+                    arguments: serde_json::json!({}),
+                }],
+            },
+            Message::Tool {
+                results: vec![ToolResult {
+                    call_id: "c1".into(),
+                    tool_name: "shell".into(),
+                    output: serde_json::json!("ok"),
+                    is_error: false,
+                }],
+            },
+            user("two"),
+        ];
+        let (cut, _) = rewind_cut(&messages, 1).unwrap();
+        let kept = context_from(&messages[..cut]);
+        // The call and its result are both kept, or both dropped.
+        if let Some(Message::Assistant { tool_calls, .. }) = kept.messages().last() {
+            assert!(tool_calls.is_empty());
+        }
+        assert_eq!(kept.messages().len(), 4);
+    }
+
+    #[test]
+    fn context_from_copies_the_messages_it_is_given() {
+        let messages = conversation();
+        let rebuilt = context_from(&messages[..3]);
+        assert_eq!(rebuilt.messages().len(), 3);
+        assert_eq!(
+            serde_json::to_string(rebuilt.messages()).unwrap(),
+            serde_json::to_string(&messages[..3]).unwrap()
+        );
+    }
+
+    /// Plan mode must reach every level of the agent tree. Spawning is
+    /// denied in plan mode, so the case this covers is the reachable
+    /// one: a subagent already running when the user flips `/mode`.
+    #[tokio::test]
+    async fn spawned_subagents_inherit_the_plan_gate() {
+        use orca_harness_core::{ToolCall, ToolDecision};
+
+        let (ui, _rx) = mpsc::unbounded_channel();
+        let mode = ModeHandle::new(Mode::Normal);
+        let spawn = SubagentSpawn {
+            id: 1,
+            parent_id: None,
+            depth: 0,
+            call_id: "c1".into(),
+            task: "do the thing".into(),
+        };
+        let extensions = subagent_extensions(&spawn, &ui, &mode, &PlanArea::new());
+        let names: Vec<&str> = extensions.iter().map(|ext| ext.name()).collect();
+        assert!(names.contains(&"plan-mode"), "{names:?}");
+
+        let gate = extensions
+            .iter()
+            .find(|ext| ext.name() == "plan-mode")
+            .expect("a plan gate");
+        let call = ToolCall {
+            id: "c2".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({}),
+        };
+        // The inner gate shares the session's handle, so flipping the
+        // mode reaches an already-spawned agent.
+        assert!(matches!(
+            gate.before_tool(&call).await.unwrap(),
+            ToolDecision::Continue
+        ));
+        mode.set(Mode::Plan);
+        assert!(matches!(
+            gate.before_tool(&call).await.unwrap(),
+            ToolDecision::Deny { .. }
+        ));
+    }
+
+    fn planning(mode: Mode) -> Planning {
+        Planning {
+            mode: ModeHandle::new(mode),
+            area: PlanArea::new(),
+        }
+    }
+
+    /// A planning episode briefs the model once and names no file: what
+    /// to write, and whether to write anything, is the agent's call.
+    #[test]
+    fn a_planning_episode_briefs_once_and_names_no_file() {
+        let planning = planning(Mode::Plan);
+        let mut context = Context::new();
+        context.push_system("base prompt");
+
+        assert!(planning.open_episode(&mut context), "the first turn briefs");
+        let briefing = match context.messages().last() {
+            Some(Message::System { content }) => content.clone(),
+            other => panic!("expected a system briefing, got {other:?}"),
+        };
+        assert!(briefing.contains("docs/plan/"), "{briefing}");
+        assert!(briefing.contains("You choose the name"), "{briefing}");
+        assert!(briefing.contains("Decide for yourself"), "{briefing}");
+        // Nothing has been written, so nothing is claimed.
+        assert!(planning.area.written().is_empty());
+
+        // Later turns in the same episode add nothing.
+        let before = context.messages().len();
+        assert!(!planning.open_episode(&mut context));
+        assert_eq!(context.messages().len(), before);
+    }
+
+    /// Normal mode never briefs, so an ordinary session's context is
+    /// untouched by any of this.
+    #[test]
+    fn normal_mode_opens_no_episode() {
+        let planning = planning(Mode::Normal);
+        let mut context = Context::new();
+        context.push_system("base prompt");
+        assert!(!planning.open_episode(&mut context));
+        assert_eq!(context.messages().len(), 1, "no briefing pushed");
+    }
+
+    /// Ending an episode and planning again briefs afresh — the model in
+    /// the second episode has to be told the rules too.
+    #[test]
+    fn a_second_episode_briefs_again() {
+        let planning = planning(Mode::Plan);
+        let mut context = Context::new();
+        assert!(planning.open_episode(&mut context));
+        planning.area.record("docs/plan/2026-08-22-first.md");
+
+        let written = planning.area.end();
+        assert_eq!(written, ["docs/plan/2026-08-22-first.md".to_string()]);
+        assert!(planning.open_episode(&mut context));
+        assert!(planning.area.written().is_empty(), "a fresh list");
+    }
+
+    /// `--plan` is the only thing that starts a session read-only.
+    #[test]
+    fn plan_flag_picks_the_mode() {
+        let base = Config {
+            model: "m".into(),
+            base_url: "u".into(),
+            api_key: None,
+            firecrawl_key: None,
+            openrouter: false,
+            list_models: false,
+            workspace: PathBuf::from("."),
+            prompt: None,
+            json: false,
+            auto_approve: false,
+            max_steps: 4,
+            subagent_depth: 1,
+            continue_latest: false,
+            resume_id: None,
+            no_session: true,
+            theme: "default".into(),
+            plan: false,
+        };
+        assert_eq!(base.mode(), Mode::Normal);
+        assert_eq!(Config { plan: true, ..base }.mode(), Mode::Plan);
     }
 }

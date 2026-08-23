@@ -25,7 +25,8 @@ use orca_harness_core::{
     ToolRegistry, ToolSchema,
 };
 use orca_harness_tools::{
-    core_tools, fs_admin_tools, ReadFileTool, ShellTool, Workspace, WriteFileTool,
+    core_tools_with_guard, fs_admin_tools, FileGuard, ReadFileTool, ShellTool, Workspace,
+    WriteFileTool,
 };
 
 /// [`Timed`] for already-boxed tools, so a whole registry can be wrapped.
@@ -274,6 +275,11 @@ async fn main() {
     std::fs::write(mixed_dir.join("src/seed.rs"), "needle in seed\n").unwrap();
     std::fs::write(mixed_dir.join("copy_me.txt"), "payload\n").unwrap();
     let mixed_ws = Workspace::new(mixed_dir.clone());
+    // The registry is rebuilt every iteration (fresh timing counters),
+    // but the read-before-write guard is not: one guard across the run
+    // models one agent session, so the repeated `out.txt` write is a
+    // real overwrite of a file these tools wrote, not a refusal.
+    let mixed_guard = FileGuard::new();
     measure(
         "mixed batch → every tool at once",
         10,
@@ -306,9 +312,13 @@ async fn main() {
         },
         {
             let ws = mixed_ws.clone();
+            let guard = mixed_guard.clone();
             move |epoch, first, last| {
                 let mut tools = ToolRegistry::new();
-                for tool in core_tools(&ws).into_iter().chain(fs_admin_tools(&ws)) {
+                for tool in core_tools_with_guard(&ws, &guard)
+                    .into_iter()
+                    .chain(fs_admin_tools(&ws))
+                {
                     tools.register(Arc::new(TimedDyn {
                         inner: tool,
                         epoch,

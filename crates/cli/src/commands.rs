@@ -30,6 +30,19 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
+        name: "rewind",
+        description: "drop the last n user turns from the conversation (default 1)",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
+        name: "fork",
+        description:
+            "continue this conversation in a new session, leaving the current one as it is",
+        category: "Session",
+        takes_args: false,
+    },
+    CommandSpec {
         name: "queue",
         description: "show the prompt queue, or clear waiting prompts",
         category: "Session",
@@ -78,10 +91,28 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
+        name: "mode",
+        description: "switch between normal and plan (read-only) mode; no argument toggles",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
+        name: "todo",
+        description: "show the agent's current task list",
+        category: "Session",
+        takes_args: false,
+    },
+    CommandSpec {
         name: "usage",
         description: "session token totals, cache traffic, and context occupancy",
         category: "Session",
         takes_args: false,
+    },
+    CommandSpec {
+        name: "copy",
+        description: "copy the last answer to the clipboard — code for its last code block, all for the transcript",
+        category: "General",
+        takes_args: true,
     },
     CommandSpec {
         name: "quit",
@@ -152,14 +183,14 @@ mod tests {
     fn prefix_matches_rank_before_substring_matches() {
         // "el" prefixes nothing but appears inside "help" and "models".
         assert_eq!(names(&filter_commands("el")), vec!["help", "models"]);
-        // "m" prefixes "models" and "mcp"; appears inside "compact" and
-        // "theme".
+        // "m" prefixes "models", "mcp", and "mode"; appears
+        // inside "compact" and "theme", and inside "settings".
         assert_eq!(
             names(&filter_commands("m")),
-            vec!["models", "mcp", "compact", "theme"]
+            vec!["models", "mcp", "mode", "compact", "theme"]
         );
-        // "e" prefixes "expand" and "extensions"; appears inside every
-        // other command except "quit"... which it doesn't contain.
+        // "e" prefixes "expand" and "extensions"; the substring matches
+        // that follow keep registry order among themselves.
         assert_eq!(
             names(&filter_commands("e")),
             vec![
@@ -167,10 +198,12 @@ mod tests {
                 "extensions",
                 "help",
                 "clear",
+                "rewind",
                 "queue",
                 "models",
                 "provider",
                 "subagents",
+                "mode",
                 "usage",
                 "theme",
                 "settings",
