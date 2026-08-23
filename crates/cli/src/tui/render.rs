@@ -18,7 +18,16 @@ use orca_harness_core::Message;
 use orca_harness_tools::TodoStatus;
 
 use crate::commands::filter_commands;
+use crate::components::activity_rail::{ActivityRail, ActivityRailKind};
+use crate::components::composer::Composer;
 use crate::components::picker::ListPicker;
+use crate::components::progress_list::{progress_list, ProgressItem, ProgressState};
+use crate::components::status_bar::StatusBar;
+use crate::components::tool_row::ToolRow;
+use crate::components::transcript::{append_block, BlockSpacing};
+use crate::components::transcript::{transcript_spacing, TranscriptSpacing};
+use crate::components::tray::Tray;
+use crate::components::welcome::Welcome;
 use crate::msg::Provider;
 use crate::view::{self, theme};
 
@@ -30,66 +39,10 @@ use super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
 use super::{
-    append_render_block, App, BlockSpacing, InspectorBodyCache, LocationEntry, LocationPicker,
-    ModelPicker, Overlay, RunState, ToolActivity, TuiConfig, ViewMode, LIVE_TOOL_ROWS,
-    PALETTE_ROWS, PICKER_ROWS, QUEUE_PREVIEW_ROWS, SESSIONS_WINDOW, SPINNER,
+    App, InspectorBodyCache, LocationEntry, LocationPicker, ModelPicker, Overlay, RunState,
+    ToolActivity, ViewMode, LIVE_TOOL_ROWS, PALETTE_ROWS, PICKER_ROWS, QUEUE_PREVIEW_ROWS,
+    SESSIONS_WINDOW, SPINNER,
 };
-
-fn welcome_lines(
-    full_height: usize,
-    clip: usize,
-    width: usize,
-    cfg: &TuiConfig,
-) -> Vec<Line<'static>> {
-    let t = theme();
-    let available_width = width.saturating_sub(4).min(64);
-    let value_width = available_width.saturating_sub(11);
-    let row = |label: &'static str, value: &str| {
-        Line::from(vec![
-            Span::styled(format!("{label:<11}"), t.dim),
-            Span::raw(view::truncate_line(value, value_width)),
-        ])
-    };
-    let content = vec![
-        Line::from(vec![
-            Span::styled("▀▄ ", t.accent),
-            Span::styled("ORCACODE", t.strong),
-            Span::styled(format!("  v{}", env!("CARGO_PKG_VERSION")), t.dim),
-        ]),
-        Line::from(Span::styled(
-            "A small, fast agent runtime for your terminal",
-            t.dim,
-        )),
-        row("model", &cfg.model_name),
-        row("workspace", &cfg.workspace_name),
-        Line::from(vec![
-            Span::styled("› ", t.accent),
-            Span::styled("Describe a task to begin", t.strong),
-        ]),
-        Line::from(Span::styled(
-            "  /help commands · /models switch model",
-            t.dim,
-        )),
-    ];
-    // Centre the pixels the user can actually see. Previously this used
-    // the 64-column maximum even when the longest rendered row was much
-    // shorter, leaving the visible card noticeably left of centre.
-    let content_width = content.iter().map(Line::width).max().unwrap_or(0);
-    let indent = " ".repeat(width.saturating_sub(content_width) / 2);
-    let content = content.into_iter().map(|line| {
-        let mut spans = Vec::with_capacity(line.spans.len() + 1);
-        spans.push(Span::raw(indent.clone()));
-        spans.extend(line.spans);
-        Line::from(spans)
-    });
-    // Centre against the full terminal height, but never push the bottom
-    // of the card past the transcript clip the welcome is drawn into.
-    let top =
-        (full_height.saturating_sub(content.len()) / 2).min(clip.saturating_sub(content.len()));
-    std::iter::repeat_n(Line::from(""), top)
-        .chain(content)
-        .collect()
-}
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
@@ -138,10 +91,15 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     // Connector startup notices are transcript history, but they should not
     // displace the empty-state welcome before the user begins a conversation.
     // Keep them recorded in the background and reveal the transcript on the
-    // first real turn.
-    if app.turn_count == 0 && !app.running() {
+    // first explicit command or model turn.
+    if !app.welcome_dismissed && app.turn_count == 0 && !app.running() {
         let full_height = frame.area().height as usize;
-        let welcome = welcome_lines(full_height, height, transcript_width, &app.cfg);
+        let welcome = Welcome {
+            version: env!("CARGO_PKG_VERSION"),
+            model: &app.cfg.model_name,
+            workspace: &app.cfg.workspace_name,
+        }
+        .lines(full_height, height, transcript_width);
         frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
     } else {
         let max_scroll = projected.len().saturating_sub(height);
@@ -219,36 +177,24 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
 
     frame.render_widget(Paragraph::new(Text::from(live)), live_area);
 
-    // Composer with a horizontally-scrolling single line and a
-    // placeholder when empty.
-    let inner_width = (composer_area.width as usize).saturating_sub(3).max(8);
-    let chars: Vec<char> = app.composer.chars().collect();
-    let start = if app.cursor >= inner_width {
-        app.cursor + 1 - inner_width
+    let placeholder = if app.running() {
+        "type another prompt to queue"
+    } else if !app.prompt_queue.is_empty() {
+        "queue paused · enter to resume"
     } else {
-        0
+        "ask anything · @ add files · /help commands"
     };
-    let visible: String = chars.iter().skip(start).take(inner_width).collect();
-    let composer_line = if app.composer.is_empty() {
-        let placeholder = if app.running() {
-            "type another prompt to queue"
-        } else if !app.prompt_queue.is_empty() {
-            "queue paused · enter to resume"
-        } else {
-            "ask anything · @ add files · /help commands"
-        };
-        Line::from(vec![
-            Span::styled("│ ", theme().accent),
-            Span::styled(placeholder, theme().dim),
-        ])
-    } else {
-        Line::from(vec![Span::styled("│ ", theme().accent), Span::raw(visible)])
-    };
-    frame.render_widget(Paragraph::new(composer_line), composer_area);
-    frame.set_cursor_position((
-        composer_area.x + 2 + (app.cursor - start) as u16,
-        composer_area.y,
-    ));
+    let composer = Composer::new(
+        &app.composer,
+        app.cursor,
+        placeholder,
+        composer_area.width as usize,
+        theme().accent,
+        theme().dim,
+    )
+    .render();
+    frame.render_widget(Paragraph::new(composer.line), composer_area);
+    frame.set_cursor_position((composer_area.x + composer.cursor_x, composer_area.y));
 
     // Status line with contextual hints.
     let state = if app.approval.is_some() {
@@ -294,23 +240,25 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         "enter send · @ paths · ctrl+o expand · wheel scroll"
     };
-    let status = format!(
-        " {} · {}{} · {}{}{}{} · {} · {}",
-        app.cfg.model_name,
+    let mode = mode_segment(&app.cfg.mode, &app.cfg.plan);
+    let context = context_segment(app.context_tokens, app.context_window);
+    let stats = stats_segments(&app.cfg.stats);
+    let todo = todo_segment(&app.cfg.todos);
+    let queue = queue_segment(app.prompt_queue.len());
+    let workspace = workspace_status_name(&app.cfg.workspace_name);
+    let status = StatusBar {
+        model: &app.cfg.model_name,
         state,
-        mode_segment(&app.cfg.mode, &app.cfg.plan),
-        context_segment(app.context_tokens, app.context_window),
-        stats_segments(&app.cfg.stats),
-        todo_segment(&app.cfg.todos),
-        queue_segment(app.prompt_queue.len()),
+        mode: &mode,
+        context: &context,
+        stats: &stats,
+        todo: &todo,
+        queue: &queue,
         hint,
-        workspace_status_name(&app.cfg.workspace_name),
-    );
+        workspace: &workspace,
+    };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            view::truncate_line(&status, left_width),
-            theme().dim,
-        ))),
+        Paragraph::new(status.line(left_width, theme().dim)),
         status_area,
     );
 }
@@ -461,6 +409,7 @@ pub(super) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Providers { picker } => provider_lines(picker, width),
             Overlay::Themes { picker } => theme_picker_lines(picker, width),
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
+            Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
             Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
             Overlay::Settings { picker } => settings_lines(app, picker, width),
@@ -521,35 +470,18 @@ pub(super) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
 /// plan stays visible instead of disappearing into a clipped status line.
 fn todo_lines(todos: &orca_harness_tools::TodoList, width: usize) -> Vec<Line<'static>> {
     let items = todos.items();
-    if items.is_empty() {
-        return Vec::new();
-    }
-    let done = items
+    let items: Vec<_> = items
         .iter()
-        .filter(|item| item.status == TodoStatus::Completed)
-        .count();
-    let t = theme();
-    let mut lines = vec![Line::from(vec![
-        Span::styled("  todo", t.strong),
-        Span::styled(format!(" · {done}/{} done", items.len()), t.dim),
-    ])];
-    let last = items.len().saturating_sub(1);
-    for (index, item) in items.into_iter().enumerate() {
-        let branch = if index == last { "└" } else { "├" };
-        let (marker, style) = match item.status {
-            TodoStatus::Completed => ("✓", t.dim),
-            TodoStatus::InProgress => ("▸", t.strong),
-            TodoStatus::Pending => ("□", t.dim),
-        };
-        let prefix = format!("  {branch} {marker} ");
-        let content =
-            view::truncate_line(&item.content, width.saturating_sub(prefix.chars().count()));
-        lines.push(Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(content, style),
-        ]));
-    }
-    lines
+        .map(|item| ProgressItem {
+            content: &item.content,
+            state: match item.status {
+                TodoStatus::Completed => ProgressState::Completed,
+                TodoStatus::InProgress => ProgressState::Active,
+                TodoStatus::Pending => ProgressState::Pending,
+            },
+        })
+        .collect();
+    progress_list("todo", &items, width)
 }
 
 /// Drop the `@` marker from `@path` mentions before the prompt reaches the
@@ -735,18 +667,12 @@ fn projected_transcript_selected(
         return lines;
     }
 
-    let has_activity = !activity.is_empty();
-    append_render_block(&mut lines, activity, BlockSpacing::Section, None);
+    append_block(&mut lines, activity, BlockSpacing::Section, None);
     if let Some(answer) = answer {
-        let spacing = if has_activity {
-            BlockSpacing::Tight
-        } else {
-            BlockSpacing::Section
-        };
-        append_render_block(
+        append_block(
             &mut lines,
             view::markdown_lines(answer, width, "  "),
-            spacing,
+            BlockSpacing::Section,
             None,
         );
     }
@@ -859,14 +785,17 @@ pub(super) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
             .iter()
             .map(|record| record.elapsed)
             .sum::<Duration>();
-        lines.push(Line::from(Span::styled(
+        ActivityRail::new(
+            ActivityRailKind::Thinking,
+            "•",
             format!(
-                "  • Thinking · {} · {}",
+                "{} · {}",
                 elapsed_label(thinking_elapsed),
                 plural(thinking_count, "update")
             ),
             theme().dim,
-        )));
+        )
+        .append_to(&mut lines);
     }
 
     if tool_count > 0 {
@@ -880,10 +809,8 @@ pub(super) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
         } else {
             theme().dim
         };
-        lines.push(Line::from(Span::styled(
-            format!("  • Work · {}", parts.join(" · ")),
-            style,
-        )));
+        ActivityRail::new(ActivityRailKind::Work, "•", parts.join(" · "), style)
+            .append_to(&mut lines);
     }
 
     lines
@@ -926,14 +853,16 @@ pub(super) fn activity_lines_selected(
         } else {
             "•"
         };
-        lines.push(Line::from(Span::styled(
+        let mut thinking = ActivityRail::new(
+            ActivityRailKind::Thinking,
+            marker,
             format!(
-                "  {marker} Thinking · {} · {}",
+                "{} · {}",
                 elapsed_label(elapsed),
                 plural(thinking_count, "update")
             ),
             t.dim,
-        )));
+        );
         if live && current_thinking {
             let body_width = width.saturating_sub(6).max(16);
             let wrapped: Vec<String> = app
@@ -946,9 +875,10 @@ pub(super) fn activity_lines_selected(
                 })
                 .collect();
             for line in wrapped.iter().rev().take(2).rev() {
-                lines.push(Line::from(Span::styled(format!("    {line}"), t.dim)));
+                thinking.push(Line::from(Span::styled(format!("    {line}"), t.dim)));
             }
         }
+        thinking.append_to(&mut lines);
     }
 
     if app.activity_tools.is_empty() {
@@ -960,17 +890,17 @@ pub(super) fn activity_lines_selected(
         .filter(|tool| tool.output.is_some())
         .count();
     let running = app.activity_tools.len() - complete;
-    let header = if live {
+    let (marker, summary) = if live {
         let dot = if app.spinner_frame.is_multiple_of(2) {
             "•"
         } else {
             " "
         };
-        format!("  {dot} Work · ✓ {complete} · □ {running}")
+        (dot, format!("✓ {complete} · □ {running}"))
     } else {
-        format!("  • Work · {}", plural(app.activity_tools.len(), "tool"))
+        ("•", plural(app.activity_tools.len(), "tool"))
     };
-    lines.push(Line::from(Span::styled(header, t.dim)));
+    let mut work = ActivityRail::new(ActivityRailKind::Work, marker, summary, t.dim);
 
     let visible_indices = if live && app.activity_tools.len() > LIVE_TOOL_ROWS {
         let mut selected: Vec<usize> = app
@@ -1002,7 +932,7 @@ pub(super) fn activity_lines_selected(
         .len()
         .saturating_sub(visible_indices.len());
     if hidden > 0 {
-        lines.push(Line::from(Span::styled(
+        work.push(Line::from(Span::styled(
             format!("    … {hidden} earlier tools"),
             t.dim,
         )));
@@ -1011,8 +941,6 @@ pub(super) fn activity_lines_selected(
     for (position, index) in visible_indices.iter().copied().enumerate() {
         let tool = &app.activity_tools[index];
         let last = position + 1 == visible_indices.len();
-        let branch = if last { "└─" } else { "├─" };
-        let continuation = if last { "  " } else { "│ " };
         let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
         let (glyph, mut detail, status_style) = match &tool.output {
             Some(output) if tool.is_error => (
@@ -1035,47 +963,30 @@ pub(super) fn activity_lines_selected(
                 format!("{approval} · {detail}")
             };
         }
-        let row_width = width.min(132);
         let elapsed = elapsed_label(elapsed);
-        let prefix = format!("    {branch} ");
-        let detail_width = (row_width / 3).clamp(12, 40);
-        detail = view::truncate_line(&detail, detail_width);
         let selected = selected_tool == Some(index);
-        let status = if detail.is_empty() {
-            format!(" · {elapsed}")
-        } else {
-            format!(" · {detail} · {elapsed}")
-        };
-        let fixed_width = prefix.chars().count() + 2 + status.chars().count();
-        let connector_reserve = if selected { 10 } else { 0 };
-        let call_width = row_width
-            .saturating_sub(fixed_width + connector_reserve)
-            .max(8);
-        let call = view::truncate_line(&tool.call_line, call_width);
         let row_style = if selected { t.select } else { t.accent };
-        let mut spans = vec![
-            Span::styled(prefix, t.dim),
-            Span::styled(format!("{glyph} "), status_style),
-            Span::styled(call, row_style),
-            Span::styled(status, status_style),
-        ];
-        if selected {
-            let used = spans
-                .iter()
-                .map(|span| span.content.chars().count())
-                .sum::<usize>();
-            let dots = width.saturating_sub(used + 1);
-            spans.push(Span::styled(
-                format!(" {}○", "·".repeat(dots.saturating_sub(1).max(1))),
-                t.dim,
-            ));
-        }
-        lines.push(Line::from(spans));
+        let row = ToolRow {
+            last,
+            glyph,
+            call: &tool.call_line,
+            detail: &detail,
+            elapsed: &elapsed,
+            selected,
+            width,
+            branch_style: t.dim,
+            glyph_style: status_style,
+            call_style: row_style,
+        };
+        let continuation = row.continuation();
+        work.push(row.line());
         if tool.tool_name == "edit_file" {
-            lines.extend(edit_diff_preview_lines(tool, width, continuation));
+            work.extend(edit_diff_preview_lines(tool, width, continuation));
         }
         if tool.tool_name == "subagent" && tool.output.is_none() {
-            nested_subagent_lines(app, &tool.call_id, width, continuation, &mut lines);
+            let mut nested = Vec::new();
+            nested_subagent_lines(app, &tool.call_id, width, continuation, &mut nested);
+            work.extend(nested);
         }
         if tool.is_error {
             if let Some(output) = &tool.output {
@@ -1084,7 +995,7 @@ pub(super) fn activity_lines_selected(
                     .into_iter()
                     .take(4)
                 {
-                    lines.push(Line::from(Span::styled(
+                    work.push(Line::from(Span::styled(
                         format!(
                             "    {continuation} │ {}",
                             view::truncate_line(&output_line, output_width)
@@ -1095,6 +1006,7 @@ pub(super) fn activity_lines_selected(
             }
         }
     }
+    work.append_to(&mut lines);
     lines
 }
 
@@ -1220,7 +1132,7 @@ pub(super) fn replay_transcript(
             Message::System { .. } => {}
             Message::User { content } => {
                 app.push_line(Line::from(""));
-                app.push_wrapped(content, "┃ ", theme().strong, width);
+                app.push_user_prompt(content, width);
                 app.turn_count += 1;
             }
             Message::Assistant {
@@ -1388,10 +1300,7 @@ fn usage_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         ),
         _ => format!("~{} (window unknown)", app.context_tokens),
     };
-    let mut lines = vec![
-        Line::from(Span::styled("  Session usage · esc close", t.dim)),
-        Line::from(""),
-    ];
+    let mut tray = Tray::new("Session usage · esc close", t.dim);
     let rows = [
         ("model", app.cfg.model_name.clone()),
         ("context", context),
@@ -1404,12 +1313,12 @@ fn usage_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     ];
     for (label, value) in rows {
         let text = format!("  {label:<12} {value}");
-        lines.push(Line::from(Span::styled(
+        tray.push(Line::from(Span::styled(
             view::truncate_line(&text, width),
             t.dim,
         )));
     }
-    lines
+    tray.lines()
 }
 
 fn theme_picker_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
@@ -1465,6 +1374,7 @@ fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Vec<Line<'sta
         ("view", app.view_mode.label().to_string()),
         ("api key", key_status),
         ("approvals", approvals_status),
+        ("spacing", transcript_spacing().label().to_string()),
     ];
     let mut lines = picker.lines(
         "Settings · ↑↓ navigate · enter change · esc close",
@@ -1480,6 +1390,23 @@ fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Vec<Line<'sta
         )));
     }
     lines
+}
+
+fn transcript_spacing_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let current = transcript_spacing();
+    let rows = TranscriptSpacing::ALL.iter().map(|spacing| {
+        let note = if *spacing == current { "current" } else { "" };
+        let description = match spacing {
+            TranscriptSpacing::Compact => "no blank rows between sections",
+            TranscriptSpacing::Comfortable => "one blank row between sections",
+        };
+        format!("{:<14} {:<36} {note}", spacing.label(), description)
+    });
+    picker.lines(
+        "Transcript spacing · ↑↓ navigate · enter use · esc close",
+        rows,
+        width,
+    )
 }
 
 /// This workspace's saved always-allowed tools; enter revokes the
@@ -1664,18 +1591,16 @@ fn sessions_picker_lines(
 
 fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static>> {
     let t = theme();
-    vec![
-        Line::from(Span::styled(
-            format!(
-                "  {} API key (saved for future sessions) · enter confirm · esc cancel",
-                provider.label()
-            ),
-            t.warn,
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  key: ", t.dim),
-            Span::raw("•".repeat(input.chars().count())),
-        ]),
-    ]
+    let mut tray = Tray::new(
+        format!(
+            "{} API key (saved for future sessions) · enter confirm · esc cancel",
+            provider.label()
+        ),
+        t.warn,
+    );
+    tray.push(Line::from(vec![
+        Span::styled("  key: ", t.dim),
+        Span::raw("•".repeat(input.chars().count())),
+    ]));
+    tray.lines()
 }

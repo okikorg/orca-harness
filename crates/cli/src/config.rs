@@ -107,6 +107,14 @@ pub fn save_view(slug: &str) -> io::Result<PathBuf> {
     save_str(None, "view", slug)
 }
 
+pub fn stored_transcript_spacing() -> Option<String> {
+    stored_str(None, "transcript_spacing")
+}
+
+pub fn save_transcript_spacing(slug: &str) -> io::Result<PathBuf> {
+    save_str(None, "transcript_spacing", slug)
+}
+
 /// The saved on/off override for a user-toggleable extension. `None`
 /// means nothing was saved and the extension's default applies.
 pub fn stored_extension(name: &str) -> Option<bool> {

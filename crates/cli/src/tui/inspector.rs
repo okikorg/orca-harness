@@ -7,6 +7,7 @@ use std::path::Path;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::components::inspector::{CodePreview, InspectorSection};
 use crate::view::{self, theme};
 
 use super::elapsed_label;
@@ -72,33 +73,42 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
 pub(super) fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let inner = width.saturating_sub(4).max(16);
-    let mut lines = vec![Line::from(Span::styled("  › input", t.dim))];
-    append_inspector_input(&mut lines, tool, inner);
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  · output", t.dim)));
+    let mut lines = Vec::new();
+    let mut input = InspectorSection::new("› input", t.dim);
+    append_inspector_input(&mut input, tool, inner);
+    input.append_to(&mut lines);
+    let mut output_section = InspectorSection::new("· output", t.dim);
     if let Some(output) = &tool.output {
         let language = inspector_output_language(tool, output);
         if let Some(facts) = inspector_code_facts(tool, output, language) {
-            lines.push(Line::from(Span::styled(format!("  {facts}"), t.dim)));
+            output_section.push(Line::from(Span::styled(format!("  {facts}"), t.dim)));
         }
         let (expanded, omitted) =
             inspector_output_preview(&tool.tool_name, output, language, tool.is_error);
         if tool.is_error {
-            push_inspector_text(&mut lines, &expanded, inner, t.error);
+            push_inspector_text(&mut output_section, &expanded, inner, t.error);
         } else if let Some(language) = language {
-            lines.extend(view::highlighted_code_lines(
-                &expanded, language, inner, "  ",
-            ));
+            output_section.extend(
+                CodePreview {
+                    text: &expanded,
+                    language,
+                    width: inner,
+                    indent: "  ",
+                    plain_style: Style::default(),
+                }
+                .lines(),
+            );
         } else {
-            push_inspector_text(&mut lines, &expanded, inner, Style::default());
+            push_inspector_text(&mut output_section, &expanded, inner, Style::default());
         }
         if omitted {
-            lines.push(Line::from(""));
-            lines.push(inspector_omitted_line(inner, "output omitted", "/expand n"));
+            output_section.push(Line::from(""));
+            output_section.push(inspector_omitted_line(inner, "output omitted", "/expand n"));
         }
     } else {
-        lines.push(Line::from(Span::styled("  waiting for result", t.dim)));
+        output_section.push(Line::from(Span::styled("  waiting for result", t.dim)));
     }
+    output_section.append_to(&mut lines);
     lines
 }
 
@@ -113,7 +123,7 @@ fn inspector_omitted_line(width: usize, label: &str, action: &str) -> Line<'stat
     ])
 }
 
-fn append_inspector_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
+fn append_inspector_input(section: &mut InspectorSection, tool: &ToolActivity, width: usize) {
     let path = tool.input.get("path").and_then(serde_json::Value::as_str);
     let content = tool
         .input
@@ -123,7 +133,7 @@ fn append_inspector_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, w
         let language = language_for_path(path).unwrap_or("text");
         let line_count = content.lines().count();
         let line_label = if line_count == 1 { "line" } else { "lines" };
-        lines.push(Line::from(Span::styled(
+        section.push(Line::from(Span::styled(
             format!(
                 "  {path} · {language} · {line_count} {line_label} · {}",
                 inspector_size_label(content.len() as u64)
@@ -132,14 +142,21 @@ fn append_inspector_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, w
         )));
         let (preview, omitted) = limit_inspector_preview(content);
         if language == "text" {
-            push_inspector_text(lines, &preview, width, Style::default());
+            push_inspector_text(section, &preview, width, Style::default());
         } else {
-            lines.extend(view::highlighted_code_lines(
-                &preview, language, width, "  ",
-            ));
+            section.extend(
+                CodePreview {
+                    text: &preview,
+                    language,
+                    width,
+                    indent: "  ",
+                    plain_style: Style::default(),
+                }
+                .lines(),
+            );
         }
         if omitted {
-            lines.push(Line::from(Span::styled(
+            section.push(Line::from(Span::styled(
                 "  More input omitted",
                 theme().dim,
             )));
@@ -149,7 +166,16 @@ fn append_inspector_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, w
 
     let input =
         serde_json::to_string_pretty(&tool.input).unwrap_or_else(|_| tool.input.to_string());
-    lines.extend(view::highlighted_code_lines(&input, "json", width, "  "));
+    section.extend(
+        CodePreview {
+            text: &input,
+            language: "json",
+            width,
+            indent: "  ",
+            plain_style: Style::default(),
+        }
+        .lines(),
+    );
 }
 
 pub(super) fn inspector_code_facts(
@@ -541,15 +567,15 @@ pub(super) fn empty_tool_inspector_lines() -> Vec<Line<'static>> {
     ]
 }
 
-fn push_inspector_text(lines: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+fn push_inspector_text(section: &mut InspectorSection, text: &str, width: usize, style: Style) {
     let text = view::sanitize_cells(text);
     for source in text.lines() {
         let wrapped = textwrap::wrap(source, width.saturating_sub(2).max(8));
         if wrapped.is_empty() {
-            lines.push(Line::from(""));
+            section.push(Line::from(""));
         } else {
             for part in wrapped {
-                lines.push(Line::from(Span::styled(format!("  {part}"), style)));
+                section.push(Line::from(Span::styled(format!("  {part}"), style)));
             }
         }
     }

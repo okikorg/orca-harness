@@ -44,7 +44,13 @@ use orca_harness_model_openrouter::ModelInfo;
 
 use crate::clipboard;
 use crate::commands::{filter_commands, CommandSpec};
+use crate::components::message::{assistant_message, user_prompt};
+use crate::components::notification::Notification;
 use crate::components::picker::{ListPicker, PickerAction, PickerEvent};
+use crate::components::transcript::{
+    append_block, line_is_blank, set_transcript_spacing, transcript_spacing, BlockSpacing,
+    TranscriptSpacing,
+};
 use crate::msg::{ApprovalRequest, ApprovalResponse, Provider, UiMsg, WorkerCmd};
 use crate::view::{self, theme};
 
@@ -205,6 +211,8 @@ enum Overlay {
     Themes { picker: ListPicker },
     /// Transcript layout selector (classic or split inspector).
     Views { picker: ListPicker },
+    /// Vertical spacing between transcript sections.
+    TranscriptSpacing { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
     Usage,
     /// Masked API-key entry for a provider whose key is not in the env.
@@ -244,7 +252,7 @@ enum Overlay {
 
 /// Rows in the settings overlay: provider, model, theme, transcript view,
 /// api key, approvals.
-const SETTINGS_ROWS: usize = 6;
+const SETTINGS_ROWS: usize = 7;
 
 /// Row actions in the /sessions picker (space arms them).
 const SESSION_ACTIONS: &[PickerAction] = &[PickerAction {
@@ -289,14 +297,6 @@ struct CompletedWork {
 
 struct ThinkingRecord {
     elapsed: Duration,
-}
-
-/// Vertical rhythm between transcript components. Model-provided leading or
-/// trailing whitespace never participates in layout; the transcript owns it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BlockSpacing {
-    Tight,
-    Section,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -424,6 +424,10 @@ struct App {
     work_log: Vec<CompletedWork>,
     /// Number of user turns rendered in this session.
     turn_count: usize,
+    /// Whether the initial welcome has been replaced by user activity.
+    /// Kept separate from `turn_count`: local slash commands do not create
+    /// model turns, but their transcript output must still be visible.
+    welcome_dismissed: bool,
     /// Top-level tool calls made during the current turn.
     turn_tool_calls: usize,
     /// Duration/tool-call summary of the last completed turn, shown in
@@ -459,6 +463,11 @@ struct App {
 
 impl App {
     fn new(cfg: TuiConfig) -> Self {
+        let spacing = crate::config::stored_transcript_spacing()
+            .as_deref()
+            .and_then(TranscriptSpacing::from_slug)
+            .unwrap_or(TranscriptSpacing::Comfortable);
+        set_transcript_spacing(spacing);
         Self {
             cfg,
             pending_history: Vec::new(),
@@ -492,6 +501,7 @@ impl App {
             tool_log: Vec::new(),
             work_log: Vec::new(),
             turn_count: 0,
+            welcome_dismissed: false,
             turn_tool_calls: 0,
             last_turn_summary: None,
             pending_calls: std::collections::HashMap::new(),
@@ -528,8 +538,9 @@ impl App {
         self.pending_history.push(line);
     }
 
-    fn push_wrapped(&mut self, text: &str, indent: &str, style: Style, width: usize) {
-        push_wrapped_lines(&mut self.pending_history, text, indent, style, width);
+    fn push_user_prompt(&mut self, text: &str, width: usize) {
+        self.pending_history
+            .extend(user_prompt(text, width, theme().strong));
     }
 
     fn push_record(&mut self, record: ToolRecord) {
@@ -583,13 +594,12 @@ impl App {
             BlockSpacing::Section
         };
         let transcript_tail = self.transcript.last().map(line_is_blank);
-        let appended =
-            append_render_block(&mut self.pending_history, lines, spacing, transcript_tail);
+        let appended = append_block(&mut self.pending_history, lines, spacing, transcript_tail);
         self.assistant_started |= appended;
     }
 
     fn push_markdown_block(&mut self, text: &str, width: usize, spacing: BlockSpacing) {
-        self.push_transcript_block(view::markdown_lines(text, width, "  "), spacing);
+        self.push_transcript_block(assistant_message(text, width), spacing);
     }
 
     fn commit_activity(&mut self, width: usize) {
@@ -606,10 +616,10 @@ impl App {
         };
         let lines = activity_lines_selected(self, width, false, selected);
         if !lines.is_empty() {
-            // Work is part of the surrounding event stream, not a new
-            // prose paragraph. Keep it adjacent to the narration and show
-            // its useful rows immediately.
-            self.push_transcript_block(lines.clone(), BlockSpacing::Tight);
+            // Each work phase is its own compact rail. Give it one blank row
+            // from the preceding prose or rail, while keeping the rows inside
+            // the rail itself tight.
+            self.push_transcript_block(lines.clone(), BlockSpacing::Section);
             let collapsed = collapsed_activity_lines(self);
             let summaries = collapsed.iter().map(line_text).collect();
             self.work_log.push(CompletedWork {
@@ -1162,6 +1172,8 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
         },
         /// Close, persist, and activate the selected transcript layout.
         CloseAndSetView(ViewMode),
+        /// Close, persist, and activate transcript section spacing.
+        CloseAndSetTranscriptSpacing(TranscriptSpacing),
         /// Close and drop a dim status line into the history.
         CloseWithNote(String),
         /// Keep the overlay open and drop a dim status line (row
@@ -1184,6 +1196,7 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
     // Read before the overlay borrow: the settings rows need these.
     let current_provider = app.cfg.provider;
     let current_view = app.view_mode;
+    let current_spacing = transcript_spacing();
     let workspace_root = app.cfg.workspace_root.clone();
     let current_session = app.cfg.session_id.clone();
     let Some(overlay) = app.overlay.as_mut() else {
@@ -1306,6 +1319,12 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             PickerEvent::Activated(index) => After::CloseAndSetView(ViewMode::ALL[index]),
             _ => After::Nothing,
         },
+        Overlay::TranscriptSpacing { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                After::CloseAndSetTranscriptSpacing(TranscriptSpacing::ALL[index])
+            }
+            _ => After::Nothing,
+        },
         Overlay::Usage => match key.code {
             KeyCode::Enter | KeyCode::Char('q') => After::Close,
             _ => After::Nothing,
@@ -1386,7 +1405,7 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                         })
                     }
                 }
-                _ => {
+                5 => {
                     let tools = crate::config::stored_approvals(&workspace_root);
                     if tools.is_empty() {
                         After::CloseWithNote("no saved approvals for this workspace".into())
@@ -1396,6 +1415,15 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
                             tools,
                         })
                     }
+                }
+                _ => {
+                    let selected = TranscriptSpacing::ALL
+                        .iter()
+                        .position(|spacing| *spacing == current_spacing)
+                        .unwrap_or(1);
+                    After::Replace(Overlay::TranscriptSpacing {
+                        picker: ListPicker::with_selected(TranscriptSpacing::ALL.len(), selected),
+                    })
                 }
             },
             _ => After::Nothing,
@@ -1638,6 +1666,18 @@ fn handle_overlay_key(app: &mut App, key: KeyEvent, worker: &mpsc::UnboundedSend
             };
             push_notice(app, note);
         }
+        After::CloseAndSetTranscriptSpacing(spacing) => {
+            app.overlay = None;
+            set_transcript_spacing(spacing);
+            let note = match crate::config::save_transcript_spacing(spacing.slug()) {
+                Ok(_) => format!("transcript spacing set to {}", spacing.label()),
+                Err(err) => format!(
+                    "transcript spacing set to {} (not saved: {err})",
+                    spacing.label()
+                ),
+            };
+            push_notice(app, note);
+        }
         After::CloseWithNote(note) => {
             app.overlay = None;
             push_notice(app, note);
@@ -1729,11 +1769,7 @@ fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
 /// A compact transcript notification: the dot keeps system status scannable
 /// without giving it the visual weight of transcript content.
 fn push_notice(app: &mut App, text: impl Into<String>) {
-    let t = theme();
-    app.push_line(Line::from(vec![
-        Span::styled("• ", t.accent),
-        Span::styled(text.into(), t.dim),
-    ]));
+    app.push_line(Notification::notice(text).line());
 }
 
 /// A command that refused to do what was asked. The same leading glyph as
@@ -1741,11 +1777,7 @@ fn push_notice(app: &mut App, text: impl Into<String>) {
 /// line without the glyph reads as model output — with the body in the
 /// error color so severity and origin are two separate cues.
 fn push_error(app: &mut App, text: impl Into<String>) {
-    let t = theme();
-    app.push_line(Line::from(vec![
-        Span::styled("• ", t.accent),
-        Span::styled(text.into(), t.error),
-    ]));
+    app.push_line(Notification::error(text).line());
 }
 
 fn handle_approval_key(app: &mut App, key: KeyEvent) {
@@ -1905,7 +1937,7 @@ fn start_shell(
     if app.turn_count > 0 {
         app.push_line(Line::from(""));
     }
-    app.push_wrapped(&prompt, "┃ ", theme().strong, width);
+    app.push_user_prompt(&prompt, width);
     app.turn_count += 1;
     app.run = RunState::Running {
         started: Instant::now(),
@@ -1943,7 +1975,7 @@ fn start_prompt(
     if app.turn_count > 0 {
         app.push_line(Line::from(""));
     }
-    app.push_wrapped(&prompt, "┃ ", theme().strong, width);
+    app.push_user_prompt(&prompt, width);
     app.turn_count += 1;
     app.run = RunState::Running {
         started: Instant::now(),
@@ -2055,46 +2087,6 @@ fn clear_tool_connectors(lines: &mut [Line<'static>]) {
     }
 }
 
-fn line_is_blank(line: &Line<'_>) -> bool {
-    line.spans.iter().all(|span| span.content.trim().is_empty())
-}
-
-fn trim_blank_edges(lines: &mut Vec<Line<'static>>) {
-    let start = lines.iter().position(|line| !line_is_blank(line));
-    let Some(start) = start else {
-        lines.clear();
-        return;
-    };
-    let end = lines
-        .iter()
-        .rposition(|line| !line_is_blank(line))
-        .expect("non-empty block")
-        + 1;
-    lines.drain(end..);
-    lines.drain(..start);
-}
-
-fn append_render_block(
-    target: &mut Vec<Line<'static>>,
-    mut block: Vec<Line<'static>>,
-    spacing: BlockSpacing,
-    fallback_prior: Option<bool>,
-) -> bool {
-    trim_blank_edges(&mut block);
-    if block.is_empty() {
-        return false;
-    }
-    while target.last().is_some_and(line_is_blank) {
-        target.pop();
-    }
-    let prior = target.last().map(line_is_blank).or(fallback_prior);
-    if prior.is_some() && prior == Some(false) && spacing == BlockSpacing::Section {
-        target.push(Line::from(""));
-    }
-    target.extend(block);
-    true
-}
-
 fn push_wrapped_lines(
     lines: &mut Vec<Line<'static>>,
     text: &str,
@@ -2140,6 +2132,10 @@ fn slash_command(
     worker: &mpsc::UnboundedSender<WorkerCmd>,
     width: usize,
 ) {
+    // A slash command is user activity even though it is not a model turn.
+    // Dismiss the empty-state card before writing command output so `/help`
+    // (and command errors/notices) are visible on the first frame afterward.
+    app.welcome_dismissed = true;
     let dim = theme().dim;
     if command == "queue" {
         let queued = app.prompt_queue.len();
@@ -4047,8 +4043,18 @@ mod tests {
 
         // Actual answer text still streams live.
         app.text = "partial answer".into();
-        let joined = flat_lines(&projected_transcript(&app, 80));
+        let projected = projected_transcript(&app, 80);
+        let joined = flat_lines(&projected);
         assert!(joined.contains("partial answer"));
+        let answer_row = projected
+            .iter()
+            .position(|line| line_text(line).contains("partial answer"))
+            .expect("partial answer row");
+        assert!(
+            answer_row > 0 && line_is_blank(&projected[answer_row - 1]),
+            "thinking and live prose need one blank row: {:?}",
+            projected.iter().map(line_text).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -5038,8 +5044,8 @@ mod tests {
         assert!(
             texts[checkpoint_row + 1..=second_thinking_row]
                 .iter()
-                .all(|line| !line.is_empty()),
-            "work phases do not inject blank rows: {texts:?}"
+                .any(|line| line.is_empty()),
+            "successive prose and rails have one-row breathing room: {texts:?}"
         );
         assert_eq!(app.work_log.len(), 3, "each phase remains expandable");
     }
@@ -5340,6 +5346,26 @@ mod tests {
             flat_lines(&app.transcript).contains("MCP docs connected"),
             "startup notice should remain recorded"
         );
+    }
+
+    #[test]
+    fn help_as_the_first_command_replaces_the_welcome_immediately() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+
+        slash_command(&mut app, "help", &tx, 90);
+        app.absorb_pending();
+        let screen = rendered_rows(&mut app, 90, 40).join("\n");
+
+        assert!(
+            screen.contains("/help        show this help"),
+            "help missing: {screen}"
+        );
+        assert!(
+            !screen.contains("▀▄ ORCACODE"),
+            "welcome remained: {screen}"
+        );
+        assert_eq!(app.turn_count, 0, "local help is not a model turn");
     }
 
     /// The rendered status line, which is the row carrying the model name.
@@ -5931,6 +5957,26 @@ mod tests {
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
         assert!(rx.try_recv().is_err(), "no command for a keyless provider");
+
+        // Transcript spacing is a persisted picker and applies immediately.
+        set_transcript_spacing(TranscriptSpacing::Comfortable);
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 6),
+        });
+        press(&mut app, &tx, KeyCode::Enter);
+        match &app.overlay {
+            Some(Overlay::TranscriptSpacing { picker }) => assert_eq!(picker.index(), 1),
+            _ => panic!("expected transcript spacing overlay"),
+        }
+        press(&mut app, &tx, KeyCode::Up);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert_eq!(transcript_spacing(), TranscriptSpacing::Compact);
+        assert_eq!(
+            crate::config::stored_transcript_spacing().as_deref(),
+            Some("compact")
+        );
+        set_transcript_spacing(TranscriptSpacing::Comfortable);
+        let _ = crate::config::save_transcript_spacing("comfortable");
     }
 
     #[test]
