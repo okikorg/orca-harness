@@ -89,22 +89,26 @@ a compact summary:
   collapsed into the expandable record when they finish. The status line
   counts live background work (`procs 2 · pykernel · agents 3`).
 
-**Copying text out** — mouse capture stays off, so the terminal draws its
-own selection: drag to select and copy exactly as you would anywhere
-else. The trade is the scroll wheel, which a terminal only forwards to a
-fullscreen app under capture — `pgup`/`pgdn` scroll the transcript
-instead. For text that has already scrolled past, the clipboard reaches
-further than a drag can:
+**Scrolling and copying text out** — mouse capture is on, so the wheel
+scrolls the transcript. `shift+↑`/`shift+↓` scroll by line and
+`pgup`/`pgdn` by page, which matters on laptop keyboards where those are
+`fn`+arrows that some terminals swallow for their own scrollback. Capture
+does not cost you selection: hold `option` (macOS terminals) or `shift`
+(most others) while dragging and the terminal draws its own selection as
+usual. A terminal selection is always whole rows, though, so in split
+view a drag takes both panes at once — there is no escape sequence that
+would stop it at the divider. For one pane on its own, and for text that
+has already scrolled past, the clipboard reaches further than a drag can:
 
 | Key      | Command            | Effect                                                                    |
 | :------- | :----------------- | :------------------------------------------------------------------------ |
-| `ctrl+y` | `/copy`            | copy the last answer to the clipboard (`code` for its last fenced block, `all` for the whole transcript) |
+| `ctrl+y` | `/copy`            | copy the focused pane to the clipboard: the last answer, or the inspected tool when the inspector has focus (`code` for its last fenced block, `all` for the whole transcript, `tool` for the inspector regardless of focus) |
 
 `/copy` goes through OSC 52, so it reaches the clipboard of whichever
 terminal is in front of you — including across `ssh`. Under `tmux` it
 needs `set -g set-clipboard on`.
 Copying mid-stream takes the partial answer as it stands, and says so.
-`pgup`/`pgdn` scroll the transcript; `up`/`down` recall prompt history.
+`up`/`down` recall prompt history.
 
 **Tool approvals** — gated tools (`shell`, `write_file`, `edit_file`,
 `pykernel`, `subagent`) pause behind a prompt:

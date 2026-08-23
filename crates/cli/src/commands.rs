@@ -110,7 +110,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "copy",
-        description: "copy the last answer to the clipboard — code for its last code block, all for the transcript",
+        description: "copy the last answer to the clipboard — code for its last code block, all for the transcript, tool for the inspected tool",
         category: "General",
         takes_args: true,
     },
