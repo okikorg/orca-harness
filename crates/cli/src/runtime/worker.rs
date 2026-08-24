@@ -3,15 +3,30 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use orca_harness_core::{Agent, Context, Model};
+use orca_harness_core::{Agent, CancellationToken, Context, HarnessError, Model};
 use orca_harness_extensions::{
-    compact, CompactConfig, HarnessEvent, SessionHandler, TruncationStore,
+    compact, CompactConfig, ContextCapacity, HarnessEvent, SessionHandler, TruncationStore,
 };
-use orca_harness_model_providers::openrouter;
 use orca_harness_tools::{FileGuard, TodoList};
 
-use crate::msg::{Provider, UiMsg, WorkerCmd};
+use crate::msg::{UiMsg, WorkerCmd};
 use crate::{config, mcp, skills, spawn_window_probe, Endpoint, Planning};
+
+async fn run_interactive_context(
+    agent: &Agent<Arc<dyn Model>>,
+    context: &mut Context,
+    cancel: &CancellationToken,
+    continue_at_step_limit: bool,
+) -> Result<String, HarnessError> {
+    loop {
+        match agent.run_context(context, cancel.clone()).await {
+            Err(HarnessError::StepLimitExceeded) if continue_at_step_limit => {
+                continue;
+            }
+            result => return result,
+        }
+    }
+}
 
 /// Owns the Agent and the conversation; runs prompts sent by the UI.
 /// `build` produces a fresh agent for the current endpoint; the
@@ -23,6 +38,7 @@ pub(crate) async fn worker<F>(
     mut endpoint: Endpoint,
     build: F,
     store: TruncationStore,
+    context_capacity: ContextCapacity,
     mcp: mcp::McpServers,
     skills: skills::Skills,
     session: Option<Arc<SessionHandler>>,
@@ -39,7 +55,7 @@ pub(crate) async fn worker<F>(
     let mut user_shell_call_id = 0_u64;
     let mut login_attempt = 0_u64;
     let mut login_task: Option<tokio::task::JoinHandle<()>> = None;
-    spawn_window_probe(&endpoint, ui.clone());
+    spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
     while let Some(command) = commands.recv().await {
         match command {
             WorkerCmd::Run {
@@ -52,7 +68,13 @@ pub(crate) async fn worker<F>(
                 // and whether a plan file appears is up to the agent.
                 planning.open_episode(&mut context);
                 context.push_user_with_images(&prompt, images);
-                let result = agent.run_context(&mut context, cancel).await;
+                let result = run_interactive_context(
+                    &agent,
+                    &mut context,
+                    &cancel,
+                    crate::extensions::enabled("long-session"),
+                )
+                .await;
                 repair_dangling_tool_calls(&mut context);
                 // The repair lands after on_agent_end fired; catch up so
                 // the file never ends in dangling tool calls.
@@ -231,25 +253,18 @@ pub(crate) async fn worker<F>(
                 // Detached: a slow catalog fetch must not wedge the worker
                 // (runs and model switches would queue behind it).
                 let ui = ui.clone();
-                let base_url = endpoint.base_url.clone();
-                let api_key = endpoint.api_key.clone();
-                let provider = endpoint.provider;
+                let endpoint = endpoint.clone();
                 tokio::spawn(async move {
-                    let result = if provider == Provider::OpenAiCodex {
-                        orca_harness_model_providers::openai_codex::list_models(Arc::new(
-                            crate::auth::CodexCliCredential::discover(),
-                        ))
+                    let result = endpoint
+                        .list_models()
                         .await
-                    } else {
-                        openrouter::list_models(&base_url, api_key.as_deref()).await
-                    }
-                    .map(|mut models| {
-                        if !filter.is_empty() {
-                            models.retain(|m| m.id.to_lowercase().contains(&filter));
-                        }
-                        models
-                    })
-                    .map_err(|e| e.to_string());
+                        .map(|mut models| {
+                            if !filter.is_empty() {
+                                models.retain(|m| m.id.to_lowercase().contains(&filter));
+                            }
+                            models
+                        })
+                        .map_err(|e| e.to_string());
                     let _ = ui.send(UiMsg::Models(result));
                 });
             }
@@ -290,6 +305,7 @@ pub(crate) async fn worker<F>(
                         endpoint.model = provider.default_model().into();
                         let _ = config::save_provider(provider.label());
                         agent = build(&endpoint);
+                        spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                         let _ = ui.send(UiMsg::ProviderChanged {
                             provider,
                             model: endpoint.model.clone(),
@@ -306,7 +322,7 @@ pub(crate) async fn worker<F>(
                 // the next session starts on the provider default.
                 let _ = config::save_model(endpoint.provider.label(), &endpoint.model);
                 agent = build(&endpoint);
-                spawn_window_probe(&endpoint, ui.clone());
+                spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 if ui
                     .send(UiMsg::ModelChanged(endpoint.model.clone()))
                     .is_err()
@@ -325,7 +341,7 @@ pub(crate) async fn worker<F>(
                 endpoint.model = provider.default_model().into();
                 let _ = config::save_provider(provider.label());
                 agent = build(&endpoint);
-                spawn_window_probe(&endpoint, ui.clone());
+                spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 let changed = UiMsg::ProviderChanged {
                     provider,
                     model: endpoint.model.clone(),
@@ -373,5 +389,46 @@ pub(crate) async fn worker<F>(
                 agent = build(&endpoint);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orca_harness_core::testing::{call, ScriptedModel};
+    use orca_harness_core::{FnTool, Limits, ModelResponse};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn long_session_continues_across_bounded_agent_runs() {
+        let mut responses = (0..7)
+            .map(|index| {
+                ModelResponse::tool_calls(vec![call(
+                    &format!("call-{index}"),
+                    "echo",
+                    json!({"index": index}),
+                )])
+            })
+            .collect::<Vec<_>>();
+        responses.push(ModelResponse::final_text("finished"));
+        let model: Arc<dyn Model> = Arc::new(ScriptedModel::new(responses));
+        let echo = FnTool::new(
+            "echo",
+            "echo input",
+            json!({"type": "object"}),
+            |input, _| async move { Ok(input) },
+        );
+        let agent = Agent::new(model).tool(echo).limits(Limits {
+            max_steps: 3,
+            ..Limits::default()
+        });
+        let mut context = Context::new();
+        context.push_user("work for a long time");
+
+        let answer = run_interactive_context(&agent, &mut context, &CancellationToken::new(), true)
+            .await
+            .unwrap();
+
+        assert_eq!(answer, "finished");
     }
 }

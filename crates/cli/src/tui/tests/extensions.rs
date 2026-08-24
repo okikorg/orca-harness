@@ -49,25 +49,32 @@ mod extensions_command_tests {
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.clone().into_owned()))
             .collect::<String>();
+        assert!(
+            lines.contains("long-session"),
+            "lists long-session: {lines}"
+        );
         assert!(lines.contains("truncation"), "lists truncation: {lines}");
         assert!(lines.contains("retry"), "lists retry: {lines}");
         assert!(lines.contains("enter toggle"), "shows key hint: {lines}");
 
-        // Enter on the first row (truncation, default on) turns it off,
+        // Enter on the first row (long-session, default on) turns it off,
         // asks the worker to rebuild, and keeps the picker open.
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         handle_overlay_key(&mut app, key, &worker);
-        assert_eq!(crate::config::stored_extension("truncation"), Some(false));
+        assert_eq!(crate::config::stored_extension("long-session"), Some(false));
         assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadExtensions)));
         assert!(matches!(app.overlay, Some(Overlay::Extensions { .. })));
 
         // A second enter toggles it right back on.
         handle_overlay_key(&mut app, key, &worker);
-        assert_eq!(crate::config::stored_extension("truncation"), Some(true));
+        assert_eq!(crate::config::stored_extension("long-session"), Some(true));
         assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadExtensions)));
 
-        // Down then enter toggles the second row (retry, default off).
+        // Down toggles truncation; another down toggles retry.
         let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        handle_overlay_key(&mut app, down, &worker);
+        handle_overlay_key(&mut app, key, &worker);
+        assert_eq!(crate::config::stored_extension("truncation"), Some(false));
         handle_overlay_key(&mut app, down, &worker);
         handle_overlay_key(&mut app, key, &worker);
         assert_eq!(crate::config::stored_extension("retry"), Some(true));
@@ -320,4 +327,3 @@ mod extensions_command_tests {
         assert!(text.contains("the answer"), "answer replayed: {text}");
     }
 }
-

@@ -1,11 +1,7 @@
-use std::process::ExitCode;
-use std::sync::Arc;
-
-use orca_harness_model_providers::openrouter;
-
-use crate::msg::Provider;
 use crate::parse_args;
 use crate::view;
+use crate::Endpoint;
+use std::process::ExitCode;
 
 use super::interactive::run_mode;
 
@@ -30,14 +26,7 @@ pub(crate) async fn entrypoint() -> ExitCode {
     }
 
     if cfg.list_models {
-        let result = if cfg.provider == Provider::OpenAiCodex {
-            orca_harness_model_providers::openai_codex::list_models(Arc::new(
-                crate::auth::CodexCliCredential::discover(),
-            ))
-            .await
-        } else {
-            openrouter::list_models(&cfg.base_url, cfg.api_key.as_deref()).await
-        };
+        let result = Endpoint::from_config(&cfg).list_models().await;
         return match result {
             Ok(models) => {
                 for model in models {

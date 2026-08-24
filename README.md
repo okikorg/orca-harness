@@ -515,7 +515,7 @@ processes:
 | Metric                                                              |      Value |
 | :------------------------------------------------------------------ | ---------: |
 | Release binary (default profile)                                    |    11.7 MB |
-| Release binary (`lto = "fat"`, `codegen-units = 1`, `strip = true`) | **7.2 MB** |
+| Release binary (`lto = "fat"`, `codegen-units = 1`, `strip = true`) | **5.2 MB** |
 | Idle resident memory (one live session)                             |      ~8 MB |
 | Processes at runtime                                                |          1 |
 
@@ -528,7 +528,7 @@ claims. Every row is a live session doing nothing, sampled the same way
 
 | CLI (version)                                     |              Binary | Idle RSS (live session) | Processes |
 | :------------------------------------------------ | ------------------: | ----------------------: | --------: |
-| `orcacode` 0.1.0 (this repo)                      |          **7.2 MB** |               **~8 MB** |         1 |
+| `orcacode` 0.1.0 (this repo)                      |          **5.2 MB** |               **~8 MB** |         1 |
 | `fx` 0.0.5 (for scale)                            |              6.4 MB |                  ~21 MB |         1 |
 | `pi` 0.84.2 (`@earendil-works/pi-coding-agent`)   |      131 MB install |                 ~211 MB |  1 + node |
 | Codex 0.149.0 (`@openai/codex`)                   | 210 MB + 55 MB host |                 ~340 MB |   up to 3 |

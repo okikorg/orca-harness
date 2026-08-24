@@ -359,6 +359,7 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
 /// The worker's current endpoint: which provider, where, with what key,
 /// and which model id is active. Type-erasing the adapter behind
 /// `Arc<dyn Model>` is what lets one session switch providers.
+#[derive(Clone)]
 struct Endpoint {
     provider: Provider,
     base_url: String,
@@ -375,6 +376,22 @@ impl Endpoint {
             base_url: cfg.base_url.clone(),
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
+        }
+    }
+
+    async fn list_models(
+        &self,
+    ) -> Result<Vec<openrouter::ModelInfo>, orca_harness_core::ModelError> {
+        match self.provider {
+            Provider::OpenAiCodex => {
+                orca_harness_model_providers::openai_codex::list_models(Arc::new(
+                    auth::CodexCliCredential::discover(),
+                ))
+                .await
+            }
+            Provider::OpenRouter | Provider::OpenAi | Provider::Local => {
+                openrouter::list_models(&self.base_url, self.api_key.as_deref()).await
+            }
         }
     }
 
@@ -431,23 +448,33 @@ impl Endpoint {
 /// effort, and report it to the UI. OpenRouter's catalog carries
 /// `context_length`; a local ollama exposes it via the native
 /// `/api/show`. Plain OpenAI endpoints publish nothing — `None`.
-fn spawn_window_probe(endpoint: &Endpoint, ui: mpsc::UnboundedSender<UiMsg>) {
-    let base_url = endpoint.base_url.clone();
-    let api_key = endpoint.api_key.clone();
-    let model = endpoint.model.clone();
+fn spawn_window_probe(
+    endpoint: &Endpoint,
+    ui: mpsc::UnboundedSender<UiMsg>,
+    capacity: orca_harness_extensions::ContextCapacity,
+) {
+    // Never let a newly selected model inherit the previous model's limit,
+    // or let a slower probe for an older selection overwrite a newer one.
+    let revision = capacity.begin_update();
+    let endpoint = endpoint.clone();
     tokio::spawn(async move {
-        let window = if base_url.contains("openrouter") {
-            openrouter::list_models(&base_url, api_key.as_deref())
+        let window = match endpoint.provider {
+            Provider::OpenAiCodex | Provider::OpenRouter => endpoint
+                .list_models()
                 .await
                 .ok()
-                .and_then(|models| models.into_iter().find(|m| m.id == model))
-                .and_then(|m| m.context_length)
-        } else if base_url.contains("localhost:11434") || base_url.contains("127.0.0.1:11434") {
-            ollama_context_window(&base_url, &model).await
-        } else {
-            None
+                .and_then(|models| {
+                    models
+                        .into_iter()
+                        .find(|candidate| candidate.id == endpoint.model)
+                })
+                .and_then(|candidate| candidate.context_length),
+            Provider::Local => ollama_context_window(&endpoint.base_url, &endpoint.model).await,
+            Provider::OpenAi => None,
         };
-        let _ = ui.send(UiMsg::ContextWindow(window));
+        if capacity.finish_update(revision, window) {
+            let _ = ui.send(UiMsg::ContextWindow(window));
+        }
     });
 }
 

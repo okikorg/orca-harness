@@ -16,6 +16,11 @@ pub struct ExtensionSpec {
 
 pub const EXTENSIONS: &[ExtensionSpec] = &[
     ExtensionSpec {
+        name: "long-session",
+        description: "continue bounded interactive runs and compact near the active model's context limit",
+        default_on: true,
+    },
+    ExtensionSpec {
         name: "truncation",
         description: "cap oversized tool outputs at 16k chars; read_tool_result pages the original",
         default_on: true,
@@ -77,6 +82,7 @@ mod tests {
 
     #[test]
     fn defaults_apply_until_an_override_is_saved() {
+        assert!(enabled("long-session"), "long-session defaults on");
         assert!(enabled("truncation"), "truncation defaults on");
         assert!(!enabled("retry"), "retry defaults off");
 

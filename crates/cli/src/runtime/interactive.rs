@@ -8,7 +8,8 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Model};
 use orca_harness_extensions::{
-    EventStream, ReadToolResultTool, SessionHandler, Truncation, TruncationStore,
+    ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, Truncation,
+    TruncationStore,
 };
 use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
@@ -132,6 +133,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // One store for the whole session: agent rebuilds (model/provider
     // swaps) keep it, so read_tool_result and /compact recovery survive.
     let store = TruncationStore::default();
+    let context_capacity = ContextCapacity::default();
     // Connect the configured MCP servers before the first build so their
     // tools are in the first agent; status lines land in the transcript
     // once the TUI starts draining the channel.
@@ -151,6 +153,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let subagent_depth = subagent_depth.clone();
         let stats = stats.clone();
         let store = store.clone();
+        let context_capacity = context_capacity.clone();
         let session = session.clone();
         let mcp = mcp.clone();
         let skills = skills.clone();
@@ -168,6 +171,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 &subagent_depth,
                 &stats,
                 &store,
+                &context_capacity,
                 &session,
                 &mcp,
                 &skills,
@@ -202,6 +206,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         endpoint,
         build,
         store,
+        context_capacity,
         mcp,
         skills,
         session,
@@ -246,6 +251,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     subagent_depth: &SubagentDepth,
     stats: &BackgroundStats,
     store: &TruncationStore,
+    context_capacity: &ContextCapacity,
     session: &Option<Arc<SessionHandler>>,
     mcp: &mcp::McpServers,
     skills: &skills::Skills,
@@ -268,6 +274,14 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         .extension(events)
         .extension(PlanGate::new(mode.clone(), plan_area.clone()))
         .extension(Approval::new(ui.clone(), workspace_scope(ws)));
+    if extensions::enabled("long-session") {
+        let ui = ui.clone();
+        agent = agent.extension(
+            LongSession::new(context_capacity.clone(), store.clone()).on_compact(move |report| {
+                let _ = ui.send(UiMsg::Compacted(Ok(report)));
+            }),
+        );
+    }
     if let Some(session) = session {
         agent = agent.extension_arc(session.clone());
     }

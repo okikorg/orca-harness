@@ -16,6 +16,8 @@
 //! - [`UsageMeter`] — accumulate self-reported token usage across a run.
 //! - [`SessionHandler`] — record the transcript to an append-only JSONL
 //!   file and resume it later; durable memory as an Extension concern.
+//! - [`LongSession`] — compact context against dynamically discovered model
+//!   capacity so an interactive session can keep running without a model table.
 //!
 //! Each subscribes only to the hooks it needs, so registering one it does
 //! not use costs nothing on the kernel's hot path.
@@ -40,6 +42,7 @@
 
 mod compact;
 mod events;
+mod long_session;
 mod policy;
 mod read_tool_result;
 mod retry;
@@ -49,6 +52,7 @@ mod usage;
 
 pub use compact::{compact, CompactConfig, CompactError, CompactReport};
 pub use events::{EventSink, EventStream, HarnessEvent};
+pub use long_session::{ContextCapacity, LongSession, LongSessionConfig};
 pub use policy::{PolicyOutcome, PolicyRule, ToolPolicy};
 pub use read_tool_result::ReadToolResultTool;
 pub use retry::{RetryModel, ToolRetry};

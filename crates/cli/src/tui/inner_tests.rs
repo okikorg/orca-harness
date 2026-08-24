@@ -1,5 +1,9 @@
 mod tests {
-    include!("tests/core_1.rs");
+    const TEST_TERMINAL_WIDTH: usize = 80;
+
+    include!("tests/paste_and_images.rs");
+    include!("tests/interaction_and_copy.rs");
+    include!("tests/inspector.rs");
     include!("tests/core_2.rs");
     include!("tests/core_3.rs");
     include!("tests/core_4.rs");

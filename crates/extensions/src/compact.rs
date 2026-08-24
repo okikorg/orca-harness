@@ -85,6 +85,10 @@ fn est_tokens(bytes: usize) -> usize {
     bytes / APPROX_BYTES_PER_TOKEN
 }
 
+pub(crate) fn estimated_context_tokens(context: &Context) -> u64 {
+    est_tokens(context_bytes(context.messages())) as u64
+}
+
 fn message_bytes(message: &Message) -> usize {
     serde_json::to_string(message).map(|s| s.len()).unwrap_or(0)
 }
