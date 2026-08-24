@@ -9,7 +9,7 @@ use orca_harness_core::{Extension, ExtensionError, Subscriptions, ToolCall, Tool
 use tokio::sync::{mpsc, oneshot};
 
 use crate::msg::{ApprovalRequest, ApprovalResponse, UiMsg};
-use crate::view;
+use crate::presentation;
 
 /// Tools that mutate the machine or egress to arbitrary hosts and
 /// therefore need a human answer. `web_search`/`web_crawl` are not here:
@@ -73,7 +73,7 @@ impl Extension for Approval {
         let (respond, answer) = oneshot::channel();
         let request = ApprovalRequest {
             tool_name: call.name.clone(),
-            detail: view::tool_call_line(&call.name, &call.arguments),
+            detail: presentation::tool_call_line(&call.name, &call.arguments),
             respond,
         };
         let deny = || ToolDecision::Deny {

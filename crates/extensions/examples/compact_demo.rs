@@ -19,7 +19,7 @@ use orca_harness_core::{Agent, CancellationToken, Context, Limits, Message};
 use orca_harness_extensions::{
     compact, CompactConfig, ReadToolResultTool, Truncation, TruncationStore, UsageMeter,
 };
-use orca_harness_model_openai::OpenAiModel;
+use orca_harness_model_providers::openai::OpenAiModel;
 use orca_harness_tools::{core_tools, Workspace};
 
 const PROMPTS: &[&str] = &[

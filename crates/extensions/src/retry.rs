@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use orca_harness_core::{
-    Context, Extension, Model, ModelError, ModelResponse, Next, Subscriptions, ToolCall,
+    Context, DeltaSink, Extension, Model, ModelError, ModelResponse, Next, Subscriptions, ToolCall,
     ToolContext, ToolError, ToolSchema,
 };
 
@@ -26,6 +26,9 @@ use orca_harness_core::{
 /// `call` is passed so one policy can branch per tool (shell exit code,
 /// HTTP status, ...).
 type RetryRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
+
+/// Called immediately before another model attempt begins.
+type ModelRetryNotice = Arc<dyn Fn(u32, u32, &ModelError) + Send + Sync>;
 
 /// Retries a failing tool up to `max_attempts` total tries.
 pub struct ToolRetry {
@@ -139,6 +142,7 @@ pub struct RetryModel<M: Model> {
     inner: M,
     max_attempts: u32,
     backoff: Duration,
+    on_retry: Option<ModelRetryNotice>,
 }
 
 impl<M: Model> RetryModel<M> {
@@ -147,12 +151,29 @@ impl<M: Model> RetryModel<M> {
             inner,
             max_attempts: max_attempts.max(1),
             backoff: Duration::from_millis(200),
+            on_retry: None,
         }
     }
 
     pub fn backoff(mut self, backoff: Duration) -> Self {
         self.backoff = backoff;
         self
+    }
+
+    /// Observe a retry without coupling the model layer to a particular UI.
+    /// `attempt` is the upcoming attempt number, starting at two.
+    pub fn on_retry(
+        mut self,
+        callback: impl Fn(u32, u32, &ModelError) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_retry = Some(Arc::new(callback));
+        self
+    }
+
+    fn notify_retry(&self, next_attempt: u32, error: &ModelError) {
+        if let Some(callback) = &self.on_retry {
+            callback(next_attempt, self.max_attempts, error);
+        }
     }
 }
 
@@ -168,12 +189,41 @@ impl<M: Model> Model for RetryModel<M> {
             match self.inner.generate(context, tools).await {
                 Ok(response) => return Ok(response),
                 // Deterministic; retrying will not help.
-                Err(err @ ModelError::InvalidResponse(_)) => return Err(err),
+                Err(err @ (ModelError::InvalidResponse(_) | ModelError::Authentication(_))) => {
+                    return Err(err)
+                }
                 Err(err) => {
-                    last_err = Some(err);
                     if attempt < self.max_attempts {
+                        self.notify_retry(attempt + 1, &err);
                         tokio::time::sleep(self.backoff).await;
                     }
+                    last_err = Some(err);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| ModelError::Request("retry: no attempts made".into())))
+    }
+
+    async fn generate_streaming(
+        &self,
+        context: &Context,
+        tools: &[ToolSchema],
+        sink: &dyn DeltaSink,
+    ) -> Result<ModelResponse, ModelError> {
+        let mut last_err = None;
+        for attempt in 1..=self.max_attempts {
+            match self.inner.generate_streaming(context, tools, sink).await {
+                Ok(response) => return Ok(response),
+                // Deterministic; retrying will not help.
+                Err(err @ (ModelError::InvalidResponse(_) | ModelError::Authentication(_))) => {
+                    return Err(err)
+                }
+                Err(err) => {
+                    if attempt < self.max_attempts {
+                        self.notify_retry(attempt + 1, &err);
+                        tokio::time::sleep(self.backoff).await;
+                    }
+                    last_err = Some(err);
                 }
             }
         }

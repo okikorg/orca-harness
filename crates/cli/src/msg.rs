@@ -3,7 +3,7 @@
 
 use orca_harness_core::CancellationToken;
 use orca_harness_extensions::{CompactReport, HarnessEvent};
-use orca_harness_model_openrouter::ModelInfo;
+use orca_harness_model_providers::openrouter::ModelInfo;
 use tokio::sync::oneshot;
 
 /// A selectable endpoint preset.
@@ -11,16 +11,30 @@ use tokio::sync::oneshot;
 pub enum Provider {
     OpenRouter,
     OpenAi,
+    OpenAiCodex,
     Local,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAuth {
+    ApiKey { environment: &'static str },
+    OAuth,
+    None,
+}
+
 impl Provider {
-    pub const ALL: [Provider; 3] = [Provider::OpenRouter, Provider::OpenAi, Provider::Local];
+    pub const ALL: [Provider; 4] = [
+        Provider::OpenRouter,
+        Provider::OpenAi,
+        Provider::OpenAiCodex,
+        Provider::Local,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Provider::OpenRouter => "openrouter",
             Provider::OpenAi => "openai",
+            Provider::OpenAiCodex => "openai-codex",
             Provider::Local => "local",
         }
     }
@@ -32,18 +46,31 @@ impl Provider {
 
     pub fn base_url(self) -> &'static str {
         match self {
-            Provider::OpenRouter => orca_harness_model_openrouter::OPENROUTER_BASE_URL,
+            Provider::OpenRouter => orca_harness_model_providers::openrouter::OPENROUTER_BASE_URL,
             Provider::OpenAi => "https://api.openai.com/v1",
+            Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL,
             Provider::Local => "http://localhost:11434/v1",
+        }
+    }
+
+    pub fn auth(self) -> ProviderAuth {
+        match self {
+            Provider::OpenRouter => ProviderAuth::ApiKey {
+                environment: "OPENROUTER_API_KEY",
+            },
+            Provider::OpenAi => ProviderAuth::ApiKey {
+                environment: "OPENAI_API_KEY",
+            },
+            Provider::OpenAiCodex => ProviderAuth::OAuth,
+            Provider::Local => ProviderAuth::None,
         }
     }
 
     /// The environment variable holding this provider's key, if it needs one.
     pub fn key_env(self) -> Option<&'static str> {
-        match self {
-            Provider::OpenRouter => Some("OPENROUTER_API_KEY"),
-            Provider::OpenAi => Some("OPENAI_API_KEY"),
-            Provider::Local => None,
+        match self.auth() {
+            ProviderAuth::ApiKey { environment } => Some(environment),
+            ProviderAuth::OAuth | ProviderAuth::None => None,
         }
     }
 
@@ -70,6 +97,7 @@ impl Provider {
         match self {
             Provider::OpenRouter => "openrouter/auto",
             Provider::OpenAi => "gpt-4o-mini",
+            Provider::OpenAiCodex => "gpt-5.4",
             Provider::Local => "qwen3.5:9b",
         }
     }
@@ -183,6 +211,14 @@ pub enum WorkerCmd {
     LoadSession { path: std::path::PathBuf },
     /// Fetch the endpoint's model catalog, keeping ids containing `filter`.
     ListModels { filter: String },
+    /// Run a provider-owned interactive OAuth flow, then activate it.
+    LoginProvider { provider: Provider },
+    /// Result of a detached provider login; `attempt` rejects stale completions.
+    LoginFinished {
+        provider: Provider,
+        attempt: u64,
+        result: Result<(), String>,
+    },
     /// Switch the active model for subsequent runs (context is kept).
     SetModel { id: String },
     /// Switch endpoint provider; `api_key` overrides env detection.

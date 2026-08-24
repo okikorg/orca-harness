@@ -8,13 +8,16 @@ use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
+use orca_harness_tool_extensions::web::{
+    Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
+};
 use orca_harness_tools::{
     core_tools, PyKernelTool, SubagentDepth, SubagentTool, TodoList, TodoWriteTool, Workspace,
 };
 
 use crate::approval::HeadlessGate;
 use crate::mode::{ModeHandle, PlanGate};
-use crate::view;
+use crate::presentation;
 use crate::Config;
 
 #[allow(clippy::too_many_arguments)]
@@ -54,7 +57,7 @@ pub async fn run<M: Model + Clone + 'static>(
             HarnessEvent::ToolCall {
                 tool_name, input, ..
             } => {
-                eprintln!("• {}", view::tool_call_line(tool_name, input));
+                eprintln!("• {}", presentation::tool_call_line(tool_name, input));
             }
             HarnessEvent::ToolResult {
                 tool_name,
@@ -64,7 +67,7 @@ pub async fn run<M: Model + Clone + 'static>(
             } => {
                 eprintln!(
                     "  {}",
-                    view::tool_result_summary(tool_name, output, *is_error)
+                    presentation::tool_result_summary(tool_name, output, *is_error)
                 );
             }
             HarnessEvent::Result { message } => {
@@ -99,7 +102,15 @@ pub async fn run<M: Model + Clone + 'static>(
     for tool in core_tools(ws) {
         agent = agent.tool_arc(tool);
     }
-    agent = agent.tool_arc(Arc::new(TodoWriteTool::new(todos.clone())));
+    agent = agent
+        .tool_arc(Arc::new(TodoWriteTool::new(todos.clone())))
+        .tool_arc(Arc::new(WebFetchTool::new(UrlPolicy::strict())));
+    if let Some(key) = &cfg.firecrawl_key {
+        let firecrawl = Arc::new(Firecrawl::new(key.clone()));
+        agent = agent
+            .tool_arc(Arc::new(WebSearchTool::new(firecrawl.clone())))
+            .tool_arc(Arc::new(WebCrawlTool::new(firecrawl)));
+    }
     let root = ws.root().to_string_lossy().into_owned();
     agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root)));
     agent = agent.tool_arc(Arc::new(
@@ -154,7 +165,7 @@ pub async fn run<M: Model + Clone + 'static>(
     if mode.is_plan() && plan_area.open() {
         context.push_system(crate::plan::briefing(&crate::plan::today()));
     }
-    context.push_user(crate::tui::strip_location_mentions(prompt));
+    context.push_user(crate::prompt::strip_location_mentions(prompt));
 
     let result = agent.run_context(&mut context, cancel).await;
     if !json {

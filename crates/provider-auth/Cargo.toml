@@ -1,0 +1,11 @@
+[package]
+name = "orca-harness-provider-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider-neutral authentication contracts for Orca Harness"
+
+[dependencies]
+async-trait.workspace = true
+

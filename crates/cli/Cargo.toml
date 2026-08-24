@@ -12,12 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 orca-harness-core = { path = "../harness-core" }
-orca-harness-model-openai = { path = "../model-openai" }
-orca-harness-model-openrouter = { path = "../model-openrouter" }
+orca-harness-model-providers = { path = "../model-providers" }
+orca-harness-provider-auth = { path = "../provider-auth" }
 orca-harness-tools = { path = "../tools" }
-orca-harness-tools-web = { path = "../tools-web" }
-orca-harness-tools-mcp = { path = "../tools-mcp" }
-orca-harness-tools-skills = { path = "../tools-skills" }
+orca-harness-tool-extensions = { path = "../tool-extensions" }
 orca-harness-extensions = { path = "../extensions" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }

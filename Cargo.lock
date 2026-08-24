@@ -1101,7 +1101,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "orca-harness-core",
- "orca-harness-model-openai",
+ "orca-harness-model-providers",
  "orca-harness-tools",
  "serde",
  "serde_json",
@@ -1110,12 +1110,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "orca-harness-model-openai"
+name = "orca-harness-model-providers"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
  "orca-harness-core",
+ "orca-harness-provider-auth",
  "reqwest",
  "serde",
  "serde_json",
@@ -1123,15 +1124,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "orca-harness-model-openrouter"
+name = "orca-harness-provider-auth"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+]
+
+[[package]]
+name = "orca-harness-tool-extensions"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "criterion",
+ "html-to-markdown-rs",
  "orca-harness-core",
- "orca-harness-model-openai",
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
 ]
 
@@ -1148,41 +1158,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orca-harness-tools-mcp"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "orca-harness-core",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "orca-harness-tools-skills"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "criterion",
- "orca-harness-core",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "orca-harness-tools-web"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "html-to-markdown-rs",
- "orca-harness-core",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "orcacode"
 version = "0.1.0"
 dependencies = [
@@ -1191,12 +1166,10 @@ dependencies = [
  "futures-util",
  "orca-harness-core",
  "orca-harness-extensions",
- "orca-harness-model-openai",
- "orca-harness-model-openrouter",
+ "orca-harness-model-providers",
+ "orca-harness-provider-auth",
+ "orca-harness-tool-extensions",
  "orca-harness-tools",
- "orca-harness-tools-mcp",
- "orca-harness-tools-skills",
- "orca-harness-tools-web",
  "ratatui",
  "reqwest",
  "serde_json",

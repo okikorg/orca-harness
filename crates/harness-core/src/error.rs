@@ -39,6 +39,10 @@ pub enum HarnessError {
 /// Failure reported by a [`crate::Model`] adapter.
 #[derive(Debug, Error)]
 pub enum ModelError {
+    /// Authentication cannot recover without refreshing or user action.
+    #[error("authentication failed: {0}")]
+    Authentication(String),
+
     /// Transport-level failure (network, HTTP status, timeout).
     #[error("request failed: {0}")]
     Request(String),

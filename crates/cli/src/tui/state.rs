@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use ratatui::text::Line;
 
-use crate::components::picker::{ListPicker, PickerAction};
 use crate::msg::{ApprovalRequest, Provider};
+use crate::tui::components::picker::{ListPicker, PickerAction};
 use orca_harness_core::CancellationToken;
-use orca_harness_model_openrouter::ModelInfo;
+use orca_harness_model_providers::openrouter::ModelInfo;
 
 use super::PICKER_ROWS;
 

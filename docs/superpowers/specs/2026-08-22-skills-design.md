@@ -1,7 +1,7 @@
 # Design: skills
 
 Date: 2026-08-22
-Status: implemented — `crates/tools-skills`, `crates/cli/src/skills.rs`
+Status: implemented — `crates/tool-extensions/src/skills`, `crates/cli/src/skills.rs`
 
 ## Motivation
 
@@ -81,9 +81,9 @@ truncation, retries, session recording. Loading a skill is the opposite —
 a capability invoked deliberately, at a moment only the model knows — so
 it is a Tool, by the same reasoning the kernel/subagent design used for
 the same fork (`2026-08-20-kernel-subagent-tools-design.md`). MCP
-resolved identically: `tools-mcp` produces Tools, and the lifecycle
+resolved identically: `tool-extensions::mcp` produces Tools, and the lifecycle
 (connect, reload, hold) lives in the host at `crates/cli/src/mcp.rs`, not
-in an Extension. Skills copy that split: `crates/tools-skills` for the
+in an Extension. Skills copy that split: `crates/tool-extensions/src/skills` for the
 tool, `crates/cli/src/skills.rs` for discovery and reload.
 
 Keeping a *catalog* in front of the model every turn, however, is exactly
@@ -230,10 +230,10 @@ the root (`crates/tools/src/workspace.rs:42`). Skills legitimately read
 `~/.claude/skills`, so they get their own crate rather than a hole in
 that invariant.
 
-## 3. `skill` tool (`crates/tools-skills`)
+## 3. `skill` tool (`crates/tool-extensions/src/skills`)
 
-New crate `orca-harness-tools-skills` (lib `orca_harness_tools_skills`),
-a sibling of `tools-mcp` with the same framing: outside the core tool
+New crate `orca-harness-tool-extensions::skills`,
+a sibling of `tool-extensions::mcp` with the same framing: outside the core tool
 set, host opt-in. Contents: discovery + the frontmatter parser
 (`skill.rs`), and `SkillTool` (`tool.rs`).
 
@@ -292,7 +292,7 @@ Response JSON:
 `resource` is the one place this tool can be pointed at an arbitrary
 path, and `Workspace::resolve` cannot help — it is rooted at the
 workspace, and skill directories may live under `$HOME`. So
-`tools-skills` enforces its own rule, and it is a real invariant with its
+`tool-extensions::skills` enforces its own rule, and it is a real invariant with its
 own tests:
 
 1. Reject absolute paths and any `..` component before touching disk.
@@ -463,9 +463,9 @@ if an `"s"`-filter test is ever added, so slot it next to `sessions`.
 
 ### Manifests
 
-Root `Cargo.toml` `[workspace] members` gains `crates/tools-skills`;
+Root `Cargo.toml` `[workspace] members` gains `crates/tool-extensions/src/skills`;
 `crates/cli/Cargo.toml` gains the dependency. The same two lines
-`tools-mcp` needed.
+`tool-extensions::mcp` needed.
 
 ### Worker, build, headless (`main.rs`, `headless.rs`)
 

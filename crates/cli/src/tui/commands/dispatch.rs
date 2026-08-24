@@ -1,0 +1,459 @@
+use super::integrations::*;
+
+// The slash-command handlers (`/mode`, `/rewind`, `/todo`, `/skills`,
+// `/mcp`, ...) behind the composer palette. Each takes the trimmed
+// argument text and drives the [`App`] overlay/queue/notice machinery; a
+// few hand a follow-up `WorkerCmd` to the agent for anything that needs
+// the model loop (model list fetch, session load, MCP reconnect).
+
+use tokio::sync::mpsc;
+
+use ratatui::text::{Line, Span};
+
+use crate::msg::{Provider, WorkerCmd};
+use crate::tui::components::picker::ListPicker;
+use crate::tui::components::transcript::BlockSpacing;
+use crate::view::{self, theme};
+
+use super::super::render::reset_conversation_ui;
+use super::super::state::{App, Overlay, SESSION_ACTIONS, SETTINGS_ROWS};
+use super::super::{copy_command, expand_tool, push_error, push_notice, SESSIONS_WINDOW};
+
+pub(crate) fn slash_command(
+    app: &mut App,
+    command: &str,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    width: usize,
+) {
+    // A slash command is user activity even though it is not a model turn.
+    // Dismiss the empty-state card before writing command output so `/help`
+    // (and command errors/notices) are visible on the first frame afterward.
+    app.welcome_dismissed = true;
+    let dim = theme().dim;
+    if command == "queue" {
+        let queued = app.prompt_queue.len();
+        let message = match queued {
+            0 => "queue empty".to_string(),
+            1 => "1 prompt queued".to_string(),
+            _ => format!("{queued} prompts queued"),
+        };
+        app.push_line(Line::from(Span::styled(message, dim)));
+        return;
+    }
+    if let Some(rest) = command.strip_prefix("queue ") {
+        if rest.trim() == "clear" {
+            let cleared = app.prompt_queue.len();
+            app.prompt_queue.clear();
+            let message = match cleared {
+                0 => "queue already empty".to_string(),
+                1 => "cleared 1 queued prompt".to_string(),
+                _ => format!("cleared {cleared} queued prompts"),
+            };
+            app.push_line(Line::from(Span::styled(message, dim)));
+            return;
+        }
+        push_error(app, "usage: /queue [clear]");
+        return;
+    }
+    if let Some(rest) = command.strip_prefix("expand") {
+        let nth = rest.trim().parse::<usize>().unwrap_or(1).max(1);
+        expand_tool(app, nth, width);
+        return;
+    }
+    if let Some(rest) = command.strip_prefix("mode") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            mode_command(app, rest.trim());
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("rewind") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            rewind_command(app, rest.trim(), worker);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("todo") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            todo_command(app, width);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("subagents") {
+        if rest.is_empty() {
+            push_notice(
+                app,
+                format!("subagent nesting depth: {}", app.cfg.subagent_depth.get()),
+            );
+            return;
+        }
+        if let Some(arg) = rest.strip_prefix(' ') {
+            match arg.trim().parse::<u32>() {
+                Ok(depth) => {
+                    let set = app.cfg.subagent_depth.set(depth);
+                    app.push_line(Line::from(Span::styled(
+                        format!("subagent nesting depth set to {set} (applies to the next spawn)"),
+                        dim,
+                    )));
+                }
+                Err(_) => {
+                    push_error(app, "usage: /subagents [1-5]");
+                }
+            }
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("extensions") {
+        if rest.is_empty() {
+            // Same interface as /theme and /provider: a picker overlay
+            // where enter toggles the selected extension.
+            app.overlay = Some(Overlay::Extensions {
+                picker: ListPicker::new(crate::extensions::EXTENSIONS.len()),
+            });
+            return;
+        }
+        if let Some(args) = rest.strip_prefix(' ') {
+            let mut parts = args.split_whitespace();
+            let enabled = match parts.next() {
+                Some("enable" | "add" | "on") => true,
+                Some("disable" | "remove" | "delete" | "off") => false,
+                _ => {
+                    push_error(app, "usage: /extensions [enable|disable <name>]");
+                    return;
+                }
+            };
+            let name = parts.next().unwrap_or("");
+            if crate::extensions::find(name).is_none() {
+                let known = crate::extensions::EXTENSIONS
+                    .iter()
+                    .map(|spec| spec.name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                push_error(
+                    app,
+                    format!("unknown extension: {name} — valid extensions: {known}"),
+                );
+                return;
+            }
+            let state = if enabled { "enabled" } else { "disabled" };
+            match crate::config::save_extension(name, enabled) {
+                Ok(_) => {
+                    push_notice(
+                        app,
+                        format!("extension {name} {state} (applies to the next run)"),
+                    );
+                    if worker.send(WorkerCmd::ReloadExtensions).is_err() {
+                        push_error(app, "worker is gone; restart orcacode");
+                    }
+                }
+                Err(err) => {
+                    push_error(
+                        app,
+                        format!("extension {name} not {state} (save failed: {err})"),
+                    );
+                }
+            }
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("mcp") {
+        if rest.is_empty() {
+            // Same interface as /extensions: a picker overlay where
+            // space toggles the selected server. With nothing
+            // configured the overlay would be a dead end, so the hint
+            // stands in for it.
+            let servers = crate::config::stored_mcp_servers();
+            if servers.is_empty() {
+                push_notice(app, "no MCP servers configured — /mcp add <name> <command>");
+                return;
+            }
+            app.overlay = Some(Overlay::Mcp {
+                picker: ListPicker::new(servers.len()),
+                filter: String::new(),
+                servers,
+            });
+            return;
+        }
+        if let Some(args) = rest.strip_prefix(' ') {
+            mcp_command(app, args, worker);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("copy") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            copy_command(app, rest.trim());
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("skills") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            skills_command(app, rest.trim(), worker);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("models") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            // Fetch the full catalog; the argument seeds the picker's
+            // live filter so the user can widen it without refetching.
+            app.picker_pending = Some(rest.trim().to_lowercase());
+            if worker
+                .send(WorkerCmd::ListModels {
+                    filter: String::new(),
+                })
+                .is_err()
+            {
+                app.picker_pending = None;
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, "fetching models…");
+            }
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("sessions") {
+        let arg = rest.trim();
+        let Some(base) = crate::config::sessions_dir() else {
+            push_error(app, "no home directory for session storage");
+            return;
+        };
+        let dir = base.join(orca_harness_extensions::workspace_key(
+            &app.cfg.workspace_root,
+        ));
+        let sessions = orca_harness_extensions::SessionFile::list(&dir);
+        if arg.is_empty() {
+            if sessions.is_empty() {
+                push_notice(app, "no recorded sessions for this workspace");
+                return;
+            }
+            // Same interface as /provider and /theme: a picker overlay,
+            // preselected on the current session. The display windows to
+            // the last few sessions (newest first), and ↑↓/PgUp/PgDn
+            // navigate the whole list just like the /models picker.
+            let index = sessions
+                .iter()
+                .position(|s| app.cfg.session_id.as_deref() == Some(s.meta.id.as_str()))
+                .unwrap_or(0)
+                // An old-but-current session stays reachable; the window
+                // just opens on the newest rows.
+                .min(SESSIONS_WINDOW.saturating_sub(1));
+            app.overlay = Some(Overlay::Sessions {
+                picker: ListPicker::with_selected(sessions.len(), index).actions(SESSION_ACTIONS),
+                sessions,
+            });
+            return;
+        }
+        match sessions.iter().find(|s| s.meta.id.starts_with(arg)) {
+            Some(session) => {
+                if worker
+                    .send(WorkerCmd::LoadSession {
+                        path: session.path.clone(),
+                    })
+                    .is_err()
+                {
+                    push_error(app, "worker is gone; restart orcacode");
+                } else {
+                    push_notice(app, format!("loading session {}…", session.meta.id));
+                }
+            }
+            None => {
+                push_error(
+                    app,
+                    format!("no session matching {arg} — /sessions lists them"),
+                );
+            }
+        }
+        return;
+    }
+    if let Some(rest) = command.strip_prefix("theme") {
+        let arg = rest.trim();
+        if arg.is_empty() {
+            // Same interface as /models and /provider: a picker overlay,
+            // preselected on the active theme.
+            let current = view::theme_name();
+            let index = view::ThemeName::ALL
+                .iter()
+                .position(|name| *name == current)
+                .unwrap_or(0);
+            app.overlay = Some(Overlay::Themes {
+                picker: ListPicker::with_selected(view::ThemeName::ALL.len(), index),
+            });
+            return;
+        }
+        match view::ThemeName::from_str(arg) {
+            Some(name) => {
+                view::set_theme(name);
+                let note = match crate::config::save_theme(name.slug()) {
+                    Ok(_) => format!("theme set to {}", name.label()),
+                    Err(err) => format!("theme set to {} (not saved: {err})", name.label()),
+                };
+                push_notice(app, note);
+            }
+            None => {
+                push_error(app, format!(
+                        "unknown theme: {arg} — valid themes: default, mono, dracula, solarized-dark, one-dark, monokai, nord"
+                    ));
+            }
+        }
+        return;
+    }
+    match command {
+        "quit" | "exit" | "q" => app.quit = true,
+        "clear" => {
+            let _ = worker.send(WorkerCmd::Clear);
+            reset_conversation_ui(app);
+        }
+        "usage" => {
+            app.overlay = Some(Overlay::Usage);
+        }
+        "compact" => {
+            if worker.send(WorkerCmd::Compact).is_err() {
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, "compacting conversation…");
+            }
+        }
+        "fork" => {
+            if worker.send(WorkerCmd::Fork).is_err() {
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, "forking session…");
+            }
+        }
+        "provider" => {
+            app.overlay = Some(Overlay::Providers {
+                picker: ListPicker::new(Provider::ALL.len()),
+            });
+        }
+        "settings" => {
+            app.overlay = Some(Overlay::Settings {
+                picker: ListPicker::new(SETTINGS_ROWS),
+            });
+        }
+        "help" | "" => {
+            for entry in [
+                "/help        show this help",
+                "/expand [n]  full output of the n-th latest tool call (1 = latest)",
+                "/clear       reset the conversation, empty the session, stop background work",
+                "/compact     compact the conversation (elide tool outputs, capped summary)",
+                "/usage       session token totals, cache traffic, and context occupancy",
+                "/copy [code|all|tool] copy the last answer, its last code block, the transcript, or the inspected tool",
+                "/sessions [id] resume a recorded session (no argument opens the picker)",
+                "/queue [clear] show or clear waiting prompts",
+                "/models [f]  pick a model from the endpoint's catalog",
+                "/provider    switch provider (Codex subscription, OpenAI API, OpenRouter, local)",
+                "/settings    view and change provider, model, theme, api key",
+                "/subagents [n] show or set subagent nesting depth (1-5)",
+                "/extensions  toggle harness extensions (no argument opens the picker)",
+                "/mcp         toggle MCP servers · add <name> <command> · remove <name>",
+                "/skills      list and toggle skills (space reveals toggle/delete)",
+                "/skills add <source>   install from owner/repo, a url, or a local folder",
+                "/skills create <name>  scaffold a new skill · remove <name> · reload",
+                "/quit        exit",
+                "/theme [name] pick a color theme (no argument opens the picker)",
+                "@path        add a workspace file or folder to the prompt",
+                "keys: enter send or queue · esc cancel run · ctrl+o reveal latest work tree",
+                "      scroll: wheel · shift+↑/↓ line · pgup/pgdn page",
+                "      ctrl+c quit · up/down history",
+                "      ctrl+y copy last answer",
+                "copying: ctrl+y and /copy use OSC 52 (works over ssh; tmux needs set-clipboard on).",
+                "         the wheel scrolls; to drag-select, hold option (macOS) or shift.",
+                "         a drag selects whole terminal rows, so in split view it takes both panes;",
+                "         ctrl+y copies just the focused one (tab focuses the inspector).",
+                "approvals: y allow once · a always (session) · A always (saved for this workspace) · n deny",
+            ] {
+                app.push_line(Line::from(Span::styled(entry.to_string(), dim)));
+            }
+        }
+        other => {
+            push_error(app, format!("unknown command: /{other}"));
+        }
+    }
+}
+
+/// `/mode [normal|plan]` — no argument toggles, which is what a mode
+/// with two states wants. The change lands on the shared handle the plan
+/// gate reads per tool call, so it takes effect on the call in flight
+/// with no agent rebuild and nothing to save.
+pub(crate) fn mode_command(app: &mut App, arg: &str) {
+    use crate::mode::Mode;
+    let next = if arg.is_empty() {
+        app.cfg.mode.toggle()
+    } else {
+        match Mode::from_label(arg) {
+            Some(mode) => {
+                app.cfg.mode.set(mode);
+                mode
+            }
+            None => {
+                push_error(
+                    app,
+                    format!("unknown mode: {arg} — valid modes: normal, plan"),
+                );
+                return;
+            }
+        }
+    };
+    push_notice(
+        app,
+        format!("{} mode · {}", next.label(), next.description()),
+    );
+    // Leaving plan mode ends the episode. Report the plans the agent
+    // actually wrote — observed from tool results, not guessed — and say
+    // nothing when it wrote none: plan mode is also a fine way to just
+    // look around, and announcing a missing file would be nagging.
+    if next == Mode::Normal {
+        for path in app.cfg.plan.end() {
+            push_notice(app, format!("plan saved to {path}"));
+        }
+    }
+}
+
+/// `/rewind [n]` — drop the last n user turns (default 1) from the
+/// conversation and from the recorded session, so the next prompt
+/// continues from before them.
+pub(crate) fn rewind_command(app: &mut App, arg: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
+    let turns = if arg.is_empty() {
+        1
+    } else {
+        match arg.parse::<usize>() {
+            Ok(0) | Err(_) => {
+                push_error(
+                    app,
+                    "usage: /rewind [n] — n is how many turns to drop (default 1)",
+                );
+                return;
+            }
+            Ok(turns) => turns,
+        }
+    };
+    if worker.send(WorkerCmd::Rewind { turns }).is_err() {
+        push_error(app, "worker is gone; restart orcacode");
+    }
+}
+
+/// `/todo` — the agent's current task list, as `todo_write` last left it.
+pub(crate) fn todo_command(app: &mut App, width: usize) {
+    use orca_harness_tools::TodoStatus;
+    let items = app.cfg.todos.items();
+    if items.is_empty() {
+        push_notice(app, "no task list — the agent writes one with todo_write");
+        return;
+    }
+    let t = theme();
+    let (done, total) = app.cfg.todos.progress();
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  todo", t.strong),
+        Span::styled(format!(" · {done}/{total} done"), t.dim),
+    ])];
+    for item in items {
+        let (marker, style) = match item.status {
+            TodoStatus::Completed => ("✓", t.dim),
+            TodoStatus::InProgress => ("▸", t.strong),
+            TodoStatus::Pending => ("□", t.dim),
+        };
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&format!("  {marker} {}", item.content), width),
+            style,
+        )));
+    }
+    app.push_transcript_block(lines, BlockSpacing::Tight);
+}

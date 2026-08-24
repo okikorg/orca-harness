@@ -1,0 +1,338 @@
+use super::agent::subagent_extensions;
+use super::session::open_session;
+use super::worker::worker;
+use std::process::ExitCode;
+use std::sync::Arc;
+
+use tokio::sync::mpsc;
+
+use orca_harness_core::{Agent, Context, Model};
+use orca_harness_extensions::{
+    EventStream, ReadToolResultTool, SessionHandler, Truncation, TruncationStore,
+};
+use orca_harness_tool_extensions::web::{
+    Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
+};
+use orca_harness_tools::{
+    core_tools_with_guard, BackgroundStats, FileGuard, ProcessTool, PyKernelTool, SubagentDepth,
+    SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
+};
+
+use crate::approval::Approval;
+use crate::mode::{ModeHandle, PlanGate};
+use crate::msg::UiMsg;
+use crate::plan::PlanArea;
+use crate::{
+    extensions, headless, instructions, mcp, skills, system_prompt, tui, workspace_scope, Config,
+    Endpoint, Planning,
+};
+
+/// Headless or interactive. The endpoint (provider, base url, key, model)
+/// lives in the worker and can be switched from the TUI at runtime.
+pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
+    let ws = Workspace::new(&cfg.workspace);
+    // Scanned before the prompt is built: whether the `skill` tool gets
+    // advertised depends on whether any skill was found, and the scan is
+    // a handful of read_dir calls.
+    let skills = skills::Skills::for_session(&cfg.workspace);
+    let skill_notices = skills.reload();
+    // The base prompt is a fixed string with tests asserting its
+    // contents; the user's standing instructions are appended here, at
+    // the call site, so no AGENTS.md can ever change what that function
+    // returns. `/clear` re-pushes this composed string, so instructions
+    // survive a reset.
+    let instructions = instructions::Instructions::load(&cfg.workspace);
+    let instruction_notices = instructions.notices();
+    let mut system = system_prompt(&ws, cfg.firecrawl_key.is_some());
+    if let Some(block) = instructions.block() {
+        system.push_str(&block);
+    }
+    let endpoint = Endpoint::from_config(&cfg);
+    let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
+    let stats = BackgroundStats::new();
+    let mode = ModeHandle::new(cfg.mode());
+    let todos = TodoList::new();
+    let files = FileGuard::new();
+    let plan_area = PlanArea::new();
+    let planning = Planning {
+        mode: mode.clone(),
+        area: plan_area.clone(),
+    };
+
+    let session = if cfg.no_session {
+        None
+    } else {
+        match open_session(&cfg, &ws) {
+            Ok(opened) => Some(opened),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    if cfg.prompt.is_some() {
+        let (handler, resumed) = match session {
+            Some((handler, resumed)) => (Some(Arc::new(handler)), resumed),
+            None => (None, None),
+        };
+        for line in skill_notices.iter().chain(instruction_notices.iter()) {
+            eprintln!("{line}");
+        }
+        let code = headless::run(
+            &cfg,
+            endpoint.build_model(),
+            &ws,
+            &system,
+            handler,
+            resumed,
+            &skills,
+            &mode,
+            &todos,
+            &plan_area,
+        )
+        .await;
+        return ExitCode::from(code as u8);
+    }
+
+    // Interactive: worker task owns the agent; UI owns the terminal.
+    let (ui_tx, ui_rx) = mpsc::unbounded_channel();
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+
+    // Session warnings surface as transcript notices; recording failures
+    // must be visible but never fatal mid-run.
+    let (session, resumed) = match session {
+        Some((handler, resumed)) => {
+            let ui = ui_tx.clone();
+            let handler = handler.on_warn(move |message| {
+                let _ = ui.send(UiMsg::Notice(message.to_string()));
+            });
+            (Some(Arc::new(handler)), resumed)
+        }
+        None => (None, None),
+    };
+    let context = match resumed {
+        // A recorded transcript already begins with its system prompt.
+        // SessionLoaded replays it into the transcript once the TUI
+        // starts draining the channel.
+        Some(context) => {
+            let _ = ui_tx.send(UiMsg::SessionLoaded {
+                id: session.as_ref().map(|s| s.session_id()).unwrap_or_default(),
+                messages: context.messages().to_vec(),
+            });
+            context
+        }
+        None => {
+            let mut context = Context::new();
+            context.push_system(&system);
+            context
+        }
+    };
+
+    // One store for the whole session: agent rebuilds (model/provider
+    // swaps) keep it, so read_tool_result and /compact recovery survive.
+    let store = TruncationStore::default();
+    // Connect the configured MCP servers before the first build so their
+    // tools are in the first agent; status lines land in the transcript
+    // once the TUI starts draining the channel.
+    let mcp = mcp::McpServers::new();
+    for line in mcp.reload().await {
+        let _ = ui_tx.send(UiMsg::Notice(line));
+    }
+    // The skills scan and the instruction load already ran (the system
+    // prompt depended on both); replay what they had to say now that
+    // there is a transcript.
+    for line in skill_notices.into_iter().chain(instruction_notices) {
+        let _ = ui_tx.send(UiMsg::Notice(line));
+    }
+    let build = {
+        let cfg = cfg.clone();
+        let ui_tx = ui_tx.clone();
+        let subagent_depth = subagent_depth.clone();
+        let stats = stats.clone();
+        let store = store.clone();
+        let session = session.clone();
+        let mcp = mcp.clone();
+        let skills = skills.clone();
+        let mode = mode.clone();
+        let todos = todos.clone();
+        let files = files.clone();
+        let plan_area = plan_area.clone();
+        move |endpoint: &Endpoint| {
+            let ws = Workspace::new(&cfg.workspace);
+            build_agent(
+                endpoint.build_model_for_ui(Some(ui_tx.clone())),
+                &cfg,
+                &ws,
+                &ui_tx,
+                &subagent_depth,
+                &stats,
+                &store,
+                &session,
+                &mcp,
+                &skills,
+                &mode,
+                &todos,
+                &files,
+                &plan_area,
+            )
+        }
+    };
+    let agent = build(&endpoint);
+    // Everything above is the cold-start path — arg parse, config load,
+    // skills scan, system prompt, session open, MCP connect, agent build.
+    // Everything below needs a terminal, so `ORCA_BENCH` stops here: it is
+    // what lets `benchmarks/startup.sh` time the whole startup without a
+    // TTY. Nothing else in the binary reads it.
+    if std::env::var("ORCA_BENCH").is_ok_and(|v| !v.trim().is_empty() && v != "0") {
+        eprintln!("ORCA_BENCH set: exiting after startup, before the terminal UI");
+        return ExitCode::SUCCESS;
+    }
+    let initial_provider = endpoint.provider;
+    let session_id = session.as_ref().map(|s| s.session_id());
+    // The TUI reads per-server tool counts off the same handle the
+    // worker reloads; /mcp renders whatever the last reload recorded.
+    let tui_mcp = mcp.clone();
+    let tui_skills = skills.clone();
+    let worker_todos = todos.clone();
+    let worker_commands = cmd_tx.clone();
+    tokio::spawn(worker(
+        agent,
+        system,
+        endpoint,
+        build,
+        store,
+        mcp,
+        skills,
+        session,
+        worker_todos,
+        files,
+        planning,
+        context,
+        cmd_rx,
+        worker_commands,
+        ui_tx,
+    ));
+
+    let tui_cfg = tui::TuiConfig {
+        model_name: cfg.model.clone(),
+        workspace_name: cfg.workspace.display().to_string(),
+        workspace_root: workspace_scope(&ws),
+        provider: initial_provider,
+        subagent_depth,
+        stats,
+        session_id,
+        mcp: tui_mcp,
+        skills: tui_skills,
+        mode,
+        todos,
+        plan: plan_area,
+    };
+    match tui::run(tui_cfg, cmd_tx, ui_rx).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("terminal error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_agent<M: Model + Clone + 'static>(
+    model: M,
+    cfg: &Config,
+    ws: &Workspace,
+    ui: &mpsc::UnboundedSender<UiMsg>,
+    subagent_depth: &SubagentDepth,
+    stats: &BackgroundStats,
+    store: &TruncationStore,
+    session: &Option<Arc<SessionHandler>>,
+    mcp: &mcp::McpServers,
+    skills: &skills::Skills,
+    mode: &ModeHandle,
+    todos: &TodoList,
+    files: &FileGuard,
+    plan_area: &PlanArea,
+) -> Agent<M> {
+    let model_for_subagents = model.clone();
+    let events = EventStream::from_fn({
+        let ui = ui.clone();
+        move |event| {
+            let _ = ui.send(UiMsg::Event(event));
+        }
+    });
+    // PlanGate before Approval: the kernel stops at the first denial, so
+    // a call plan mode refuses never reaches the user as a prompt.
+    let mut agent = Agent::new(model)
+        .limits(cfg.limits())
+        .extension(events)
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(Approval::new(ui.clone(), workspace_scope(ws)));
+    if let Some(session) = session {
+        agent = agent.extension_arc(session.clone());
+    }
+    if extensions::enabled("truncation") {
+        agent = agent.extension(Truncation::new(16_000).store(store.clone()));
+    }
+    if extensions::enabled("retry") {
+        agent = agent.extension(extensions::tool_retry());
+    }
+    // read_tool_result stays registered even with truncation off so
+    // outputs trimmed before the toggle remain pageable.
+    agent = agent
+        .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store.clone())))
+        .tool_arc(std::sync::Arc::new(TodoWriteTool::new(todos.clone())))
+        .tool_arc(std::sync::Arc::new(WebFetchTool::new(UrlPolicy::strict())));
+    if let Some(key) = &cfg.firecrawl_key {
+        let fc = std::sync::Arc::new(Firecrawl::new(key.clone()));
+        agent = agent
+            .tool_arc(std::sync::Arc::new(WebSearchTool::new(fc.clone())))
+            .tool_arc(std::sync::Arc::new(WebCrawlTool::new(fc)));
+    }
+    for tool in mcp.tools() {
+        agent = agent.tool_arc(tool);
+    }
+    // One `skill` tool carrying the whole catalog, or none at all when
+    // nothing was found or everything is switched off.
+    if let Some(tool) = skills.tool() {
+        agent = agent.tool_arc(tool);
+    }
+    // One guard for the whole session: the agent is rebuilt on every
+    // model switch and config reload, and what the model has read must
+    // not be forgotten each time.
+    for tool in core_tools_with_guard(ws, files) {
+        agent = agent.tool_arc(tool);
+    }
+    let root = ws.root().to_string_lossy().into_owned();
+    // Re-registering `process` replaces core_tools' entry by name (its
+    // position is kept) so it can carry the shared stats handle.
+    agent = agent.tool_arc(std::sync::Arc::new(
+        ProcessTool::local()
+            .working_dir(root.clone())
+            .stats(stats.clone()),
+    ));
+    agent = agent.tool_arc(std::sync::Arc::new(
+        PyKernelTool::new().working_dir(root).stats(stats.clone()),
+    ));
+    let ui_events = ui.clone();
+    let mut subagent = SubagentTool::new(model_for_subagents, ws)
+        .max_depth(subagent_depth.clone())
+        .stats(stats.clone());
+    if extensions::enabled("retry") {
+        // Inner agents get the same retry policy as the orchestrator:
+        // three attempts, and data failures (nonzero exit, HTTP 5xx)
+        // retry too.
+        subagent = subagent.retry_with_rule(
+            3,
+            std::time::Duration::from_millis(250),
+            extensions::data_failure,
+        );
+    }
+    let subagent_mode = mode.clone();
+    let subagent_plan = plan_area.clone();
+    subagent = subagent.spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
+        subagent_extensions(spawn, &ui_events, &subagent_mode, &subagent_plan)
+    }));
+    agent = agent.tool_arc(std::sync::Arc::new(subagent));
+    agent
+}

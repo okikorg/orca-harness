@@ -1,0 +1,23 @@
+[package]
+name = "orca-harness-model-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Extensible model provider adapters for Orca Harness."
+
+[lib]
+name = "orca_harness_model_providers"
+
+[dependencies]
+orca-harness-core = { path = "../harness-core" }
+orca-harness-provider-auth = { path = "../provider-auth" }
+async-trait.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

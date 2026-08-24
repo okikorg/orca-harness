@@ -18,6 +18,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-orca-harness-model-openai = { path = "../model-openai" }
+orca-harness-model-providers = { path = "../model-providers" }
 orca-harness-tools = { path = "../tools" }
 tokio = { version = "1", features = ["full"] }

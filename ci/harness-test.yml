@@ -51,11 +51,19 @@ jobs:
       - name: fmt
         run: cargo fmt --check
 
+      - name: source size
+        run: ./ci/check-source-size.sh
+
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: test
         run: cargo test --workspace
+
+      - name: release binary size
+        run: |
+          cargo build --release -p orcacode
+          ./ci/check-binary-size.sh
 
       - name: bench (smoke)
         run: cargo bench --workspace -- --test

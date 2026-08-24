@@ -42,18 +42,15 @@ orca-harness/
 ├── crates/
 │   ├── harness-core/ # the kernel: Agent, Context, Model, Loop, Dispatcher, Tool, Extension,
 │   │                 # Limits, errors
-│   ├── model-openai/ # OpenAI-compatible chat-completions adapter
+│   ├── model-providers/ # Extensible OpenAI, OpenRouter, and Codex adapters
+│   ├── provider-auth/ # provider-neutral credential source and error boundary
 │   ├── tools/        # core host/target tools: shell, process (persistent sessions / background
 │   │                 # processes), pykernel (persistent Python compute), subagent (in-process
 │   │                 # agent fan-out with adjustable nesting), todo_write (the agent's task
 │   │                 # list as shared state), read/write/edit/list files (read-before-write
 │   │                 # guarded), grep, glob — the set that makes an agent independently
 │   │                 # useful; plus an opt-in fs-admin bundle (copy/rename/delete/mkdir/stat)
-│   ├── tools-web/    # opt-in web tools: web_fetch (HTML→markdown, SSRF-guarded URL policy),
-│   │                 # plus web_search and web_crawl backed by Firecrawl (provider trait for
-│   │                 # swapping the search backend)
-│   ├── tools-mcp/    # opt-in MCP client: connect stdio MCP servers (/mcp add <name> <command>
-│   │                 # in the CLI) and expose their tools as mcp__<server>__<tool>
+│   ├── tool-extensions/ # opt-in MCP, skills, and web tool integrations
 │   ├── extensions/   # critical extensions: event stream, tool policy, truncation (+ store
 │   │                 # paired with the read_tool_result tool), retry, usage metering, session
 │   │                 # recording/resume/fork (JSONL transcripts, --continue / --resume /
@@ -74,6 +71,13 @@ cargo run --release -p orcacode -- -p "..."        # headless: single prompt
 cargo run --release -p orcacode -- --json -p "..." # headless: NDJSON events
 cargo run --release -p orcacode -- --plan -p "..." # read-only: plan, change nothing
 ```
+
+To use an OpenAI ChatGPT subscription instead of API billing, run Orcacode,
+open `/provider`, and select `openai-codex`. Orcacode displays OpenAI's device
+login URL and code, stores the resulting credentials under its own config
+directory, and refreshes them automatically. An existing official Codex login
+from `$CODEX_HOME/auth.json` or `~/.codex/auth.json` is imported as a fallback.
+The `openai` provider remains the separate API-billed option.
 
 ### Interactive mode
 
@@ -385,7 +389,7 @@ registering an unused one costs nothing on the hot path:
 
 ```rust
 use orca_harness_core::{Agent, FnTool};
-use orca_harness_model_openai::OpenAiModel;
+use orca_harness_model_providers::openai::OpenAiModel;
 use serde_json::json;
 
 let model = OpenAiModel::new("gpt-4o").api_key(std::env::var("OPENAI_API_KEY")?);

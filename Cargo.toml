@@ -2,12 +2,10 @@
 resolver = "2"
 members = [
     "crates/harness-core",
-    "crates/model-openai",
-    "crates/model-openrouter",
+    "crates/provider-auth",
+    "crates/model-providers",
     "crates/tools",
-    "crates/tools-web",
-    "crates/tools-mcp",
-    "crates/tools-skills",
+    "crates/tool-extensions",
     "crates/extensions",
     "crates/cli",
 ]
@@ -32,6 +30,8 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 [profile.release]
 lto = "fat"
 codegen-units = 1
+opt-level = "z"
+panic = "abort"
 strip = true
 
 [profile.bench]

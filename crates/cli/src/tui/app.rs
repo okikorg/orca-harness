@@ -7,8 +7,8 @@ use std::collections::VecDeque;
 
 use ratatui::text::Line;
 
-use crate::components::message::{assistant_message, user_prompt};
-use crate::components::transcript::{
+use crate::tui::components::message::{assistant_message, user_prompt};
+use crate::tui::components::transcript::{
     append_block, line_is_blank, set_transcript_spacing, BlockSpacing, TranscriptSpacing,
 };
 use crate::view::theme;

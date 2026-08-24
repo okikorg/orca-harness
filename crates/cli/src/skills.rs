@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use orca_harness_core::Tool;
-use orca_harness_tools_skills::{discover, Discovered, Skill, SkillRoot, SkillTool};
+use orca_harness_tool_extensions::skills::{discover, Discovered, Skill, SkillRoot, SkillTool};
 
 /// What the last scan found for one skill, as the `/skills` overlay
 /// renders it.
@@ -78,7 +78,7 @@ impl Skills {
         home: Option<PathBuf>,
     ) -> Self {
         Self {
-            roots: Arc::new(orca_harness_tools_skills::roots(
+            roots: Arc::new(orca_harness_tool_extensions::skills::roots(
                 workspace,
                 config_dir.as_deref(),
                 home.as_deref(),
@@ -180,7 +180,7 @@ impl Skills {
         let root = self
             .root_for(global)
             .ok_or("no folder to create skills in")?;
-        orca_harness_tools_skills::scaffold(&root, name)
+        orca_harness_tool_extensions::skills::scaffold(&root, name)
     }
 
     /// Copy skills in from a folder or a repository. Returns the lines
@@ -190,12 +190,12 @@ impl Skills {
     /// from someone else's repository should not silently appear as an
     /// untracked folder in the user's project. `--here` says otherwise.
     pub async fn add(&self, source: &str, here: bool) -> Result<Vec<String>, String> {
-        let request = orca_harness_tools_skills::parse_request(source)?;
+        let request = orca_harness_tool_extensions::skills::parse_request(source)?;
         let root = self
             .root_for(!here)
             .ok_or("no folder to install skills into")?;
-        let checkout = orca_harness_tools_skills::checkout(&request.origin).await?;
-        let mut candidates = orca_harness_tools_skills::find_candidates(&checkout.root);
+        let checkout = orca_harness_tool_extensions::skills::checkout(&request.origin).await?;
+        let mut candidates = orca_harness_tool_extensions::skills::find_candidates(&checkout.root);
         if let Some(filter) = &request.filter {
             candidates.retain(|candidate| &candidate.name == filter);
             if candidates.is_empty() {
@@ -217,7 +217,7 @@ impl Skills {
         }
         let mut lines = Vec::new();
         for candidate in &candidates {
-            match orca_harness_tools_skills::install(candidate, &root) {
+            match orca_harness_tool_extensions::skills::install(candidate, &root) {
                 Ok(installed) => lines.push(format!(
                     "installed {} → {}",
                     installed.name,
@@ -249,7 +249,7 @@ impl Skills {
                 entry.dir.display()
             ));
         }
-        orca_harness_tools_skills::uninstall(&entry.dir)?;
+        orca_harness_tool_extensions::skills::uninstall(&entry.dir)?;
         // Drop the on/off override too, so a later reinstall of the same
         // name does not come back silently disabled.
         let _ = crate::config::forget_skill(name);

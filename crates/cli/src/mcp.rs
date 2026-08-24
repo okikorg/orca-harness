@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use orca_harness_core::Tool;
-use orca_harness_tools_mcp::McpClient;
+use orca_harness_tool_extensions::mcp::McpClient;
 
 /// What the last connection attempt for a server produced. Rendered by
 /// the /mcp overlay next to each row.
