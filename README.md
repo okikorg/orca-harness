@@ -521,20 +521,20 @@ processes:
 
 ### Compare to
 
-Idle-state measurements taken on the same machine (Apple Silicon Mac,
-2026-08-22) from the installed binaries and live processes — not vendor
-claims. Every row is a live session doing nothing, sampled the same way
-(`ps` RSS over the CLI's own process tree after ~10 s idle):
+Measurements come from the same Apple Silicon Mac, not vendor claims. Binary
+sizes were refreshed on 2026-08-24 and use decimal MB (1 MB = 1,000,000
+bytes). Idle RSS was measured on 2026-08-22; every row was a live session
+doing nothing, sampled with `ps` over the CLI's process tree after ~10 s idle:
 
-| CLI (version)                                     |              Binary | Idle RSS (live session) | Processes |
-| :------------------------------------------------ | ------------------: | ----------------------: | --------: |
-| `orcacode` 0.1.0 (this repo)                      |          **5.2 MB** |               **~8 MB** |         1 |
-| `fx` 0.0.5 (for scale)                            |              6.4 MB |                  ~21 MB |         1 |
-| `pi` 0.84.2 (`@earendil-works/pi-coding-agent`)   |      131 MB install |                 ~211 MB |  1 + node |
-| Codex 0.149.0 (`@openai/codex`)                   | 210 MB + 55 MB host |                 ~340 MB |   up to 3 |
-| `prime-agent` 0.7.4                               |      265 MB install |                 ~400 MB | 1 + node + py |
-| `omp` 17.4.2 (`@oh-my-pi/pi-coding-agent`)        |  233 MB + 63 MB bun |                 ~406 MB |   1 + bun |
-| Claude Code 2.1.220 (`@anthropic-ai/claude-code`) |              245 MB |                 ~456 MB |         1 |
+| CLI (version)                                           |                     Binary | Idle RSS (live session) | Processes |
+| :------------------------------------------------------ | -------------------------: | ----------------------: | --------: |
+| `orcacode` 0.1.0 (this repo)                            |                 **5.2 MB** |               **~8 MB** |         1 |
+| `fx` 0.0.5 (for scale)                                  |                     6.4 MB |                  ~21 MB |         1 |
+| `pi` 0.84.2 (`@earendil-works/pi-coding-agent`)         |             131 MB install |                 ~211 MB |  1 + node |
+| Codex 0.149.0-alpha.4.1 (bundled with ChatGPT)           |    220.5 MB + 57.2 MB host |                 ~340 MB |   up to 3 |
+| `prime-agent` 0.7.4                                     |             265 MB install |                 ~400 MB | 1 + node + py |
+| `omp` 17.4.2 (`@oh-my-pi/pi-coding-agent`)              |         233 MB + 63 MB bun |                 ~406 MB |   1 + bun |
+| Claude Code 2.1.220 (`@anthropic-ai/claude-code`)       |                   256.9 MB |                 ~456 MB |         1 |
 
 Numbers are the core CLI only: any MCP servers configured for a CLI spawn
 on top of this at startup (on the measurement machine they added 1–2 GB and
