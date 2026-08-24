@@ -14,8 +14,8 @@ use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
 use orca_harness_tools::{
-    core_tools_with_guard, BackgroundStats, FileGuard, ProcessTool, PyKernelTool, SubagentDepth,
-    SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
+    core_tools_with_guard, AskTool, BackgroundStats, FileGuard, ProcessTool, PyKernelTool,
+    SubagentDepth, SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
 };
 
 use crate::approval::Approval;
@@ -282,6 +282,16 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     agent = agent
         .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store.clone())))
         .tool_arc(std::sync::Arc::new(TodoWriteTool::new(todos.clone())))
+        .tool_arc(std::sync::Arc::new(AskTool::new({
+            let ui = ui.clone();
+            move |request| match ui.send(UiMsg::Ask(request)) {
+                Ok(()) => Ok(()),
+                Err(err) => match err.0 {
+                    UiMsg::Ask(request) => Err(request),
+                    _ => unreachable!("ask callback only sends UiMsg::Ask"),
+                },
+            }
+        })))
         .tool_arc(std::sync::Arc::new(WebFetchTool::new(UrlPolicy::strict())));
     if let Some(key) = &cfg.firecrawl_key {
         let fc = std::sync::Arc::new(Firecrawl::new(key.clone()));

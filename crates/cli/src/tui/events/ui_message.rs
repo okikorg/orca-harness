@@ -27,6 +27,7 @@ pub(crate) fn handle_ui_msg(
             event,
         } => handle_subagent_event(app, id, parent_id, depth, call_id, event),
         UiMsg::Approval(request) => app.approval = Some(request),
+        UiMsg::Ask(request) => app.ask = Some(crate::tui::components::ask::AskForm::new(request)),
         UiMsg::Models(result) => {
             let t = theme();
             let seed = app.picker_pending.take().unwrap_or_default();
@@ -186,6 +187,7 @@ pub(crate) fn handle_ui_msg(
             app.text.clear();
             app.run = RunState::Idle;
             app.approval = None;
+            app.ask = None;
             if let Err(err) = result {
                 let (style, label) = if err.to_lowercase().contains("cancel") {
                     (theme().dim, "interrupted".to_string())
@@ -216,6 +218,7 @@ pub(crate) fn handle_ui_msg(
             };
             app.run = RunState::Idle;
             app.approval = None;
+            app.ask = None;
             if let Some(elapsed) = elapsed {
                 app.last_turn_summary =
                     Some(format!("Shell command took {:.1}s", elapsed.as_secs_f64()));

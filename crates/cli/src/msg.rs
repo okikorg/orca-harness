@@ -4,6 +4,7 @@
 use orca_harness_core::CancellationToken;
 use orca_harness_extensions::{CompactReport, HarnessEvent};
 use orca_harness_model_providers::openrouter::ModelInfo;
+use orca_harness_tools::AskRequest;
 use tokio::sync::oneshot;
 
 /// A selectable endpoint preset.
@@ -128,6 +129,8 @@ pub struct ApprovalRequest {
 pub enum UiMsg {
     Event(HarnessEvent),
     Approval(ApprovalRequest),
+    /// Structured clarification requested by the running agent.
+    Ask(AskRequest),
     /// The worker finished a run: final answer or error text.
     RunDone(Result<String, String>),
     /// A user-invoked `!` shell command finished. Its tool result has

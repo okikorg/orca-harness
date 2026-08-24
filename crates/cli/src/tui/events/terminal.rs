@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::msg::WorkerCmd;
 use crate::tui::clipboard;
+use crate::tui::components::ask::AskFormEvent;
 use crate::tui::components::picker::ListPicker;
 
 use super::super::composer::{
@@ -64,7 +65,9 @@ pub(crate) fn handle_terminal_event(
         // A paste is composer input only: an open approval or overlay is
         // a keystroke menu with nowhere to put the text.
         CtEvent::Paste(text) => {
-            if app.approval.is_none() && app.overlay.is_none() {
+            if let Some(ask) = app.ask.as_mut() {
+                ask.handle_paste(&text);
+            } else if app.approval.is_none() && app.overlay.is_none() {
                 insert_paste(app, &text);
             }
             return;
@@ -76,6 +79,13 @@ pub(crate) fn handle_terminal_event(
     }
     if app.approval.is_some() {
         handle_approval_key(app, key);
+        return;
+    }
+    if app.ask.is_some() {
+        let event = app.ask.as_mut().expect("ask checked").handle_key(key);
+        if matches!(event, AskFormEvent::Submit | AskFormEvent::Cancel) {
+            app.ask.take().expect("ask present").finish(event);
+        }
         return;
     }
     if app.overlay.is_some() {

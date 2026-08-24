@@ -159,7 +159,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
 
     frame.render_widget(Paragraph::new(Text::from(live)), live_area);
 
-    let placeholder = if app.running() {
+    let placeholder = if app.ask.is_some() {
+        "answering agent clarification above"
+    } else if app.running() {
         "type another prompt to queue"
     } else if !app.prompt_queue.is_empty() {
         "queue paused · enter to resume"
@@ -181,6 +183,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // Status line with contextual hints.
     let state = if app.approval.is_some() {
         "awaiting approval"
+    } else if app.ask.is_some() {
+        "awaiting answer"
     } else if app.running() {
         "running"
     } else if !app.prompt_queue.is_empty() {
@@ -200,6 +204,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             "scrolled · pgdn to follow"
         }
+    } else if app.ask.is_some() {
+        "↑↓ question · ←→ option · space choose · tab topic · enter send"
     } else if app.overlay.is_some() && app.approval.is_none() {
         "↑↓ navigate · enter use · esc close"
     } else if app.palette_query().is_some() && app.approval.is_none() {
@@ -363,8 +369,8 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-/// The pinned live region: approval prompt beats palette beats run status.
-/// Streaming content itself is projected into the main transcript.
+/// The pinned live region: approval prompt beats ask form, overlays, palette,
+/// then run status. Streaming content itself is projected into the main transcript.
 pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     if let Some(request) = &app.approval {
@@ -383,6 +389,9 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 t.dim,
             )),
         ];
+    }
+    if let Some(ask) = &app.ask {
+        return ask.lines(width);
     }
     if let Some(overlay) = &app.overlay {
         return match overlay {

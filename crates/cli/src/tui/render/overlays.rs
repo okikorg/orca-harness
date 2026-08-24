@@ -182,6 +182,7 @@ pub(crate) fn reset_conversation_ui(app: &mut App) {
     app.scroll = 0;
     app.transcript_max_scroll = 0;
     app.split_inspector_cache = None;
+    app.ask = None;
     app.prompt_queue.clear();
     app.tokens_in = 0;
     app.tokens_out = 0;

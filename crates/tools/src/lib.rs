@@ -34,6 +34,7 @@
 //! `Executor::docker_exec("container")` — and the model drives that
 //! machine through the same `shell` contract.
 
+mod ask;
 mod files;
 mod fs_admin;
 mod glob;
@@ -52,6 +53,10 @@ use std::sync::Arc;
 
 use orca_harness_core::Tool;
 
+pub use ask::{
+    AskAnswer, AskOption, AskQuestion, AskRequest, AskResponse, AskTool, AskTopic, AskTopicAnswer,
+    MAX_ASK_TOPICS,
+};
 pub use files::{EditFileTool, FileGuard, ListDirTool, ReadFileTool, WriteFileTool};
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use glob::GlobTool;

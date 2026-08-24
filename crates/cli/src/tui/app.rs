@@ -44,6 +44,7 @@ impl App {
             assistant_started: false,
             run: RunState::Idle,
             approval: None,
+            ask: None,
             composer: String::new(),
             cursor: 0,
             prompt_queue: VecDeque::new(),
@@ -87,9 +88,9 @@ impl App {
     }
 
     /// The palette is open whenever the composer starts with `/` and no
-    /// approval prompt is pending. Returns the text after the slash.
+    /// approval or clarification prompt is pending. Returns the text after the slash.
     pub(crate) fn palette_query(&self) -> Option<&str> {
-        if self.approval.is_some() {
+        if self.approval.is_some() || self.ask.is_some() {
             return None;
         }
         self.composer.strip_prefix('/')

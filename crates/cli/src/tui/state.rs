@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use ratatui::text::Line;
 
 use crate::msg::{ApprovalRequest, Provider};
+use crate::tui::components::ask::AskForm;
 use crate::tui::components::picker::{ListPicker, PickerAction};
 use orca_harness_core::CancellationToken;
 use orca_harness_model_providers::openrouter::ModelInfo;
@@ -309,6 +310,8 @@ pub(crate) struct App {
     pub(crate) assistant_started: bool,
     pub(crate) run: RunState,
     pub(crate) approval: Option<ApprovalRequest>,
+    /// Active structured clarification form requested by the `ask` tool.
+    pub(crate) ask: Option<AskForm>,
     pub(crate) composer: String,
     pub(crate) cursor: usize,
     /// Prompts waiting for the active turn to finish, oldest first.

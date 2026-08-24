@@ -84,6 +84,7 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "web_crawl",
     "skill",
     "todo_write",
+    "ask",
 ];
 
 /// Cloneable handle onto the session's mode, captured by [`PlanGate`] and

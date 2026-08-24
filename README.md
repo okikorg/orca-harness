@@ -47,7 +47,7 @@ orca-harness/
 │   ├── tools/        # core host/target tools: shell, process (persistent sessions / background
 │   │                 # processes), pykernel (persistent Python compute), subagent (in-process
 │   │                 # agent fan-out with adjustable nesting), todo_write (the agent's task
-│   │                 # list as shared state), read/write/edit/list files (read-before-write
+│   │                 # list as shared state), ask (structured user clarification), read/write/edit/list files (read-before-write
 │   │                 # guarded), grep, glob — the set that makes an agent independently
 │   │                 # useful; plus an opt-in fs-admin bundle (copy/rename/delete/mkdir/stat)
 │   ├── tool-extensions/ # opt-in MCP, skills, and web tool integrations
@@ -134,7 +134,7 @@ and the status line carries `· plan mode` for as long as it is on.
 
 It is an **allowlist**, not a denylist. Only `read_file`, `list_dir`,
 `grep`, `glob`, `file_info`, `read_tool_result`, `web_fetch`,
-`web_search`, `web_crawl`, `skill`, and `todo_write` run; everything else
+`web_search`, `web_crawl`, `skill`, `todo_write`, and `ask` run; everything else
 — `shell`, `process`, `pykernel`, `write_file`, `edit_file`, `subagent`,
 and every MCP tool — is denied with a reason that points the model at the
 plan directory instead. A denylist would have to know every tool the
