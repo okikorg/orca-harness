@@ -129,7 +129,7 @@ pub(crate) fn replay_transcript(
     for message in messages {
         match message {
             Message::System { .. } => {}
-            Message::User { content } => {
+            Message::User { content, .. } => {
                 app.push_line(Line::from(""));
                 app.push_user_prompt(content, width);
                 app.turn_count += 1;

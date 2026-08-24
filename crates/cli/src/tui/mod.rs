@@ -12,6 +12,7 @@
 // that has scrolled past, which no drag can.
 mod app;
 mod clipboard;
+mod clipboard_image;
 mod command_catalog;
 mod commands;
 pub(crate) mod components;
@@ -89,7 +90,7 @@ use crate::view::{self, theme};
 use self::format::elapsed_label;
 #[cfg(test)]
 use self::format::redact_command;
-use self::input::expand_pastes;
+use self::input::{expand_pastes, prompt_images};
 
 use self::inspector::inspector_text_content;
 #[cfg(test)]

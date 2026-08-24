@@ -285,6 +285,7 @@ mod extensions_command_tests {
             },
             orca_harness_core::Message::User {
                 content: "first prompt".into(),
+                images: Vec::new(),
             },
             orca_harness_core::Message::Assistant {
                 content: None,

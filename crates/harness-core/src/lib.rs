@@ -38,7 +38,7 @@ mod tool;
 pub mod testing;
 
 pub use agent::Agent;
-pub use context::{Context, Message};
+pub use context::{Context, Image, Message};
 pub use dispatcher::Dispatcher;
 pub use error::{ExtensionError, HarnessError, ModelError, ToolError};
 pub use extension::{Extension, ExtensionRegistry, Next, Subscriptions, ToolDecision};

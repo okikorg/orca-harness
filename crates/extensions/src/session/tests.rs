@@ -48,6 +48,7 @@ fn load_round_trips_header_and_messages() {
         },
         Message::User {
             content: "hi".into(),
+            images: vec![],
         },
         Message::Assistant {
             content: Some("yo".into()),
@@ -69,6 +70,7 @@ fn truncated_final_line_is_dropped_with_warning() {
     let dir = temp_dir("truncated");
     let messages = vec![Message::User {
         content: "hi".into(),
+        images: vec![],
     }];
     let mut lines = msg_lines(&messages);
     lines.push(r#"{"User":{"conte"#.into());
@@ -84,6 +86,7 @@ fn corrupt_middle_line_is_an_error() {
     let mut lines = vec!["not json".to_string()];
     lines.extend(msg_lines(&[Message::User {
         content: "hi".into(),
+        images: vec![],
     }]));
     let path = write_session(&dir, &meta("0000000001-a-0"), &lines, true);
     match SessionFile::load(&path) {
@@ -110,6 +113,7 @@ fn dangling_trailing_assistant_tool_calls_are_dropped() {
     let messages = vec![
         Message::User {
             content: "hi".into(),
+            images: vec![],
         },
         Message::Assistant {
             content: None,

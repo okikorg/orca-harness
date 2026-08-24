@@ -13,10 +13,19 @@ pub(crate) fn body(
     for message in context.messages() {
         match message {
             Message::System { content } => instructions.push(content.as_str()),
-            Message::User { content } => input.push(json!({
-                "type": "message", "role": "user",
-                "content": [{"type": "input_text", "text": content}]
-            })),
+            Message::User { content, images } => {
+                let mut parts = vec![json!({"type": "input_text", "text": content})];
+                parts.extend(images.iter().map(|image| {
+                    json!({
+                        "type": "input_image",
+                        "image_url": crate::image_data_url(image),
+                        "detail": "auto",
+                    })
+                }));
+                input.push(json!({
+                    "type": "message", "role": "user", "content": parts
+                }));
+            }
             Message::Assistant {
                 content,
                 tool_calls,
@@ -92,7 +101,7 @@ pub(crate) fn body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orca_harness_core::{ToolCall, ToolResult};
+    use orca_harness_core::{Image, ToolCall, ToolResult};
 
     #[test]
     fn maps_context_and_tools_to_responses_items() {
@@ -118,6 +127,27 @@ mod tests {
         assert_eq!(value["tools"][0]["name"], "shell");
         assert_eq!(value["store"], false);
         assert_eq!(value["include"][0], "reasoning.encrypted_content");
+    }
+
+    #[test]
+    fn user_images_append_data_url_parts() {
+        let mut context = Context::new();
+        context.push_user_with_images(
+            "describe",
+            vec![Image {
+                media_type: "image/jpeg".into(),
+                data: "/9j/".into(),
+            }],
+        );
+
+        let value = body("codex", &context, &[], true, &[]);
+        assert_eq!(
+            value["input"][0]["content"],
+            json!([
+                {"type": "input_text", "text": "describe"},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,/9j/", "detail": "auto"}
+            ])
+        );
     }
 
     #[test]

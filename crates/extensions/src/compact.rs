@@ -228,7 +228,7 @@ fn deterministic_summary(head: &[Message], elided_ids: &[String]) -> String {
     let mut last_note = "";
     for message in head {
         match message {
-            Message::User { content } => requests.push(content),
+            Message::User { content, .. } => requests.push(content),
             Message::Assistant {
                 content: Some(text),
                 ..
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(report.files_modified, vec!["Cargo.toml"]);
         let messages = context.messages();
         assert!(matches!(messages[0], Message::System { .. }));
-        let Message::User { content } = &messages[1] else {
+        let Message::User { content, .. } = &messages[1] else {
             panic!("expected summary as a user message");
         };
         assert!(content.contains("read the config"), "request kept verbatim");

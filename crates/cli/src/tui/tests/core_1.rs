@@ -1,4 +1,6 @@
     use super::*;
+    use super::input::insert_image_bytes_for_test;
+    use super::state::HeldInput;
     use orca_harness_model_providers::openrouter::ModelInfo;
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
@@ -127,6 +129,112 @@
         }
     }
 
+    fn add_test_image(app: &mut App) {
+        insert_image_bytes_for_test(app, b"\x89PNG\r\n\x1a\nminimal".to_vec());
+    }
+
+    #[test]
+    fn clipboard_image_is_an_atomic_pill_and_sends_native_data() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.cfg.provider = Provider::OpenAi;
+        add_test_image(&mut app);
+
+        assert_eq!(app.composer, "[▧ image.png]");
+        let pill_end = app.cursor;
+        press(&mut app, &tx, KeyCode::Left);
+        assert_eq!(app.cursor, 0);
+        press(&mut app, &tx, KeyCode::Right);
+        assert_eq!(app.cursor, pill_end);
+
+        submit(&mut app, &tx, 80);
+        match rx.try_recv() {
+            Ok(WorkerCmd::Run { prompt, images, .. }) => {
+                assert_eq!(prompt, "[▧ image.png]");
+                assert_eq!(images.len(), 1);
+                assert_eq!(images[0].media_type, "image/png");
+            }
+            other => panic!("expected a run, got {:?}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn backspace_removes_an_image_pill_whole() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        add_test_image(&mut app);
+
+        press(&mut app, &tx, KeyCode::Backspace);
+        assert_eq!(app.composer, "");
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn delete_removes_an_image_pill_whole_from_its_start() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        add_test_image(&mut app);
+        app.cursor = 0;
+
+        press(&mut app, &tx, KeyCode::Delete);
+        assert_eq!(app.composer, "");
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn pasted_image_path_remains_plain_text() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+
+        paste(&mut app, &tx, "/tmp/screenshot.png");
+        assert_eq!(app.composer, "/tmp/screenshot.png");
+        assert!(app.pastes.is_empty());
+    }
+
+    #[test]
+    fn local_model_keeps_image_draft_when_send_is_blocked() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        add_test_image(&mut app);
+        let draft = app.composer.clone();
+
+        submit(&mut app, &tx, 80);
+        assert_eq!(app.composer, draft);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn repeated_clipboard_images_get_distinct_pills() {
+        let mut app = test_app();
+        add_test_image(&mut app);
+        add_test_image(&mut app);
+        assert_eq!(app.composer, "[▧ image.png][▧ image.png · 2]");
+    }
+
+    #[test]
+    fn image_payloads_follow_visual_pill_order() {
+        let first = HeldInput::Image {
+            label: "first.png".into(),
+            image: orca_harness_core::Image {
+                media_type: "image/png".into(),
+                data: "first".into(),
+            },
+        };
+        let second = HeldInput::Image {
+            label: "second.png".into(),
+            image: orca_harness_core::Image {
+                media_type: "image/png".into(),
+                data: "second".into(),
+            },
+        };
+        let held = vec![first, second];
+        let prompt = format!("{} then {}", held[1].marker(2), held[0].marker(1));
+
+        let images = prompt_images(&held, &prompt);
+        assert_eq!(images[0].data, "second");
+        assert_eq!(images[1].data, "first");
+    }
+
     #[test]
     fn a_short_single_line_paste_is_typed_through() {
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -149,7 +257,7 @@
         paste(&mut app, &tx, "one\r\ntwo\r\nthree\r\n");
 
         assert_eq!(app.composer, "[Pasted text #1, 3 lines]");
-        assert_eq!(app.pastes[0], "one\ntwo\nthree\n");
+        assert!(matches!(&app.pastes[0], HeldInput::Text(text) if text == "one\ntwo\nthree\n"));
     }
 
     #[test]
@@ -181,7 +289,10 @@
             "[Pasted text #1, 3 lines]"
         );
         assert_eq!(
-            expand_pastes(&["a\nb".to_string()], "[Pasted text #1, 9 lines]"),
+            expand_pastes(
+                &[HeldInput::Text("a\nb".to_string())],
+                "[Pasted text #1, 9 lines]",
+            ),
             "[Pasted text #1, 9 lines]"
         );
     }

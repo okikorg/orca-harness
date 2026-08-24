@@ -168,6 +168,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         "ask anything · @ add files · /help commands"
     };
+    let pill_spans = super::super::input::image_marker_spans(&app.pastes, &app.composer);
     let composer = Composer::new(
         &app.composer,
         app.cursor,
@@ -175,6 +176,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         composer_area.width as usize,
         theme().accent,
         theme().dim,
+        &pill_spans,
     )
     .render();
     frame.render_widget(Paragraph::new(composer.line), composer_area);

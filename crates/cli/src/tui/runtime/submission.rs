@@ -9,6 +9,17 @@ pub(crate) fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, w
         return;
     }
 
+    if !prompt.starts_with('!')
+        && !app.cfg.provider.supports_images()
+        && !prompt_images(&app.pastes, &prompt).is_empty()
+    {
+        push_error(
+            app,
+            "this model does not support image input; select another model",
+        );
+        return;
+    }
+
     // Queue management is intentionally available during a run. Other
     // slash commands retain the existing one-run-at-a-time behavior and
     // stay in the composer until the active turn finishes.
@@ -108,13 +119,15 @@ pub(crate) fn start_prompt(
     width: usize,
 ) -> bool {
     let cancel = CancellationToken::new();
-    // The marker is a composer affordance only. Once sent, the turn
-    // shows what the model actually received.
+    let images = prompt_images(&app.pastes, &prompt);
+    // Text paste markers are composer affordances; image pills remain in
+    // the visible/model text as references alongside their native payloads.
     let prompt = expand_pastes(&app.pastes, &prompt);
     app.context_tokens += (prompt.len() / 4) as u64;
     if worker
         .send(WorkerCmd::Run {
             prompt: strip_location_mentions(&prompt),
+            images,
             cancel: cancel.clone(),
         })
         .is_err()

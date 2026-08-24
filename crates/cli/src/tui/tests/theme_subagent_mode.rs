@@ -392,6 +392,7 @@ mod mode_rewind_todo_tests {
                     },
                     orca_harness_core::Message::User {
                         content: "still here".into(),
+                        images: Vec::new(),
                     },
                 ],
                 notice: "rewound 1 turn · 2 messages dropped".into(),

@@ -1,7 +1,7 @@
 //! Channel types wiring the agent worker, the approval extension, and the
 //! terminal UI together.
 
-use orca_harness_core::CancellationToken;
+use orca_harness_core::{CancellationToken, Image};
 use orca_harness_extensions::{CompactReport, HarnessEvent};
 use orca_harness_model_providers::openrouter::ModelInfo;
 use orca_harness_tools::AskRequest;
@@ -92,6 +92,13 @@ impl Provider {
     /// environment first, then the config file.
     pub fn resolve_key(self) -> Option<String> {
         self.env_key().or_else(|| self.stored_key())
+    }
+
+    pub fn supports_images(self) -> bool {
+        matches!(
+            self,
+            Provider::OpenRouter | Provider::OpenAi | Provider::OpenAiCodex
+        )
     }
 
     pub fn default_model(self) -> &'static str {
@@ -190,6 +197,7 @@ pub enum UiMsg {
 pub enum WorkerCmd {
     Run {
         prompt: String,
+        images: Vec<Image>,
         cancel: CancellationToken,
     },
     /// Run a user-entered `!` command as a synthetic shell tool call and

@@ -112,6 +112,7 @@ mod main_tests {
     fn user(text: &str) -> Message {
         Message::User {
             content: text.into(),
+            images: Vec::new(),
         }
     }
 

@@ -15,7 +15,9 @@ use super::super::composer::{
     mention_starts_at, remove_location_mention_before_cursor, workspace_locations,
 };
 use super::super::format::byte_index;
-use super::super::input::{insert_paste, marker_ending_at, marker_starting_at, remove_marker};
+use super::super::input::{
+    insert_clipboard_image, insert_paste, marker_ending_at, marker_starting_at, remove_marker,
+};
 use super::super::render::transcript_content_width;
 use super::super::state::{App, LocationPicker, Overlay, RunState, ViewMode};
 use super::super::PALETTE_ROWS;
@@ -204,6 +206,11 @@ pub(crate) fn handle_terminal_event(
             app.scroll = 0;
             submit(app, worker, content_width);
             app.palette_index = 0;
+        }
+        KeyCode::Char('v') if ctrl => {
+            if key.kind == KeyEventKind::Press {
+                insert_clipboard_image(app);
+            }
         }
         KeyCode::Char(c) => {
             let at = byte_index(&app.composer, app.cursor);

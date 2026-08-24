@@ -36,7 +36,7 @@ async fn final_response_ends_the_run() {
     let seen = model.observed_contexts();
     let messages = seen[0].messages();
     assert!(matches!(&messages[0], Message::System { content } if content == "be brief"));
-    assert!(matches!(&messages[1], Message::User { content } if content == "meaning of life?"));
+    assert!(matches!(&messages[1], Message::User { content, .. } if content == "meaning of life?"));
 }
 
 #[tokio::test]

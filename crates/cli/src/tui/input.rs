@@ -1,25 +1,14 @@
-//! Composer input: applying typed text and bracketed pastes to the
-//! composer, and the paste-marker machinery that stands a large paste in
-//! for a short marker the user can edit around. Pastes are held aside in
-//! `App::pastes` (indexed by marker number) until the prompt is sent.
+//! Composer input and atomic held entities. Large text pastes and clipboard
+//! images share one marker mechanism for deletion and navigation.
+
+use base64::Engine;
+use orca_harness_core::Image;
 
 use super::format::byte_index;
-use super::App;
+use super::state::HeldInput;
+use super::{push_error, push_notice, App};
 
-/// Pasting more than this many characters inline is held as a marker.
 pub(super) const PASTE_INLINE_MAX: usize = 200;
-
-/// The composer stand-in for held paste `index` (1-based).
-pub(super) fn paste_marker(index: usize, lines: usize) -> String {
-    let unit = if lines == 1 { "line" } else { "lines" };
-    format!("[Pasted text #{index}, {lines} {unit}]")
-}
-
-/// Line count as the marker reports it: what the user sees pasted, so a
-/// trailing newline is not a line of its own.
-pub(super) fn paste_line_count(text: &str) -> usize {
-    text.lines().count().max(1)
-}
 
 pub(super) fn insert_at_cursor(app: &mut App, text: &str) {
     let at = byte_index(&app.composer, app.cursor);
@@ -27,35 +16,62 @@ pub(super) fn insert_at_cursor(app: &mut App, text: &str) {
     app.cursor += text.chars().count();
 }
 
-/// Put a bracketed paste into the composer: short single-line text as if
-/// typed, anything larger as a marker standing for the held original.
 pub(super) fn insert_paste(app: &mut App, text: &str) {
-    // Terminals forward whatever line endings the source had; normalize
-    // so a CRLF paste does not count double or leave stray carriage
-    // returns in the prompt.
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     if !text.contains('\n') && text.chars().count() <= PASTE_INLINE_MAX {
         insert_at_cursor(app, &text);
         return;
     }
-    app.pastes.push(text);
-    let index = app.pastes.len();
-    let lines = paste_line_count(&app.pastes[index - 1]);
-    let marker = paste_marker(index, lines);
+    app.pastes.push(HeldInput::Text(text));
+    let marker = app
+        .pastes
+        .last()
+        .expect("just pushed")
+        .marker(app.pastes.len());
     insert_at_cursor(app, &marker);
 }
 
-/// Char spans of every paste marker present in `text`. Markers are found
-/// as whole literals, so the composer can treat each as one unit — one
-/// backspace, one arrow step — rather than 26 characters the user has to
-/// chew through and can corrupt halfway.
-pub(super) fn marker_spans(pastes: &[String], text: &str) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
-    if pastes.is_empty() || !text.contains("[Pasted text #") {
-        return spans;
+pub(super) fn insert_clipboard_image(app: &mut App) {
+    match super::clipboard_image::read() {
+        Ok(Some(bytes)) => insert_image_bytes(app, bytes),
+        Ok(None) => push_notice(app, "clipboard does not contain an image"),
+        Err(error) => push_error(app, error),
     }
-    for (i, paste) in pastes.iter().enumerate() {
-        let marker = paste_marker(i + 1, paste_line_count(paste));
+}
+
+fn insert_image_bytes(app: &mut App, bytes: Vec<u8>) {
+    let label = unique_clipboard_label(&app.pastes);
+    let image = Image {
+        media_type: "image/png".into(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    };
+    app.pastes.push(HeldInput::Image { label, image });
+    let marker = app
+        .pastes
+        .last()
+        .expect("just pushed")
+        .marker(app.pastes.len());
+    insert_at_cursor(app, &marker);
+}
+
+fn unique_clipboard_label(pastes: &[HeldInput]) -> String {
+    let count = pastes
+        .iter()
+        .filter(|held| {
+            matches!(held, HeldInput::Image { label, .. } if label == "image.png" || label.starts_with("image.png · "))
+        })
+        .count();
+    if count == 0 {
+        "image.png".into()
+    } else {
+        format!("image.png · {}", count + 1)
+    }
+}
+
+pub(super) fn marker_spans(pastes: &[HeldInput], text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (i, held) in pastes.iter().enumerate() {
+        let marker = held.marker(i + 1);
         let width = marker.chars().count();
         let mut from = 0;
         while let Some(offset) = text[from..].find(&marker) {
@@ -65,12 +81,12 @@ pub(super) fn marker_spans(pastes: &[String], text: &str) -> Vec<(usize, usize)>
             from = start_byte + marker.len();
         }
     }
+    spans.sort_unstable();
     spans
 }
 
-/// The marker ending exactly at `cursor`, if the cursor sits against one.
 pub(super) fn marker_ending_at(
-    pastes: &[String],
+    pastes: &[HeldInput],
     text: &str,
     cursor: usize,
 ) -> Option<(usize, usize)> {
@@ -79,9 +95,8 @@ pub(super) fn marker_ending_at(
         .find(|(_, end)| *end == cursor)
 }
 
-/// The marker starting exactly at `cursor`.
 pub(super) fn marker_starting_at(
-    pastes: &[String],
+    pastes: &[HeldInput],
     text: &str,
     cursor: usize,
 ) -> Option<(usize, usize)> {
@@ -90,7 +105,6 @@ pub(super) fn marker_starting_at(
         .find(|(start, _)| *start == cursor)
 }
 
-/// Cut the marker span `(start, end)` out of the composer whole.
 pub(super) fn remove_marker(app: &mut App, start: usize, end: usize) {
     let from = byte_index(&app.composer, start);
     let to = byte_index(&app.composer, end);
@@ -98,19 +112,48 @@ pub(super) fn remove_marker(app: &mut App, start: usize, end: usize) {
     app.cursor = start;
 }
 
-/// Restore held pastes into `text`, marker by marker. Markers are matched
-/// as whole literals rather than parsed, so text that merely looks like
-/// one is left alone.
-pub(super) fn expand_pastes(pastes: &[String], text: &str) -> String {
-    if pastes.is_empty() || !text.contains("[Pasted text #") {
-        return text.to_string();
-    }
+pub(super) fn expand_pastes(pastes: &[HeldInput], text: &str) -> String {
     let mut out = text.to_string();
-    for (i, paste) in pastes.iter().enumerate() {
-        let marker = paste_marker(i + 1, paste_line_count(paste));
-        if out.contains(&marker) {
-            out = out.replace(&marker, paste);
+    for (i, held) in pastes.iter().enumerate() {
+        if let HeldInput::Text(value) = held {
+            out = out.replace(&held.marker(i + 1), value);
         }
     }
     out
+}
+
+pub(super) fn prompt_images(pastes: &[HeldInput], text: &str) -> Vec<Image> {
+    let mut found = Vec::new();
+    for (i, held) in pastes.iter().enumerate() {
+        let HeldInput::Image { image, .. } = held else {
+            continue;
+        };
+        let marker = held.marker(i + 1);
+        for (byte, _) in text.match_indices(&marker) {
+            found.push((byte, image.clone()));
+        }
+    }
+    found.sort_by_key(|(byte, _)| *byte);
+    found.into_iter().map(|(_, image)| image).collect()
+}
+
+pub(super) fn image_marker_spans(pastes: &[HeldInput], text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (i, held) in pastes.iter().enumerate() {
+        if !matches!(held, HeldInput::Image { .. }) {
+            continue;
+        }
+        let marker = held.marker(i + 1);
+        let width = marker.chars().count();
+        for (byte, _) in text.match_indices(&marker) {
+            let start = text[..byte].chars().count();
+            spans.push((start, start + width));
+        }
+    }
+    spans
+}
+
+#[cfg(test)]
+pub(super) fn insert_image_bytes_for_test(app: &mut App, bytes: Vec<u8>) {
+    insert_image_bytes(app, bytes);
 }

@@ -13,3 +13,7 @@ pub use catalog::{ModelInfo, Pricing};
 pub use openai::OpenAiModel;
 pub use openai_codex::OpenAiCodexModel;
 pub use openrouter::OpenRouterModel;
+
+fn image_data_url(image: &orca_harness_core::Image) -> String {
+    format!("data:{};base64,{}", image.media_type, image.data)
+}

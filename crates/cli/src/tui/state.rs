@@ -13,7 +13,7 @@ use ratatui::text::Line;
 use crate::msg::{ApprovalRequest, Provider};
 use crate::tui::components::ask::AskForm;
 use crate::tui::components::picker::{ListPicker, PickerAction};
-use orca_harness_core::CancellationToken;
+use orca_harness_core::{CancellationToken, Image};
 use orca_harness_model_providers::openrouter::ModelInfo;
 
 use super::PICKER_ROWS;
@@ -288,6 +288,24 @@ pub(crate) enum RunState {
     },
 }
 
+pub(crate) enum HeldInput {
+    Text(String),
+    Image { label: String, image: Image },
+}
+
+impl HeldInput {
+    pub(crate) fn marker(&self, index: usize) -> String {
+        match self {
+            Self::Text(text) => {
+                let lines = text.lines().count().max(1);
+                let unit = if lines == 1 { "line" } else { "lines" };
+                format!("[Pasted text #{index}, {lines} {unit}]")
+            }
+            Self::Image { label, .. } => format!("[▧ {label}]"),
+        }
+    }
+}
+
 pub(crate) struct App {
     pub(crate) cfg: TuiConfig,
     /// Lines waiting to move into the transcript on the next tick.
@@ -317,10 +335,10 @@ pub(crate) struct App {
     /// Prompts waiting for the active turn to finish, oldest first.
     /// Held in marker form; expanded against [`App::pastes`] on send.
     pub(crate) prompt_queue: VecDeque<String>,
-    /// Bulk pastes held aside, indexed by the number in their composer
-    /// marker (`pastes[0]` is `#1`). Grows for the session: a queued or
-    /// recalled prompt must still expand after later pastes arrive.
-    pub(crate) pastes: Vec<String>,
+    /// Held composer entities, indexed by their stable marker number.
+    /// Entries are never removed because queued and recalled prompts can
+    /// still refer to them.
+    pub(crate) pastes: Vec<HeldInput>,
     pub(crate) prompt_history: Vec<String>,
     pub(crate) history_pos: Option<usize>,
     pub(crate) tokens_in: u64,

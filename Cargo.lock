@@ -1162,6 +1162,7 @@ name = "orcacode"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "crossterm",
  "futures-util",
  "orca-harness-core",

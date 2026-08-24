@@ -42,12 +42,16 @@ pub(crate) async fn worker<F>(
     spawn_window_probe(&endpoint, ui.clone());
     while let Some(command) = commands.recv().await {
         match command {
-            WorkerCmd::Run { prompt, cancel } => {
+            WorkerCmd::Run {
+                prompt,
+                images,
+                cancel,
+            } => {
                 // Briefing the model is not news for the user: the
                 // /mode line already said the session is read-only,
                 // and whether a plan file appears is up to the agent.
                 planning.open_episode(&mut context);
-                context.push_user(&prompt);
+                context.push_user_with_images(&prompt, images);
                 let result = agent.run_context(&mut context, cancel).await;
                 repair_dangling_tool_calls(&mut context);
                 // The repair lands after on_agent_end fired; catch up so

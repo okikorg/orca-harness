@@ -155,8 +155,19 @@ fn encode_messages(context: &Context) -> Vec<Value> {
             Message::System { content } => {
                 out.push(json!({"role": "system", "content": content}));
             }
-            Message::User { content } => {
-                out.push(json!({"role": "user", "content": content}));
+            Message::User { content, images } => {
+                if images.is_empty() {
+                    out.push(json!({"role": "user", "content": content}));
+                } else {
+                    let mut parts = vec![json!({"type": "text", "text": content})];
+                    parts.extend(images.iter().map(|image| {
+                        json!({
+                            "type": "image_url",
+                            "image_url": {"url": crate::image_data_url(image)},
+                        })
+                    }));
+                    out.push(json!({"role": "user", "content": parts}));
+                }
             }
             Message::Assistant {
                 content,
@@ -374,6 +385,7 @@ impl Model for OpenAiModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orca_harness_core::Image;
 
     fn schemas() -> Vec<ToolSchema> {
         vec![ToolSchema {
@@ -387,6 +399,37 @@ mod tests {
         let mut context = Context::new();
         context.push_user("hi");
         context
+    }
+
+    #[test]
+    fn text_only_user_content_remains_a_string() {
+        let messages = encode_messages(&context());
+        assert_eq!(messages[0]["content"], "hi");
+    }
+
+    #[test]
+    fn user_images_follow_text_as_data_urls() {
+        let mut context = Context::new();
+        context.push_user_with_images(
+            "describe",
+            vec![Image {
+                media_type: "image/png".into(),
+                data: "aGVsbG8=".into(),
+            }],
+        );
+
+        let messages = encode_messages(&context);
+        assert_eq!(
+            messages[0]["content"][0],
+            json!({"type": "text", "text": "describe"})
+        );
+        assert_eq!(
+            messages[0]["content"][1],
+            json!({
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,aGVsbG8="}
+            })
+        );
     }
 
     #[test]

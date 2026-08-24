@@ -22,6 +22,7 @@ reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 futures-util = { workspace = true }
+base64 = "0.22"
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 textwrap = "0.16"
