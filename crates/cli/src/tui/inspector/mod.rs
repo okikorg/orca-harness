@@ -66,6 +66,7 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
         "glob" => "Find workspace paths",
         "process" => "Manage a background process",
         "pykernel" => "Run Python in the persistent kernel",
+        "bun_repl" => "Run JavaScript or TypeScript in the persistent Bun REPL",
         "subagent" => "Delegate a focused task",
         _ => "Inspect tool input and output",
     }

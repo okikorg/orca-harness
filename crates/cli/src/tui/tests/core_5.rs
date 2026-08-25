@@ -274,6 +274,10 @@
             other => panic!("expected a run, got {:?}", other.is_ok()),
         }
         assert_eq!(
+            app.turn_tokens_in, 9,
+            "input progress estimates the normalized submitted prompt once"
+        );
+        assert_eq!(
             app.prompt_history.last().map(String::as_str),
             Some("read @docs/crate-diagram.md please"),
             "recall keeps what the user typed"

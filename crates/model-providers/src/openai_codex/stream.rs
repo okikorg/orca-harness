@@ -114,6 +114,12 @@ impl Accumulator {
                         name: name.to_string(),
                         arguments,
                     });
+                    return Ok((!raw_arguments.is_empty())
+                        .then(|| ModelDelta::ToolInput {
+                            text: raw_arguments.to_string(),
+                        })
+                        .into_iter()
+                        .collect());
                 }
                 Ok(vec![])
             }
@@ -183,7 +189,11 @@ mod tests {
         let mut acc = Accumulator::default();
         acc.apply(r#"{"type":"response.output_text.delta","delta":"hello"}"#)
             .unwrap();
-        acc.apply(r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"shell","arguments":"{\"cmd\":\"pwd\"}"}}"#).unwrap();
+        let deltas = acc.apply(r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"shell","arguments":"{\"cmd\":\"pwd\"}"}}"#).unwrap();
+        assert!(matches!(
+            deltas.as_slice(),
+            [ModelDelta::ToolInput { text }] if text == r#"{"cmd":"pwd"}"#
+        ));
         acc.apply(r#"{"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":5}}}}"#).unwrap();
         match acc.finish().unwrap() {
             ModelResponse::ToolCalls {

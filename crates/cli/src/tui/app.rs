@@ -53,6 +53,12 @@ impl App {
             history_pos: None,
             tokens_in: 0,
             tokens_out: 0,
+            turn_tokens_in: 0,
+            turn_tokens_out: 0,
+            turn_output_settled: 0,
+            turn_reasoning_tokens: Default::default(),
+            turn_text_tokens: Default::default(),
+            turn_tool_input_tokens: Default::default(),
             cache_read_total: 0,
             cache_write_total: 0,
             usage_steps: 0,
@@ -131,8 +137,67 @@ impl App {
         });
     }
 
+    fn refresh_turn_output(&mut self) {
+        self.turn_tokens_out = self
+            .turn_output_settled
+            .saturating_add(self.turn_reasoning_tokens.estimate())
+            .saturating_add(self.turn_text_tokens.estimate())
+            .saturating_add(self.turn_tool_input_tokens.estimate());
+    }
+
+    pub(crate) fn consume_turn_reasoning(&mut self, text: &str) {
+        self.turn_reasoning_tokens.consume(text);
+        self.refresh_turn_output();
+    }
+
+    pub(crate) fn consume_turn_text(&mut self, text: &str) {
+        self.turn_text_tokens.consume(text);
+        self.refresh_turn_output();
+    }
+
+    pub(crate) fn consume_turn_tool_input(&mut self, text: &str) {
+        self.turn_tool_input_tokens.consume(text);
+        self.refresh_turn_output();
+    }
+
+    pub(crate) fn consume_turn_text_if_unseen(&mut self, text: &str) {
+        if self.turn_text_tokens.estimate() == 0 {
+            self.consume_turn_text(text);
+        }
+    }
+
+    /// Replace the active model step's estimates with authoritative
+    /// provider output, then start fresh estimators for the next step.
+    pub(crate) fn reconcile_turn_output(&mut self, output_tokens: u64) {
+        self.turn_output_settled = self.turn_output_settled.saturating_add(output_tokens);
+        self.turn_reasoning_tokens = Default::default();
+        self.turn_text_tokens = Default::default();
+        self.turn_tool_input_tokens = Default::default();
+        self.refresh_turn_output();
+    }
+
+    /// Preserve estimates when a provider omitted usage for this step.
+    pub(crate) fn settle_turn_output_estimate(&mut self) {
+        let estimate = self
+            .turn_reasoning_tokens
+            .estimate()
+            .saturating_add(self.turn_text_tokens.estimate())
+            .saturating_add(self.turn_tool_input_tokens.estimate());
+        self.turn_output_settled = self.turn_output_settled.saturating_add(estimate);
+        self.turn_reasoning_tokens = Default::default();
+        self.turn_text_tokens = Default::default();
+        self.turn_tool_input_tokens = Default::default();
+        self.refresh_turn_output();
+    }
+
     pub(crate) fn reset_activity(&mut self) {
         self.turn_tool_calls = 0;
+        self.turn_tokens_in = 0;
+        self.turn_tokens_out = 0;
+        self.turn_output_settled = 0;
+        self.turn_reasoning_tokens = Default::default();
+        self.turn_text_tokens = Default::default();
+        self.turn_tool_input_tokens = Default::default();
         self.last_turn_summary = None;
         self.reasoning.clear();
         self.reasoning_started = None;

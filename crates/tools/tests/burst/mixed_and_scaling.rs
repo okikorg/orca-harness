@@ -157,6 +157,7 @@ async fn heterogeneous_burst_100_all_tools() {
     tools.register(Arc::new(SubagentTool::new(model, &ws)));
 
     let python = python3_available();
+    let bun = bun_available();
     let content = large_noise();
     let mut seq = 0usize;
     let mut id = move || {
@@ -274,13 +275,28 @@ async fn heterogeneous_burst_100_all_tools() {
             json!({"path": format!("made/d_{i}")}),
         ));
     }
-    // 8 file_info
-    for i in 0..8 {
+    // 4 file_info
+    for i in 0..4 {
         batch.push(call(
             &id(),
             "file_info",
             json!({"path": format!("pool/large_{}.txt", i % POOL)}),
         ));
+    }
+    // 4 bun_repl (one independent Keyed chain), or file_info without Bun
+    if bun {
+        let code = "globalThis.bunTotal = (globalThis.bunTotal ?? 0) + 1; console.log(globalThis.bunTotal)";
+        for _ in 0..4 {
+            batch.push(call(&id(), "bun_repl", json!({"code": code})));
+        }
+    } else {
+        for i in 0..4 {
+            batch.push(call(
+                &id(),
+                "file_info",
+                json!({"path": format!("pool/large_{}.txt", i % POOL)}),
+            ));
+        }
     }
     // 4 pykernel (one Keyed chain), or 4 more file_info without python3
     if python {
@@ -335,13 +351,21 @@ async fn heterogeneous_burst_100_all_tools() {
         let expected: Vec<String> = (1..=4).map(|i| (i * LARGE_BYTES).to_string()).collect();
         assert_eq!(totals, expected);
     }
+    if bun {
+        let totals: Vec<&str> = results
+            .iter()
+            .filter(|r| r.tool_name == "bun_repl")
+            .map(|r| r.output["output"].as_str().unwrap().trim())
+            .collect();
+        assert_eq!(totals, ["1", "2", "3", "4"]);
+    }
     for r in results.iter().filter(|r| r.tool_name == "subagent") {
         assert_eq!(r.output["answer"], "done");
     }
 
     let rate = BURST as f64 / wall.as_secs_f64().max(f64::EPSILON);
     eprintln!(
-        "[bench] heterogeneous 15-tool mix          burst{BURST}={wall:>10.2?}  rate={rate:>7.0}/s"
+        "[bench] heterogeneous 16-tool mix          burst{BURST}={wall:>10.2?}  rate={rate:>7.0}/s"
     );
     cleanup(dir);
 }

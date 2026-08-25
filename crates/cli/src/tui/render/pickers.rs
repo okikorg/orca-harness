@@ -104,6 +104,30 @@ pub(crate) fn view_picker_lines(
     )
 }
 
+/// The `/mode` selector — same grammar as the provider and theme
+/// pickers.
+pub(crate) fn mode_picker_lines(
+    current: crate::mode::Mode,
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let rows = crate::mode::Mode::ALL.iter().map(|mode| {
+        let label = mode.label();
+        let note = if *mode == current { "current" } else { "" };
+        let description = match mode {
+            crate::mode::Mode::Normal => "gated tools ask for approval",
+            crate::mode::Mode::Plan => "read-only: investigate and propose, change nothing",
+            crate::mode::Mode::Yolo => "every gated tool runs without asking",
+        };
+        format!("{:<10} {:<46} {note}", label, description)
+    });
+    picker.lines(
+        "Select mode · ↑↓ navigate · enter use · esc close",
+        rows,
+        width,
+    )
+}
+
 /// The /settings tray: current values for the persisted preferences,
 /// enter drills into the matching picker.
 pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Vec<Line<'static>> {

@@ -161,7 +161,7 @@ pub(crate) async fn worker<F>(
                         }
                     }
                 }
-                // A fresh agent drops the old process/pykernel/subagent
+                // A fresh agent drops the old process/pykernel/bun_repl/subagent
                 // tools; their Drop kills background process groups and
                 // the interpreter, so /clear leaves nothing running.
                 agent = build(&endpoint);

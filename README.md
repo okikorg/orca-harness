@@ -39,27 +39,49 @@ tools, lifecycle, performance, and boundary — see
 
 ```text
 orca-harness/
+├── Cargo.toml                 # workspace manifest
 ├── crates/
-│   ├── harness-core/ # the kernel: Agent, Context, Model, Loop, Dispatcher, Tool, Extension,
-│   │                 # Limits, errors
-│   ├── model-providers/ # Extensible OpenAI, OpenRouter, and Codex adapters
-│   ├── provider-auth/ # provider-neutral credential source and error boundary
-│   ├── tools/        # core host/target tools: shell, process (persistent sessions / background
-│   │                 # processes), pykernel (persistent Python compute), subagent (in-process
-│   │                 # agent fan-out with adjustable nesting), todo_write (the agent's task
-│   │                 # list as shared state), ask (structured user clarification), read/write/edit/list files (read-before-write
-│   │                 # guarded), grep, glob — the set that makes an agent independently
-│   │                 # useful; plus an opt-in fs-admin bundle (copy/rename/delete/mkdir/stat)
-│   ├── tool-extensions/ # opt-in MCP, skills, and web tool integrations
-│   ├── extensions/   # critical extensions: event stream, tool policy, truncation (+ store
-│   │                 # paired with the read_tool_result tool), retry, usage metering, session
-│   │                 # recording/resume/fork (JSONL transcripts, --continue / --resume /
-│   │                 # /sessions / /rewind / /fork)
-│   └── cli/          # `orcacode`: interactive terminal host (streaming REPL, tool approvals,
-│                     # read-only plan mode, AGENTS.md project instructions, headless mode)
+│   ├── harness-core/          # agent loop, model/tool contracts, dispatcher, limits, testing
+│   │   ├── src/
+│   │   ├── examples/
+│   │   ├── benches/
+│   │   └── tests/
+│   ├── provider-auth/         # provider-neutral credential contracts
+│   │   └── src/
+│   ├── model-providers/       # unified OpenAI, OpenRouter, and Codex adapters
+│   │   ├── src/{openai,openai_codex,openrouter}/
+│   │   ├── examples/
+│   │   └── tests/
+│   ├── tools/                 # shell/process, files/search, Python/Bun compute, subagents, todo, and ask
+│   │   ├── src/
+│   │   ├── examples/
+│   │   └── tests/
+│   ├── tool-extensions/       # opt-in MCP, skills, and web integrations
+│   │   ├── src/{mcp,skills,web}/
+│   │   ├── examples/
+│   │   ├── benches/
+│   │   └── tests/
+│   ├── extensions/            # events, policy, compaction, truncation, retry, usage, sessions
+│   │   ├── src/
+│   │   ├── examples/
+│   │   └── tests/
+│   └── cli/                   # `orcacode` terminal host
+│       └── src/
+│           ├── auth/          # device login and credential storage
+│           ├── config/        # persisted host configuration
+│           ├── prompt/        # prompt parsing and file mentions
+│           ├── runtime/       # agent construction, workers, sessions, and signals
+│           ├── tui/           # commands, components, events, rendering, keys, and tests
+│           ├── view/          # Markdown and transcript formatting
+│           └── presentation/  # tool-result presentation
+├── benchmarks/                # kernel/startup probes, reports, budgets, and results
+├── ci/                        # test/benchmark workflows and size checks
+└── docs/                      # crate diagram, design notes, and implementation plans
 ```
 
-## Try it## Try it
+See [`docs/crate-diagram.md`](docs/crate-diagram.md) for the runtime dependency graph between these crates.
+
+## Try it
 
 `orcacode` is a reference host proving the harness drives a real terminal
 agent. It talks to any OpenAI-compatible endpoint; with no key set it
@@ -91,7 +113,7 @@ a compact summary:
   failed output expands inline while work is live.
 - Subagents render their inner tool calls as an indented nested rail,
   collapsed into the expandable record when they finish. The status line
-  counts live background work (`procs 2 · pykernel · agents 3`).
+  counts live background work (`procs 2 · pykernel · bun_repl · agents 3`).
 
 **Scrolling and copying text out** — mouse capture is on, so the wheel
 scrolls the transcript. `shift+↑`/`shift+↓` scroll by line and
@@ -115,7 +137,7 @@ Copying mid-stream takes the partial answer as it stands, and says so.
 `up`/`down` recall prompt history.
 
 **Tool approvals** — gated tools (`shell`, `write_file`, `edit_file`,
-`pykernel`, `subagent`) pause behind a prompt:
+`pykernel`, `bun_repl`, `subagent`) pause behind a prompt:
 
 | Key | Effect                                                                           |
 | :-- | :------------------------------------------------------------------------------- |
@@ -127,15 +149,17 @@ Copying mid-stream takes the partial answer as it stands, and says so.
 Saved grants are scoped to the workspace directory — future sessions in the same directory
 skip the prompt, other directories still ask — and are listed and revocable from `/settings`.
 
-**Plan mode** — `/mode` (or `--plan` at startup) makes the session
+**Plan mode** — `/mode plan` (or `--plan` at startup) makes the session
 read-only: the agent investigates and proposes, but changes nothing.
-Bare `/mode` toggles; `/mode plan` and `/mode normal` set it directly,
-and the status line carries `· plan mode` for as long as it is on.
+Bare `/mode` opens a picker over all three modes, preselected on the
+current one; `/mode plan`, `/mode yolo`, and `/mode normal` set a mode
+directly. The status line carries `· plan mode` for as long as plan
+mode is on.
 
 It is an **allowlist**, not a denylist. Only `read_file`, `list_dir`,
 `grep`, `glob`, `file_info`, `read_tool_result`, `web_fetch`,
 `web_search`, `web_crawl`, `skill`, `todo_write`, and `ask` run; everything else
-— `shell`, `process`, `pykernel`, `write_file`, `edit_file`, `subagent`,
+— `shell`, `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `subagent`,
 and every MCP tool — is denied with a reason that points the model at the
 plan directory instead. A denylist would have to know every tool the
 session might load, and MCP servers and skills add tools the CLI has
@@ -173,6 +197,30 @@ the plans that were actually written — observed from tool results, not
 guessed from the filesystem, so a denied or failed write is never
 reported as saved. It says nothing when no plan was written: looking
 around in plan mode is a legitimate use of it.
+
+**Yolo mode** — `/mode yolo` (or `--yolo` at startup, or pick it from
+the `/mode` picker) goes the other way: every gated tool runs without
+approval prompts, interactive or headless (it implies `--auto-approve`
+headless). Saved grants, revocations, and the approval UI are all
+skipped while it is on — the mode outranks everything below it.
+
+A mode that silences exactly the mechanism whose job is to say "wait"
+must never be quiet itself, so while yolo is on:
+
+- the status line carries `· yolo` for the whole session — not among
+  the optional segments that come and go;
+- it is never persisted: a session that silently came back with
+  approvals off would be a trap rather than a convenience.
+
+```text
+• yolo mode · every tool runs without approval prompts
+ model · running · yolo · ctx 10% · enter queue · esc interrupt · repo
+```
+
+Plan mode outranks yolo if both flags are given (`--yolo --plan` starts
+in plan mode): read-only and unprompted is a coherent, safe stance for
+unattended investigation, while letting the louder flag win would turn
+an ambiguous invocation into "everything writable, nobody asked".
 
 Note that this repository's own plans live in `docs/superpowers/plans/`,
 the convention the `superpowers` plugin uses. `orcacode` writes to
@@ -241,7 +289,7 @@ as append-only JSONL:
 | `--resume <id>` | resume a specific session                                                                                  |
 | `/sessions`     | open a picker and resume from the TUI                                                                      |
 | `--no-session`  | opt out of recording                                                                                       |
-| `/clear`        | empty the current session in place (same id) and stop all background work (processes, pykernel, subagents) |
+| `/clear`        | empty the current session in place (same id) and stop all background work (processes, pykernel, bun_repl, subagents) |
 | `/rewind [n]`   | drop the last `n` user turns (default 1) from the conversation and the file                                |
 | `/fork`         | continue this conversation in a new session file, leaving the current one as it is                         |
 
@@ -286,11 +334,28 @@ live tool count:
 | `/mcp add <name> <command>`    | save a server and connect it                      |
 | `/mcp remove <name>`           | forget a server and drop its tools                |
 
-A server's tools are exposed to the model as `mcp__<server>__<tool>`, so
-`<name>` must be letters, digits, `-`, or `_`. Toggling is cheap: reloads
-diff the config against the live connections, so flipping one server
-leaves the others' processes untouched. A server that fails to connect
-reports why and is skipped — it never blocks the rest.
+MCP contributes three stable model-facing interfaces regardless of how many
+servers or remote tools are connected:
+
+- `mcp_search_tools` searches metadata across every server without exposing
+  every full input schema.
+- `mcp_select_tool` loads one exact search result; its ordinary
+  `mcp__<server>__<tool>` schema appears on the next model turn.
+- `mcp_features` lists/reads resources, lists/invokes prompts, and performs
+  prompt/resource argument completion against an exact server.
+
+Remote tools remain ordinary harness tools for dispatch, approval,
+cancellation, and keyed per-server concurrency; a host-side model adapter
+filters their schemas until selected, and execution rejects guessed tool names
+until that same selection occurs. Connections validate initialization and
+advertised capabilities, load every paginated tool-list page, and fail closed
+on malformed protocol traffic or generated-name collisions. An interrupted
+request closes its serialized connection rather than risking a stale or
+partially written exchange; toggle the server to reconnect it. The harness core
+and agent loop are unchanged. Server `<name>` must be letters, digits, `-`, or
+`_`. Toggling is cheap: reloads diff the config against the live connections,
+so flipping one server leaves the others' processes untouched. A server that
+fails to connect reports why and is skipped — it never blocks the rest.
 
 Servers persist to the config file, either as a bare command string or as
 `{"command": …, "enabled": false}` so a disabled server keeps its command:
@@ -324,6 +389,13 @@ results to the model:
   (`Executor::ssh("user@host")`, `Executor::docker_exec("ctr")`) and the
   model drives that target through the same contract. Kills the child on
   cancellation, caps output, enforces a timeout.
+- `process` — keep background processes and interactive stdin/stdout sessions
+  alive across calls.
+- `pykernel` and `bun_repl` — persistent Python and JavaScript/TypeScript
+  compute. Both preserve state across calls, serialize only against themselves,
+  and restart explicitly after a timeout. `bun_repl` uses the `bun` executable
+  on `PATH`, supports imports and top-level `await`, and never auto-installs
+  missing packages.
 - `read_file`, `write_file`, `edit_file`, `list_dir`, `grep`, `glob` — all
   rooted at a `Workspace` that rejects absolute paths and `..` escapes.
   Writes and edits are `Keyed` by path: same-file writes serialize while
@@ -530,6 +602,7 @@ doing nothing, sampled with `ps` over the CLI's process tree after ~10 s idle:
 | :------------------------------------------------------ | -------------------------: | ----------------------: | --------: |
 | `orcacode` 0.1.0 (this repo)                            |                 **5.2 MB** |               **~8 MB** |         1 |
 | `fx` 0.0.5 (for scale)                                  |                     6.4 MB |                  ~21 MB |         1 |
+| Grok Build 1.0.5 (`grok`)                               |                   134.3 MB |                 ~90 MB |         1 |
 | `pi` 0.84.2 (`@earendil-works/pi-coding-agent`)         |             131 MB install |                 ~211 MB |  1 + node |
 | Codex 0.149.0-alpha.4.1 (bundled with ChatGPT)           |    220.5 MB + 57.2 MB host |                 ~340 MB |   up to 3 |
 | `prime-agent` 0.7.4                                     |             265 MB install |                 ~400 MB | 1 + node + py |
@@ -541,8 +614,9 @@ on top of this at startup (on the measurement machine they added 1–2 GB and
 up to a dozen node processes to Codex, omp, and Claude Code alike).
 
 Codex, Claude Code, and omp bundle a JavaScript runtime (Bun/Node); pi runs
-on a Node process — hence the order-of-magnitude gaps on both axes. A
-pure-Rust kernel sits next to `fx`, not next to the JS-bundled agents, which
+on a Node process — hence the order-of-magnitude gaps on both axes. Grok
+Build is a native single binary too, but a full product at 134 MB. A
+pure-Rust kernel sits next to `fx`, not next to the product CLIs, which
 is what makes it cheap to embed as a system's execution primitive
 (`ORCA_HARNESS_BIN`) and to run many agents per host.
 

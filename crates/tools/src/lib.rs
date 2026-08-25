@@ -3,9 +3,10 @@
 //! The core set of tools that make the harness independently useful: run
 //! commands on the host (or a target machine / container), keep
 //! long-lived processes and interactive sessions alive across calls, and
-//! read, write, edit, list, glob, and search files. Three workflow tools
+//! read, write, edit, list, glob, and search files. Four workflow tools
 //! build on the same primitives: [`PyKernelTool`] (persistent Python
-//! compute — state survives across calls), [`SubagentTool`] (spawn
+//! compute), [`BunReplTool`] (persistent JavaScript/TypeScript compute),
+//! [`SubagentTool`] (spawn
 //! independent in-process agents, with nesting governed by a shared
 //! [`SubagentDepth`]), and [`TodoWriteTool`] (the agent's plan as
 //! structured state, readable by the host through a shared
@@ -35,6 +36,7 @@
 //! machine through the same `shell` contract.
 
 mod ask;
+mod bun_repl;
 mod files;
 mod fs_admin;
 mod glob;
@@ -57,6 +59,7 @@ pub use ask::{
     AskAnswer, AskOption, AskQuestion, AskRequest, AskResponse, AskTool, AskTopic, AskTopicAnswer,
     MAX_ASK_TOPICS,
 };
+pub use bun_repl::BunReplTool;
 pub use files::{EditFileTool, FileGuard, ListDirTool, ReadFileTool, WriteFileTool};
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use glob::GlobTool;

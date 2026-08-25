@@ -57,6 +57,9 @@ pub enum ModelDelta {
     /// A fragment of the model's reasoning/thinking channel. Ephemeral:
     /// reasoning never enters the Context.
     Reasoning { text: String },
+    /// A fragment of tool-call arguments being generated. Presentation
+    /// can count it as output without exposing incomplete JSON as a call.
+    ToolInput { text: String },
 }
 
 /// Receives deltas during a streaming generation. Implemented for plain

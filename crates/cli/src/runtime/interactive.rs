@@ -11,12 +11,13 @@ use orca_harness_extensions::{
     ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, Truncation,
     TruncationStore,
 };
+use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
 use orca_harness_tools::{
-    core_tools_with_guard, AskTool, BackgroundStats, FileGuard, ProcessTool, PyKernelTool,
-    SubagentDepth, SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
+    core_tools_with_guard, AskTool, BackgroundStats, BunReplTool, FileGuard, ProcessTool,
+    PyKernelTool, SubagentDepth, SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
 };
 
 use crate::approval::Approval;
@@ -147,6 +148,15 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     for line in skill_notices.into_iter().chain(instruction_notices) {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
+    // A session that starts in yolo says so once, up front. The status
+    // line keeps saying it for the rest of the session; this is the
+    // prose version, so the first thing on the transcript is honest
+    // about what will (not) be asked.
+    if cfg.mode().bypasses_approval() {
+        let _ = ui_tx.send(UiMsg::Notice(
+            "yolo mode · every gated tool runs without approval prompts".into(),
+        ));
+    }
     let build = {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
@@ -259,7 +269,11 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     todos: &TodoList,
     files: &FileGuard,
     plan_area: &PlanArea,
-) -> Agent<M> {
+) -> Agent<Arc<dyn Model>> {
+    // MCP visibility is a host-side model concern: core keeps its sacred,
+    // immutable schema snapshot while this adapter filters it on each
+    // provider request using the catalog's current selections.
+    let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
     let model_for_subagents = model.clone();
     let events = EventStream::from_fn({
         let ui = ui.clone();
@@ -269,11 +283,17 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     });
     // PlanGate before Approval: the kernel stops at the first denial, so
     // a call plan mode refuses never reaches the user as a prompt.
+    // Both read the shared handle per call: /mode applies to the call
+    // in flight, yolo included.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
         .extension(PlanGate::new(mode.clone(), plan_area.clone()))
-        .extension(Approval::new(ui.clone(), workspace_scope(ws)));
+        .extension(Approval::with_mode(
+            mode.clone(),
+            ui.clone(),
+            workspace_scope(ws),
+        ));
     if extensions::enabled("long-session") {
         let ui = ui.clone();
         agent = agent.extension(
@@ -336,7 +356,12 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             .stats(stats.clone()),
     ));
     agent = agent.tool_arc(std::sync::Arc::new(
-        PyKernelTool::new().working_dir(root).stats(stats.clone()),
+        PyKernelTool::new()
+            .working_dir(root.clone())
+            .stats(stats.clone()),
+    ));
+    agent = agent.tool_arc(std::sync::Arc::new(
+        BunReplTool::new().working_dir(root).stats(stats.clone()),
     ));
     let ui_events = ui.clone();
     let mut subagent = SubagentTool::new(model_for_subagents, ws)

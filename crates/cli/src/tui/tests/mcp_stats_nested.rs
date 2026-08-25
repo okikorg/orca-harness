@@ -350,12 +350,17 @@ mod stats_segment_tests {
         assert_eq!(stats_segments(&stats), " · procs 2 · agents 1");
         stats.inc_kernels();
         assert_eq!(stats_segments(&stats), " · procs 2 · pykernel · agents 1");
+        stats.inc_bun_repls();
+        assert_eq!(
+            stats_segments(&stats),
+            " · procs 2 · pykernel · bun_repl · agents 1"
+        );
     }
 }
 mod nested_rail_tests {
     use super::*;
     #[cfg(test)]
-use orca_harness_extensions::HarnessEvent;
+    use orca_harness_extensions::HarnessEvent;
     use serde_json::json;
 
     fn nested_app() -> App {
@@ -559,4 +564,3 @@ use orca_harness_extensions::HarnessEvent;
         assert!(expanded.contains("list_dir"), "{expanded}");
     }
 }
-

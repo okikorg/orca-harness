@@ -129,6 +129,9 @@ impl ChunkAccumulator {
                 }
                 if let Some(arguments) = fragment.function.arguments {
                     partial.arguments.push_str(&arguments);
+                    if !arguments.is_empty() {
+                        deltas.push(ModelDelta::ToolInput { text: arguments });
+                    }
                 }
             }
         }
@@ -196,6 +199,7 @@ mod tests {
             .map(|d| match d {
                 ModelDelta::Text { text } => format!("text:{text}"),
                 ModelDelta::Reasoning { text } => format!("reasoning:{text}"),
+                ModelDelta::ToolInput { text } => format!("tool_input:{text}"),
             })
             .collect()
     }
@@ -256,7 +260,7 @@ mod tests {
     #[test]
     fn tool_call_arguments_assemble_across_chunks() {
         let mut acc = ChunkAccumulator::new();
-        apply_all(
+        let deltas = apply_all(
             &mut acc,
             &[
                 r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"shell","arguments":""}}]},"finish_reason":null}]}"#,
@@ -264,6 +268,10 @@ mod tests {
                 r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ls\"}"}}]},"finish_reason":null}]}"#,
                 r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
             ],
+        );
+        assert_eq!(
+            delta_tags(&deltas),
+            vec!["tool_input:{\"command\":", "tool_input:\"ls\"}"]
         );
         match acc.finish().unwrap() {
             ModelResponse::ToolCalls { content, calls, .. } => {

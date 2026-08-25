@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use orca_harness_core::Tool;
-use orca_harness_tool_extensions::mcp::McpClient;
+use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient};
 
 /// What the last connection attempt for a server produced. Rendered by
 /// the /mcp overlay next to each row.
@@ -40,6 +40,7 @@ struct Connection {
 #[derive(Clone, Default)]
 pub struct McpServers {
     connections: Arc<RwLock<HashMap<String, Connection>>>,
+    catalog: McpCatalog,
 }
 
 impl McpServers {
@@ -47,15 +48,23 @@ impl McpServers {
         Self::default()
     }
 
-    /// Tools from every connected server, in config order so the tool
-    /// list a model sees does not shuffle between rebuilds.
+    /// The three stable interfaces followed by hidden remote tools. The model
+    /// adapter filters hidden schemas, while dispatch can still resolve a
+    /// selected remote tool by its ordinary registered name.
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        let mut tools = self.catalog.interface_tools();
         let connections = self.connections.read().expect("mcp lock");
-        crate::config::stored_mcp_servers()
-            .iter()
-            .filter_map(|server| connections.get(&server.name))
-            .flat_map(|connection| connection.tools.iter().cloned())
-            .collect()
+        tools.extend(
+            crate::config::stored_mcp_servers()
+                .iter()
+                .filter(|server| connections.contains_key(&server.name))
+                .flat_map(|server| self.catalog.server_tools(&server.name)),
+        );
+        tools
+    }
+
+    pub fn catalog(&self) -> McpCatalog {
+        self.catalog.clone()
     }
 
     /// The last attempt's outcome for `name`, or `None` when the server
@@ -65,6 +74,9 @@ impl McpServers {
         let connection = connections.get(name)?;
         Some(match &connection.error {
             Some(err) => McpState::Failed(err.clone()),
+            None if !self.catalog.healthy(name) => {
+                McpState::Failed("connection interrupted; reload to reconnect".into())
+            }
             None => McpState::Connected(connection.tools.len()),
         })
     }
@@ -89,7 +101,11 @@ impl McpServers {
                         server.enabled
                             && server.name == **name
                             && server.command == connection.command
-                    })
+                    }) || (connection.error.is_none() && !self.catalog.healthy(name))
+                        || connection
+                            .error
+                            .as_ref()
+                            .is_some_and(|error| error.contains("duplicate MCP tool name"))
                 })
                 .map(|(name, _)| name.clone())
                 .collect()
@@ -98,6 +114,7 @@ impl McpServers {
             let mut connections = self.connections.write().expect("mcp lock");
             for name in &stale {
                 connections.remove(name);
+                self.catalog.remove(name);
                 // A server that is merely gone from the config was
                 // reported by /mcp remove already; only disabling and
                 // re-command are worth a line here.
@@ -117,16 +134,34 @@ impl McpServers {
                 continue;
             }
             let connection = match McpClient::connect(&server.name, &server.command).await {
-                Ok(tools) => {
-                    let count = match tools.len() {
+                Ok(connected) => {
+                    let count = match connected.tools().len() {
                         1 => "1 tool".to_string(),
                         n => format!("{n} tools"),
                     };
-                    lines.push(format!("MCP {} connected · {count}", server.name));
-                    Connection {
-                        command: server.command.clone(),
-                        tools,
-                        error: None,
+                    let tools = connected
+                        .tools()
+                        .iter()
+                        .cloned()
+                        .map(|tool| tool as Arc<dyn Tool>)
+                        .collect();
+                    match self.catalog.insert(server.name.clone(), connected) {
+                        Ok(()) => {
+                            lines.push(format!("MCP {} connected · {count}", server.name));
+                            Connection {
+                                command: server.command.clone(),
+                                tools,
+                                error: None,
+                            }
+                        }
+                        Err(err) => {
+                            lines.push(format!("MCP {} · {err}", server.name));
+                            Connection {
+                                command: server.command.clone(),
+                                tools: Vec::new(),
+                                error: Some(err.to_string()),
+                            }
+                        }
                     }
                 }
                 Err(err) => {
@@ -157,13 +192,13 @@ mod tests {
     async fn reload_reports_per_server_and_replaces_the_set() {
         let servers = McpServers::new();
         assert!(servers.reload().await.is_empty());
-        assert!(servers.tools().is_empty());
+        assert_eq!(servers.tools().len(), 3);
 
         crate::config::save_mcp_server("ghost", "orca-no-such-binary-xyz").unwrap();
         let lines = servers.reload().await;
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("MCP ghost ·"), "line: {}", lines[0]);
-        assert!(servers.tools().is_empty());
+        assert_eq!(servers.tools().len(), 3);
         assert!(matches!(servers.state("ghost"), Some(McpState::Failed(_))));
     }
 

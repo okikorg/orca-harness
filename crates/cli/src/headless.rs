@@ -8,11 +8,13 @@ use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
+use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
 use orca_harness_tools::{
-    core_tools, PyKernelTool, SubagentDepth, SubagentTool, TodoList, TodoWriteTool, Workspace,
+    core_tools, BunReplTool, PyKernelTool, SubagentDepth, SubagentTool, TodoList, TodoWriteTool,
+    Workspace,
 };
 
 use crate::approval::HeadlessGate;
@@ -33,6 +35,13 @@ pub async fn run<M: Model + Clone + 'static>(
     todos: &TodoList,
     plan_area: &crate::plan::PlanArea,
 ) -> i32 {
+    // Connect before constructing the model adapter so selection made by an
+    // MCP tool is reflected in the immediately following provider request.
+    let mcp = crate::mcp::McpServers::new();
+    for line in mcp.reload().await {
+        eprintln!("{line}");
+    }
+    let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
     let model_for_subagents = model.clone();
     let json = cfg.json;
     let saw_delta = Arc::new(AtomicBool::new(false));
@@ -81,7 +90,7 @@ pub async fn run<M: Model + Clone + 'static>(
     });
 
     let (meter, usage) = UsageMeter::new();
-    // PlanGate first: --plan denies before --auto-approve can allow.
+    // PlanGate first: --plan denies before --yolo/--auto-approve can allow.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
@@ -93,7 +102,10 @@ pub async fn run<M: Model + Clone + 'static>(
     if crate::extensions::enabled("retry") {
         agent = agent.extension(crate::extensions::tool_retry());
     }
-    if !cfg.auto_approve {
+    // Yolo implies auto-approve: a headless run started with --yolo has
+    // opted out of every ask, so the headless gate must not re-add the
+    // one the interactive path just removed.
+    if !cfg.auto_approve && !cfg.mode().bypasses_approval() {
         agent = agent.extension(HeadlessGate);
     }
     if let Some(session) = &session {
@@ -112,18 +124,14 @@ pub async fn run<M: Model + Clone + 'static>(
             .tool_arc(Arc::new(WebCrawlTool::new(firecrawl)));
     }
     let root = ws.root().to_string_lossy().into_owned();
-    agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root)));
+    agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root.clone())));
+    agent = agent.tool_arc(Arc::new(BunReplTool::new().working_dir(root)));
     agent = agent.tool_arc(Arc::new(
         SubagentTool::new(model_for_subagents, ws)
             .max_depth(SubagentDepth::new(cfg.subagent_depth)),
     ));
-    // Configured MCP servers join headless runs too; connect status goes
-    // to stderr with the rest of the tool activity, and a server that
-    // fails to connect is skipped, never fatal.
-    let mcp = crate::mcp::McpServers::new();
-    for line in mcp.reload().await {
-        eprintln!("{line}");
-    }
+    // Configured MCP servers joined before model construction; register the
+    // stable interfaces and hidden remote dispatch targets here.
     for tool in mcp.tools() {
         agent = agent.tool_arc(tool);
     }

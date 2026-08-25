@@ -369,40 +369,52 @@ pub(crate) fn slash_command(
     }
 }
 
-/// `/mode [normal|plan]` — no argument toggles, which is what a mode
-/// with two states wants. The change lands on the shared handle the plan
-/// gate reads per tool call, so it takes effect on the call in flight
-/// with no agent rebuild and nothing to save.
-pub(crate) fn mode_command(app: &mut App, arg: &str) {
-    use crate::mode::Mode;
-    let next = if arg.is_empty() {
-        app.cfg.mode.toggle()
-    } else {
-        match Mode::from_label(arg) {
-            Some(mode) => {
-                app.cfg.mode.set(mode);
-                mode
-            }
-            None => {
-                push_error(
-                    app,
-                    format!("unknown mode: {arg} — valid modes: normal, plan"),
-                );
-                return;
-            }
-        }
-    };
-    push_notice(
-        app,
-        format!("{} mode · {}", next.label(), next.description()),
-    );
+/// Apply a session mode: the notice, the yolo warning, and the plan
+/// episode end all live here so every entry point says the same thing.
+pub(crate) fn apply_mode(app: &mut App, next: crate::mode::Mode) {
+    let previous = app.cfg.mode.get();
+    app.cfg.mode.set(next);
+    // One plain-text line, glyph included — deliberately not the
+    // shared notification (its dot is accent-colored): a mode change
+    // is text like any other, nothing highlighted.
+    app.push_line(Line::from(Span::styled(
+        format!("• {} mode · {}", next.label(), next.description()),
+        theme().dim,
+    )));
     // Leaving plan mode ends the episode. Report the plans the agent
     // actually wrote — observed from tool results, not guessed — and say
     // nothing when it wrote none: plan mode is also a fine way to just
     // look around, and announcing a missing file would be nagging.
-    if next == Mode::Normal {
+    if previous == crate::mode::Mode::Plan && next != crate::mode::Mode::Plan {
         for path in app.cfg.plan.end() {
             push_notice(app, format!("plan saved to {path}"));
+        }
+    }
+}
+
+/// `/mode [normal|plan|yolo]` — no argument opens the standard picker,
+/// preselected on the current mode, exactly like /provider and /theme.
+/// A name picks directly: `mode` is a command typed hourly, so the
+/// text form stays.
+pub(crate) fn mode_command(app: &mut App, arg: &str) {
+    use crate::mode::Mode;
+    if arg.is_empty() {
+        let index = Mode::ALL
+            .iter()
+            .position(|mode| *mode == app.cfg.mode.get())
+            .unwrap_or(0);
+        app.overlay = Some(Overlay::Mode {
+            picker: ListPicker::with_selected(Mode::ALL.len(), index),
+        });
+        return;
+    }
+    match Mode::from_label(arg) {
+        Some(mode) => apply_mode(app, mode),
+        None => {
+            push_error(
+                app,
+                format!("unknown mode: {arg} — valid modes: normal, plan, yolo"),
+            );
         }
     }
 }

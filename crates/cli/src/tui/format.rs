@@ -19,7 +19,10 @@ pub(super) fn workspace_status_name(workspace: &str) -> &str {
 
 /// Short human label for an elapsed duration.
 pub(super) fn elapsed_label(elapsed: Duration) -> String {
-    if elapsed.as_secs() > 0 {
+    if elapsed.as_secs() >= 60 {
+        let seconds = elapsed.as_secs();
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else if elapsed.as_secs() > 0 {
         format!("{:.1}s", elapsed.as_secs_f64())
     } else if elapsed.as_millis() > 0 {
         format!("{}ms", elapsed.as_millis())
@@ -28,6 +31,44 @@ pub(super) fn elapsed_label(elapsed: Duration) -> String {
     } else {
         format!("{}ns", elapsed.as_nanos())
     }
+}
+
+/// Chunk-invariant token estimate used for live turn progress. Each
+/// whitespace-delimited byte span costs ceil(bytes / 4), matching FX.
+#[derive(Default)]
+pub(super) struct TokenEstimator {
+    settled_tokens: u64,
+    span_bytes: u64,
+}
+
+impl TokenEstimator {
+    pub(super) fn consume(&mut self, text: &str) {
+        for byte in text.bytes() {
+            if byte.is_ascii_whitespace() {
+                self.finish_span();
+            } else {
+                self.span_bytes = self.span_bytes.saturating_add(1);
+            }
+        }
+    }
+
+    pub(super) fn estimate(&self) -> u64 {
+        self.settled_tokens
+            .saturating_add(self.span_bytes.div_ceil(4))
+    }
+
+    fn finish_span(&mut self) {
+        self.settled_tokens = self
+            .settled_tokens
+            .saturating_add(self.span_bytes.div_ceil(4));
+        self.span_bytes = 0;
+    }
+}
+
+pub(super) fn estimate_tokens(text: &str) -> u64 {
+    let mut estimator = TokenEstimator::default();
+    estimator.consume(text);
+    estimator.estimate()
 }
 
 /// `1 item` vs `2 items`.
@@ -60,6 +101,21 @@ pub(super) fn fmt_tokens(n: u64) -> String {
         0..=999 => n.to_string(),
         1_000..=999_999 => format!("{:.1}k", n as f64 / 1_000.0),
         _ => format!("{:.1}m", n as f64 / 1_000_000.0),
+    }
+}
+
+/// FX-style live token count: exact below 1k, one decimal below 10k
+/// only when useful, then whole thousands.
+pub(super) fn fmt_turn_tokens(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    let whole = tokens / 1_000;
+    let tenths = (tokens % 1_000) / 100;
+    if whole < 10 && tenths > 0 {
+        format!("{whole}.{tenths}k")
+    } else {
+        format!("{whole}k")
     }
 }
 

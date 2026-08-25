@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::tui::format::estimate_tokens;
 
 pub(crate) fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, width: usize) {
     let prompt = app.composer.trim().to_string();
@@ -124,9 +125,11 @@ pub(crate) fn start_prompt(
     // the visible/model text as references alongside their native payloads.
     let prompt = expand_pastes(&app.pastes, &prompt);
     app.context_tokens += (prompt.len() / 4) as u64;
+    let model_prompt = strip_location_mentions(&prompt);
+    let prompt_tokens = estimate_tokens(&model_prompt);
     if worker
         .send(WorkerCmd::Run {
-            prompt: strip_location_mentions(&prompt),
+            prompt: model_prompt,
             images,
             cancel: cancel.clone(),
         })
@@ -137,6 +140,7 @@ pub(crate) fn start_prompt(
     }
 
     app.reset_activity();
+    app.turn_tokens_in = prompt_tokens;
 
     if app.turn_count > 0 {
         app.push_line(Line::from(""));

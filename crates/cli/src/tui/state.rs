@@ -16,6 +16,7 @@ use crate::tui::components::picker::{ListPicker, PickerAction};
 use orca_harness_core::{CancellationToken, Image};
 use orca_harness_model_providers::openrouter::ModelInfo;
 
+use super::format::TokenEstimator;
 use super::PICKER_ROWS;
 
 /// Everything the terminal needs to know about the workspace it is
@@ -130,6 +131,8 @@ pub(crate) enum Overlay {
     Themes { picker: ListPicker },
     /// Transcript layout selector (classic or split inspector).
     Views { picker: ListPicker },
+    /// Session mode selector over `crate::mode::Mode::ALL`.
+    Mode { picker: ListPicker },
     /// Vertical spacing between transcript sections.
     TranscriptSpacing { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
@@ -343,6 +346,14 @@ pub(crate) struct App {
     pub(crate) history_pos: Option<usize>,
     pub(crate) tokens_in: u64,
     pub(crate) tokens_out: u64,
+    /// FX-style live turn progress: estimated submitted prompt tokens
+    /// once, plus generated output reconciled to provider usage per step.
+    pub(crate) turn_tokens_in: u64,
+    pub(crate) turn_tokens_out: u64,
+    pub(super) turn_output_settled: u64,
+    pub(super) turn_reasoning_tokens: TokenEstimator,
+    pub(super) turn_text_tokens: TokenEstimator,
+    pub(super) turn_tool_input_tokens: TokenEstimator,
     pub(crate) cache_read_total: u64,
     pub(crate) cache_write_total: u64,
     /// Model steps that reported usage this session.

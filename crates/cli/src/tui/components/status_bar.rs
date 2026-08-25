@@ -58,4 +58,31 @@ mod tests {
             " model · idle · normal · ctx 10% · enter send · repo"
         );
     }
+
+    /// The yolo segment renders like any other mode segment — plain
+    /// text, one unstyled span. Presence, not paint, is the signal.
+    #[test]
+    fn yolo_segment_renders_like_any_other() {
+        let line = StatusBar {
+            model: "model",
+            state: "idle",
+            mode: " · yolo",
+            context: "ctx 10%",
+            stats: "",
+            todo: "",
+            queue: "",
+            hint: "enter send",
+            workspace: "repo",
+        }
+        .line(200, Style::default());
+        assert_eq!(
+            line.spans.len(),
+            1,
+            "no special styling for any mode segment"
+        );
+        assert_eq!(
+            line.spans[0].content.as_ref(),
+            " model · idle · yolo · ctx 10% · enter send · repo"
+        );
+    }
 }

@@ -113,12 +113,32 @@
     }
 
     #[test]
+    fn turn_token_estimator_is_chunk_invariant() {
+        let text = "split 你好 inside words";
+        let mut one_shot = super::format::TokenEstimator::default();
+        one_shot.consume(text);
+
+        for split in text
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain(std::iter::once(text.len()))
+        {
+            let mut fragmented = super::format::TokenEstimator::default();
+            fragmented.consume(&text[..split]);
+            fragmented.consume(&text[split..]);
+            assert_eq!(fragmented.estimate(), one_shot.estimate());
+        }
+    }
+
+    #[test]
     fn elapsed_labels_keep_sub_millisecond_tool_timings_visible() {
         assert_eq!(elapsed_label(Duration::ZERO), "0ns");
         assert_eq!(elapsed_label(Duration::from_nanos(850)), "850ns");
         assert_eq!(elapsed_label(Duration::from_micros(842)), "842µs");
         assert_eq!(elapsed_label(Duration::from_millis(14)), "14ms");
         assert_eq!(elapsed_label(Duration::from_millis(1_500)), "1.5s");
+        assert_eq!(elapsed_label(Duration::from_secs(60)), "1m 0s");
+        assert_eq!(elapsed_label(Duration::from_secs(199)), "3m 19s");
     }
 
     #[test]

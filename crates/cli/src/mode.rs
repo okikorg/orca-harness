@@ -3,7 +3,10 @@
 //! `Normal` is the agent as usual — every registered tool is available,
 //! and the gated ones ask for approval. `Plan` is read-only: the agent
 //! may investigate but may not change anything, so it answers with a
-//! plan instead of a diff.
+//! plan instead of a diff. `Yolo` removes friction instead of adding
+//! it: gated tools stop asking entirely. Because that silences exactly
+//! the mechanism whose job is to say "wait", it never renders quietly —
+//! the status line carries `yolo` for as long as it is on.
 //!
 //! Plan mode is an **allowlist**, not a denylist. A denylist would have
 //! to enumerate every mutating tool, and the session's tool set is not
@@ -32,15 +35,19 @@ pub enum Mode {
     Normal,
     /// Read-only: only the tools in [`READ_ONLY_TOOLS`] run.
     Plan,
+    /// Every tool runs without approval prompts. The status line shows
+    /// `yolo` for the whole session.
+    Yolo,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 2] = [Mode::Normal, Mode::Plan];
+    pub const ALL: [Mode; 3] = [Mode::Normal, Mode::Plan, Mode::Yolo];
 
     pub fn label(self) -> &'static str {
         match self {
             Mode::Normal => "normal",
             Mode::Plan => "plan",
+            Mode::Yolo => "yolo",
         }
     }
 
@@ -48,6 +55,7 @@ impl Mode {
         match self {
             Mode::Normal => "every tool is available; gated tools ask for approval",
             Mode::Plan => "read-only: the agent investigates and proposes, but changes nothing",
+            Mode::Yolo => "every tool runs without approval prompts",
         }
     }
 
@@ -57,14 +65,22 @@ impl Mode {
         match label.trim().to_ascii_lowercase().as_str() {
             "normal" | "default" | "off" | "act" => Some(Mode::Normal),
             "plan" | "planning" | "read-only" | "readonly" | "ro" => Some(Mode::Plan),
+            "yolo" => Some(Mode::Yolo),
             _ => None,
         }
+    }
+
+    /// True when gated tools must not prompt. Plan mode denies them
+    /// before approval is ever consulted ([`PlanGate`] registers
+    /// first); yolo skips the ask on purpose.
+    pub fn bypasses_approval(self) -> bool {
+        matches!(self, Mode::Yolo)
     }
 }
 
 /// The tools that only observe: they read files, search, or fetch, and
 /// leave the machine exactly as they found it. Everything else — `shell`,
-/// `process`, `pykernel`, `write_file`, `edit_file`, `subagent`, the
+/// `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `subagent`, the
 /// `fs_admin` bundle, every MCP tool — is denied in plan mode.
 ///
 /// `shell` is absent on purpose. Most of what an agent wants it for in
@@ -87,8 +103,9 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "ask",
 ];
 
-/// Cloneable handle onto the session's mode, captured by [`PlanGate`] and
-/// by the TUI's status line. Cheap enough to read on every tool call.
+/// Cloneable handle onto the session's mode, captured by [`PlanGate`],
+/// by the approval extension, and by the TUI's status line. Cheap
+/// enough to read on every tool call.
 #[derive(Clone, Default)]
 pub struct ModeHandle(Arc<AtomicU8>);
 
@@ -102,7 +119,8 @@ impl ModeHandle {
     pub fn get(&self) -> Mode {
         match self.0.load(Ordering::Relaxed) {
             0 => Mode::Normal,
-            _ => Mode::Plan,
+            1 => Mode::Plan,
+            _ => Mode::Yolo,
         }
     }
 
@@ -110,22 +128,13 @@ impl ModeHandle {
         let encoded = match mode {
             Mode::Normal => 0,
             Mode::Plan => 1,
+            Mode::Yolo => 2,
         };
         self.0.store(encoded, Ordering::Relaxed);
     }
 
     pub fn is_plan(&self) -> bool {
         self.get() == Mode::Plan
-    }
-
-    /// Flip between the two modes, returning the new one.
-    pub fn toggle(&self) -> Mode {
-        let next = match self.get() {
-            Mode::Normal => Mode::Plan,
-            Mode::Plan => Mode::Normal,
-        };
-        self.set(next);
-        next
     }
 }
 
@@ -230,17 +239,17 @@ mod tests {
         }
         assert_eq!(Mode::from_label("READ-ONLY"), Some(Mode::Plan));
         assert_eq!(Mode::from_label(" off "), Some(Mode::Normal));
+        assert_eq!(Mode::from_label("YOLO"), Some(Mode::Yolo));
         assert_eq!(Mode::from_label("nonsense"), None);
     }
 
     #[test]
-    fn handle_defaults_to_normal_and_toggles() {
+    fn handle_defaults_to_normal_and_shares_state() {
         let handle = ModeHandle::default();
         assert_eq!(handle.get(), Mode::Normal);
         assert!(!handle.is_plan());
-        assert_eq!(handle.toggle(), Mode::Plan);
-        assert!(handle.is_plan());
-        assert_eq!(handle.toggle(), Mode::Normal);
+        handle.set(Mode::Yolo);
+        assert!(handle.get().bypasses_approval());
         // Clones share one state: the TUI and the gate see the same mode.
         let clone = handle.clone();
         handle.set(Mode::Plan);
@@ -267,6 +276,7 @@ mod tests {
             "shell",
             "process",
             "pykernel",
+            "bun_repl",
             "write_file",
             "edit_file",
             "subagent",
@@ -294,6 +304,57 @@ mod tests {
         assert!(denied(
             &gate.before_tool(&call("some_future_tool")).await.unwrap()
         ));
+    }
+
+    /// Yolo is not plan mode: the gate stays out of the way and every
+    /// tool — known or unknown — runs.
+    #[tokio::test]
+    async fn yolo_mode_gates_nothing() {
+        let gate = PlanGate::new(ModeHandle::new(Mode::Yolo), PlanArea::new());
+        for name in [
+            "shell",
+            "write_file",
+            "edit_file",
+            "process",
+            "pykernel",
+            "bun_repl",
+            "subagent",
+            "mcp__x__y",
+            "some_future_tool",
+        ] {
+            let decision = gate.before_tool(&call(name)).await.unwrap();
+            assert!(matches!(decision, ToolDecision::Continue), "{name}");
+        }
+    }
+
+    /// The one exception is the plan area: in yolo the whole machine is
+    /// writable anyway, so no path is special and none is recorded as
+    /// "a plan" — that vocabulary belongs to plan mode.
+    #[tokio::test]
+    async fn yolo_mode_records_no_plans() {
+        let area = PlanArea::new();
+        let mode = ModeHandle::new(Mode::Yolo);
+        let gate = PlanGate::new(mode.clone(), area.clone());
+        let write = ToolCall {
+            id: "c1".into(),
+            name: "write_file".into(),
+            arguments: json!({"path": "docs/plan/x.md", "content": "# Plan"}),
+        };
+        assert!(matches!(
+            gate.before_tool(&write).await.unwrap(),
+            ToolDecision::Continue
+        ));
+        gate.tool_result(&orca_harness_core::ToolResult {
+            call_id: "c1".into(),
+            tool_name: "write_file".into(),
+            output: json!({"path": "docs/plan/x.md", "bytesWritten": 6}),
+            is_error: false,
+        })
+        .await;
+        assert!(area.written().is_empty());
+        // And leaving yolo for normal reports nothing.
+        mode.set(Mode::Normal);
+        assert!(area.end().is_empty());
     }
 
     /// Flipping the handle applies to the very next call, with no agent

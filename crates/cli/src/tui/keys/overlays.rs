@@ -148,6 +148,10 @@ pub(crate) fn handle_overlay_key(
             PickerEvent::Activated(index) => After::CloseAndSetView(ViewMode::ALL[index]),
             _ => After::Nothing,
         },
+        Overlay::Mode { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => After::CloseAndSetMode(crate::mode::Mode::ALL[index]),
+            _ => After::Nothing,
+        },
         Overlay::TranscriptSpacing { picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => {
                 After::CloseAndSetTranscriptSpacing(TranscriptSpacing::ALL[index])
@@ -478,6 +482,10 @@ pub(crate) fn handle_overlay_key(
             app.overlay = None;
             app.context_window = window;
             send_or_report(app, worker, WorkerCmd::SetModel { id });
+        }
+        After::CloseAndSetMode(mode) => {
+            app.overlay = None;
+            crate::tui::commands::apply_mode(app, mode);
         }
         After::CloseAndSetView(mode) => {
             app.overlay = None;

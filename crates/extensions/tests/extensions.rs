@@ -67,6 +67,7 @@ async fn event_stream_emits_full_lifecycle() {
             HarnessEvent::AgentStart => "start",
             HarnessEvent::AssistantDelta { .. } => "assistant_delta",
             HarnessEvent::ReasoningDelta { .. } => "reasoning_delta",
+            HarnessEvent::ToolInputDelta { .. } => "tool_input_delta",
             HarnessEvent::Assistant { .. } => "assistant",
             HarnessEvent::ToolCall { .. } => "tool_call",
             HarnessEvent::ToolResult { .. } => "tool_result",

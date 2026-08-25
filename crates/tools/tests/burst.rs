@@ -7,8 +7,9 @@
 //!   concurrency class is covered: Parallel fan-out (shell, process,
 //!   read_file, list_dir, grep, glob, create_folder, file_info,
 //!   subagent), Keyed-by-path (write_file, edit_file, copy_file,
-//!   delete_file), multi-key (rename_file), and the Keyed pykernel chain.
-//! - heterogeneous: one 100-call batch mixing all 15 shipped tools,
+//!   delete_file), multi-key (rename_file), and the independent Keyed
+//!   pykernel and bun_repl chains.
+//! - heterogeneous: one 100-call batch mixing all 16 shipped tools,
 //!   with ordered (Keyed and multi-key) members embedded in the Parallel
 //!   majority, plus a same-path Keyed write chain whose final content
 //!   proves call-order serialization.
@@ -34,8 +35,8 @@ use orca_harness_core::{
     ToolResult,
 };
 use orca_harness_tools::{
-    fs_admin_tools, EditFileTool, GlobTool, GrepTool, ListDirTool, ProcessTool, PyKernelTool,
-    ReadFileTool, ShellTool, SubagentTool, Workspace, WriteFileTool,
+    fs_admin_tools, BunReplTool, EditFileTool, GlobTool, GrepTool, ListDirTool, ProcessTool,
+    PyKernelTool, ReadFileTool, ShellTool, SubagentTool, Workspace, WriteFileTool,
 };
 
 const BURST: usize = 100;
@@ -155,7 +156,8 @@ fn registry(ws: &Workspace) -> ToolRegistry {
     for tool in fs_admin_tools(ws) {
         tools.register(tool);
     }
-    tools.register(Arc::new(PyKernelTool::new().working_dir(dir)));
+    tools.register(Arc::new(PyKernelTool::new().working_dir(dir.clone())));
+    tools.register(Arc::new(BunReplTool::new().working_dir(dir)));
     tools
 }
 

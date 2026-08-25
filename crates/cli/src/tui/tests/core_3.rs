@@ -65,6 +65,27 @@
     }
 
     #[test]
+    fn live_row_uses_minutes_and_current_turn_token_traffic() {
+        let mut app = test_app();
+        app.run = RunState::Running {
+            started: Instant::now() - Duration::from_secs(199),
+            cancel: CancellationToken::new(),
+        };
+        app.turn_tokens_in = 4_020;
+        app.turn_tokens_out = 178;
+
+        let text = live_lines(&app, 100)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("working · 3m 19s · ↑4k ↓178 · esc to interrupt"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn paused_queue_shows_resume_guidance_in_the_composer_and_status() {
         let mut app = App::new(TuiConfig {
             model_name: "test".into(),
@@ -154,6 +175,23 @@
     }
 
     #[test]
+    fn turn_output_estimates_streams_then_reconciles_each_step() {
+        let mut app = test_app();
+        app.consume_turn_reasoning("thinking");
+        app.consume_turn_text("answer");
+        app.consume_turn_tool_input("{\"x\":1}");
+        assert_eq!(app.turn_tokens_out, 6, "three live channel estimates");
+
+        app.reconcile_turn_output(20);
+        assert_eq!(app.turn_tokens_out, 20, "provider usage replaces the step estimate");
+
+        app.consume_turn_text("more");
+        assert_eq!(app.turn_tokens_out, 21, "the next step adds to settled output");
+        app.settle_turn_output_estimate();
+        assert_eq!(app.turn_tokens_out, 21, "missing usage preserves the estimate");
+    }
+
+    #[test]
     fn context_meter_tracks_the_latest_step_not_the_session_total() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
@@ -173,6 +211,11 @@
             );
         }
         assert_eq!(app.tokens_in, 2_200, "session total accumulates");
+        assert_eq!(
+            app.turn_tokens_in, 0,
+            "provider context input does not replace the submitted-prompt estimate"
+        );
+        assert_eq!(app.turn_tokens_out, 130, "turn output accumulates");
         assert_eq!(
             app.context_tokens, 1_280,
             "context meter is the latest step's input + output"

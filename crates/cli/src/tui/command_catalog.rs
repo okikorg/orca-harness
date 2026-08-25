@@ -92,7 +92,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "mode",
-        description: "switch between normal and plan (read-only) mode; no argument toggles",
+        description: "pick a session mode (normal, plan read-only, yolo no-approvals); no argument opens the picker",
         category: "Session",
         takes_args: true,
     },

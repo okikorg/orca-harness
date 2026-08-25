@@ -22,6 +22,9 @@ async fn event_stream_emits_deltas_before_the_full_message() {
             ModelDelta::Text {
                 text: " world".into(),
             },
+            ModelDelta::ToolInput {
+                text: "{\"path\":".into(),
+            },
         ]]);
 
     let (stream, mut rx) = EventStream::channel();
@@ -41,6 +44,7 @@ async fn event_stream_emits_deltas_before_the_full_message() {
             HarnessEvent::AgentStart => "start".into(),
             HarnessEvent::ReasoningDelta { text } => format!("reasoning:{text}"),
             HarnessEvent::AssistantDelta { text } => format!("delta:{text}"),
+            HarnessEvent::ToolInputDelta { text } => format!("tool_input:{text}"),
             HarnessEvent::Assistant { message } => format!("assistant:{message}"),
             HarnessEvent::Result { .. } => "result".into(),
             other => panic!("unexpected event: {other:?}"),
@@ -53,6 +57,7 @@ async fn event_stream_emits_deltas_before_the_full_message() {
             "reasoning:hmm",
             "delta:Hello",
             "delta: world",
+            "tool_input:{\"path\":",
             "assistant:Hello world",
             "result",
         ]
@@ -71,4 +76,10 @@ async fn delta_events_serialize_to_platform_ndjson_tags() {
     let ev = HarnessEvent::ReasoningDelta { text: "hmm".into() };
     let json = serde_json::to_value(&ev).unwrap();
     assert_eq!(json["type"], "reasoning_delta");
+
+    let ev = HarnessEvent::ToolInputDelta {
+        text: "{\"x\":".into(),
+    };
+    let json = serde_json::to_value(&ev).unwrap();
+    assert_eq!(json["type"], "tool_input_delta");
 }

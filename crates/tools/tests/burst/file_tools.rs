@@ -5,6 +5,13 @@ fn python3_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+fn bun_available() -> bool {
+    std::process::Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 // --------------------------------------------------------------------
 // Homogeneous bursts: 100 calls of one tool, real action, large files.
 // --------------------------------------------------------------------

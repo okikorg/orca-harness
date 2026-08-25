@@ -1,27 +1,27 @@
 //! One stdio MCP server connection: spawn, handshake, request/response.
 //!
-//! The wire is a single lane — requests are serialized behind a mutex and
-//! each response is matched by id, so an exchange abandoned mid-flight
-//! (cancellation) leaves at worst a stale response the next exchange
-//! skips over. Server-initiated traffic is tolerated, not supported:
-//! notifications are ignored, `ping` is answered, anything else is
-//! refused with a JSON-RPC error.
+//! The wire is a single lane: requests are serialized behind a mutex and
+//! each response is matched by id. Cancellation or deadline expiry closes
+//! the connection rather than risking a partial write or stale exchange.
+//! Server-initiated traffic is tolerated, not supported: notifications are
+//! ignored, `ping` is answered, anything else is refused with a JSON-RPC error.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
-use orca_harness_core::{Tool, ToolSchema};
+use orca_harness_core::{ToolContext, ToolError, ToolSchema};
 
 use crate::mcp::tool::McpTool;
 
-/// The protocol revision offered in `initialize`. Servers may answer
-/// with their own; nothing later in the exchange depends on which won.
+/// Protocol revisions implemented by this client, newest first.
 const PROTOCOL_VERSION: &str = "2025-06-18";
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26"];
 
 /// Cap on each handshake step so a broken command cannot wedge the
 /// caller. Generous because `npx`-style launchers download on first run.
@@ -39,26 +39,50 @@ pub enum McpError {
     Protocol(String),
 }
 
+/// One live connection and the tools discovered during its handshake.
+pub struct McpConnection {
+    client: Arc<McpClient>,
+    tools: Vec<Arc<McpTool>>,
+}
+
+impl McpConnection {
+    pub fn tools(&self) -> &[Arc<McpTool>] {
+        &self.tools
+    }
+
+    pub fn into_parts(self) -> (Arc<McpClient>, Vec<Arc<McpTool>>) {
+        (self.client, self.tools)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ServerCapabilities {
+    pub(crate) tools: bool,
+    pub(crate) resources: bool,
+    pub(crate) prompts: bool,
+    pub(crate) completions: bool,
+}
+
 /// A connected MCP server. Held via `Arc` by every [`McpTool`] it
 /// produced; the child process is killed when the last clone drops.
 pub struct McpClient {
     server: String,
     next_id: AtomicU64,
+    healthy: AtomicBool,
+    capabilities: OnceLock<ServerCapabilities>,
+    child: StdMutex<Child>,
     wire: Mutex<Wire>,
 }
 
 struct Wire {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
-    // Held for kill_on_drop; all traffic goes through the taken pipes.
-    _child: Child,
 }
 
 impl McpClient {
     /// Spawn `command` (split on whitespace — no shell quoting), run the
-    /// MCP handshake, and return one [`Tool`] per tool the server lists,
-    /// each named `mcp__<server>__<tool>`.
-    pub async fn connect(server: &str, command: &str) -> Result<Vec<Arc<dyn Tool>>, McpError> {
+    /// MCP handshake, and retain the live client plus the server's tools.
+    pub async fn connect(server: &str, command: &str) -> Result<McpConnection, McpError> {
         let mut parts = command.split_whitespace();
         let program = parts
             .next()
@@ -76,11 +100,10 @@ impl McpClient {
         let client = Arc::new(Self {
             server: server.to_string(),
             next_id: AtomicU64::new(1),
-            wire: Mutex::new(Wire {
-                stdin,
-                stdout,
-                _child: child,
-            }),
+            healthy: AtomicBool::new(true),
+            capabilities: OnceLock::new(),
+            child: StdMutex::new(child),
+            wire: Mutex::new(Wire { stdin, stdout }),
         });
 
         let init = json!({
@@ -91,26 +114,29 @@ impl McpClient {
                 "version": env!("CARGO_PKG_VERSION"),
             },
         });
-        step(
+        let initialized = step(
             HANDSHAKE_TIMEOUT,
             "initialize",
             client.request("initialize", init),
         )
         .await?;
+        let capabilities = parse_initialize(&initialized)?;
+        client
+            .capabilities
+            .set(capabilities.clone())
+            .expect("capabilities set once");
         client.notify("notifications/initialized").await?;
-        let listed = step(
-            HANDSHAKE_TIMEOUT,
-            "tools/list",
-            client.request("tools/list", json!({})),
-        )
-        .await?;
 
-        Ok(parse_tool_list(server, &listed)?
+        let listed = if capabilities.tools {
+            step(HANDSHAKE_TIMEOUT, "tools/list", list_all_tools(&client)).await?
+        } else {
+            Vec::new()
+        };
+        let tools = listed
             .into_iter()
-            .map(|(schema, remote)| {
-                Arc::new(McpTool::new(client.clone(), schema, remote)) as Arc<dyn Tool>
-            })
-            .collect())
+            .map(|(schema, remote)| Arc::new(McpTool::new(client.clone(), schema, remote)))
+            .collect();
+        Ok(McpConnection { client, tools })
     }
 
     /// The configured server name (also the tools' concurrency key).
@@ -118,12 +144,38 @@ impl McpClient {
         &self.server
     }
 
-    /// One request/response exchange. Callers wanting cancellation or a
-    /// deadline select over this future; see [`Wire::recv`] for why an
-    /// abandoned exchange is harmless.
+    pub(crate) fn capabilities(&self) -> &ServerCapabilities {
+        self.capabilities.get().expect("MCP handshake completed")
+    }
+
+    pub fn healthy(&self) -> bool {
+        self.healthy.load(Ordering::Acquire)
+    }
+
+    fn ensure_healthy(&self) -> Result<(), McpError> {
+        self.healthy
+            .load(Ordering::Acquire)
+            .then_some(())
+            .ok_or_else(|| {
+                McpError::Protocol(
+                    "connection closed after an interrupted request; reconnect the server".into(),
+                )
+            })
+    }
+
+    fn invalidate(&self) {
+        if !self.healthy.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let _ = self.child.lock().expect("MCP child lock").start_kill();
+    }
+
+    /// One request/response exchange.
     pub(crate) async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
+        self.ensure_healthy()?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let mut wire = self.wire.lock().await;
+        self.ensure_healthy()?;
         wire.send(&json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -141,6 +193,33 @@ impl McpClient {
     }
 }
 
+/// Run a request with the same cancellation/deadline semantics as tools/call.
+pub(crate) async fn request_with_context(
+    client: &McpClient,
+    method: &str,
+    params: Value,
+    ctx: &ToolContext,
+) -> Result<Value, ToolError> {
+    let exchange = client.request(method, params);
+    let expired = async {
+        match ctx.deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        result = exchange => result.map_err(|error| ToolError::msg(error.to_string())),
+        _ = ctx.cancellation.cancelled() => {
+            client.invalidate();
+            Err(ToolError::msg("cancelled"))
+        },
+        _ = expired => {
+            client.invalidate();
+            Err(ToolError::msg("deadline exceeded"))
+        },
+    }
+}
+
 impl Wire {
     async fn send(&mut self, message: &Value) -> Result<(), McpError> {
         let mut line = message.to_string();
@@ -150,11 +229,10 @@ impl Wire {
         Ok(())
     }
 
-    /// Read until the response for `id` arrives. Notifications and
-    /// non-JSON lines (servers that log to stdout) are skipped; stale
-    /// responses from abandoned exchanges have smaller ids and are
-    /// skipped too; server requests are answered inline so a `ping`
-    /// mid-exchange cannot deadlock the lane.
+    /// Read until the response for `id` arrives. Valid notifications are
+    /// skipped, and server requests are answered inline so a `ping`
+    /// mid-exchange cannot deadlock the lane. Non-JSON stdout diagnostics
+    /// are tolerated; parsed JSON must be a valid JSON-RPC envelope.
     async fn recv(&mut self, id: u64) -> Result<Value, McpError> {
         loop {
             let mut line = String::new();
@@ -164,10 +242,18 @@ impl Wire {
             let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
                 continue;
             };
-            if message["method"].is_string() {
-                let request_id = &message["id"];
-                if !request_id.is_null() {
-                    let reply = if message["method"] == "ping" {
+            let object = message
+                .as_object()
+                .ok_or_else(|| McpError::Protocol("JSON-RPC message is not an object".into()))?;
+            if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+                return Err(McpError::Protocol("invalid JSON-RPC version".into()));
+            }
+            if let Some(method) = object.get("method") {
+                let method = method
+                    .as_str()
+                    .ok_or_else(|| McpError::Protocol("JSON-RPC method is not a string".into()))?;
+                if let Some(request_id) = object.get("id") {
+                    let reply = if method == "ping" {
                         json!({ "jsonrpc": "2.0", "id": request_id, "result": {} })
                     } else {
                         json!({ "jsonrpc": "2.0", "id": request_id,
@@ -177,46 +263,169 @@ impl Wire {
                 }
                 continue;
             }
-            if message["id"].as_u64() != Some(id) {
-                continue;
+            let response_id = object
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| McpError::Protocol("JSON-RPC response has an invalid id".into()))?;
+            if response_id != id {
+                return Err(McpError::Protocol(format!(
+                    "JSON-RPC response id {response_id} does not match request {id}"
+                )));
             }
-            if let Some(error) = message.get("error") {
-                let detail = error["message"].as_str().unwrap_or("unknown error");
+            let result = object.get("result");
+            let error = object.get("error");
+            if result.is_some() == error.is_some() {
+                return Err(McpError::Protocol(
+                    "JSON-RPC response must contain exactly one of result or error".into(),
+                ));
+            }
+            if let Some(error) = error {
+                let error = error
+                    .as_object()
+                    .ok_or_else(|| McpError::Protocol("JSON-RPC error is not an object".into()))?;
+                if error.get("code").and_then(Value::as_i64).is_none() {
+                    return Err(McpError::Protocol(
+                        "JSON-RPC error code is not an integer".into(),
+                    ));
+                }
+                let detail = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        McpError::Protocol("JSON-RPC error message is not a string".into())
+                    })?;
                 return Err(McpError::Protocol(format!("server error: {detail}")));
             }
-            return Ok(message["result"].clone());
+            return Ok(result.expect("validated result").clone());
         }
     }
 }
 
-async fn step(
+async fn step<T>(
     limit: std::time::Duration,
     name: &'static str,
-    exchange: impl std::future::Future<Output = Result<Value, McpError>>,
-) -> Result<Value, McpError> {
+    exchange: impl std::future::Future<Output = Result<T, McpError>>,
+) -> Result<T, McpError> {
     tokio::time::timeout(limit, exchange)
         .await
         .map_err(|_| McpError::Timeout { step: name })?
 }
 
-/// A `tools/list` result as (model-facing schema, server-side tool name)
-/// pairs. Nameless entries are a protocol violation; entries without a
-/// description or input schema are common and get harmless defaults.
-fn parse_tool_list(server: &str, result: &Value) -> Result<Vec<(ToolSchema, String)>, McpError> {
-    let tools = result["tools"]
-        .as_array()
+fn parse_initialize(result: &Value) -> Result<ServerCapabilities, McpError> {
+    let object = result
+        .as_object()
+        .ok_or_else(|| McpError::Protocol("initialize result is not an object".into()))?;
+    let version = object
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::Protocol("initialize returned no protocolVersion".into()))?;
+    if !SUPPORTED_PROTOCOL_VERSIONS.contains(&version) {
+        return Err(McpError::Protocol(format!(
+            "unsupported MCP protocol version: {version}"
+        )));
+    }
+    let capabilities = object
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .ok_or_else(|| McpError::Protocol("initialize returned no capabilities object".into()))?;
+    let server_info = object
+        .get("serverInfo")
+        .and_then(Value::as_object)
+        .ok_or_else(|| McpError::Protocol("initialize returned no serverInfo object".into()))?;
+    for field in ["name", "version"] {
+        if server_info.get(field).and_then(Value::as_str).is_none() {
+            return Err(McpError::Protocol(format!(
+                "initialize serverInfo has no {field}"
+            )));
+        }
+    }
+    for capability in ["tools", "resources", "prompts", "completions"] {
+        if capabilities
+            .get(capability)
+            .is_some_and(|value| !value.is_object())
+        {
+            return Err(McpError::Protocol(format!(
+                "initialize capability {capability} is not an object"
+            )));
+        }
+    }
+    Ok(ServerCapabilities {
+        tools: capabilities.contains_key("tools"),
+        resources: capabilities.contains_key("resources"),
+        prompts: capabilities.contains_key("prompts"),
+        completions: capabilities.contains_key("completions"),
+    })
+}
+
+struct ToolPage {
+    tools: Vec<(ToolSchema, String)>,
+    next_cursor: Option<String>,
+}
+
+fn ensure_unique_tools(tools: &[(ToolSchema, String)]) -> Result<(), McpError> {
+    let mut names = HashSet::new();
+    if let Some(duplicate) = tools
+        .iter()
+        .map(|(schema, _)| schema.name.as_str())
+        .find(|name| !names.insert(*name))
+    {
+        return Err(McpError::Protocol(format!(
+            "duplicate MCP tool name: {duplicate}"
+        )));
+    }
+    Ok(())
+}
+
+async fn list_all_tools(client: &McpClient) -> Result<Vec<(ToolSchema, String)>, McpError> {
+    let mut cursor = None;
+    let mut seen = HashSet::new();
+    let mut tools = Vec::new();
+    loop {
+        let params = cursor
+            .as_ref()
+            .map_or_else(|| json!({}), |cursor| json!({ "cursor": cursor }));
+        let result = client.request("tools/list", params).await?;
+        let page = parse_tool_page(client.server(), &result)?;
+        tools.extend(page.tools);
+        let Some(next) = page.next_cursor else {
+            break;
+        };
+        if !seen.insert(next.clone()) {
+            return Err(McpError::Protocol(format!(
+                "tools/list repeated cursor: {next}"
+            )));
+        }
+        cursor = Some(next);
+    }
+    ensure_unique_tools(&tools)?;
+    Ok(tools)
+}
+
+/// Parse one `tools/list` page. Nameless entries are a protocol violation;
+/// entries without a description or input schema get harmless defaults.
+fn parse_tool_page(server: &str, result: &Value) -> Result<ToolPage, McpError> {
+    let object = result
+        .as_object()
+        .ok_or_else(|| McpError::Protocol("tools/list result is not an object".into()))?;
+    let tools = object
+        .get("tools")
+        .and_then(Value::as_array)
         .ok_or_else(|| McpError::Protocol("tools/list returned no tools array".into()))?;
-    tools
+    let tools = tools
         .iter()
         .map(|tool| {
             let remote = tool["name"]
                 .as_str()
+                .filter(|name| !name.is_empty())
                 .ok_or_else(|| McpError::Protocol("tools/list entry without a name".into()))?
                 .to_string();
-            let parameters = match &tool["inputSchema"] {
-                Value::Object(schema) => Value::Object(schema.clone()),
-                _ => json!({ "type": "object" }),
-            };
+            let parameters = tool
+                .get("inputSchema")
+                .and_then(Value::as_object)
+                .map(|schema| Value::Object(schema.clone()))
+                .ok_or_else(|| {
+                    McpError::Protocol("tools/list entry without an inputSchema object".into())
+                })?;
             let schema = ToolSchema {
                 name: format!("mcp__{server}__{remote}"),
                 description: tool["description"].as_str().unwrap_or("").to_string(),
@@ -224,22 +433,45 @@ fn parse_tool_list(server: &str, result: &Value) -> Result<Vec<(ToolSchema, Stri
             };
             Ok((schema, remote))
         })
-        .collect()
+        .collect::<Result<Vec<_>, McpError>>()?;
+    let next_cursor = match object.get("nextCursor") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(cursor)) if !cursor.is_empty() => Some(cursor.clone()),
+        Some(_) => {
+            return Err(McpError::Protocol(
+                "tools/list nextCursor is not a non-empty string".into(),
+            ))
+        }
+    };
+    Ok(ToolPage { tools, next_cursor })
 }
 
 /// Reduce a `tools/call` result to the model-visible output value:
 /// `structuredContent` verbatim when present, text content joined,
 /// anything richer passed through raw.
 pub(crate) fn call_output(result: &Value) -> Result<Value, orca_harness_core::ToolError> {
-    let text = result["content"].as_array().map(|items| {
-        items.iter().all(|item| item["type"] == "text").then(|| {
-            items
-                .iter()
-                .filter_map(|item| item["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-    });
+    let object = result
+        .as_object()
+        .ok_or_else(|| orca_harness_core::ToolError::msg("tools/call result is not an object"))?;
+    if object
+        .get("isError")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(orca_harness_core::ToolError::msg(
+            "tools/call isError is not a boolean",
+        ));
+    }
+    let content = object
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| orca_harness_core::ToolError::msg("tools/call returned no content array"))?;
+    let text = Some(content.iter().all(|item| item["type"] == "text").then(|| {
+        content
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }));
     if result["isError"].as_bool() == Some(true) {
         let detail = match text.flatten().filter(|t| !t.is_empty()) {
             Some(text) => text,
@@ -261,13 +493,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_list_prefixes_names_and_defaults_missing_fields() {
+    fn tool_list_prefixes_names_and_requires_input_schemas() {
         let listed = json!({ "tools": [
             { "name": "echo", "description": "echo back",
               "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } } } },
-            { "name": "bare" },
+            { "name": "bare", "inputSchema": { "type": "object" } },
         ]});
-        let tools = parse_tool_list("docs", &listed).unwrap();
+        let page = parse_tool_page("docs", &listed).unwrap();
+        let tools = page.tools;
         assert_eq!(tools[0].0.name, "mcp__docs__echo");
         assert_eq!(tools[0].0.description, "echo back");
         assert_eq!(tools[0].1, "echo");
@@ -278,10 +511,65 @@ mod tests {
 
     #[test]
     fn tool_list_rejects_malformed_results() {
-        assert!(parse_tool_list("d", &json!({})).is_err());
+        assert!(parse_tool_page("d", &json!({})).is_err());
         assert!(
-            parse_tool_list("d", &json!({ "tools": [{ "description": "nameless" }] })).is_err()
+            parse_tool_page("d", &json!({ "tools": [{ "description": "nameless" }] })).is_err()
         );
+        assert!(parse_tool_page("d", &json!({ "tools": [{ "name": "bare" }] })).is_err());
+    }
+
+    #[test]
+    fn initialize_requires_the_supported_version_and_valid_capabilities() {
+        let valid = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": { "tools": {}, "resources": {} },
+            "serverInfo": { "name": "fake", "version": "1" }
+        });
+        let capabilities = parse_initialize(&valid).unwrap();
+        assert!(capabilities.tools);
+        assert!(capabilities.resources);
+        assert!(!capabilities.prompts);
+        let older = json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "serverInfo": { "name": "fake", "version": "1" }
+        });
+        assert!(parse_initialize(&older).is_ok());
+        assert!(parse_initialize(&json!({})).is_err());
+        let mut unsupported = valid;
+        unsupported["protocolVersion"] = json!("old");
+        assert!(parse_initialize(&unsupported).is_err());
+    }
+
+    #[test]
+    fn tool_page_parses_and_validates_next_cursor() {
+        let page = parse_tool_page("docs", &json!({ "tools": [], "nextCursor": "two" })).unwrap();
+        assert_eq!(page.next_cursor.as_deref(), Some("two"));
+        assert!(parse_tool_page("docs", &json!({ "tools": [], "nextCursor": 2 })).is_err());
+        assert!(parse_tool_page("docs", &json!({ "tools": [], "nextCursor": "" })).is_err());
+    }
+
+    #[test]
+    fn duplicate_tool_names_are_rejected() {
+        let tools = vec![
+            (
+                ToolSchema {
+                    name: "mcp__same".into(),
+                    description: String::new(),
+                    parameters: json!({}),
+                },
+                "one".into(),
+            ),
+            (
+                ToolSchema {
+                    name: "mcp__same".into(),
+                    description: String::new(),
+                    parameters: json!({}),
+                },
+                "two".into(),
+            ),
+        ];
+        assert!(ensure_unique_tools(&tools).is_err());
     }
 
     #[test]
@@ -304,6 +592,18 @@ mod tests {
             call_output(&image).unwrap(),
             json!({ "content": [{ "type": "image", "data": "abc" }] })
         );
+    }
+
+    #[test]
+    fn call_output_rejects_malformed_results() {
+        for malformed in [
+            json!(null),
+            json!({}),
+            json!({ "content": null }),
+            json!({ "content": [], "isError": "yes" }),
+        ] {
+            assert!(call_output(&malformed).is_err(), "accepted {malformed}");
+        }
     }
 
     #[test]

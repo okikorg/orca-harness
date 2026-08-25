@@ -14,6 +14,9 @@ pub(super) enum After {
     },
     /// Close, persist, and activate the selected transcript layout.
     CloseAndSetView(ViewMode),
+    /// Close and activate the picked session mode on the shared
+    /// handle the gates read per tool call.
+    CloseAndSetMode(crate::mode::Mode),
     /// Close, persist, and activate transcript section spacing.
     CloseAndSetTranscriptSpacing(TranscriptSpacing),
     /// Close and drop a dim status line into the history.

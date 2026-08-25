@@ -6,6 +6,7 @@ Two suites, because the harness has two costs worth defending:
 | :--------- | :------------------------ | :----------------------------------------------------------- |
 | **kernel** | `./benchmarks/kernel.sh`  | overhead between a model emitting tool calls and tools running |
 | startup    | `./benchmarks/startup.sh` | fixed cost the `orcacode` host pays before accepting input     |
+| MCP search | `benchmarks/mcp/`          | metadata-search cutoff distribution and labeled query accuracy  |
 
 Plus `./benchmarks/compare.sh`, which puts orcacode next to `fx` on the
 same host — see [Comparing against fx](#comparing-against-fx), and read it
@@ -39,7 +40,11 @@ The reporting layer has its own tests:
 ```bash
 python3 benchmarks/check_budgets_test.py
 python3 benchmarks/kernel_report_test.py
+python3 -m unittest discover -s benchmarks/mcp -p '*_test.py' -v
 ```
+
+MCP search benchmark details and standalone reports live in
+[`benchmarks/mcp/`](mcp/README.md).
 
 ## The kernel suite
 

@@ -14,7 +14,7 @@ use crate::tui::components::status_bar::StatusBar;
 use crate::tui::components::welcome::Welcome;
 use crate::view::{self, theme};
 
-use super::super::format::workspace_status_name;
+use super::super::format::{elapsed_label, fmt_turn_tokens, workspace_status_name};
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
@@ -278,7 +278,7 @@ pub(crate) fn stabilize_transcript_scroll(app: &mut App, max_scroll: usize) {
 }
 
 /// Status-line segments for live background work; empty when idle so the
-/// line stays quiet. `pykernel` is unnumbered (it is 0 or 1).
+/// line stays quiet. Each persistent compute tool is unnumbered (0 or 1).
 pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> String {
     let mut out = String::new();
     if stats.processes() > 0 {
@@ -286,6 +286,9 @@ pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> Str
     }
     if stats.kernels() > 0 {
         out.push_str(" · pykernel");
+    }
+    if stats.bun_repls() > 0 {
+        out.push_str(" · bun_repl");
     }
     if stats.agents() > 0 {
         out.push_str(&format!(" · agents {}", stats.agents()));
@@ -308,9 +311,17 @@ pub(crate) fn queue_segment(queued: usize) -> String {
 ///
 /// Once the agent has written a plan, the count rides along, so a landed
 /// plan is visible without waiting for `/mode normal` to list it.
+///
+/// Yolo is the same bargain from the other side: it silences exactly
+/// the mechanism whose job is to say "wait", so while it is on its
+/// segment never abbreviates away either. It renders as plain `yolo`.
 pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::PlanArea) -> String {
-    if mode.get() == crate::mode::Mode::Normal {
-        return String::new();
+    match mode.get() {
+        crate::mode::Mode::Normal => {
+            return String::new();
+        }
+        crate::mode::Mode::Yolo => return " · yolo".to_string(),
+        crate::mode::Mode::Plan => {}
     }
     match plan.written().len() {
         0 => " · plan mode".to_string(),
@@ -402,6 +413,7 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Providers { picker } => provider_lines(picker, width),
             Overlay::Themes { picker } => theme_picker_lines(picker, width),
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
+            Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),
             Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
             Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
@@ -438,12 +450,21 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             "working"
         };
         if let RunState::Running { started, .. } = &app.run {
+            let token_io = if app.turn_tokens_in == 0 && app.turn_tokens_out == 0 {
+                String::new()
+            } else {
+                format!(
+                    " · ↑{} ↓{}",
+                    fmt_turn_tokens(app.turn_tokens_in),
+                    fmt_turn_tokens(app.turn_tokens_out)
+                )
+            };
             lines.push(Line::from(vec![
                 Span::styled(format!("  {spinner} "), t.accent),
                 Span::styled(
                     format!(
-                        "{verb} · {}s · esc to interrupt",
-                        started.elapsed().as_secs()
+                        "{verb} · {}{token_io} · esc to interrupt",
+                        elapsed_label(started.elapsed())
                     ),
                     t.dim,
                 ),

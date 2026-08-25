@@ -155,16 +155,25 @@ mod mode_rewind_todo_tests {
         let mut app = app_with(mode.clone(), TodoList::new());
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
 
+        // Bare /mode opens the standard picker (same as /provider and
+        // /theme), preselected on the current mode; it changes nothing
+        // on its own.
         slash_command(&mut app, "mode", &worker, 80);
-        assert_eq!(mode.get(), Mode::Plan, "bare /mode toggles");
-        slash_command(&mut app, "mode", &worker, 80);
-        assert_eq!(mode.get(), Mode::Normal);
+        assert_eq!(mode.get(), Mode::Normal, "bare /mode changes nothing");
+        let Some(Overlay::Mode { ref picker }) = app.overlay else {
+            panic!("bare /mode must open the picker");
+        };
+        assert_eq!(picker.index(), 0);
+        handle_overlay_key(&mut app, key(KeyCode::Esc), &worker);
+        assert!(app.overlay.is_none());
 
         slash_command(&mut app, "mode plan", &worker, 80);
         assert_eq!(mode.get(), Mode::Plan);
         // Setting the mode it is already in is not a toggle.
         slash_command(&mut app, "mode plan", &worker, 80);
         assert_eq!(mode.get(), Mode::Plan);
+        slash_command(&mut app, "mode yolo", &worker, 80);
+        assert_eq!(mode.get(), Mode::Yolo);
         slash_command(&mut app, "mode normal", &worker, 80);
         assert_eq!(mode.get(), Mode::Normal);
 
@@ -173,6 +182,44 @@ mod mode_rewind_todo_tests {
         assert_eq!(mode.get(), Mode::Normal);
         // Glyphed like every other system line, not flush-left.
         assert!(texts(&app).contains("• unknown mode: sideways"));
+    }
+
+    /// The picker is preselected on the current mode and enter applies
+    /// through the same `apply_mode` path as `/mode <name>`: same
+    /// notice, same yolo warning, same episode end.
+    #[tokio::test]
+    async fn mode_picker_applies_the_picked_mode_on_enter() {
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let mode = ModeHandle::new(Mode::Normal);
+        let mut app = app_with(mode.clone(), TodoList::new());
+        slash_command(&mut app, "mode", &worker, 80);
+
+        // Down twice → yolo row, enter lands it with the loud notice.
+        handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
+        handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
+        handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
+        assert_eq!(mode.get(), Mode::Yolo, "enter applies the picked mode");
+        assert!(app.overlay.is_none());
+        let rendered = texts(&app);
+        assert!(rendered.contains("yolo mode ·"), "{rendered}");
+
+
+        // Reopening from yolo highlights the yolo row; picking normal
+        // ends any plan episode exactly like /mode normal would.
+        slash_command(&mut app, "mode", &worker, 80);
+        let Some(Overlay::Mode { ref picker }) = app.overlay else {
+            panic!("expected the mode picker");
+        };
+        assert_eq!(picker.index(), 2);
+        handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
+        handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
+        handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
+        assert_eq!(mode.get(), Mode::Normal);
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
     }
 
     /// Leaving plan mode reports the plans that were actually written,
@@ -207,6 +254,32 @@ mod mode_rewind_todo_tests {
         assert!(app.cfg.plan.written().is_empty(), "the episode ended");
     }
 
+    #[tokio::test]
+    async fn switching_from_plan_to_yolo_ends_the_episode_once() {
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        app.cfg.plan.record("docs/plan/2026-08-22-yolo.md");
+
+        slash_command(&mut app, "mode yolo", &worker, 80);
+        assert_eq!(app.cfg.mode.get(), Mode::Yolo);
+        assert!(app.cfg.plan.written().is_empty(), "the plan episode ended");
+        let first_render = texts(&app);
+        assert!(
+            first_render.contains("plan saved to docs/plan/2026-08-22-yolo.md"),
+            "{first_render}"
+        );
+
+        slash_command(&mut app, "mode normal", &worker, 80);
+        let final_render = texts(&app);
+        assert_eq!(
+            final_render
+                .matches("plan saved to docs/plan/2026-08-22-yolo.md")
+                .count(),
+            1,
+            "the stale plan must not be reported again: {final_render}"
+        );
+    }
+
     /// Entering plan mode must not claim anything about files — at that
     /// point nobody knows whether the conversation warrants one.
     #[tokio::test]
@@ -222,9 +295,11 @@ mod mode_rewind_todo_tests {
 
     /// Plan mode is a restriction the user must not be able to lose
     /// track of, so it is on the status line while it is on and absent
-    /// when it is not.
+    /// when it is not. Yolo is the same bargain from the other side:
+    /// it silences every approval prompt, so its segment never
+    /// abbreviates away either, and it reads as a warning.
     #[test]
-    fn plan_mode_shows_in_the_status_line() {
+    fn plan_and_yolo_modes_show_in_the_status_line() {
         let mode = ModeHandle::default();
         let plan = crate::plan::PlanArea::new();
         assert_eq!(mode_segment(&mode, &plan), "");
@@ -238,6 +313,29 @@ mod mode_rewind_todo_tests {
         // Normal mode says nothing, whatever was written.
         mode.set(Mode::Normal);
         assert_eq!(mode_segment(&mode, &plan), "");
+        // Yolo keeps the warning up whatever else happens.
+        mode.set(Mode::Yolo);
+        assert_eq!(mode_segment(&mode, &plan), " · yolo");
+    }
+
+    /// `/mode yolo` lands on the handle (so gates see it immediately)
+    /// and says what it did, like every other mode change.
+    #[tokio::test]
+    async fn mode_yolo_announces_itself_loudly() {
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = app_with(ModeHandle::new(Mode::Normal), TodoList::new());
+
+        slash_command(&mut app, "mode yolo", &worker, 80);
+        let rendered = texts(&app);
+        assert!(
+            rendered.contains("yolo mode ·"),
+            "{rendered}"
+        );
+
+
+        // And back down to normal through the same command.
+        slash_command(&mut app, "mode normal", &worker, 80);
+        assert_eq!(app.cfg.mode.get(), Mode::Normal);
     }
 
     /// Write a task list through the real tool, the way the model does.

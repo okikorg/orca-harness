@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match delta {
             ModelDelta::Text { text } => print!("{text}"),
             ModelDelta::Reasoning { text } => eprint!("{text}"),
+            ModelDelta::ToolInput { .. } => {}
         }
         std::io::stdout().flush().ok();
         std::io::stderr().flush().ok();

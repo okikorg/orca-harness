@@ -137,7 +137,7 @@ pub fn date_from_unix(seconds: u64) -> String {
 pub fn briefing(today: &str) -> String {
     format!(
         "Plan mode is on: this session may read, search, and fetch, but may change nothing — \
-         no shell, no process, no pykernel, no subagents, and no writes anywhere except the \
+         no shell, no process, no pykernel, no bun_repl, no subagents, and no writes anywhere except the \
          `{PLAN_DIR}/` directory.\n\
          \n\
          When you have designed something worth building, write the plan to \

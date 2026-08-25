@@ -90,12 +90,17 @@ OPTIONS:
                      solarized-dark, one-dark, monokai, nord
   --plan             start in plan mode: read-only tools, and docs/plan/
                      the only writable directory — the agent decides
-                     whether to write a plan (/mode toggles it)
+                     whether to write a plan (/mode opens a picker)
+  --yolo             start in yolo mode: every gated tool runs without
+                     approval prompts, interactive or headless. The
+                     status line reads yolo for the whole session
+                     (/mode opens a picker)
   --continue         resume the latest recorded session for this workspace
   --resume ID        resume a recorded session by id (a unique prefix works)
   --no-session       do not record this session to disk
   --json             headless: emit NDJSON harness events on stdout
   --auto-approve     headless: allow shell/write/edit without approval
+                     (implied by --yolo)
   -p, --prompt TEXT  headless prompt
   -h, --help         show this help
 
@@ -141,6 +146,10 @@ pub struct Config {
     /// and a session that silently came back read-only would be a
     /// puzzle rather than a safeguard.
     pub plan: bool,
+    /// Start with approvals off. Same reasoning as `plan`: not
+    /// persisted, and the status line keeps saying yolo for as long
+    /// as the session lives so it can never be forgotten.
+    pub yolo: bool,
 }
 
 impl Config {
@@ -151,10 +160,16 @@ impl Config {
         }
     }
 
-    /// The mode a session starts in.
+    /// The mode a session starts in. `--plan` wins over `--yolo` when
+    /// both are given: read-only-and-unprompted is a coherent, safe
+    /// stance (investigation runs unattended), while letting the
+    /// louder flag win would turn an ambiguous invocation into
+    /// "everything writable, nobody asked".
     pub fn mode(&self) -> Mode {
         if self.plan {
             Mode::Plan
+        } else if self.yolo {
+            Mode::Yolo
         } else {
             Mode::Normal
         }
@@ -181,6 +196,7 @@ fn parse_args() -> Result<Config, String> {
     let mut resume_id: Option<String> = None;
     let mut no_session = false;
     let mut plan = false;
+    let mut yolo = false;
     let mut theme = std::env::var("ORCA_THEME").ok();
 
     let mut args = std::env::args().skip(1);
@@ -212,6 +228,7 @@ fn parse_args() -> Result<Config, String> {
             "--resume" => resume_id = Some(value("--resume")?),
             "--no-session" => no_session = true,
             "--plan" => plan = true,
+            "--yolo" => yolo = true,
             "--json" => json = true,
             "--auto-approve" => auto_approve = true,
             "-p" | "--prompt" => prompt = Some(value("-p")?),
@@ -267,6 +284,7 @@ fn parse_args() -> Result<Config, String> {
         no_session,
         theme,
         plan,
+        yolo,
     })
 }
 
@@ -319,7 +337,9 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
         "You are Orca Code, a coding agent operating in the workspace at {root} on {os}. \
          You act through tools: shell, process (persistent sessions and background \
          processes), pykernel (persistent Python — variables survive across calls; \
-         print what you need to see), subagent (spawn an independent agent with its \
+         print what you need to see), bun_repl (persistent JavaScript and TypeScript — \
+         variables and imports survive across calls; console.log what you need to see), \
+         subagent (spawn an independent agent with its \
          own context and tools for a self-contained task; parallel calls fan out), \
          read_file, write_file, edit_file, list_dir, grep, glob, \
          todo_write (the task list for work with several steps), \
@@ -346,11 +366,12 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          Writes to the same file are ordered for you; unrelated writes are safe to \
          batch.\n\
          \n\
-         Use pykernel as your working state. Its variables persist across calls, so \
-         parse, compute, and accumulate there instead of re-running shell pipelines \
-         to re-derive the same data: load results into variables once, refine them in \
-         later calls, and keep intermediate findings (file lists, parsed output, \
-         counters, partial conclusions) alive in the kernel rather than in your head.",
+         Use pykernel for persistent Python state and bun_repl for persistent JavaScript \
+         or TypeScript state. Parse, compute, and accumulate in the language that fits \
+         the task instead of re-running shell pipelines to re-derive the same data: load \
+         results into variables once, refine them in later calls, and keep intermediate \
+         findings (file lists, parsed output, counters, partial conclusions) alive in a \
+         compute session rather than in your head.",
         root = ws.root().display(),
         os = std::env::consts::OS,
     )

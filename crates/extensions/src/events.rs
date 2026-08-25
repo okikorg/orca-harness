@@ -30,6 +30,9 @@ pub enum HarnessEvent {
     /// An incremental fragment of the model's reasoning channel.
     /// Ephemeral: reasoning never enters the context or the final result.
     ReasoningDelta { text: String },
+    /// An incremental fragment of tool-call arguments, used for live
+    /// output-token progress without exposing an incomplete tool call.
+    ToolInputDelta { text: String },
     /// The model produced assistant text (with or without tool calls).
     Assistant { message: String },
     /// The model requested a tool call.
@@ -126,6 +129,7 @@ impl Extension for EventStream {
         let event = match delta {
             ModelDelta::Text { text } => HarnessEvent::AssistantDelta { text: text.clone() },
             ModelDelta::Reasoning { text } => HarnessEvent::ReasoningDelta { text: text.clone() },
+            ModelDelta::ToolInput { text } => HarnessEvent::ToolInputDelta { text: text.clone() },
         };
         self.sink.emit(event).await;
     }

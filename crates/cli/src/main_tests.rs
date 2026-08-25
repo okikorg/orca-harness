@@ -59,20 +59,22 @@ mod main_tests {
     }
 
     #[test]
-    fn system_prompt_advertises_pykernel_and_subagent() {
+    fn system_prompt_advertises_persistent_compute_and_subagent() {
         let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
         assert!(prompt.contains("pykernel"));
+        assert!(prompt.contains("bun_repl"));
         assert!(!prompt.contains("processes), kernel (persistent Python"));
         assert!(prompt.contains("subagent"));
     }
 
     /// The prompt must keep telling the model to plan ahead of each call and
-    /// to lean on pykernel's persistent variables for intermediate state.
+    /// to keep intermediate state in the persistent compute tool that fits.
     #[test]
-    fn system_prompt_instructs_planning_and_pykernel_state() {
+    fn system_prompt_instructs_planning_and_persistent_compute_state() {
         let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
         assert!(prompt.contains("Plan before every tool call"));
-        assert!(prompt.contains("pykernel as your working state"));
+        assert!(prompt.contains("pykernel for persistent Python state"));
+        assert!(prompt.contains("bun_repl for persistent JavaScript"));
         assert!(prompt.contains("fanning out"));
     }
 
@@ -320,9 +322,12 @@ mod main_tests {
         assert!(planning.area.written().is_empty(), "a fresh list");
     }
 
-    /// `--plan` is the only thing that starts a session read-only.
+    /// `--plan` starts a session read-only; `--yolo` starts it with
+    /// approvals off. When both are given, plan wins: read-only and
+    /// unprompted is coherent, writable and unprompted by accident is
+    /// not.
     #[test]
-    fn plan_flag_picks_the_mode() {
+    fn plan_and_yolo_flags_pick_the_mode() {
         let base = Config {
             provider: Provider::Local,
             model: "m".into(),
@@ -342,9 +347,35 @@ mod main_tests {
             no_session: true,
             theme: "default".into(),
             plan: false,
+            yolo: false,
         };
         assert_eq!(base.mode(), Mode::Normal);
-        assert_eq!(Config { plan: true, ..base }.mode(), Mode::Plan);
+        assert_eq!(
+            Config {
+                plan: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Plan
+        );
+        assert_eq!(
+            Config {
+                yolo: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Yolo
+        );
+        // Plan outranks yolo when both are asked for.
+        assert_eq!(
+            Config {
+                plan: true,
+                yolo: true,
+                ..base
+            }
+            .mode(),
+            Mode::Plan
+        );
     }
 
     #[test]

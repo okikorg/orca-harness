@@ -10,17 +10,20 @@ flowchart TD
     TOOLS[orca-harness-tools\nshell / file I/O / search]
     TOOL_EXT[orca-harness-tool-extensions\nMCP / skills / web tools]
     MODELS[orca-harness-model-providers\nOpenAI / OpenRouter / Codex adapters]
+    AUTH[orca-harness-provider-auth\nprovider-neutral credential contracts]
 
     CLI --> CORE
     CLI --> EXT
     CLI --> TOOLS
     CLI --> TOOL_EXT
     CLI --> MODELS
+    CLI --> AUTH
 
     EXT --> CORE
     TOOLS --> CORE
     TOOL_EXT --> CORE
     MODELS --> CORE
+    MODELS --> AUTH
 
     classDef kernel fill:#16324f,stroke:#8ecae6,color:#fff
     class CORE kernel
@@ -28,10 +31,11 @@ flowchart TD
 
 ## Dependency shape
 
-- `orca-harness-core` is the dependency center and has no workspace-crate dependencies.
-- `orca-harness-extensions` and the baseline tools, optional tool-extensions, and unified model-provider crates depend directly on the core.
+- `orca-harness-core` and `orca-harness-provider-auth` are independent foundation crates with no workspace-crate dependencies.
+- `orca-harness-extensions`, the baseline tools, and optional tool-extensions depend directly on the core.
+- `orca-harness-model-providers` depends on the core execution contracts and the provider-neutral authentication boundary.
 - Provider modules share protocol implementations internally; OpenRouter reuses the OpenAI-compatible adapter.
-- `orcacode` is the composition root: it wires the kernel, extensions, tools, model adapters, and terminal UI together.
+- `orcacode` is the composition root: it wires the kernel, authentication, extensions, tools, model adapters, and terminal UI together.
 
 ## Development-only dependencies
 

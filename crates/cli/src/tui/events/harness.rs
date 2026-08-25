@@ -6,19 +6,27 @@ use orca_harness_extensions::HarnessEvent;
 pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
     match event {
         HarnessEvent::AssistantDelta { text } => {
+            app.consume_turn_text(&text);
             if app.text.is_empty() && !text.is_empty() {
                 app.commit_settled_tools(width);
             }
             app.text.push_str(&text);
         }
         HarnessEvent::ReasoningDelta { text } => {
+            app.consume_turn_reasoning(&text);
             if app.reasoning.is_empty() && !text.is_empty() {
                 app.commit_settled_tools(width);
                 app.reasoning_started = Some(Instant::now());
             }
             app.reasoning.push_str(&text);
         }
+        HarnessEvent::ToolInputDelta { text } => {
+            app.consume_turn_tool_input(&text);
+        }
         HarnessEvent::Assistant { message } => {
+            // Non-streaming adapters produce no deltas, so use the complete
+            // message as this step's estimate only when none was seen.
+            app.consume_turn_text_if_unseen(&message);
             // `Assistant` closes the current model phase. Commit its
             // reasoning and any preceding tool batch before retaining the
             // message that follows it in the event stream.
@@ -31,6 +39,7 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             tool_name,
             input,
         } => {
+            app.settle_turn_output_estimate();
             clear_tool_connectors(&mut app.transcript);
             clear_tool_connectors(&mut app.pending_history);
             app.flush_reasoning();
@@ -98,6 +107,7 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
         HarnessEvent::Usage { usage } => {
             app.tokens_in += usage.input_tokens;
             app.tokens_out += usage.output_tokens;
+            app.reconcile_turn_output(usage.output_tokens);
             app.cache_read_total += usage.cache_read_tokens;
             app.cache_write_total += usage.cache_create_tokens;
             app.usage_steps += 1;
@@ -107,6 +117,7 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             app.context_tokens = usage.context_tokens();
         }
         HarnessEvent::Result { message } => {
+            app.settle_turn_output_estimate();
             app.commit_activity(width);
             let answer = if message.is_empty() {
                 app.pending_assistant.take().unwrap_or_default()

@@ -4,8 +4,13 @@
 
 #![cfg(unix)]
 
-use orca_harness_core::{CancellationToken, ToolContext};
-use orca_harness_tool_extensions::mcp::{McpClient, McpError};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use orca_harness_core::{
+    CancellationToken, Context, Model, ModelError, ModelResponse, Tool, ToolContext, ToolSchema,
+};
+use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient, McpError, McpModel};
 use serde_json::json;
 
 const FAKE_SERVER: &str = r#"#!/bin/sh
@@ -17,6 +22,47 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","descri
 read _call
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello back"}]}}'
 "#;
+
+const PAGED_SERVER: &str = r#"#!/bin/sh
+read _initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"paged","version":"0.0.0"}}}'
+read _initialized
+read _first
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"one","inputSchema":{"type":"object"}}],"nextCursor":"two"}}'
+read _second
+case "$_second" in *'"cursor":"two"'*) ;; *) exit 2 ;; esac
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"two","inputSchema":{"type":"object"}}]}}'
+"#;
+
+const CANCEL_SERVER: &str = r#"#!/bin/sh
+read _initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"cancel","version":"0.0.0"}}}'
+read _initialized
+read _list
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"wait","inputSchema":{"type":"object"}}]}}'
+read _call
+sleep 10
+"#;
+
+fn one_tool_server(server: &str, remote: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+read _initialize
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-06-18","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"{server}","version":"0.0.0"}}}}}}'
+read _initialized
+read _list
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{{"name":"{remote}","inputSchema":{{"type":"object"}}}}]}}}}'
+"#
+    )
+}
+
+fn script(name: &str, contents: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("orca-mcp-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("server.sh");
+    std::fs::write(&path, contents).unwrap();
+    path
+}
 
 fn ctx(tool_name: &str) -> ToolContext {
     ToolContext {
@@ -34,9 +80,10 @@ async fn connects_lists_and_calls_through_a_stdio_server() {
     let script = dir.join("fake-mcp.sh");
     std::fs::write(&script, FAKE_SERVER).unwrap();
 
-    let tools = McpClient::connect("fake", &format!("sh {}", script.display()))
+    let connection = McpClient::connect("fake", &format!("sh {}", script.display()))
         .await
         .unwrap();
+    let tools = connection.tools();
     assert_eq!(tools.len(), 1);
 
     let schema = tools[0].schema();
@@ -44,13 +91,232 @@ async fn connects_lists_and_calls_through_a_stdio_server() {
     assert_eq!(schema.description, "echo back");
     assert_eq!(schema.parameters["type"], "object");
 
-    let output = tools[0]
+    let direct_error = tools[0]
+        .call(json!({ "text": "hi" }), &ctx(&schema.name))
+        .await
+        .unwrap_err();
+    assert!(direct_error.message.contains("mcp_select_tool"));
+    let invalid_arguments = tools[0]
+        .call(json!("not an object"), &ctx(&schema.name))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        invalid_arguments.message,
+        "MCP tool arguments must be an object"
+    );
+
+    let catalog = McpCatalog::new();
+    catalog.insert("fake".into(), connection).unwrap();
+    let selector = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_select_tool")
+        .unwrap();
+    selector
+        .call(
+            json!({ "name": "mcp__fake__echo" }),
+            &ctx("mcp_select_tool"),
+        )
+        .await
+        .unwrap();
+    let tool = catalog.server_tools("fake").into_iter().next().unwrap();
+    let output = tool
         .call(json!({ "text": "hi" }), &ctx(&schema.name))
         .await
         .unwrap();
     assert_eq!(output, json!({ "content": "hello back" }));
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn search_requires_deliberate_terms_and_filters_metadata() {
+    let dir = std::env::temp_dir().join(format!("orca-mcp-search-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("fake-mcp.sh");
+    std::fs::write(&script, FAKE_SERVER).unwrap();
+
+    let connection = McpClient::connect("fake", &format!("sh {}", script.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("fake".into(), connection).unwrap();
+    let search = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_search_tools")
+        .unwrap();
+
+    for input in [json!({}), json!({ "query": "" })] {
+        let error = search
+            .call(input, &ctx("mcp_search_tools"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "missing or invalid query");
+    }
+    let filtered = search
+        .call(json!({ "query": "echo back" }), &ctx("mcp_search_tools"))
+        .await
+        .unwrap();
+    assert_eq!(filtered["tools"].as_array().unwrap().len(), 1);
+    let absent = search
+        .call(json!({ "query": "mcp" }), &ctx("mcp_search_tools"))
+        .await
+        .unwrap();
+    assert!(absent["tools"].as_array().unwrap().is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+struct ObservedTools(Arc<Mutex<Vec<Vec<String>>>>);
+
+#[async_trait]
+impl Model for ObservedTools {
+    async fn generate(
+        &self,
+        _context: &Context,
+        tools: &[ToolSchema],
+    ) -> Result<ModelResponse, ModelError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(tools.iter().map(|schema| schema.name.clone()).collect());
+        Ok(ModelResponse::final_text("ok"))
+    }
+}
+
+#[tokio::test]
+async fn selection_reaches_the_next_provider_request_without_core_changes() {
+    let dir = std::env::temp_dir().join(format!("orca-mcp-lazy-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("fake-mcp.sh");
+    std::fs::write(&script, FAKE_SERVER).unwrap();
+
+    let connection = McpClient::connect("fake", &format!("sh {}", script.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("fake".into(), connection).unwrap();
+    let schemas: Vec<ToolSchema> = catalog
+        .interface_tools()
+        .into_iter()
+        .chain(catalog.server_tools("fake"))
+        .map(|tool| tool.schema())
+        .collect();
+    assert_eq!(schemas.len(), 4);
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let model = McpModel::new(ObservedTools(observed.clone()), catalog.clone());
+    let context = Context::new();
+    model.generate(&context, &schemas).await.unwrap();
+
+    let selector = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_select_tool")
+        .unwrap();
+    selector
+        .call(
+            json!({ "name": "mcp__fake__echo" }),
+            &ctx("mcp_select_tool"),
+        )
+        .await
+        .unwrap();
+    model.generate(&context, &schemas).await.unwrap();
+
+    let observed = observed.lock().unwrap();
+    assert_eq!(
+        observed[0],
+        ["mcp_search_tools", "mcp_select_tool", "mcp_features"]
+    );
+    assert_eq!(
+        observed[1],
+        [
+            "mcp_search_tools",
+            "mcp_select_tool",
+            "mcp_features",
+            "mcp__fake__echo"
+        ]
+    );
+
+    drop(observed);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn follows_all_tool_list_pages() {
+    let path = script("pages", PAGED_SERVER);
+    let connection = McpClient::connect("paged", &format!("sh {}", path.display()))
+        .await
+        .unwrap();
+    let names: Vec<String> = connection
+        .tools()
+        .iter()
+        .map(|tool| tool.schema().name)
+        .collect();
+    assert_eq!(names, ["mcp__paged__one", "mcp__paged__two"]);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn catalog_rejects_cross_server_generated_name_collisions() {
+    let first_script = one_tool_server("a__b", "c");
+    let second_script = one_tool_server("a", "b__c");
+    let first_path = script("collision-one", &first_script);
+    let second_path = script("collision-two", &second_script);
+    let first = McpClient::connect("a__b", &format!("sh {}", first_path.display()))
+        .await
+        .unwrap();
+    let second = McpClient::connect("a", &format!("sh {}", second_path.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("a__b".into(), first).unwrap();
+    let error = catalog.insert("a".into(), second).unwrap_err();
+    assert!(error.to_string().contains("duplicate MCP tool name"));
+    assert_eq!(catalog.server_tools("a__b").len(), 1);
+    assert!(catalog.server_tools("a").is_empty());
+    let _ = std::fs::remove_dir_all(first_path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(second_path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn cancellation_closes_the_connection_instead_of_leaving_a_stale_exchange() {
+    let path = script("cancel", CANCEL_SERVER);
+    let connection = McpClient::connect("cancel", &format!("sh {}", path.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("cancel".into(), connection).unwrap();
+    let selector = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_select_tool")
+        .unwrap();
+    selector
+        .call(
+            json!({ "name": "mcp__cancel__wait" }),
+            &ctx("mcp_select_tool"),
+        )
+        .await
+        .unwrap();
+    let tool = catalog.server_tools("cancel").into_iter().next().unwrap();
+    let call_ctx = ctx("mcp__cancel__wait");
+    let cancellation = call_ctx.cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        cancellation.cancel();
+    });
+    assert_eq!(
+        tool.call(json!({}), &call_ctx).await.unwrap_err().message,
+        "cancelled"
+    );
+    let second = tool
+        .call(json!({}), &ctx("mcp__cancel__wait"))
+        .await
+        .unwrap_err();
+    assert!(second.message.contains("interrupted request"), "{second:?}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
 #[tokio::test]

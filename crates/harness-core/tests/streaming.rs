@@ -55,6 +55,7 @@ fn texts(deltas: &[ModelDelta]) -> Vec<String> {
         .map(|d| match d {
             ModelDelta::Text { text } => format!("text:{text}"),
             ModelDelta::Reasoning { text } => format!("reasoning:{text}"),
+            ModelDelta::ToolInput { text } => format!("tool_input:{text}"),
         })
         .collect()
 }
@@ -72,6 +73,9 @@ async fn deltas_reach_subscribed_extension_in_order() {
             ModelDelta::Text {
                 text: " world".into(),
             },
+            ModelDelta::ToolInput {
+                text: "{\"path\":".into(),
+            },
         ]]);
     let (recorder, deltas) = DeltaRecorder::new();
 
@@ -84,7 +88,12 @@ async fn deltas_reach_subscribed_extension_in_order() {
     assert_eq!(answer, "Hello world");
     assert_eq!(
         texts(&deltas.lock().unwrap()),
-        vec!["reasoning:thinking", "text:Hello", "text: world"]
+        vec![
+            "reasoning:thinking",
+            "text:Hello",
+            "text: world",
+            "tool_input:{\"path\":"
+        ]
     );
 }
 
