@@ -65,11 +65,21 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
                 is_error: false,
                 approval: None,
             });
-            if !app.split_focused {
-                app.split_tool = Some(index);
-                app.split_scroll = 0;
-            }
+            app.split_tool = Some(index);
+            app.split_scroll = 0;
             app.pending_calls.insert(tool_call_id, index);
+        }
+        HarnessEvent::ToolFinished {
+            tool_call_id,
+            is_error,
+            ..
+        } => {
+            if let Some(index) = app.pending_calls.get(&tool_call_id).copied() {
+                if let Some(activity) = app.activity_tools.get_mut(index) {
+                    activity.elapsed = Some(activity.started.elapsed());
+                    activity.is_error = is_error;
+                }
+            }
         }
         HarnessEvent::ToolResult {
             tool_call_id,
@@ -86,7 +96,9 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             let call_line = index
                 .and_then(|index| app.activity_tools.get_mut(index))
                 .map(|activity| {
-                    activity.elapsed = Some(activity.started.elapsed());
+                    activity
+                        .elapsed
+                        .get_or_insert_with(|| activity.started.elapsed());
                     activity.output = Some(output.clone());
                     activity.is_error = is_error;
                     activity.call_line.clone()
@@ -219,6 +231,20 @@ pub(crate) fn handle_subagent_event(
             });
             spawn.pending.insert(tool_call_id, index);
         }
+        HarnessEvent::ToolFinished {
+            tool_call_id,
+            is_error,
+            ..
+        } => {
+            if let Some(spawn) = app.subagent_activity.get_mut(&id) {
+                if let Some(index) = spawn.pending.get(&tool_call_id).copied() {
+                    if let Some(tool) = spawn.tools.get_mut(index) {
+                        tool.elapsed = Some(tool.started.elapsed());
+                        tool.is_error = is_error;
+                    }
+                }
+            }
+        }
         HarnessEvent::ToolResult {
             tool_call_id,
             output,
@@ -228,7 +254,7 @@ pub(crate) fn handle_subagent_event(
             if let Some(spawn) = app.subagent_activity.get_mut(&id) {
                 if let Some(index) = spawn.pending.remove(&tool_call_id) {
                     if let Some(tool) = spawn.tools.get_mut(index) {
-                        tool.elapsed = Some(tool.started.elapsed());
+                        tool.elapsed.get_or_insert_with(|| tool.started.elapsed());
                         tool.output = Some(output);
                         tool.is_error = is_error;
                     }

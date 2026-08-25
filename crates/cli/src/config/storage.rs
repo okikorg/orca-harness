@@ -107,6 +107,14 @@ pub fn save_view(slug: &str) -> io::Result<PathBuf> {
     save_str(None, "view", slug)
 }
 
+pub fn stored_inspector() -> Option<String> {
+    stored_str(None, "inspector")
+}
+
+pub fn save_inspector(slug: &str) -> io::Result<PathBuf> {
+    save_str(None, "inspector", slug)
+}
+
 pub fn stored_transcript_spacing() -> Option<String> {
     stored_str(None, "transcript_spacing")
 }

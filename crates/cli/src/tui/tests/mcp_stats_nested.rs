@@ -54,6 +54,19 @@ mod mcp_command_tests {
             .join("\n")
     }
 
+    fn picker_cells<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+        let line = text
+            .lines()
+            .find(|line| {
+                let mut cells = line.split_whitespace();
+                matches!(cells.next(), Some(first) if first == name || (first == "▸" && cells.next() == Some(name)))
+            })
+            .unwrap_or_else(|| panic!("missing {name} row: {text}"));
+        line.split_whitespace()
+            .filter(|cell| *cell != "▸")
+            .collect()
+    }
+
     #[tokio::test]
     async fn add_list_and_remove_round_trip_through_config_and_reload() {
         let mut app = mcp_app();
@@ -87,7 +100,7 @@ mod mcp_command_tests {
         assert!(matches!(app.overlay, Some(Overlay::Mcp { .. })));
         let text = overlay_text(&app);
         assert!(text.contains("space toggle"), "{text}");
-        assert!(text.contains("docs  on   …"), "{text}");
+        assert_eq!(&picker_cells(&text, "docs")[..3], ["docs", "on", "…"]);
         assert!(text.contains("npx -y some-server /tmp"), "{text}");
         press(&mut app, &worker, KeyCode::Esc);
 
@@ -125,15 +138,16 @@ mod mcp_command_tests {
         // The row redraws immediately, without waiting for the reload,
         // and an off server shows no tool count.
         let text = overlay_text(&app);
-        assert!(text.contains("docs   on   …"), "{text}");
-        assert!(text.contains("fetch  off"), "{text}");
-        assert!(!text.contains("fetch  off  …"), "off rows drop the count");
+        assert_eq!(&picker_cells(&text, "docs")[..3], ["docs", "on", "…"]);
+        assert_eq!(&picker_cells(&text, "fetch")[..2], ["fetch", "off"]);
+        assert!(!picker_cells(&text, "fetch").contains(&"…"), "{text}");
 
         // Enter toggles too, matching /extensions muscle memory.
         press(&mut app, &worker, KeyCode::Enter);
         assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ReloadMcp)));
         assert!(crate::config::stored_mcp_servers()[1].enabled);
-        assert!(overlay_text(&app).contains("fetch  on"));
+        let text = overlay_text(&app);
+        assert_eq!(&picker_cells(&text, "fetch")[..3], ["fetch", "on", "…"]);
 
         press(&mut app, &worker, KeyCode::Esc);
         assert!(app.overlay.is_none());
@@ -173,7 +187,7 @@ mod mcp_command_tests {
 
         slash_command(&mut app, "mcp", &worker, 80);
         let text = overlay_text(&app);
-        assert!(text.contains("ghost  on   failed"), "{text}");
+        assert_eq!(&picker_cells(&text, "ghost")[..3], ["ghost", "on", "failed"]);
         assert!(
             text.contains("failed     orca-no-such-binary-xyz"),
             "the command survives the error: {text}"
@@ -286,18 +300,20 @@ mod mcp_command_tests {
         app.cfg.mcp.reload().await;
 
         slash_command(&mut app, "mcp", &worker, 80);
-        assert!(overlay_text(&app).contains("ghost  off"));
+        let text = overlay_text(&app);
+        assert_eq!(&picker_cells(&text, "ghost")[..2], ["ghost", "off"]);
 
         // Toggling on redraws as on with no state yet; the worker has
         // not reconnected.
         press(&mut app, &worker, KeyCode::Char(' '));
-        assert!(overlay_text(&app).contains("ghost  on   …"));
+        let text = overlay_text(&app);
+        assert_eq!(&picker_cells(&text, "ghost")[..3], ["ghost", "on", "…"]);
 
         // The worker's reload resolves it, with the overlay still open.
         app.cfg.mcp.reload().await;
         let text = overlay_text(&app);
         assert!(!text.contains('…'), "the placeholder resolves: {text}");
-        assert!(text.contains("ghost  on   failed"), "{text}");
+        assert_eq!(&picker_cells(&text, "ghost")[..3], ["ghost", "on", "failed"]);
     }
 
     #[tokio::test]

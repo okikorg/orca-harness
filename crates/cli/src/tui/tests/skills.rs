@@ -357,4 +357,127 @@ mod skills_command_tests {
         assert!(printed(&app).contains("unknown /skills argument: wat"));
     }
 
+    #[test]
+    fn dollar_picker_filters_and_inserts_an_enabled_skill() {
+        let fixture = Fixture::new("dollar-picker");
+        fixture.skill("mention-deploy", "Ship the application");
+        fixture.skill("mention-review", "Review a change");
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        press(&mut app, &worker, KeyCode::Char('$'));
+        assert!(matches!(app.overlay, Some(Overlay::SkillMentions(_))));
+        let shown = overlay_text(&app);
+        assert!(shown.contains("1/2"), "{shown}");
+        assert!(shown.contains("Ship the application"), "{shown}");
+        assert!(shown.contains("Review a change"), "{shown}");
+        let deploy = shown
+            .lines()
+            .find(|line| line.contains("Ship the application"))
+            .unwrap();
+        let review = shown
+            .lines()
+            .find(|line| line.contains("Review a change"))
+            .unwrap();
+        let deploy_detail = deploy[..deploy.find("Ship the application").unwrap()]
+            .chars()
+            .count();
+        let review_detail = review[..review.find("Review a change").unwrap()]
+            .chars()
+            .count();
+        assert_eq!(deploy_detail, review_detail, "{shown}");
+
+        for c in "review".chars() {
+            press(&mut app, &worker, KeyCode::Char(c));
+        }
+        let shown = overlay_text(&app);
+        assert!(shown.contains("mention-review"), "{shown}");
+        assert!(!shown.contains("mention-deploy"), "{shown}");
+        assert!(shown.contains("Review a change"), "{shown}");
+
+        press(&mut app, &worker, KeyCode::Tab);
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "$mention-review ");
+    }
+
+    #[test]
+    fn backspace_removes_an_inserted_skill_mention_in_one_go() {
+        let fixture = Fixture::new("dollar-backspace");
+        fixture.skill("mention-quality", "Check code quality");
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        press(&mut app, &worker, KeyCode::Char('$'));
+        press(&mut app, &worker, KeyCode::Enter);
+        assert_eq!(app.composer, "$mention-quality ");
+
+        press(&mut app, &worker, KeyCode::Backspace);
+        assert_eq!(app.composer, "");
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn dollar_picker_pages_through_large_skill_catalogs() {
+        let fixture = Fixture::new("dollar-pages");
+        for index in 0..12 {
+            fixture.skill(&format!("mention-page-{index:02}"), "Paged skill");
+        }
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        press(&mut app, &worker, KeyCode::Char('$'));
+        assert!(overlay_text(&app).contains("1/12"));
+        press(&mut app, &worker, KeyCode::PageDown);
+
+        let shown = overlay_text(&app);
+        assert!(shown.contains("11/12"), "{shown}");
+        assert!(shown.contains("mention-page-10"), "{shown}");
+    }
+
+    #[test]
+    fn submitting_a_skill_mention_keeps_visible_and_worker_text_exact() {
+        let fixture = Fixture::new("dollar-submit");
+        fixture.skill("mention-testing", "Run focused tests");
+        let mut app = fixture.app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        app.composer = "$mention-testing verify this change".into();
+        app.cursor = app.composer.chars().count();
+
+        submit(&mut app, &worker, 80);
+
+        let Ok(WorkerCmd::Run { prompt, .. }) = rx.try_recv() else {
+            panic!("expected a model run");
+        };
+        assert_eq!(prompt, "$mention-testing verify this change");
+        assert_eq!(
+            app.prompt_history.last().map(String::as_str),
+            Some("$mention-testing verify this change")
+        );
+    }
+
+    #[test]
+    fn shell_dollars_keep_their_normal_meaning() {
+        let fixture = Fixture::new("dollar-shell");
+        fixture.skill("mention-shell", "Not for shell expansion");
+        let mut app = fixture.app();
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.composer = "!echo ".into();
+        app.cursor = app.composer.chars().count();
+
+        press(&mut app, &worker, KeyCode::Char('$'));
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "!echo $");
+
+        app.composer = "!echo $HOME ".into();
+        app.cursor = app.composer.chars().count();
+        press(&mut app, &worker, KeyCode::Backspace);
+        assert_eq!(app.composer, "!echo $HOME");
+
+        app.composer = "costs $5 ".into();
+        app.cursor = app.composer.chars().count();
+        press(&mut app, &worker, KeyCode::Backspace);
+        assert_eq!(app.composer, "costs $5");
+    }
+
 }

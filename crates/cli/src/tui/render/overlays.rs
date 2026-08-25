@@ -1,4 +1,3 @@
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use orca_harness_core::Message;
@@ -9,6 +8,7 @@ use crate::view::{self, theme};
 
 use super::super::format::fmt_tokens;
 use super::super::{App, ModelPicker, ToolActivity};
+use super::pickers::command_picker_row;
 /// Exact, source-preserving edit context beneath an `edit_file` row. Small
 /// edits remain fully visible; large replacements stay bounded so one call
 /// cannot take over the live rail.
@@ -77,44 +77,16 @@ pub(crate) fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<
         return lines;
     }
 
-    let selected = app.palette_index.min(filtered.len() - 1);
     let rows = height.saturating_sub(2).max(1);
-    let first = selected.saturating_sub(rows.saturating_sub(1));
-    let window: Vec<_> = filtered.iter().enumerate().skip(first).take(rows).collect();
-    let range = format!(
-        "{}-{}",
-        first + 1,
-        (first + window.len()).min(filtered.len())
-    );
-    let header_left = format!("  Results {} · type to filter", filtered.len());
-    let pad = width
-        .saturating_sub(header_left.chars().count() + range.chars().count() + 2)
-        .max(1);
-    lines.push(Line::from(Span::styled(
-        format!("{header_left}{}{range}", " ".repeat(pad)),
-        t.dim,
-    )));
-    lines.push(Line::from(""));
-
-    for (index, spec) in window {
-        let is_selected = index == selected;
-        let name = format!("/{}", spec.name);
-        let left = format!("  {name:<9} {}", spec.description);
-        let pad = width
-            .saturating_sub(left.chars().count() + spec.category.chars().count() + 2)
-            .max(1);
-        let (name_style, desc_style) = if is_selected {
-            (t.select, Style::default())
-        } else {
-            (t.dim, t.dim)
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {name:<9} "), name_style),
-            Span::styled(spec.description.to_string(), desc_style),
-            Span::styled(format!("{}{}", " ".repeat(pad), spec.category), t.dim),
-        ]));
-    }
-    lines
+    let mut picker = app.palette_picker;
+    picker.set_len(filtered.len());
+    picker.windowed_table_lines(
+        "Commands · type to filter · enter run · tab complete · esc close",
+        filtered.into_iter().map(command_picker_row),
+        [(6, 16), (12, 64), (0, 10)],
+        width,
+        rows,
+    )
 }
 
 /// Re-render a recorded transcript into the UI: user turns carry the
@@ -226,35 +198,22 @@ pub(crate) fn model_picker_lines(
         return lines;
     }
 
-    let selected = picker.index.min(filtered.len() - 1);
     let rows = height.saturating_sub(2).max(1);
-    let first = selected.saturating_sub(rows.saturating_sub(1));
-    let window: Vec<_> = filtered.iter().enumerate().skip(first).take(rows).collect();
-    let range = format!(
-        "{}-{}",
-        first + 1,
-        (first + window.len()).min(filtered.len())
-    );
-    let pad = width
-        .saturating_sub(header_left.chars().count() + range.chars().count() + 2)
-        .max(1);
-    lines.push(Line::from(Span::styled(
-        format!("{header_left}{}{range}", " ".repeat(pad)),
-        t.dim,
-    )));
-    lines.push(Line::from(""));
-
-    for (index, model) in window {
-        let is_selected = index == selected;
-        let marker = if is_selected { "▸ " } else { "  " };
-        let style = if is_selected { t.select } else { t.dim };
-        let text = format!("  {marker}{}", model.summary());
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&text, width),
-            style,
-        )));
-    }
-    lines
+    picker.picker.windowed_table_lines(
+        &format!("Models · {filter_note} · enter switch · esc close"),
+        filtered.into_iter().map(|model| {
+            let summary = model.summary();
+            let detail = summary
+                .strip_prefix(&model.id)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            [model.id.clone(), detail]
+        }),
+        [(8, 48), (0, usize::MAX)],
+        width,
+        rows,
+    )
 }
 
 /// The status-line context segment: percentage of the model's window when

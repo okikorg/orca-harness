@@ -6,7 +6,7 @@
 
 use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::components::composer::Composer;
@@ -25,6 +25,24 @@ use super::super::{
 use super::overlays::*;
 use super::pickers::*;
 use super::transcript::*;
+
+/// Breathing room between inspector content and the terminal edge. The
+/// renderer asks the padded block for its inner width, so previews wrap to
+/// the real content box rather than compensating with scattered subtraction.
+const INSPECTOR_PADDING: Padding = Padding::right(1);
+
+fn inspector_block(border_style: ratatui::style::Style) -> Block<'static> {
+    Block::default()
+        .borders(Borders::LEFT)
+        .border_style(border_style)
+        .padding(INSPECTOR_PADDING)
+}
+
+fn inspector_content_width(area: ratatui::layout::Rect) -> usize {
+    inspector_block(ratatui::style::Style::default())
+        .inner(area)
+        .width as usize
+}
 
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
@@ -98,26 +116,31 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         let inspected = selected_tool
             .and_then(|selected| app.activity_tools.get(selected))
             .or(app.split_snapshot.as_ref());
-        let inspector_width = inspector_area.width as usize;
+        let border_style = theme().dim;
+        let inspector_width = inspector_content_width(inspector_area);
         let (header, body) = if let Some(tool) = inspected {
-            let complete = tool.output.is_some();
+            let complete = tool.elapsed.is_some();
             let cache_valid = app.split_inspector_cache.as_ref().is_some_and(|cache| {
                 cache.call_id == tool.call_id
                     && cache.complete == complete
+                    && cache.has_output == tool.output.is_some()
                     && cache.is_error == tool.is_error
                     && cache.width == inspector_width
+                    && cache.mode == app.inspector_mode
             });
             if !cache_valid {
                 app.split_inspector_cache = Some(InspectorBodyCache {
                     call_id: tool.call_id.clone(),
                     complete,
+                    has_output: tool.output.is_some(),
                     is_error: tool.is_error,
                     width: inspector_width,
-                    lines: tool_inspector_body_lines(tool, inspector_width),
+                    mode: app.inspector_mode,
+                    lines: tool_inspector_body_lines(tool, inspector_width, app.inspector_mode),
                 });
             }
             (
-                tool_inspector_header_lines(tool, inspector_width),
+                tool_inspector_header_lines(tool, inspector_width, app.inspector_mode),
                 app.split_inspector_cache
                     .as_ref()
                     .map(|cache| cache.lines.clone())
@@ -135,16 +158,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .saturating_sub(body_area.height as usize)
             .min(u16::MAX as usize) as u16;
         app.split_scroll = app.split_scroll.min(max_scroll);
-        let border_style = if app.split_focused {
-            theme().accent
-        } else {
-            theme().dim
-        };
-        let divider = || {
-            Block::default()
-                .borders(Borders::LEFT)
-                .border_style(border_style)
-        };
+        let divider = || inspector_block(border_style);
         frame.render_widget(
             Paragraph::new(Text::from(header)).block(divider()),
             header_area,
@@ -200,7 +214,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         // shorter form so the status line is not permanently crowded.
         if app.scroll_hint_live() && split_active {
             // A drag crosses both panes here, so name the key that does not.
-            "drag spans panes · ctrl+y copies one · pgdn to follow"
+            "drag spans panes · /copy tool copies one · pgdn to follow"
         } else if app.scroll_hint_live() {
             "opt/shift+drag selects · ctrl+y copies · pgdn to follow"
         } else {
@@ -212,11 +226,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         "↑↓ navigate · enter use · esc close"
     } else if app.palette_query().is_some() && app.approval.is_none() {
         "↑↓ navigate · enter use · tab complete · esc close"
-    } else if app.split_focused {
-        "↑↓ select tool · ctrl+y copy tool · tab return"
-    } else if split_active && !app.activity_tools.is_empty() {
-        "tab inspect · enter queue · esc interrupt"
-    } else if split_active && app.running() {
+    } else if split_active && app.running() && app.activity_tools.is_empty() {
         "split ready · waiting for tool call · esc interrupt"
     } else if app.running() {
         "enter queue · esc interrupt"
@@ -408,13 +418,18 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     }
     if let Some(overlay) = &app.overlay {
         return match overlay {
+            Overlay::Help { filter, picker } => help_picker_lines(filter, picker, width),
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
             Overlay::Locations(picker) => location_picker_lines(picker, width),
+            Overlay::SkillMentions(picker) => skill_mention_picker_lines(picker, width),
             Overlay::Providers { picker } => provider_lines(picker, width),
             Overlay::Themes { picker } => theme_picker_lines(picker, width),
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
             Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),
             Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
+            Overlay::Inspector { picker } => {
+                inspector_picker_lines(app.inspector_mode, picker, width)
+            }
             Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
             Overlay::Settings { picker } => settings_lines(app, picker, width),
@@ -478,4 +493,20 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspector_content_width_comes_from_the_padded_block() {
+        let area = ratatui::layout::Rect::new(0, 0, 50, 20);
+        let block = inspector_block(ratatui::style::Style::default());
+        assert_eq!(
+            inspector_content_width(area),
+            block.inner(area).width as usize
+        );
+        assert_eq!(block.inner(area).right(), area.right() - 1);
+    }
 }

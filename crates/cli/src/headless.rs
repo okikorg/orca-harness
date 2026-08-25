@@ -43,6 +43,8 @@ pub async fn run<M: Model + Clone + 'static>(
     }
     let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
     let model_for_subagents = model.clone();
+    let model: Arc<dyn Model> =
+        Arc::new(crate::skills::SkillMentionModel::new(model, skills.clone()));
     let json = cfg.json;
     let saw_delta = Arc::new(AtomicBool::new(false));
     let saw = saw_delta.clone();

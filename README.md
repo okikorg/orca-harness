@@ -128,7 +128,8 @@ has already scrolled past, the clipboard reaches further than a drag can:
 
 | Key      | Command            | Effect                                                                    |
 | :------- | :----------------- | :------------------------------------------------------------------------ |
-| `ctrl+y` | `/copy`            | copy the focused pane to the clipboard: the last answer, or the inspected tool when the inspector has focus (`code` for its last fenced block, `all` for the whole transcript, `tool` for the inspector regardless of focus) |
+| `ctrl+y` | `/copy`            | copy the last answer (`code` for its last fenced block, `all` for the whole transcript) |
+| —        | `/copy tool`       | copy the tool currently shown in the split inspector |
 
 `/copy` goes through OSC 52, so it reaches the clipboard of whichever
 terminal is in front of you — including across `ssh`. Under `tmux` it

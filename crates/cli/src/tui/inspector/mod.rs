@@ -9,50 +9,87 @@ use crate::tui::components::inspector::{CodePreview, InspectorSection};
 use crate::view::{self, theme};
 
 mod language;
+mod summary;
 use language::{inspector_output_language, language_for_path};
 
 use super::elapsed_label;
 use super::{
-    ToolActivity, INSPECTOR_OUTPUT_HEAD, INSPECTOR_OUTPUT_TAIL, INSPECTOR_PREVIEW_CHARS,
-    INSPECTOR_PREVIEW_LINES,
+    InspectorMode, ToolActivity, INSPECTOR_OUTPUT_HEAD, INSPECTOR_OUTPUT_TAIL,
+    INSPECTOR_PREVIEW_CHARS, INSPECTOR_PREVIEW_LINES,
 };
 
 #[cfg(test)]
 pub(super) fn tool_inspector_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
-    let mut lines = tool_inspector_header_lines(tool, width);
-    lines.extend(tool_inspector_body_lines(tool, width));
+    let mut lines = tool_inspector_header_lines(tool, width, InspectorMode::Summary);
+    lines.extend(tool_inspector_body_lines(
+        tool,
+        width,
+        InspectorMode::Summary,
+    ));
     lines
 }
 
-pub(super) fn tool_inspector_header_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
+pub(super) fn tool_inspector_header_lines(
+    tool: &ToolActivity,
+    width: usize,
+    mode: InspectorMode,
+) -> Vec<Line<'static>> {
     let t = theme();
     let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
-    let (status, status_style) = match &tool.output {
-        Some(_) if tool.is_error => ("failed", t.error),
-        Some(_) => ("completed", t.success),
-        None => ("running", t.accent),
-    };
-    let raw_name = tool.tool_name.to_uppercase();
+    let (status, status_style) = inspector_status(tool);
+    let raw_name = tool.tool_name.to_lowercase();
     let duration = elapsed_label(elapsed);
-    let right_width = status.chars().count() + duration.chars().count() + 2;
-    let available = width.saturating_sub(4);
-    let name = view::truncate_line(&raw_name, available.saturating_sub(right_width + 1).max(8));
-    let gap = available
-        .saturating_sub(name.chars().count() + right_width)
-        .max(1);
+    let identity = format!("{raw_name} · {status} · {duration}");
+    let mode_suffix = format!(" · {}", mode.label().to_lowercase());
+    let action_width = width.saturating_sub(2 + mode_suffix.chars().count());
+    let action = view::truncate_line(inspector_action_label(&tool.tool_name), action_width);
     vec![
-        Line::from(vec![
-            Span::styled(format!("  {name}"), t.strong),
-            Span::raw(" ".repeat(gap)),
-            Span::styled(status, status_style),
-            Span::styled(format!("  {duration}"), t.dim),
-        ]),
         Line::from(Span::styled(
-            format!("  {}", inspector_action_label(&tool.tool_name)),
-            t.dim,
+            format!(
+                "  {}",
+                view::truncate_line(&identity, width.saturating_sub(4))
+            ),
+            status_style,
         )),
-        Line::from(""),
+        Line::from(Span::styled(format!("  {action}{mode_suffix}"), t.dim)),
     ]
+}
+
+fn inspector_status(tool: &ToolActivity) -> (&'static str, Style) {
+    let t = theme();
+    let Some(output) = &tool.output else {
+        return if tool.elapsed.is_some() {
+            if tool.is_error {
+                ("failed", t.error)
+            } else {
+                ("completed", t.success)
+            }
+        } else {
+            ("running", t.accent)
+        };
+    };
+    if tool.is_error {
+        return ("failed", t.error);
+    }
+    let warning = output.get("success").and_then(serde_json::Value::as_bool) == Some(false)
+        || output
+            .get("exitCode")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|code| code != 0)
+        || matches!(
+            output.get("state").and_then(serde_json::Value::as_str),
+            Some("error" | "timeout")
+        )
+        || output
+            .get("status")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|status| status >= 400)
+        || output.get("timedOut").and_then(serde_json::Value::as_bool) == Some(true);
+    if warning {
+        ("completed with warnings", t.warn)
+    } else {
+        ("completed", t.success)
+    }
 }
 
 fn inspector_action_label(tool_name: &str) -> &'static str {
@@ -68,18 +105,39 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
         "pykernel" => "Run Python in the persistent kernel",
         "bun_repl" => "Run JavaScript or TypeScript in the persistent Bun REPL",
         "subagent" => "Delegate a focused task",
+        "todo_write" => "Update the task list",
+        "ask" => "Ask for clarification",
+        "web_fetch" => "Fetch a web document",
+        "web_search" => "Search the web",
+        "web_crawl" => "Crawl web pages",
+        "read_tool_result" => "Read a stored tool result",
+        "skill" => "Load skill instructions",
+        "mcp_search_tools" => "Search connected capabilities",
+        "mcp_select_tool" => "Select a connected capability",
+        "mcp_features" => "Use an MCP server feature",
         _ => "Inspect tool input and output",
     }
 }
 
-pub(super) fn tool_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
+pub(super) fn tool_inspector_body_lines(
+    tool: &ToolActivity,
+    width: usize,
+    mode: InspectorMode,
+) -> Vec<Line<'static>> {
+    if mode == InspectorMode::Summary {
+        return summary::lines(tool, width);
+    }
+    debug_inspector_body_lines(tool, width)
+}
+
+fn debug_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let inner = width.saturating_sub(4).max(16);
     let mut lines = Vec::new();
-    let mut input = InspectorSection::new("› input", t.dim);
+    let mut input = InspectorSection::new("input", t.dim);
     append_inspector_input(&mut input, tool, inner);
     input.append_to(&mut lines);
-    let mut output_section = InspectorSection::new("· output", t.dim);
+    let mut output_section = InspectorSection::new("output", t.dim);
     if let Some(output) = &tool.output {
         let language = inspector_output_language(tool, output);
         if let Some(facts) = inspector_code_facts(tool, output, language) {
@@ -211,7 +269,7 @@ pub(super) fn inspector_code_facts(
     ))
 }
 
-fn inspector_size_label(bytes: u64) -> String {
+pub(super) fn inspector_size_label(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
     } else if bytes >= 1024 {
@@ -485,7 +543,7 @@ fn informative_line_window<'a>(lines: &[&'a str]) -> (Vec<&'a str>, bool) {
     (shown, true)
 }
 
-fn limit_inspector_preview(expanded: &str) -> (String, bool) {
+pub(super) fn limit_inspector_preview(expanded: &str) -> (String, bool) {
     let mut preview = String::new();
     let mut omitted = expanded.lines().count() > INSPECTOR_PREVIEW_LINES;
     for (index, line) in expanded.lines().take(INSPECTOR_PREVIEW_LINES).enumerate() {
@@ -516,7 +574,7 @@ fn limit_inspector_preview(expanded: &str) -> (String, bool) {
 
 pub(super) fn empty_tool_inspector_lines() -> Vec<Line<'static>> {
     vec![
-        Line::from(Span::styled("  TOOL INSPECTOR", theme().strong)),
+        Line::from(Span::styled("  Tool Inspector", theme().strong)),
         Line::from(""),
         Line::from(Span::styled(
             "  Tool input and output will appear here.",

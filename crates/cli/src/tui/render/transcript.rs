@@ -11,7 +11,9 @@ use crate::tui::components::transcript::{append_block, BlockSpacing};
 use crate::view::{self, theme};
 
 use super::super::format::{elapsed_label, plural};
-use super::super::{App, LocationPicker, ToolActivity, LIVE_TOOL_ROWS};
+use super::super::{
+    App, LocationPicker, SkillMentionPicker, ToolActivity, LIVE_TOOL_ROWS, PICKER_ROWS,
+};
 use super::overlays::*;
 /// The task list belongs beside the live run state, where the complete
 /// plan stays visible instead of disappearing into a clipped status line.
@@ -57,6 +59,36 @@ pub(crate) fn location_picker_lines(picker: &LocationPicker, width: usize) -> Ve
             }
         }),
         width,
+    )
+}
+
+pub(crate) fn skill_mention_picker_lines(
+    picker: &SkillMentionPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let filtered = picker.filtered();
+    if filtered.is_empty() {
+        return vec![Line::from(Span::styled(
+            format!("  No enabled skills match ${} · esc close", picker.query),
+            theme().dim,
+        ))];
+    }
+    let header = if picker.query.is_empty() {
+        "Skills · type to filter · enter invoke · esc close".to_string()
+    } else {
+        format!(
+            "Skills matching ${} · enter invoke · esc close",
+            picker.query
+        )
+    };
+    picker.picker.windowed_table_lines(
+        &header,
+        filtered
+            .into_iter()
+            .map(|entry| [entry.name.clone(), entry.description.trim().to_string()]),
+        [(4, 24), (0, usize::MAX)],
+        width,
+        PICKER_ROWS,
     )
 }
 
@@ -148,10 +180,12 @@ pub(crate) fn nested_spawn_rows(
         let last = position + 1 == visible.len();
         let branch = if last { "└─" } else { "├─" };
         let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
-        let (glyph, style) = match &tool.output {
-            Some(_) if tool.is_error => ("×", t.error),
-            Some(_) => ("✓", t.dim),
-            None => ("□", t.dim),
+        let (glyph, style) = match (&tool.output, tool.elapsed) {
+            (Some(_), _) if tool.is_error => ("×", t.error),
+            (Some(_), _) => ("✓", t.dim),
+            (None, Some(_)) if tool.is_error => ("×", t.error),
+            (None, Some(_)) => ("✓", t.dim),
+            (None, None) => ("□", t.dim),
         };
         let call = view::truncate_line(
             &tool.call_line,
@@ -306,7 +340,7 @@ pub(crate) fn activity_lines_selected(
     let complete = app
         .activity_tools
         .iter()
-        .filter(|tool| tool.output.is_some())
+        .filter(|tool| tool.elapsed.is_some())
         .count();
     let running = app.activity_tools.len() - complete;
     let (marker, summary) = if live {
@@ -327,7 +361,7 @@ pub(crate) fn activity_lines_selected(
             .iter()
             .enumerate()
             .rev()
-            .filter(|(_, tool)| tool.output.is_none())
+            .filter(|(_, tool)| tool.elapsed.is_none())
             .map(|(index, _)| index)
             .take(LIVE_TOOL_ROWS)
             .collect();
@@ -337,7 +371,7 @@ pub(crate) fn activity_lines_selected(
                 .iter()
                 .enumerate()
                 .rev()
-                .filter(|(_, tool)| tool.output.is_some())
+                .filter(|(_, tool)| tool.elapsed.is_some())
                 .map(|(index, _)| index)
                 .take(remaining),
         );
@@ -372,6 +406,8 @@ pub(crate) fn activity_lines_selected(
                 view::tool_result_summary(&tool.tool_name, output, false),
                 t.dim,
             ),
+            None if tool.elapsed.is_some() && tool.is_error => ("×", String::new(), t.error),
+            None if tool.elapsed.is_some() => ("✓", String::new(), t.dim),
             None if live => ("□", String::new(), t.dim),
             None => ("×", String::new(), t.warn),
         };

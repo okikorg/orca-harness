@@ -329,39 +329,10 @@ pub(crate) fn slash_command(
             });
         }
         "help" | "" => {
-            for entry in [
-                "/help        show this help",
-                "/expand [n]  full output of the n-th latest tool call (1 = latest)",
-                "/clear       reset the conversation, empty the session, stop background work",
-                "/compact     compact the conversation (elide tool outputs, capped summary)",
-                "/usage       session token totals, cache traffic, and context occupancy",
-                "/copy [code|all|tool] copy the last answer, its last code block, the transcript, or the inspected tool",
-                "/sessions [id] resume a recorded session (no argument opens the picker)",
-                "/queue [clear] show or clear waiting prompts",
-                "/models [f]  pick a model from the endpoint's catalog",
-                "/provider    switch provider (Codex subscription, OpenAI API, OpenRouter, local)",
-                "/settings    view and change provider, model, theme, api key",
-                "/subagents [n] show or set subagent nesting depth (1-5)",
-                "/extensions  toggle harness extensions (no argument opens the picker)",
-                "/mcp         toggle MCP servers · add <name> <command> · remove <name>",
-                "/skills      list and toggle skills (space reveals toggle/delete)",
-                "/skills add <source>   install from owner/repo, a url, or a local folder",
-                "/skills create <name>  scaffold a new skill · remove <name> · reload",
-                "/quit        exit",
-                "/theme [name] pick a color theme (no argument opens the picker)",
-                "@path        add a workspace file or folder to the prompt",
-                "keys: enter send or queue · esc cancel run · ctrl+o reveal latest work tree",
-                "      scroll: wheel · shift+↑/↓ line · pgup/pgdn page",
-                "      ctrl+c quit · up/down history",
-                "      ctrl+y copy last answer",
-                "copying: ctrl+y and /copy use OSC 52 (works over ssh; tmux needs set-clipboard on).",
-                "         the wheel scrolls; to drag-select, hold option (macOS) or shift.",
-                "         a drag selects whole terminal rows, so in split view it takes both panes;",
-                "         ctrl+y copies just the focused one (tab focuses the inspector).",
-                "approvals: y allow once · a always (session) · A always (saved for this workspace) · n deny",
-            ] {
-                app.push_line(Line::from(Span::styled(entry.to_string(), dim)));
-            }
+            app.overlay = Some(Overlay::Help {
+                filter: String::new(),
+                picker: ListPicker::new(crate::tui::command_catalog::COMMANDS.len()),
+            });
         }
         other => {
             push_error(app, format!("unknown command: /{other}"));

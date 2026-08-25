@@ -390,23 +390,58 @@
     }
 
     #[test]
-    fn help_as_the_first_command_replaces_the_welcome_immediately() {
+    fn help_as_the_first_command_opens_the_picker_without_polluting_history() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
+        let transcript_before = flat_lines(&app.transcript);
 
         slash_command(&mut app, "help", &tx, 90);
-        app.absorb_pending();
         let screen = rendered_rows(&mut app, 90, 40).join("\n");
 
+        assert!(matches!(app.overlay, Some(Overlay::Help { .. })));
         assert!(
-            screen.contains("/help        show this help"),
+            screen.contains("Help") && screen.contains("show available slash commands"),
             "help missing: {screen}"
         );
         assert!(
             !screen.contains("▀▄ ORCACODE"),
             "welcome remained: {screen}"
         );
+        assert!(app.pending_history.is_empty());
+        assert_eq!(flat_lines(&app.transcript), transcript_before);
         assert_eq!(app.turn_count, 0, "local help is not a model turn");
+    }
+
+    #[test]
+    fn help_picker_places_the_selected_command_in_the_composer() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+
+        slash_command(&mut app, "help", &tx, 90);
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "/clear");
+        assert_eq!(app.cursor, app.composer.chars().count());
+    }
+
+    #[test]
+    fn help_picker_filters_without_writing_to_the_transcript() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        let transcript_before = flat_lines(&app.transcript);
+
+        slash_command(&mut app, "help", &tx, 90);
+        for character in "mode".chars() {
+            press(&mut app, &tx, KeyCode::Char(character));
+        }
+        let shown = flat_lines(&live_lines(&app, 100));
+
+        assert!(shown.contains("filter: mode"), "{shown}");
+        assert!(shown.contains("/mode"), "{shown}");
+        assert!(!shown.contains("/help"), "{shown}");
+        assert_eq!(flat_lines(&app.transcript), transcript_before);
     }
 
     /// The rendered status line, which is the row carrying the model name.
@@ -514,4 +549,3 @@
             "full path should be omitted: {status}"
         );
     }
-

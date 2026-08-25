@@ -319,14 +319,39 @@
     }
 
     #[test]
+    fn model_picker_uses_the_shared_tabular_window() {
+        let picker = ModelPicker::new(catalog(), String::new());
+        let lines = crate::tui::render::model_picker_lines(&picker, PICKER_ROWS + 2, 80);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert!(text[0].contains("1/3"), "{}", text[0]);
+        let fast = text.iter().find(|line| line.contains("acme/fast-1")).unwrap();
+        let smart = text
+            .iter()
+            .find(|line| line.contains("acme/smart-9"))
+            .unwrap();
+        let fast_detail = fast[..fast.find("32k ctx").unwrap()].chars().count();
+        let smart_detail = smart[..smart.find("32k ctx").unwrap()].chars().count();
+        assert_eq!(fast_detail, smart_detail);
+        assert!(fast.contains("▸ acme/fast-1"), "{fast}");
+    }
+
+    #[test]
     fn picker_filters_navigates_and_switches_on_enter() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.overlay = Some(Overlay::Models(ModelPicker {
-            models: catalog(),
-            filter: String::new(),
-            index: 0,
-        }));
+        app.overlay = Some(Overlay::Models(ModelPicker::new(
+            catalog(),
+            String::new(),
+        )));
 
         // Typing narrows to the two acme models; Down selects the second.
         for c in "acme".chars() {
@@ -346,11 +371,10 @@
     fn picker_escape_closes_without_switching() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.overlay = Some(Overlay::Models(ModelPicker {
-            models: catalog(),
-            filter: String::new(),
-            index: 0,
-        }));
+        app.overlay = Some(Overlay::Models(ModelPicker::new(
+            catalog(),
+            String::new(),
+        )));
         press(&mut app, &tx, KeyCode::Esc);
         assert!(app.overlay.is_none());
         assert!(rx.try_recv().is_err(), "no command sent on cancel");
@@ -481,9 +505,24 @@
         assert!(app.view_mode == ViewMode::Split);
         assert_eq!(crate::config::stored_view().as_deref(), Some("split"));
 
-        // Api key row on a keyless provider closes with an explanation.
+        // Inspector row opens a picker and persists the selected default.
+        app.inspector_mode = InspectorMode::Summary;
         app.overlay = Some(Overlay::Settings {
             picker: ListPicker::with_selected(SETTINGS_ROWS, 4),
+        });
+        press(&mut app, &tx, KeyCode::Enter);
+        match &app.overlay {
+            Some(Overlay::Inspector { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the inspector overlay"),
+        }
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.inspector_mode, InspectorMode::Debug));
+        assert_eq!(crate::config::stored_inspector().as_deref(), Some("debug"));
+
+        // Api key row on a keyless provider closes with an explanation.
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 5),
         });
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
@@ -495,7 +534,7 @@
         let _spacing = SPACING_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         set_transcript_spacing(TranscriptSpacing::Comfortable);
         app.overlay = Some(Overlay::Settings {
-            picker: ListPicker::with_selected(SETTINGS_ROWS, 6),
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 7),
         });
         press(&mut app, &tx, KeyCode::Enter);
         match &app.overlay {
@@ -512,4 +551,3 @@
         set_transcript_spacing(TranscriptSpacing::Comfortable);
         let _ = crate::config::save_transcript_spacing("comfortable");
     }
-

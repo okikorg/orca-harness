@@ -12,7 +12,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use orca_harness_core::Tool;
+use async_trait::async_trait;
+use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, Tool, ToolSchema};
 use orca_harness_tool_extensions::skills::{discover, Discovered, Skill, SkillRoot, SkillTool};
 
 /// What the last scan found for one skill, as the `/skills` overlay
@@ -67,6 +68,71 @@ pub struct Skills {
     /// them: the project's own skill folder.
     project: Option<Arc<PathBuf>>,
     found: Arc<RwLock<Discovered>>,
+}
+
+/// Expands the latest user turn only at the model boundary. The durable
+/// context keeps the exact `$skill` text the user entered, while every model
+/// step in that turn sees the explicit instruction to load the named skill.
+pub struct SkillMentionModel<M> {
+    inner: M,
+    skills: Skills,
+}
+
+impl<M> SkillMentionModel<M> {
+    pub fn new(inner: M, skills: Skills) -> Self {
+        Self { inner, skills }
+    }
+
+    fn expanded(&self, context: &Context) -> Option<Context> {
+        let index = context
+            .messages()
+            .iter()
+            .rposition(|message| matches!(message, orca_harness_core::Message::User { .. }))?;
+        let orca_harness_core::Message::User { content, images } = &context.messages()[index]
+        else {
+            unreachable!("index was selected from user messages");
+        };
+        let expanded = crate::prompt::expand_skill_mentions(content, &self.skills.invokable());
+        if expanded == *content {
+            return None;
+        }
+
+        let mut model_context = Context::new();
+        for (message_index, message) in context.messages().iter().enumerate() {
+            if message_index == index {
+                model_context.push_user_with_images(&expanded, images.clone());
+            } else {
+                model_context.push(message.clone());
+            }
+        }
+        Some(model_context)
+    }
+}
+
+#[async_trait]
+impl<M: Model> Model for SkillMentionModel<M> {
+    async fn generate(
+        &self,
+        context: &Context,
+        tools: &[ToolSchema],
+    ) -> Result<ModelResponse, ModelError> {
+        let expanded = self.expanded(context);
+        self.inner
+            .generate(expanded.as_ref().unwrap_or(context), tools)
+            .await
+    }
+
+    async fn generate_streaming(
+        &self,
+        context: &Context,
+        tools: &[ToolSchema],
+        sink: &dyn DeltaSink,
+    ) -> Result<ModelResponse, ModelError> {
+        let expanded = self.expanded(context);
+        self.inner
+            .generate_streaming(expanded.as_ref().unwrap_or(context), tools, sink)
+            .await
+    }
 }
 
 impl Skills {
@@ -171,6 +237,28 @@ impl Skills {
             removable: self.removable(&failure.dir),
         });
         loaded.chain(shadowed).chain(failed).collect()
+    }
+
+    /// Skills a prompt can invoke: successfully loaded and not disabled.
+    /// Shadowed and failed rows remain visible in `/skills`, but cannot be
+    /// offered by the composer because the agent has no callable tool entry
+    /// for them.
+    pub fn invokable(&self) -> Vec<SkillEntry> {
+        self.catalog()
+            .into_iter()
+            .filter(|entry| entry.enabled && matches!(entry.state, SkillState::Loaded { .. }))
+            .collect()
+    }
+
+    pub fn is_invokable(&self, name: &str) -> bool {
+        is_enabled(name)
+            && self
+                .found
+                .read()
+                .expect("skills lock")
+                .skills
+                .iter()
+                .any(|skill| skill.name == name)
     }
 
     /// Write a starter `SKILL.md`. Authoring goes to the project folder
@@ -301,6 +389,8 @@ fn is_enabled(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orca_harness_core::testing::ScriptedModel;
+    use orca_harness_core::{Message, ModelResponse};
     use std::fs;
 
     struct Temp(PathBuf);
@@ -405,5 +495,32 @@ mod tests {
         );
         assert_eq!(catalog[2].name, "oops");
         assert!(matches!(catalog[2].state, SkillState::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn mention_model_expands_for_the_model_without_mutating_context() {
+        let temp = Temp::new("mention-model");
+        let skills = temp.skills();
+        temp.write("repo/.orca/skills/review/SKILL.md", &skill_md("review"));
+        skills.reload();
+        let inner = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("done")]));
+        let model = SkillMentionModel::new(inner.clone(), skills);
+        let mut context = Context::new();
+        context.push_user("$review inspect this");
+
+        model.generate(&context, &[]).await.unwrap();
+
+        let observed = inner.observed_contexts();
+        let Message::User { content, .. } = &observed[0].messages()[0] else {
+            panic!("model should receive a user message");
+        };
+        assert!(content.starts_with(
+            "The user explicitly invoked these skills: review. Before any other work"
+        ));
+        assert!(content.ends_with("$review inspect this"));
+        assert!(matches!(
+            &context.messages()[0],
+            Message::User { content, .. } if content == "$review inspect this"
+        ));
     }
 }

@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use ratatui::text::Line;
 
 use crate::tui::components::message::{assistant_message, user_prompt};
+use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::{
     append_block, line_is_blank, set_transcript_spacing, BlockSpacing, TranscriptSpacing,
 };
@@ -78,10 +79,10 @@ impl App {
             split_tool: None,
             split_snapshot: None,
             split_inspector_cache: None,
-            split_focused: false,
+            inspector_mode: super::state::InspectorMode::stored(),
             split_scroll: 0,
             subagent_activity: std::collections::HashMap::new(),
-            palette_index: 0,
+            palette_picker: ListPicker::new(super::command_catalog::COMMANDS.len()),
             overlay: None,
             picker_pending: None,
             clipboard_pending: None,
@@ -100,6 +101,14 @@ impl App {
             return None;
         }
         self.composer.strip_prefix('/')
+    }
+
+    pub(crate) fn reset_palette_picker(&mut self) {
+        let len = self
+            .palette_query()
+            .map(super::command_catalog::filter_commands)
+            .map_or(0, |commands| commands.len());
+        self.palette_picker = ListPicker::new(len);
     }
 
     pub(crate) fn push_line(&mut self, line: Line<'static>) {
@@ -204,7 +213,6 @@ impl App {
         self.thinking_log.clear();
         self.activity_tools.clear();
         self.split_tool = None;
-        self.split_focused = false;
         self.split_scroll = 0;
         self.subagent_activity.clear();
         self.pending_calls.clear();
@@ -267,7 +275,6 @@ impl App {
         self.activity_tools.clear();
         self.pending_calls.clear();
         self.split_tool = None;
-        self.split_focused = false;
         self.split_scroll = 0;
     }
 

@@ -44,11 +44,7 @@ pub(crate) fn handle_ui_msg(
                     app.push_line(Line::from(Span::styled("no models available", t.dim)));
                 }
                 Ok(models) => {
-                    app.overlay = Some(Overlay::Models(ModelPicker {
-                        models,
-                        filter: seed,
-                        index: 0,
-                    }));
+                    app.overlay = Some(Overlay::Models(ModelPicker::new(models, seed)));
                 }
                 Err(err) => app.push_line(Line::from(Span::styled(
                     format!("model list failed: {err}"),

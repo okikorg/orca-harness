@@ -41,6 +41,14 @@ pub enum HarnessEvent {
         tool_name: String,
         input: Value,
     },
+    /// A tool stopped executing. Completion events are live and may arrive
+    /// out of call order; the final transformed output still arrives through
+    /// [`ToolResult`](HarnessEvent::ToolResult).
+    ToolFinished {
+        tool_call_id: String,
+        tool_name: String,
+        is_error: bool,
+    },
     /// A tool produced a result.
     ToolResult {
         tool_call_id: String,
@@ -121,6 +129,7 @@ impl Extension for EventStream {
             .model_delta()
             .after_model()
             .before_tool()
+            .tool_finished()
             .tool_result()
             .on_error()
     }
@@ -187,6 +196,16 @@ impl Extension for EventStream {
             })
             .await;
         Ok(ToolDecision::Continue)
+    }
+
+    async fn tool_finished(&self, call_id: &str, tool_name: &str, is_error: bool) {
+        self.sink
+            .emit(HarnessEvent::ToolFinished {
+                tool_call_id: call_id.to_owned(),
+                tool_name: tool_name.to_owned(),
+                is_error,
+            })
+            .await;
     }
 
     async fn tool_result(&self, result: &ToolResult) {

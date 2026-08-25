@@ -3,6 +3,8 @@ use super::*;
 pub(super) enum After {
     Nothing,
     Close,
+    /// Close a catalog overlay and place its selected command in the composer.
+    CloseAndCompose(String),
     Replace(Overlay),
     /// Send to the worker with the overlay left open (toggle rows).
     Send(WorkerCmd),
@@ -19,6 +21,8 @@ pub(super) enum After {
     CloseAndSetMode(crate::mode::Mode),
     /// Close, persist, and activate transcript section spacing.
     CloseAndSetTranscriptSpacing(TranscriptSpacing),
+    /// Close, persist, and activate split inspector rendering.
+    CloseAndSetInspector(InspectorMode),
     /// Close and drop a dim status line into the history.
     CloseWithNote(String),
     /// Keep the overlay open and drop a dim status line (row
@@ -36,5 +40,10 @@ pub(super) enum After {
     InsertLocation {
         token_start: usize,
         entry: LocationEntry,
+    },
+    /// Close and replace the active `$query` with an invokable skill.
+    InsertSkill {
+        token_start: usize,
+        name: String,
     },
 }

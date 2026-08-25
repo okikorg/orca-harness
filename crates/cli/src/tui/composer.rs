@@ -21,6 +21,26 @@ pub(crate) fn remove_location_mention_before_cursor(
     composer: &mut String,
     cursor: &mut usize,
 ) -> bool {
+    remove_mention_before_cursor(composer, cursor, '@', |_| true)
+}
+
+/// Remove a complete `$skill-name ` token immediately before the cursor.
+/// Names are validated during skill discovery, so a whitespace-delimited
+/// token is the same boundary the picker inserted.
+pub(crate) fn remove_skill_mention_before_cursor(
+    composer: &mut String,
+    cursor: &mut usize,
+    is_skill: impl FnOnce(&str) -> bool,
+) -> bool {
+    remove_mention_before_cursor(composer, cursor, '$', is_skill)
+}
+
+fn remove_mention_before_cursor(
+    composer: &mut String,
+    cursor: &mut usize,
+    marker: char,
+    accept: impl FnOnce(&str) -> bool,
+) -> bool {
     if *cursor == 0 {
         return false;
     }
@@ -37,11 +57,16 @@ pub(crate) fn remove_location_mention_before_cursor(
         .iter()
         .rposition(|c| c.is_whitespace())
         .map_or(0, |index| index + 1);
-    if chars.get(token_start) != Some(&'@') || token_end == token_start + 1 {
+    if chars.get(token_start) != Some(&marker) || token_end == token_start + 1 {
         return false;
     }
 
     let start_byte = byte_index(composer, token_start);
+    let name_start_byte = byte_index(composer, token_start + 1);
+    let token_end_byte = byte_index(composer, token_end);
+    if !accept(&composer[name_start_byte..token_end_byte]) {
+        return false;
+    }
     let end_byte = byte_index(composer, *cursor);
     composer.replace_range(start_byte..end_byte, "");
     *cursor = token_start;

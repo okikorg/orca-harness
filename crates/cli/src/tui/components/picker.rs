@@ -165,6 +165,23 @@ impl ListPicker {
         lines
     }
 
+    /// Render structured rows as aligned columns through the standard
+    /// picker tray. Each `(min, max)` pair controls one column; widths
+    /// otherwise follow the widest cell. The assembled row still obeys
+    /// `width`.
+    pub fn table_lines<const N: usize, I>(
+        &self,
+        header: &str,
+        rows: I,
+        column_widths: [(usize, usize); N],
+        width: usize,
+    ) -> Vec<Line<'static>>
+    where
+        I: IntoIterator<Item = [String; N]>,
+    {
+        self.lines(header, table_rows(rows, column_widths), width)
+    }
+
     /// A bounded version of [`Self::lines`] for catalogs larger than the
     /// live region. The window follows the cursor and the header exposes
     /// both the selected position and total row count.
@@ -209,6 +226,60 @@ impl ListPicker {
         }
         lines
     }
+
+    /// The bounded catalog variant of [`Self::table_lines`]. Column
+    /// widths are calculated across the full filtered result so they do
+    /// not jump while the cursor pages through the window.
+    pub fn windowed_table_lines<const N: usize, I>(
+        &self,
+        header: &str,
+        rows: I,
+        column_widths: [(usize, usize); N],
+        width: usize,
+        visible_rows: usize,
+    ) -> Vec<Line<'static>>
+    where
+        I: IntoIterator<Item = [String; N]>,
+    {
+        self.windowed_lines(header, table_rows(rows, column_widths), width, visible_rows)
+    }
+}
+
+fn table_rows<const N: usize, I>(rows: I, column_widths: [(usize, usize); N]) -> Vec<String>
+where
+    I: IntoIterator<Item = [String; N]>,
+{
+    let rows: Vec<[String; N]> = rows.into_iter().collect();
+    let widths: [usize; N] = std::array::from_fn(|column| {
+        let widest = rows
+            .iter()
+            .map(|row| row[column].chars().count())
+            .max()
+            .unwrap_or(0);
+        let (minimum, maximum) = column_widths[column];
+        widest.max(minimum).min(maximum.max(minimum))
+    });
+    rows.into_iter()
+        .map(|row| render_table_row(row, &widths))
+        .collect()
+}
+
+fn render_table_row<const N: usize>(row: [String; N], widths: &[usize; N]) -> String {
+    let mut rendered = String::new();
+    for (column, cell) in row.into_iter().enumerate() {
+        let cell = view::truncate_line(&cell, widths[column]);
+        rendered.push_str(&cell);
+        if column + 1 < N {
+            rendered.push_str(
+                &" ".repeat(
+                    widths[column]
+                        .saturating_sub(cell.chars().count())
+                        .saturating_add(2),
+                ),
+            );
+        }
+    }
+    rendered
 }
 
 #[cfg(test)]
@@ -372,5 +443,72 @@ mod tests {
         assert_eq!(text.len(), 7);
         assert!(text.iter().any(|line| line.contains("▸ row 13")));
         assert!(!text.iter().any(|line| line.contains("row 8")));
+    }
+
+    #[test]
+    fn table_lines_align_columns_and_cap_long_cells() {
+        let picker = ListPicker::with_selected(2, 1);
+        let rows = [
+            ["short".into(), "first description".into()],
+            ["a-very-long-name".into(), "second description".into()],
+        ];
+        let lines = picker.table_lines("Catalog", rows, [(0, 10), (0, usize::MAX)], 80);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        let first_column = text[2][..text[2].find("first description").unwrap()]
+            .chars()
+            .count();
+        let second_column = text[3][..text[3].find("second description").unwrap()]
+            .chars()
+            .count();
+        assert_eq!(first_column, second_column);
+        assert!(text[3].contains("a-very-lo…"), "{}", text[3]);
+        assert!(text[3].contains("▸ "), "{}", text[3]);
+    }
+
+    #[test]
+    fn windowed_table_lines_keep_columns_stable_across_pages() {
+        let picker = ListPicker::with_selected(12, 10);
+        let rows = (0..12).map(|index| {
+            [
+                if index == 0 {
+                    "widest-name".to_string()
+                } else {
+                    format!("s{index}")
+                },
+                format!("description {index}"),
+            ]
+        });
+        let lines = picker.windowed_table_lines("Catalog", rows, [(0, 20), (0, usize::MAX)], 80, 5);
+        let selected: String = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("description 10"))
+            })
+            .unwrap()
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        let detail_column = selected[..selected.find("description 10").unwrap()]
+            .chars()
+            .count();
+        assert_eq!(detail_column, 17, "{selected}");
+        assert!(selected.contains("▸ s10"), "{selected}");
+        assert!(lines[0]
+            .spans
+            .iter()
+            .any(|span| span.content.contains("11/12")));
     }
 }

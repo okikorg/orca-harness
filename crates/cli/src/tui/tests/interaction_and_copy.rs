@@ -188,6 +188,36 @@ fn clearing_the_conversation_drops_the_copyable_answer() {
 /// arrows did, and the wheel and page keys scrolled the transcript
 /// behind the open palette instead.
 #[test]
+fn command_palette_uses_the_shared_tabular_window() {
+    let mut app = test_app();
+    app.composer = "/".into();
+    app.cursor = 1;
+    let lines = palette_lines(&app, PALETTE_ROWS + 2, 100);
+    let text: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+
+    assert!(text[0].contains(&format!(
+        "1/{}",
+        crate::tui::command_catalog::COMMANDS.len()
+    )));
+    let help = text.iter().find(|line| line.contains("/help")).unwrap();
+    let clear = text.iter().find(|line| line.contains("/clear")).unwrap();
+    let help_detail = help[..help.find("show available").unwrap()].chars().count();
+    let clear_detail = clear[..clear.find("reset the conversation").unwrap()]
+        .chars()
+        .count();
+    assert_eq!(help_detail, clear_detail);
+    assert!(help.contains("▸ /help"), "{help}");
+}
+
+#[test]
 fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();
@@ -202,7 +232,7 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
     // The window starts at the top and stays there while the
     // selection is inside it.
     let window = |app: &App| flat_lines(&palette_lines(app, PALETTE_ROWS + 2, 100));
-    assert!(window(&app).contains(&format!("1-{PALETTE_ROWS}")));
+    assert!(window(&app).contains(&format!("1/{total}")));
 
     // One step past the last visible row slides the window by one.
     for _ in 0..PALETTE_ROWS {
@@ -213,12 +243,8 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
             TEST_TERMINAL_WIDTH,
         );
     }
-    assert_eq!(app.palette_index, PALETTE_ROWS);
-    assert!(
-        window(&app).contains(&format!("2-{}", PALETTE_ROWS + 1)),
-        "{}",
-        window(&app)
-    );
+    assert_eq!(app.palette_picker.index(), PALETTE_ROWS);
+    assert!(window(&app).contains(&format!("{}/{total}", PALETTE_ROWS + 1)));
     assert_eq!(app.scroll, 0, "the transcript stays put");
 
     // Page keys move a screenful of the list, not of the transcript.
@@ -228,7 +254,7 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
         &tx,
         TEST_TERMINAL_WIDTH,
     );
-    assert_eq!(app.palette_index, 0);
+    assert_eq!(app.palette_picker.index(), 0);
     assert_eq!(app.scroll, 0, "page keys do not reach the transcript");
     handle_terminal_event(
         &mut app,
@@ -236,7 +262,7 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
         &tx,
         TEST_TERMINAL_WIDTH,
     );
-    assert_eq!(app.palette_index, PALETTE_ROWS);
+    assert_eq!(app.palette_picker.index(), PALETTE_ROWS);
 
     // The wheel does the same, one row at a time, and is clamped.
     handle_terminal_event(
@@ -245,7 +271,7 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
         &tx,
         TEST_TERMINAL_WIDTH,
     );
-    assert_eq!(app.palette_index, PALETTE_ROWS - 1);
+    assert_eq!(app.palette_picker.index(), PALETTE_ROWS - 1);
     assert_eq!(app.scroll, 0, "the wheel does not reach the transcript");
     for _ in 0..total * 2 {
         handle_terminal_event(
@@ -255,7 +281,11 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
             TEST_TERMINAL_WIDTH,
         );
     }
-    assert_eq!(app.palette_index, total - 1, "clamped at the last entry");
+    assert_eq!(
+        app.palette_picker.index(),
+        total - 1,
+        "clamped at the last entry"
+    );
     for _ in 0..total * 2 {
         handle_terminal_event(
             &mut app,
@@ -264,7 +294,11 @@ fn palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel() {
             TEST_TERMINAL_WIDTH,
         );
     }
-    assert_eq!(app.palette_index, 0, "clamped at the first entry");
+    assert_eq!(
+        app.palette_picker.index(),
+        0,
+        "clamped at the first entry"
+    );
     assert_eq!(app.scroll, 0);
 }
 

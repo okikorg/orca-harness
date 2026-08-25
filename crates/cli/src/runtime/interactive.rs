@@ -275,6 +275,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     // provider request using the catalog's current selections.
     let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
     let model_for_subagents = model.clone();
+    let model: Arc<dyn Model> = Arc::new(skills::SkillMentionModel::new(model, skills.clone()));
     let events = EventStream::from_fn({
         let ui = ui.clone();
         move |event| {

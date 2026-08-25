@@ -86,9 +86,6 @@ pub async fn run(
         flush_terminal_requests(&mut app)?;
     }
 
-    // Mouse tracking is unconditional at shutdown: the cost of a
-    // redundant disable is nothing and the cost of a missed one is a
-    // shell that reports mouse events forever.
     crossterm::execute!(
         io::stdout(),
         DisableBracketedPaste,

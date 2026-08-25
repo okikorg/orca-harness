@@ -56,11 +56,11 @@ pub struct TuiConfig {
 }
 
 /// The interactive model selector: the fetched catalog, a live-typed
-/// filter, and the selected row (an index into the filtered view).
+/// filter, and the standard shared picker state for the filtered view.
 pub(crate) struct ModelPicker {
     pub(crate) models: Vec<ModelInfo>,
     pub(crate) filter: String,
-    pub(crate) index: usize,
+    pub(crate) picker: ListPicker,
 }
 
 /// Workspace-relative file and directory inserted into the composer by
@@ -75,6 +75,15 @@ pub(crate) struct LocationPicker {
     pub(crate) entries: Vec<LocationEntry>,
     pub(crate) query: String,
     /// Character offset of the `@` that opened this picker.
+    pub(crate) token_start: usize,
+    pub(crate) picker: ListPicker,
+}
+
+/// An enabled, loaded skill inserted into the composer by the `$` picker.
+pub(crate) struct SkillMentionPicker {
+    pub(crate) entries: Vec<crate::skills::SkillEntry>,
+    pub(crate) query: String,
+    /// Character offset of the `$` that opened this picker.
     pub(crate) token_start: usize,
     pub(crate) picker: ListPicker,
 }
@@ -99,7 +108,41 @@ impl LocationPicker {
     }
 }
 
+impl SkillMentionPicker {
+    pub(crate) fn filtered(&self) -> Vec<&crate::skills::SkillEntry> {
+        let needle = self.query.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|entry| needle.is_empty() || entry.name.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    pub(crate) fn selected(&self) -> Option<String> {
+        self.filtered()
+            .get(self.picker.index())
+            .map(|entry| entry.name.clone())
+    }
+
+    pub(crate) fn sync_len(&mut self) {
+        let len = self.filtered().len();
+        self.picker.set_len(len);
+    }
+}
+
 impl ModelPicker {
+    pub(crate) fn new(models: Vec<ModelInfo>, filter: String) -> Self {
+        let needle = filter.to_lowercase();
+        let len = models
+            .iter()
+            .filter(|model| needle.is_empty() || model.id.to_lowercase().contains(&needle))
+            .count();
+        Self {
+            models,
+            filter,
+            picker: ListPicker::new(len),
+        }
+    }
+
     pub(crate) fn filtered(&self) -> Vec<&ModelInfo> {
         let needle = self.filter.to_lowercase();
         self.models
@@ -113,18 +156,26 @@ impl ModelPicker {
     pub(crate) fn selected_info(&self) -> Option<(String, Option<u64>)> {
         let filtered = self.filtered();
         filtered
-            .get(self.index.min(filtered.len().saturating_sub(1)))
+            .get(self.picker.index())
             .map(|m| (m.id.clone(), m.context_length))
+    }
+
+    pub(crate) fn reset_filtered_selection(&mut self) {
+        self.picker = ListPicker::new(self.filtered().len());
     }
 }
 
 /// A modal selector rendered in the live region. Approval prompts win
 /// over overlays; overlays win over the slash palette.
 pub(crate) enum Overlay {
+    /// Browsable slash-command reference; enter places a command in the composer.
+    Help { filter: String, picker: ListPicker },
     /// Model selector over the fetched catalog.
     Models(ModelPicker),
     /// Workspace file/folder selector opened by typing `@` in the composer.
     Locations(LocationPicker),
+    /// Enabled skill selector opened by typing `$` in the composer.
+    SkillMentions(SkillMentionPicker),
     /// Provider selector (openrouter, openai, local).
     Providers { picker: ListPicker },
     /// Theme selector over `view::ThemeName::ALL`.
@@ -135,6 +186,8 @@ pub(crate) enum Overlay {
     Mode { picker: ListPicker },
     /// Vertical spacing between transcript sections.
     TranscriptSpacing { picker: ListPicker },
+    /// Default split Tool Inspector rendering.
+    Inspector { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
     Usage,
     /// Masked API-key entry for a provider whose key is not in the env.
@@ -174,7 +227,7 @@ pub(crate) enum Overlay {
 
 /// Rows in the settings overlay: provider, model, theme, transcript view,
 /// api key, approvals.
-pub(crate) const SETTINGS_ROWS: usize = 7;
+pub(crate) const SETTINGS_ROWS: usize = 8;
 
 /// Row actions in the /sessions picker (space arms them).
 pub(crate) const SESSION_ACTIONS: &[PickerAction] = &[PickerAction {
@@ -250,6 +303,37 @@ impl ViewMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InspectorMode {
+    Summary,
+    Debug,
+}
+
+impl InspectorMode {
+    pub(crate) const ALL: [Self; 2] = [Self::Summary, Self::Debug];
+
+    pub(crate) fn stored() -> Self {
+        match crate::config::stored_inspector().as_deref() {
+            Some("debug") => Self::Debug,
+            _ => Self::Summary,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Summary => "Summary",
+            Self::Debug => "Debug",
+        }
+    }
+
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::Debug => "debug",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ToolActivity {
     /// The model-assigned tool-call id (anchors nested subagent spawns).
@@ -267,8 +351,10 @@ pub(crate) struct ToolActivity {
 pub(crate) struct InspectorBodyCache {
     pub(crate) call_id: String,
     pub(crate) complete: bool,
+    pub(crate) has_output: bool,
     pub(crate) is_error: bool,
     pub(crate) width: usize,
+    pub(crate) mode: InspectorMode,
     pub(crate) lines: Vec<Line<'static>>,
 }
 
@@ -390,12 +476,12 @@ pub(crate) struct App {
     /// collapses or flashes while the next call is being prepared.
     pub(crate) split_snapshot: Option<ToolActivity>,
     pub(crate) split_inspector_cache: Option<InspectorBodyCache>,
-    pub(crate) split_focused: bool,
+    pub(crate) inspector_mode: InspectorMode,
     pub(crate) split_scroll: u16,
     /// Live inner activity of running subagents, keyed by spawn id.
     pub(crate) subagent_activity: HashMap<u64, SpawnActivity>,
-    /// Selected row in the slash-command palette.
-    pub(crate) palette_index: usize,
+    /// Shared selection state for the slash-command palette.
+    pub(crate) palette_picker: ListPicker,
     /// Open modal selector, if any.
     pub(crate) overlay: Option<Overlay>,
     /// Filter to seed the model picker with once the catalog reply arrives.

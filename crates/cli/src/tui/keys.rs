@@ -17,12 +17,15 @@ use crate::view;
 
 use super::format::byte_index;
 use super::render::matching_indices;
-use super::state::{App, LocationEntry, Overlay, ViewMode};
+use super::state::{App, InspectorMode, LocationEntry, ModelPicker, Overlay, ViewMode};
 use super::{clear_tool_connectors, push_error, push_notice, remove_skill, PICKER_ROWS};
 
+mod catalogs;
 mod effects;
 mod helpers;
+mod location_mentions;
 mod overlays;
+mod skill_mentions;
 
 pub(crate) use helpers::*;
 pub(crate) use overlays::*;

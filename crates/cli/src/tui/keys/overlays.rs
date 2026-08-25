@@ -18,6 +18,7 @@ pub(crate) fn handle_overlay_key(
     // Read before the overlay borrow: the settings rows need these.
     let current_provider = app.cfg.provider;
     let current_view = app.view_mode;
+    let current_inspector = app.inspector_mode;
     let current_spacing = transcript_spacing();
     let workspace_root = app.cfg.workspace_root.clone();
     let current_session = app.cfg.session_id.clone();
@@ -25,88 +26,22 @@ pub(crate) fn handle_overlay_key(
         return;
     };
     let after = match overlay {
-        Overlay::Models(picker) => {
-            let after = match key.code {
-                KeyCode::Up => {
-                    picker.index = picker.index.saturating_sub(1);
-                    After::Nothing
-                }
-                KeyCode::Down => {
-                    picker.index += 1;
-                    After::Nothing
-                }
-                KeyCode::PageUp => {
-                    picker.index = picker.index.saturating_sub(PICKER_ROWS);
-                    After::Nothing
-                }
-                KeyCode::PageDown => {
-                    picker.index += PICKER_ROWS;
-                    After::Nothing
-                }
-                KeyCode::Enter => match picker.selected_info() {
-                    Some((id, window)) => After::CloseAndSetModel { id, window },
-                    None => After::Close,
-                },
-                KeyCode::Char(c) => {
-                    picker.filter.push(c);
-                    picker.index = 0;
-                    After::Nothing
-                }
-                KeyCode::Backspace => {
-                    picker.filter.pop();
-                    picker.index = 0;
-                    After::Nothing
-                }
-                _ => After::Nothing,
-            };
-            let len = picker.filtered().len();
-            picker.index = picker.index.min(len.saturating_sub(1));
-            after
+        Overlay::Help { filter, picker } => {
+            super::catalogs::handle_help_key(filter, picker, key.code)
         }
-        Overlay::Locations(location) => match key.code {
-            KeyCode::Tab => match location.selected() {
-                Some(entry) => After::InsertLocation {
-                    token_start: location.token_start,
-                    entry,
-                },
-                None => After::Nothing,
-            },
-            _ => match location.picker.on_key(key.code) {
-                PickerEvent::Activated(_) => match location.selected() {
-                    Some(entry) => After::InsertLocation {
-                        token_start: location.token_start,
-                        entry,
-                    },
-                    None => After::Nothing,
-                },
-                PickerEvent::Moved | PickerEvent::Action { .. } => After::Nothing,
-                PickerEvent::Ignored => match key.code {
-                    KeyCode::Char(c) => {
-                        location.query.push(c);
-                        let at = byte_index(&app.composer, app.cursor);
-                        app.composer.insert(at, c);
-                        app.cursor += 1;
-                        location.sync_len();
-                        After::Nothing
-                    }
-                    KeyCode::Backspace if !location.query.is_empty() => {
-                        location.query.pop();
-                        let at = byte_index(&app.composer, app.cursor - 1);
-                        app.composer.remove(at);
-                        app.cursor -= 1;
-                        location.sync_len();
-                        After::Nothing
-                    }
-                    KeyCode::Backspace | KeyCode::Delete => {
-                        let at = byte_index(&app.composer, location.token_start);
-                        app.composer.remove(at);
-                        app.cursor = location.token_start;
-                        After::Close
-                    }
-                    _ => After::Nothing,
-                },
-            },
-        },
+        Overlay::Models(picker) => super::catalogs::handle_model_key(picker, key.code),
+        Overlay::Locations(location) => super::location_mentions::handle_location_mention_key(
+            location,
+            &mut app.composer,
+            &mut app.cursor,
+            key.code,
+        ),
+        Overlay::SkillMentions(skill) => super::skill_mentions::handle_skill_mention_key(
+            skill,
+            &mut app.composer,
+            &mut app.cursor,
+            key.code,
+        ),
         Overlay::Providers { picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => {
                 let provider = Provider::ALL[index];
@@ -156,6 +91,10 @@ pub(crate) fn handle_overlay_key(
             PickerEvent::Activated(index) => {
                 After::CloseAndSetTranscriptSpacing(TranscriptSpacing::ALL[index])
             }
+            _ => After::Nothing,
+        },
+        Overlay::Inspector { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => After::CloseAndSetInspector(InspectorMode::ALL[index]),
             _ => After::Nothing,
         },
         Overlay::Usage => match key.code {
@@ -226,6 +165,15 @@ pub(crate) fn handle_overlay_key(
                     })
                 }
                 4 => {
+                    let selected = InspectorMode::ALL
+                        .iter()
+                        .position(|mode| *mode == current_inspector)
+                        .unwrap_or(0);
+                    After::Replace(Overlay::Inspector {
+                        picker: ListPicker::with_selected(InspectorMode::ALL.len(), selected),
+                    })
+                }
+                5 => {
                     if current_provider.key_env().is_none() {
                         After::CloseWithNote(format!(
                             "the {} endpoint needs no api key",
@@ -238,7 +186,7 @@ pub(crate) fn handle_overlay_key(
                         })
                     }
                 }
-                5 => {
+                6 => {
                     let tools = crate::config::stored_approvals(&workspace_root);
                     if tools.is_empty() {
                         After::CloseWithNote("no saved approvals for this workspace".into())
@@ -472,6 +420,12 @@ pub(crate) fn handle_overlay_key(
     match after {
         After::Nothing => {}
         After::Close => app.overlay = None,
+        After::CloseAndCompose(command) => {
+            app.overlay = None;
+            app.composer = command;
+            app.cursor = app.composer.chars().count();
+            app.reset_palette_picker();
+        }
         After::Replace(next) => app.overlay = Some(next),
         After::Send(cmd) => send_or_report(app, worker, cmd),
         After::CloseAndSend(cmd) => {
@@ -495,7 +449,6 @@ pub(crate) fn handle_overlay_key(
                 clear_tool_connectors(&mut app.pending_history);
                 app.split_inspector_cache = None;
             }
-            app.split_focused = false;
             app.split_scroll = 0;
             let note = match crate::config::save_view(mode.slug()) {
                 Ok(_) => format!("view set to {}", mode.label()),
@@ -512,6 +465,17 @@ pub(crate) fn handle_overlay_key(
                     "transcript spacing set to {} (not saved: {err})",
                     spacing.label()
                 ),
+            };
+            push_notice(app, note);
+        }
+        After::CloseAndSetInspector(mode) => {
+            app.overlay = None;
+            app.inspector_mode = mode;
+            app.split_inspector_cache = None;
+            app.split_scroll = 0;
+            let note = match crate::config::save_inspector(mode.slug()) {
+                Ok(_) => format!("Tool Inspector set to {}", mode.label()),
+                Err(err) => format!("Tool Inspector set to {} (not saved: {err})", mode.label()),
             };
             push_notice(app, note);
         }
@@ -566,6 +530,14 @@ pub(crate) fn handle_overlay_key(
             let end_byte = byte_index(&app.composer, app.cursor);
             let suffix = if entry.directory { "/" } else { "" };
             let mention = format!("@{}{suffix} ", entry.path);
+            app.composer.replace_range(start_byte..end_byte, &mention);
+            app.cursor = token_start + mention.chars().count();
+            app.overlay = None;
+        }
+        After::InsertSkill { token_start, name } => {
+            let start_byte = byte_index(&app.composer, token_start);
+            let end_byte = byte_index(&app.composer, app.cursor);
+            let mention = format!("${name} ");
             app.composer.replace_range(start_byte..end_byte, &mention);
             app.cursor = token_start + mention.chars().count();
             app.overlay = None;

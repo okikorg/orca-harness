@@ -12,14 +12,15 @@ use crate::tui::components::ask::AskFormEvent;
 use crate::tui::components::picker::ListPicker;
 
 use super::super::composer::{
-    mention_starts_at, remove_location_mention_before_cursor, workspace_locations,
+    mention_starts_at, remove_location_mention_before_cursor, remove_skill_mention_before_cursor,
+    workspace_locations,
 };
 use super::super::format::byte_index;
 use super::super::input::{
     insert_clipboard_image, insert_paste, marker_ending_at, marker_starting_at, remove_marker,
 };
 use super::super::render::transcript_content_width;
-use super::super::state::{App, LocationPicker, Overlay, RunState, ViewMode};
+use super::super::state::{App, LocationPicker, Overlay, RunState, SkillMentionPicker, ViewMode};
 use super::super::PALETTE_ROWS;
 use super::super::{
     copy_command, expand_latest_work, expand_tool, handle_approval_key, handle_overlay_key,
@@ -79,6 +80,12 @@ pub(crate) fn handle_terminal_event(
     if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
         return;
     }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // Ctrl+Tab has no Orca behavior, including while a modal that uses plain
+    // Tab is open. Consume it before those handlers can discard modifiers.
+    if ctrl && key.code == KeyCode::Tab {
+        return;
+    }
     if app.approval.is_some() {
         handle_approval_key(app, key);
         return;
@@ -95,7 +102,6 @@ pub(crate) fn handle_terminal_event(
         return;
     }
     let content_width = transcript_content_width(app, width);
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         KeyCode::Char('c') if ctrl => {
@@ -122,44 +128,12 @@ pub(crate) fn handle_terminal_event(
         }
         // Deliberately not ctrl+s (XOFF on most terminals — the app would
         // appear to hang) and not a plain letter the composer needs.
-        // ctrl+y copies whichever pane has focus, so the same key means
-        // "take what I am looking at" in either half of a split.
-        KeyCode::Char('y') if ctrl => {
-            copy_command(app, if app.split_focused { "tool" } else { "" })
-        }
+        KeyCode::Char('y') if ctrl => copy_command(app, ""),
         // Line scroll on shift+arrows: PgUp/PgDn are fn+arrows on a laptop
         // keyboard, which terminals often swallow for their own scrollback
         // before the app ever sees them.
         KeyCode::Up if shift => scroll_transcript(app, 1),
         KeyCode::Down if shift => scroll_transcript(app, -1),
-        KeyCode::Tab
-            if app.view_mode == ViewMode::Split
-                && width >= 100
-                && !app.activity_tools.is_empty() =>
-        {
-            app.split_focused = !app.split_focused;
-            if app.split_tool.is_none() {
-                app.split_tool = Some(app.activity_tools.len() - 1);
-            }
-        }
-        KeyCode::Up if app.split_focused => {
-            let selected = app
-                .split_tool
-                .unwrap_or_else(|| app.activity_tools.len().saturating_sub(1));
-            app.split_tool = Some(selected.saturating_sub(1));
-            app.split_scroll = 0;
-        }
-        KeyCode::Down if app.split_focused => {
-            let last = app.activity_tools.len().saturating_sub(1);
-            app.split_tool = Some(app.split_tool.unwrap_or(last).saturating_add(1).min(last));
-            app.split_scroll = 0;
-        }
-        KeyCode::PageUp if app.split_focused => {
-            app.split_scroll = app.split_scroll.saturating_sub(SCROLL_PAGE as u16);
-        }
-        KeyCode::PageDown if app.split_focused => {
-            app.split_scroll = app.split_scroll.saturating_add(SCROLL_PAGE as u16);
-        }
         // Page keys belong to the palette while it is open, for the same
         // reason the wheel does: the list is what the user is looking at.
         KeyCode::PageUp if app.palette_query().is_some() => {
@@ -171,12 +145,10 @@ pub(crate) fn handle_terminal_event(
         KeyCode::PageUp => scroll_transcript(app, SCROLL_PAGE as isize),
         KeyCode::PageDown => scroll_transcript(app, -(SCROLL_PAGE as isize)),
         KeyCode::Esc => {
-            if app.split_focused {
-                app.split_focused = false;
-            } else if app.palette_query().is_some() {
+            if app.palette_query().is_some() {
                 app.composer.clear();
                 app.cursor = 0;
-                app.palette_index = 0;
+                app.reset_palette_picker();
             } else if let RunState::Running { cancel, .. } = &app.run {
                 cancel.cancel();
             } else {
@@ -205,7 +177,7 @@ pub(crate) fn handle_terminal_event(
             }
             app.scroll = 0;
             submit(app, worker, content_width);
-            app.palette_index = 0;
+            app.reset_palette_picker();
         }
         KeyCode::Char('v') if ctrl => {
             if key.kind == KeyEventKind::Press {
@@ -216,7 +188,7 @@ pub(crate) fn handle_terminal_event(
             let at = byte_index(&app.composer, app.cursor);
             app.composer.insert(at, c);
             app.cursor += 1;
-            app.palette_index = 0;
+            app.reset_palette_picker();
             if c == '@' && mention_starts_at(&app.composer, app.cursor - 1) {
                 let entries = workspace_locations(Path::new(&app.cfg.workspace_root));
                 app.overlay = Some(Overlay::Locations(LocationPicker {
@@ -225,29 +197,48 @@ pub(crate) fn handle_terminal_event(
                     query: String::new(),
                     token_start: app.cursor - 1,
                 }));
+            } else if c == '$'
+                && !app.composer.starts_with('!')
+                && mention_starts_at(&app.composer, app.cursor - 1)
+            {
+                let entries = app.cfg.skills.invokable();
+                if !entries.is_empty() {
+                    app.overlay = Some(Overlay::SkillMentions(SkillMentionPicker {
+                        picker: ListPicker::new(entries.len()),
+                        entries,
+                        query: String::new(),
+                        token_start: app.cursor - 1,
+                    }));
+                }
             }
         }
         KeyCode::Backspace => {
             if let Some((start, end)) = marker_ending_at(&app.pastes, &app.composer, app.cursor) {
                 remove_marker(app, start, end);
-                app.palette_index = 0;
+                app.reset_palette_picker();
             } else if remove_location_mention_before_cursor(&mut app.composer, &mut app.cursor) {
-                app.palette_index = 0;
+                app.reset_palette_picker();
+            } else if !app.composer.starts_with('!')
+                && remove_skill_mention_before_cursor(&mut app.composer, &mut app.cursor, |name| {
+                    app.cfg.skills.is_invokable(name)
+                })
+            {
+                app.reset_palette_picker();
             } else if app.cursor > 0 {
                 let at = byte_index(&app.composer, app.cursor - 1);
                 app.composer.remove(at);
                 app.cursor -= 1;
-                app.palette_index = 0;
+                app.reset_palette_picker();
             }
         }
         KeyCode::Delete => {
             if let Some((start, end)) = marker_starting_at(&app.pastes, &app.composer, app.cursor) {
                 remove_marker(app, start, end);
-                app.palette_index = 0;
+                app.reset_palette_picker();
             } else if app.cursor < app.composer.chars().count() {
                 let at = byte_index(&app.composer, app.cursor);
                 app.composer.remove(at);
-                app.palette_index = 0;
+                app.reset_palette_picker();
             }
         }
         // Arrows step over a marker whole too: landing inside one would

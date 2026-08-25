@@ -28,6 +28,7 @@ pub struct Subscriptions {
     pub before_tool: bool,
     pub around_tool: bool,
     pub after_tool: bool,
+    pub tool_finished: bool,
     pub tool_result: bool,
     pub on_error: bool,
     pub on_agent_end: bool,
@@ -42,6 +43,7 @@ impl Subscriptions {
         before_tool: true,
         around_tool: true,
         after_tool: true,
+        tool_finished: true,
         tool_result: true,
         on_error: true,
         on_agent_end: true,
@@ -55,6 +57,7 @@ impl Subscriptions {
         before_tool: false,
         around_tool: false,
         after_tool: false,
+        tool_finished: false,
         tool_result: false,
         on_error: false,
         on_agent_end: false,
@@ -90,6 +93,10 @@ impl Subscriptions {
     }
     pub fn after_tool(mut self) -> Self {
         self.after_tool = true;
+        self
+    }
+    pub fn tool_finished(mut self) -> Self {
+        self.tool_finished = true;
         self
     }
     pub fn tool_result(mut self) -> Self {
@@ -214,6 +221,14 @@ pub trait Extension: Send + Sync {
         Ok(result)
     }
 
+    /// Live observation that execution has ended for one call. Unlike
+    /// `tool_result`, this fires from the executing task in completion order,
+    /// before batch-wide result collection and result-transforming hooks.
+    /// It intentionally exposes only identity and error status so unredacted
+    /// tool output cannot escape through telemetry. Denied calls fire this
+    /// hook during preflight because they never enter an execution task.
+    async fn tool_finished(&self, _call_id: &str, _tool_name: &str, _is_error: bool) {}
+
     /// Immutable observation of the final result (telemetry/audit).
     /// Denied calls are observed here too.
     async fn tool_result(&self, _result: &ToolResult) {}
@@ -233,6 +248,7 @@ pub struct ExtensionRegistry {
     before_tool: Vec<Arc<dyn Extension>>,
     around_tool: Vec<Arc<dyn Extension>>,
     after_tool: Vec<Arc<dyn Extension>>,
+    tool_finished: Vec<Arc<dyn Extension>>,
     tool_result: Vec<Arc<dyn Extension>>,
     on_error: Vec<Arc<dyn Extension>>,
     on_agent_end: Vec<Arc<dyn Extension>>,
@@ -266,6 +282,9 @@ impl ExtensionRegistry {
         if subs.after_tool {
             self.after_tool.push(extension.clone());
         }
+        if subs.tool_finished {
+            self.tool_finished.push(extension.clone());
+        }
         if subs.tool_result {
             self.tool_result.push(extension.clone());
         }
@@ -287,6 +306,10 @@ impl ExtensionRegistry {
 
     pub(crate) fn after_tool_subscribers(&self) -> &[Arc<dyn Extension>] {
         &self.after_tool
+    }
+
+    pub(crate) fn tool_finished_subscribers(&self) -> &[Arc<dyn Extension>] {
+        &self.tool_finished
     }
 
     pub(crate) fn tool_result_subscribers(&self) -> &[Arc<dyn Extension>] {

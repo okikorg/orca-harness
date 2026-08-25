@@ -1,13 +1,49 @@
 use ratatui::text::{Line, Span};
 
 use crate::msg::{Provider, ProviderAuth};
+use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
 use crate::tui::components::tray::Tray;
 use crate::view::{self, theme};
 
 use super::super::format::{age_label, redact_command, size};
-use super::super::{App, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
+use super::super::{App, InspectorMode, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
+
+pub(super) fn command_picker_row(spec: &CommandSpec) -> [String; 3] {
+    [
+        format!("/{}", spec.name),
+        spec.description.to_string(),
+        spec.category.to_string(),
+    ]
+}
+
+pub(crate) fn help_picker_lines(
+    filter: &str,
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let commands = crate::tui::command_catalog::filter_commands(filter);
+    if commands.is_empty() {
+        return vec![Line::from(Span::styled(
+            format!("  No commands match {filter} · backspace to widen · esc close"),
+            theme().dim,
+        ))];
+    }
+    let filter_note = if filter.is_empty() {
+        "type to filter".to_string()
+    } else {
+        format!("filter: {filter}")
+    };
+    picker.windowed_table_lines(
+        &format!("Help · {filter_note} · ↑↓ navigate · enter use · esc close"),
+        commands.into_iter().map(command_picker_row),
+        [(6, 16), (12, 64), (0, 10)],
+        width,
+        PICKER_ROWS,
+    )
+}
+
 pub(crate) fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
     let rows = Provider::ALL.iter().map(|provider| {
         let key_note = match provider.auth() {
@@ -23,15 +59,16 @@ pub(crate) fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'sta
                 format!("${environment} not set — will ask")
             }
         };
-        format!(
-            "{:<12} {:<36} {key_note}",
-            provider.label(),
-            provider.base_url()
-        )
+        [
+            provider.label().to_string(),
+            provider.base_url().to_string(),
+            key_note,
+        ]
     });
-    picker.lines(
+    picker.table_lines(
         "Select provider · ↑↓ navigate · enter use · esc close",
         rows,
+        [(12, 12), (36, 36), (0, usize::MAX)],
         width,
     )
 }
@@ -75,11 +112,16 @@ pub(crate) fn theme_picker_lines(picker: &ListPicker, width: usize) -> Vec<Line<
     let current = view::theme_name();
     let rows = view::ThemeName::ALL.iter().map(|name| {
         let note = if *name == current { "current" } else { "" };
-        format!("{:<16} {:<16} {note}", name.label(), name.slug())
+        [
+            name.label().to_string(),
+            name.slug().to_string(),
+            note.to_string(),
+        ]
     });
-    picker.lines(
+    picker.table_lines(
         "Select theme · ↑↓ navigate · enter use · esc close",
         rows,
+        [(16, 16), (16, 16), (0, usize::MAX)],
         width,
     )
 }
@@ -95,11 +137,16 @@ pub(crate) fn view_picker_lines(
             ViewMode::Classic => "transcript with inline work rail",
             ViewMode::Split => "tool rail with connected inspector",
         };
-        format!("{:<10} {:<38} {note}", mode.label(), description)
+        [
+            mode.label().to_string(),
+            description.to_string(),
+            note.to_string(),
+        ]
     });
-    picker.lines(
+    picker.table_lines(
         "Select view · ↑↓ navigate · enter use · esc close",
         rows,
+        [(10, 10), (38, 38), (0, usize::MAX)],
         width,
     )
 }
@@ -119,11 +166,12 @@ pub(crate) fn mode_picker_lines(
             crate::mode::Mode::Plan => "read-only: investigate and propose, change nothing",
             crate::mode::Mode::Yolo => "every gated tool runs without asking",
         };
-        format!("{:<10} {:<46} {note}", label, description)
+        [label.to_string(), description.to_string(), note.to_string()]
     });
-    picker.lines(
+    picker.table_lines(
         "Select mode · ↑↓ navigate · enter use · esc close",
         rows,
+        [(10, 10), (46, 46), (0, usize::MAX)],
         width,
     )
 }
@@ -150,14 +198,16 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         ("model", app.cfg.model_name.clone()),
         ("theme", view::theme_name().label().to_string()),
         ("view", app.view_mode.label().to_string()),
+        ("inspector", app.inspector_mode.label().to_string()),
         ("api key", key_status),
         ("approvals", approvals_status),
         ("spacing", transcript_spacing().label().to_string()),
     ];
-    let mut lines = picker.lines(
+    let mut lines = picker.table_lines(
         "Settings · ↑↓ navigate · enter change · esc close",
         rows.iter()
-            .map(|(name, value)| format!("{name:<10} {value}")),
+            .map(|(name, value)| [name.to_string(), value.clone()]),
+        [(10, 10), (0, usize::MAX)],
         width,
     );
     if let Some(path) = crate::config::config_path() {
@@ -170,6 +220,31 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
     lines
 }
 
+pub(crate) fn inspector_picker_lines(
+    current: InspectorMode,
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let rows = InspectorMode::ALL.iter().map(|mode| {
+        let note = if *mode == current { "current" } else { "" };
+        let description = match mode {
+            InspectorMode::Summary => "concise tool-specific rendering",
+            InspectorMode::Debug => "exact input and output data",
+        };
+        [
+            mode.label().to_string(),
+            description.to_string(),
+            note.to_string(),
+        ]
+    });
+    picker.table_lines(
+        "Tool Inspector · ↑↓ navigate · enter use · esc close",
+        rows,
+        [(10, 10), (38, 38), (0, usize::MAX)],
+        width,
+    )
+}
+
 pub(crate) fn transcript_spacing_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
     let current = transcript_spacing();
     let rows = TranscriptSpacing::ALL.iter().map(|spacing| {
@@ -178,11 +253,16 @@ pub(crate) fn transcript_spacing_lines(picker: &ListPicker, width: usize) -> Vec
             TranscriptSpacing::Compact => "no blank rows between sections",
             TranscriptSpacing::Comfortable => "one blank row between sections",
         };
-        format!("{:<14} {:<36} {note}", spacing.label(), description)
+        [
+            spacing.label().to_string(),
+            description.to_string(),
+            note.to_string(),
+        ]
     });
-    picker.lines(
+    picker.table_lines(
         "Transcript spacing · ↑↓ navigate · enter use · esc close",
         rows,
+        [(14, 14), (36, 36), (0, usize::MAX)],
         width,
     )
 }
@@ -210,11 +290,16 @@ pub(crate) fn extensions_picker_lines(picker: &ListPicker, width: usize) -> Vec<
         } else {
             "off"
         };
-        format!("{:<12} {state}  {}", spec.name, spec.description)
+        [
+            spec.name.to_string(),
+            state.to_string(),
+            spec.description.to_string(),
+        ]
     });
-    picker.lines(
+    picker.table_lines(
         "Extensions · ↑↓ navigate · enter toggle · esc close",
         rows,
+        [(12, 12), (3, 3), (0, usize::MAX)],
         width,
     )
 }
@@ -234,12 +319,6 @@ pub(crate) fn mcp_picker_lines(
     picker: &ListPicker,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let name_width = servers
-        .iter()
-        .map(|server| server.name.chars().count())
-        .max()
-        .unwrap_or(0)
-        .clamp(4, 16);
     let indices = matching_indices(servers, filter, |server| &server.name);
     let rows = indices.into_iter().map(|index| {
         let server = &servers[index];
@@ -257,21 +336,22 @@ pub(crate) fn mcp_picker_lines(
             }
         };
         let state = if server.enabled { "on " } else { "off" };
-        format!(
-            "{:<name_width$}  {state}  {:<9}  {}{why}",
-            server.name,
+        [
+            server.name.clone(),
+            state.to_string(),
             count,
-            redact_command(&server.command)
-        )
+            format!("{}{why}", redact_command(&server.command)),
+        ]
     });
     let filter_note = if filter.is_empty() {
         "type to filter".into()
     } else {
         format!("filter: {filter}")
     };
-    picker.windowed_lines(
+    picker.windowed_table_lines(
         &format!("MCP servers · {filter_note} · ↑↓ navigate · space toggle · esc close"),
         rows,
+        [(4, 16), (3, 3), (9, 9), (0, usize::MAX)],
         width,
         PICKER_ROWS,
     )
@@ -291,37 +371,40 @@ pub(crate) fn skills_picker_lines(
     picker: &ListPicker,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let name_width = entries
-        .iter()
-        .map(|entry| entry.name.chars().count())
-        .max()
-        .unwrap_or(0)
-        .clamp(4, 20);
     let indices = matching_indices(entries, filter, |entry| &entry.name);
     let rows = indices.into_iter().map(|index| {
         let entry = &entries[index];
-        let (state, detail) = match &entry.state {
+        let (state, root, size, detail) = match &entry.state {
             crate::skills::SkillState::Loaded { root, bytes } => (
                 if entry.enabled { "on " } else { "off" },
-                format!("{root}  {}  {}", size(*bytes), entry.description),
+                root.clone(),
+                size(*bytes),
+                entry.description.clone(),
             ),
-            crate::skills::SkillState::Shadowed { root, by } => {
-                ("—  ", format!("{root}  shadowed by {by}"))
-            }
-            crate::skills::SkillState::Failed { root, reason } => {
-                ("—  ", format!("{root}  failed — {reason}"))
-            }
+            crate::skills::SkillState::Shadowed { root, by } => (
+                "—  ",
+                root.clone(),
+                String::new(),
+                format!("shadowed by {by}"),
+            ),
+            crate::skills::SkillState::Failed { root, reason } => (
+                "—  ",
+                root.clone(),
+                String::new(),
+                format!("failed — {reason}"),
+            ),
         };
-        format!("{:<name_width$}  {state}  {detail}", entry.name)
+        [entry.name.clone(), state.to_string(), root, size, detail]
     });
     let filter_note = if filter.is_empty() {
         "type to filter".into()
     } else {
         format!("filter: {filter}")
     };
-    picker.windowed_lines(
+    picker.windowed_table_lines(
         &format!("Skills · {filter_note} · ↑↓ navigate · enter toggle · esc close"),
         rows,
+        [(4, 20), (3, 3), (0, 28), (0, 8), (0, usize::MAX)],
         width,
         PICKER_ROWS,
     )
@@ -356,16 +439,16 @@ pub(crate) fn sessions_picker_lines(
         } else {
             ""
         };
-        format!(
-            "{}  {:<8} {}{note}",
-            session.meta.id,
+        [
+            session.meta.id.clone(),
             age_label(session.meta.created_at),
-            session.meta.model,
-        )
+            format!("{}{note}", session.meta.model),
+        ]
     });
-    picker.windowed_lines(
+    picker.windowed_table_lines(
         "Sessions (this workspace) · ↑↓ navigate · PgUp/PgDn page · enter resume · esc close",
         rows,
+        [(36, 36), (8, 8), (0, usize::MAX)],
         width,
         SESSIONS_WINDOW,
     )

@@ -18,11 +18,8 @@ pub(crate) fn palette_move(app: &mut App, delta: isize) {
     let Some(query) = app.palette_query() else {
         return;
     };
-    let Some(last) = filter_commands(query).len().checked_sub(1) else {
-        return;
-    };
-    let current = app.palette_index.min(last) as isize;
-    app.palette_index = current.saturating_add(delta).clamp(0, last as isize) as usize;
+    app.palette_picker.set_len(filter_commands(query).len());
+    app.palette_picker.move_by(delta);
 }
 
 /// The highlighted palette entry, if the palette is open and non-empty.
@@ -30,7 +27,11 @@ pub(crate) fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
     let query = app.palette_query()?;
     let filtered = filter_commands(query);
     filtered
-        .get(app.palette_index.min(filtered.len().saturating_sub(1)))
+        .get(
+            app.palette_picker
+                .index()
+                .min(filtered.len().saturating_sub(1)),
+        )
         .copied()
 }
 

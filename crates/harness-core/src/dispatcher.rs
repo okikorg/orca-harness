@@ -24,11 +24,12 @@
 //! - lock acquisition order is always permit → RwLock, so lock waiters
 //!   always hold a permit and the pair cannot deadlock.
 //!
-//! Extension hooks stay deterministic: all `before_tool` hooks run
-//! sequentially in call order before any execution starts, and
-//! `after_tool` / `tool_result` hooks run sequentially in call order after
-//! all results are collected. Only tool execution itself (wrapped by
-//! `around_tool`) is concurrent.
+//! Extension hooks stay deterministic except for the explicitly live
+//! `tool_finished` observation: `before_tool` hooks run sequentially in call
+//! order before execution; `tool_finished` runs in the completing task;
+//! `after_tool` / `tool_result` run sequentially in call order after all
+//! results are collected. Only tool execution itself (wrapped by
+//! `around_tool`) and live completion observation are concurrent.
 //!
 //! Fan-out hot path: synchronization that cannot matter is elided — the
 //! semaphore is skipped when the batch fits under `max_parallel_tools`
@@ -120,7 +121,11 @@ impl Dispatcher {
                 }
             }
             if let Some(reason) = denied {
-                slots[index] = Some(ToolResult::error(call, format!("denied: {reason}")));
+                let result = ToolResult::error(call, format!("denied: {reason}"));
+                for ext in extensions.tool_finished_subscribers() {
+                    ext.tool_finished(&call.id, &call.name, true).await;
+                }
+                slots[index] = Some(result);
                 continue;
             }
             let input = match rewritten {
@@ -152,6 +157,7 @@ impl Dispatcher {
             exclusivity: has_serial.then(RwLock::default),
             calls,
             around_chain: extensions.around_tool_chain().to_vec(),
+            tool_finished: extensions.tool_finished_subscribers().to_vec(),
             cancellation: cancellation.clone(),
             deadline,
         });
@@ -265,6 +271,7 @@ struct SharedExecution {
     exclusivity: Option<RwLock<()>>,
     calls: Arc<[ToolCall]>,
     around_chain: Vec<Arc<dyn crate::extension::Extension>>,
+    tool_finished: Vec<Arc<dyn crate::extension::Extension>>,
     cancellation: CancellationToken,
     deadline: Option<Instant>,
 }
@@ -281,19 +288,44 @@ impl SharedExecution {
         let _permit = match &self.semaphore {
             Some(semaphore) => match self.guarded(semaphore.acquire()).await {
                 Ok(Ok(permit)) => Some(permit),
-                Ok(Err(closed)) => return ToolResult::error(call, closed.to_string()),
-                Err(err) => return ToolResult::error(call, interrupted(&err, "before execution")),
+                Ok(Err(closed)) => {
+                    return self
+                        .finish(call, ToolResult::error(call, closed.to_string()))
+                        .await
+                }
+                Err(err) => {
+                    return self
+                        .finish(
+                            call,
+                            ToolResult::error(call, interrupted(&err, "before execution")),
+                        )
+                        .await
+                }
             },
             None => None,
         };
         let _lock: Option<Hold<'_>> = match &self.exclusivity {
             Some(lock) if job.exclusive => match self.guarded(lock.write()).await {
                 Ok(guard) => Some(Hold::Exclusive(guard)),
-                Err(err) => return ToolResult::error(call, interrupted(&err, "before execution")),
+                Err(err) => {
+                    return self
+                        .finish(
+                            call,
+                            ToolResult::error(call, interrupted(&err, "before execution")),
+                        )
+                        .await
+                }
             },
             Some(lock) => match self.guarded(lock.read()).await {
                 Ok(guard) => Some(Hold::Shared(guard)),
-                Err(err) => return ToolResult::error(call, interrupted(&err, "before execution")),
+                Err(err) => {
+                    return self
+                        .finish(
+                            call,
+                            ToolResult::error(call, interrupted(&err, "before execution")),
+                        )
+                        .await
+                }
             },
             None => None,
         };
@@ -310,11 +342,20 @@ impl SharedExecution {
             tool: job.tool.as_ref(),
             ctx: &ctx,
         };
-        match self.guarded(next.run(job.input)).await {
+        let result = match self.guarded(next.run(job.input)).await {
             Ok(Ok(output)) => ToolResult::ok(call, output),
             Ok(Err(err)) => ToolResult::error(call, err.message),
             Err(err) => ToolResult::error(call, interrupted(&err, "during execution")),
+        };
+        self.finish(call, result).await
+    }
+
+    async fn finish(&self, call: &ToolCall, result: ToolResult) -> ToolResult {
+        for ext in &self.tool_finished {
+            ext.tool_finished(&call.id, &call.name, result.is_error)
+                .await;
         }
+        result
     }
 
     /// Race a future against cancellation and the run deadline.
