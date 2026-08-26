@@ -252,6 +252,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let workspace = workspace_status_name(&app.cfg.workspace_name);
     let status = StatusBar {
         model: &app.cfg.model_name,
+        effort: app.reasoning_effort.as_deref(),
         state,
         mode: &mode,
         context: &context,
@@ -424,6 +425,7 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         let mut lines = match overlay {
             Overlay::Help { filter, picker } => help_picker_lines(filter, picker, width),
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
+            Overlay::Efforts(picker) => effort_picker_lines(picker, width),
             Overlay::Locations(picker) => location_picker_lines(picker, width),
             Overlay::SkillMentions(picker) => skill_mention_picker_lines(picker, width),
             Overlay::Providers { picker } => provider_lines(picker, width),

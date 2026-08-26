@@ -42,6 +42,7 @@ pub(crate) fn handle_overlay_key(
             super::catalogs::handle_help_key(filter, picker, key.code)
         }
         Overlay::Models(picker) => super::catalogs::handle_model_key(picker, key.code),
+        Overlay::Efforts(picker) => super::catalogs::handle_effort_key(picker, key.code),
         Overlay::Locations(location) => super::location_mentions::handle_location_mention_key(
             location,
             &mut app.composer,
@@ -477,10 +478,21 @@ pub(crate) fn handle_overlay_key(
             finish_picker_flow(app);
             send_or_report(app, worker, cmd);
         }
-        After::CloseAndSetModel { id, window } => {
+        After::CloseAndSetModel {
+            id,
+            window,
+            reasoning_effort,
+        } => {
             finish_picker_flow(app);
             app.context_window = window;
-            send_or_report(app, worker, WorkerCmd::SetModel { id });
+            send_or_report(
+                app,
+                worker,
+                WorkerCmd::SetModel {
+                    id,
+                    reasoning_effort,
+                },
+            );
         }
         After::CloseAndSetMode(mode) => {
             finish_picker_flow(app);

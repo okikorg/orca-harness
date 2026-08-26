@@ -7,6 +7,7 @@ pub(crate) fn body(
     tools: &[ToolSchema],
     stream: bool,
     continuation: &[Value],
+    reasoning_effort: Option<&str>,
 ) -> Value {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
@@ -95,6 +96,9 @@ pub(crate) fn body(
                 .collect(),
         );
     }
+    if let Some(effort) = reasoning_effort {
+        value["reasoning"] = json!({"effort": effort});
+    }
     value
 }
 
@@ -120,7 +124,7 @@ mod tests {
             description: "run".into(),
             parameters: json!({"type":"object"}),
         }];
-        let value = body("codex", &context, &tools, true, &[]);
+        let value = body("codex", &context, &tools, true, &[], None);
         assert_eq!(value["instructions"], "be careful");
         assert_eq!(value["input"][1]["type"], "function_call");
         assert_eq!(value["input"][2]["type"], "function_call_output");
@@ -140,7 +144,7 @@ mod tests {
             }],
         );
 
-        let value = body("codex", &context, &[], true, &[]);
+        let value = body("codex", &context, &[], true, &[], None);
         assert_eq!(
             value["input"][0]["content"],
             json!([
@@ -169,6 +173,7 @@ mod tests {
             &[],
             true,
             std::slice::from_ref(&reasoning),
+            None,
         );
         let input = value["input"].as_array().unwrap();
         let reasoning_at = input
@@ -185,5 +190,11 @@ mod tests {
             .unwrap();
         assert!(reasoning_at < call_at && call_at < output_at);
         assert_eq!(input[reasoning_at]["encrypted_content"], "opaque");
+    }
+
+    #[test]
+    fn selected_effort_uses_responses_reasoning_shape() {
+        let value = body("codex", &Context::new(), &[], true, &[], Some("xhigh"));
+        assert_eq!(value["reasoning"], json!({"effort": "xhigh"}));
     }
 }

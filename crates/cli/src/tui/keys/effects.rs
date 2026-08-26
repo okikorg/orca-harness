@@ -14,6 +14,7 @@ pub(super) enum After {
     CloseAndSetModel {
         id: String,
         window: Option<u64>,
+        reasoning_effort: Option<String>,
     },
     /// Close, persist, and activate the selected transcript layout.
     CloseAndSetView(ViewMode),

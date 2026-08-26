@@ -9,7 +9,7 @@ pub mod openai;
 pub mod openai_codex;
 pub mod openrouter;
 
-pub use catalog::{ModelInfo, Pricing};
+pub use catalog::{ModelInfo, Pricing, ReasoningCapabilities, SupportedEfforts};
 pub use openai::OpenAiModel;
 pub use openai_codex::OpenAiCodexModel;
 pub use openrouter::OpenRouterModel;

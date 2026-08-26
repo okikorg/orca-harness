@@ -7,6 +7,7 @@ use crate::view;
 
 pub struct StatusBar<'a> {
     pub model: &'a str,
+    pub effort: Option<&'a str>,
     pub state: &'a str,
     pub mode: &'a str,
     pub context: &'a str,
@@ -19,9 +20,14 @@ pub struct StatusBar<'a> {
 
 impl StatusBar<'_> {
     pub fn line(&self, width: usize, style: Style) -> Line<'static> {
+        let effort = self
+            .effort
+            .map(|effort| format!(" · effort {effort}"))
+            .unwrap_or_default();
         let status = format!(
-            " {} · {}{} · {}{}{}{} · {} · {}",
+            " {}{} · {}{} · {}{}{}{} · {} · {}",
             self.model,
+            effort,
             self.state,
             self.mode,
             self.context,
@@ -43,6 +49,7 @@ mod tests {
     fn assembles_segments_in_the_standard_order() {
         let line = StatusBar {
             model: "model",
+            effort: None,
             state: "idle",
             mode: " · normal",
             context: "ctx 10%",
@@ -65,6 +72,7 @@ mod tests {
     fn yolo_segment_renders_like_any_other() {
         let line = StatusBar {
             model: "model",
+            effort: None,
             state: "idle",
             mode: " · yolo",
             context: "ctx 10%",
@@ -83,6 +91,27 @@ mod tests {
         assert_eq!(
             line.spans[0].content.as_ref(),
             " model · idle · yolo · ctx 10% · enter send · repo"
+        );
+    }
+
+    #[test]
+    fn selected_reasoning_effort_follows_the_model() {
+        let line = StatusBar {
+            model: "gpt-5",
+            effort: Some("high"),
+            state: "idle",
+            mode: "",
+            context: "ctx 10%",
+            stats: "",
+            todo: "",
+            queue: "",
+            hint: "enter send",
+            workspace: "repo",
+        }
+        .line(200, Style::default());
+        assert_eq!(
+            line.spans[0].content.as_ref(),
+            " gpt-5 · effort high · idle · ctx 10% · enter send · repo"
         );
     }
 }

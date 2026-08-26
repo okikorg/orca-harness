@@ -15,6 +15,7 @@ use crate::tui::components::ask::AskForm;
 use crate::tui::components::picker::{ListPicker, PickerAction};
 use orca_harness_core::{CancellationToken, Image};
 use orca_harness_model_providers::openrouter::ModelInfo;
+use orca_harness_model_providers::SupportedEfforts;
 
 use super::format::TokenEstimator;
 use super::PICKER_ROWS;
@@ -60,6 +61,15 @@ pub struct TuiConfig {
 pub(crate) struct ModelPicker {
     pub(crate) models: Vec<ModelInfo>,
     pub(crate) filter: String,
+    pub(crate) picker: ListPicker,
+}
+
+/// Provider-advertised reasoning efforts for the model chosen on the
+/// preceding `/models` page.
+pub(crate) struct EffortPicker {
+    pub(crate) model_id: String,
+    pub(crate) context_window: Option<u64>,
+    pub(crate) efforts: Vec<String>,
     pub(crate) picker: ListPicker,
 }
 
@@ -151,17 +161,41 @@ impl ModelPicker {
             .collect()
     }
 
-    /// The id under the cursor, if any model matches the filter.
-    /// The selected model's id and catalog-reported context window.
-    pub(crate) fn selected_info(&self) -> Option<(String, Option<u64>)> {
+    /// The provider metadata under the cursor, if any model matches.
+    pub(crate) fn selected_model(&self) -> Option<ModelInfo> {
         let filtered = self.filtered();
-        filtered
-            .get(self.picker.index())
-            .map(|m| (m.id.clone(), m.context_length))
+        filtered.get(self.picker.index()).cloned().cloned()
     }
 
     pub(crate) fn reset_filtered_selection(&mut self) {
         self.picker = ListPicker::new(self.filtered().len());
+    }
+}
+
+impl EffortPicker {
+    pub(crate) fn new(model: ModelInfo) -> Option<Self> {
+        let reasoning = model.reasoning?;
+        let SupportedEfforts::Listed(efforts) = reasoning.supported_efforts? else {
+            return None;
+        };
+        if efforts.is_empty() {
+            return None;
+        }
+        let selected = reasoning
+            .default_effort
+            .as_ref()
+            .and_then(|default| efforts.iter().position(|effort| effort == default))
+            .unwrap_or(0);
+        Some(Self {
+            model_id: model.id,
+            context_window: model.context_length,
+            picker: ListPicker::with_selected(efforts.len(), selected),
+            efforts,
+        })
+    }
+
+    pub(crate) fn selected(&self) -> Option<String> {
+        self.efforts.get(self.picker.index()).cloned()
     }
 }
 
@@ -172,6 +206,8 @@ pub(crate) enum Overlay {
     Help { filter: String, picker: ListPicker },
     /// Model selector over the fetched catalog.
     Models(ModelPicker),
+    /// Reasoning-effort selector for a model that advertises choices.
+    Efforts(EffortPicker),
     /// Workspace file/folder selector opened by typing `@` in the composer.
     Locations(LocationPicker),
     /// Enabled skill selector opened by typing `$` in the composer.
@@ -445,6 +481,9 @@ impl HeldInput {
 
 pub(crate) struct App {
     pub(crate) cfg: TuiConfig,
+    /// Explicit reasoning effort chosen for the active model. `None` lets
+    /// the provider use its advertised default.
+    pub(crate) reasoning_effort: Option<String>,
     /// Lines waiting to move into the transcript on the next tick.
     pub(crate) pending_history: Vec<Line<'static>>,
     /// The full session transcript (capped at [`super::TRANSCRIPT_CAP`]).

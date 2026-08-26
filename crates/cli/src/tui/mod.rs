@@ -40,8 +40,8 @@ pub(crate) use self::text::{clear_tool_connectors, line_text, push_wrapped_lines
 pub(crate) use crate::prompt::strip_location_mentions;
 
 pub(crate) use self::state::{
-    App, InspectorBodyCache, InspectorMode, LocationPicker, ModelPicker, Overlay, RunState,
-    SkillMentionPicker, ToolActivity, TuiConfig, ViewMode,
+    App, EffortPicker, InspectorBodyCache, InspectorMode, LocationPicker, ModelPicker, Overlay,
+    RunState, SkillMentionPicker, ToolActivity, TuiConfig, ViewMode,
 };
 #[cfg(test)]
 pub(crate) use self::state::{LocationEntry, ToolRecord, SESSION_ACTIONS, SETTINGS_ROWS};

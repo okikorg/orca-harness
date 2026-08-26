@@ -314,6 +314,7 @@ pub(crate) async fn worker<F>(
                         endpoint.base_url = provider.base_url().into();
                         endpoint.api_key = None;
                         endpoint.model = provider.default_model().into();
+                        endpoint.reasoning_effort = None;
                         let _ = config::save_provider(provider.label());
                         agent = build(&endpoint);
                         spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
@@ -327,15 +328,22 @@ pub(crate) async fn worker<F>(
                     }
                 }
             }
-            WorkerCmd::SetModel { id } => {
+            WorkerCmd::SetModel {
+                id,
+                reasoning_effort,
+            } => {
                 endpoint.model = id;
+                endpoint.reasoning_effort = reasoning_effort;
                 // Best-effort preference cache; a failed write only means
                 // the next session starts on the provider default.
                 let _ = config::save_model(endpoint.provider.label(), &endpoint.model);
                 agent = build(&endpoint);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 if ui
-                    .send(UiMsg::ModelChanged(endpoint.model.clone()))
+                    .send(UiMsg::ModelChanged {
+                        id: endpoint.model.clone(),
+                        reasoning_effort: endpoint.reasoning_effort.clone(),
+                    })
                     .is_err()
                 {
                     return;
@@ -350,6 +358,7 @@ pub(crate) async fn worker<F>(
                 endpoint.base_url = provider.base_url().into();
                 endpoint.api_key = api_key.or_else(|| provider.resolve_key());
                 endpoint.model = provider.default_model().into();
+                endpoint.reasoning_effort = None;
                 let _ = config::save_provider(provider.label());
                 agent = build(&endpoint);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());

@@ -49,8 +49,15 @@ pub(super) fn handle_model_key(picker: &mut ModelPicker, code: KeyCode) -> After
             After::Nothing
         }
         _ => match picker.picker.on_key(code) {
-            PickerEvent::Activated(_) => match picker.selected_info() {
-                Some((id, window)) => After::CloseAndSetModel { id, window },
+            PickerEvent::Activated(_) => match picker.selected_model() {
+                Some(model) => match EffortPicker::new(model.clone()) {
+                    Some(efforts) => After::Push(Overlay::Efforts(efforts)),
+                    None => After::CloseAndSetModel {
+                        id: model.id,
+                        window: model.context_length,
+                        reasoning_effort: None,
+                    },
+                },
                 None => After::Close,
             },
             PickerEvent::Ignored => {
@@ -66,5 +73,19 @@ pub(super) fn handle_model_key(picker: &mut ModelPicker, code: KeyCode) -> After
             }
             _ => After::Nothing,
         },
+    }
+}
+
+pub(super) fn handle_effort_key(picker: &mut EffortPicker, code: KeyCode) -> After {
+    match picker.picker.on_key(code) {
+        PickerEvent::Activated(_) => match picker.selected() {
+            Some(reasoning_effort) => After::CloseAndSetModel {
+                id: picker.model_id.clone(),
+                window: picker.context_window,
+                reasoning_effort: Some(reasoning_effort),
+            },
+            None => After::Nothing,
+        },
+        _ => After::Nothing,
     }
 }

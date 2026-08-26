@@ -18,7 +18,8 @@ use crate::view;
 use super::format::byte_index;
 use super::render::matching_indices;
 use super::state::{
-    App, InspectorMode, LocationEntry, ModelPicker, Overlay, SubagentSetting, ViewMode,
+    App, EffortPicker, InspectorMode, LocationEntry, ModelPicker, Overlay, SubagentSetting,
+    ViewMode,
 };
 use super::subagents::{
     apply_subagent_value, subagent_selected, subagent_setting_label, subagent_values,

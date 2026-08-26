@@ -25,6 +25,8 @@ pub struct OpenAiModel {
     model: String,
     temperature: Option<f64>,
     max_tokens: Option<u64>,
+    reasoning_effort: Option<String>,
+    nested_reasoning: bool,
     parallel_tool_calls: Option<bool>,
     headers: Vec<(String, String)>,
     usage_accounting: bool,
@@ -39,6 +41,8 @@ impl OpenAiModel {
             model: model.into(),
             temperature: None,
             max_tokens: None,
+            reasoning_effort: None,
+            nested_reasoning: false,
             parallel_tool_calls: None,
             headers: Vec::new(),
             usage_accounting: false,
@@ -72,6 +76,20 @@ impl OpenAiModel {
 
     pub fn max_tokens(mut self, max_tokens: u64) -> Self {
         self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Set OpenAI Chat Completions' flat reasoning-effort parameter.
+    pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self.nested_reasoning = false;
+        self
+    }
+
+    /// Set OpenRouter's normalized nested reasoning parameter.
+    pub(crate) fn nested_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self.nested_reasoning = true;
         self
     }
 
@@ -145,6 +163,13 @@ impl OpenAiModel {
         }
         if let Some(max_tokens) = self.max_tokens {
             body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(effort) = &self.reasoning_effort {
+            if self.nested_reasoning {
+                body["reasoning"] = json!({"effort": effort});
+            } else {
+                body["reasoning_effort"] = json!(effort);
+            }
         }
         if self.usage_accounting {
             body["usage"] = json!({"include": true});
@@ -461,5 +486,21 @@ mod tests {
         let model = OpenAiModel::new("m").parallel_tool_calls(true);
         let body = model.request_body(&context(), &[]);
         assert!(body.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_uses_openai_chat_completions_shape() {
+        let model = OpenAiModel::new("m").reasoning_effort("high");
+        let body = model.request_body(&context(), &[]);
+        assert_eq!(body["reasoning_effort"], "high");
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn nested_reasoning_effort_uses_openrouter_shape() {
+        let model = OpenAiModel::new("m").nested_reasoning_effort("low");
+        let body = model.request_body(&context(), &[]);
+        assert_eq!(body["reasoning"], json!({"effort": "low"}));
+        assert!(body.get("reasoning_effort").is_none());
     }
 }

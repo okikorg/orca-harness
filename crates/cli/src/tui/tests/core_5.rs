@@ -162,6 +162,7 @@
                 name: None,
                 context_length: Some(32_000),
                 pricing: None,
+                reasoning: None,
             })
             .collect()
     }
@@ -389,9 +390,77 @@
 
         assert!(app.overlay.is_none(), "picker closes on selection");
         match rx.try_recv() {
-            Ok(WorkerCmd::SetModel { id }) => assert_eq!(id, "acme/smart-9"),
+            Ok(WorkerCmd::SetModel {
+                id,
+                reasoning_effort,
+            }) => {
+                assert_eq!(id, "acme/smart-9");
+                assert!(reasoning_effort.is_none());
+            }
             other => panic!("expected SetModel, got {:?}", other.is_ok()),
         }
+    }
+
+    #[test]
+    fn model_with_reasoning_metadata_opens_effort_picker_at_provider_default() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        let mut models = catalog();
+        models[0].reasoning = Some(
+            orca_harness_model_providers::ReasoningCapabilities {
+                supported_efforts: Some(
+                    orca_harness_model_providers::SupportedEfforts::Listed(vec![
+                    "high".into(),
+                    "medium".into(),
+                    "low".into(),
+                    ]),
+                ),
+                default_effort: Some("medium".into()),
+            },
+        );
+        app.overlay = Some(Overlay::Models(ModelPicker::new(models, String::new())));
+
+        press(&mut app, &tx, KeyCode::Enter);
+
+        let Some(Overlay::Efforts(picker)) = &app.overlay else {
+            panic!("model selection should open its effort picker");
+        };
+        assert_eq!(picker.model_id, "acme/fast-1");
+        assert_eq!(picker.picker.index(), 1, "provider default is preselected");
+        assert!(rx.try_recv().is_err(), "model is not changed before effort selection");
+
+        press(&mut app, &tx, KeyCode::Enter);
+
+        assert!(app.overlay.is_none());
+        match rx.try_recv() {
+            Ok(WorkerCmd::SetModel {
+                id,
+                reasoning_effort,
+            }) => {
+                assert_eq!(id, "acme/fast-1");
+                assert_eq!(reasoning_effort.as_deref(), Some("medium"));
+            }
+            other => panic!("expected SetModel with effort, got {:?}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn model_changed_retains_effort_for_the_status_line() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+
+        handle_ui_msg(
+            &mut app,
+            UiMsg::ModelChanged {
+                id: "acme/reasoner".into(),
+                reasoning_effort: Some("high".into()),
+            },
+            &tx,
+            80,
+        );
+
+        assert_eq!(app.cfg.model_name, "acme/reasoner");
+        assert_eq!(app.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]

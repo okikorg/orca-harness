@@ -395,6 +395,7 @@ struct Endpoint {
     base_url: String,
     api_key: Option<String>,
     model: String,
+    reasoning_effort: Option<String>,
 }
 
 impl Endpoint {
@@ -406,6 +407,7 @@ impl Endpoint {
             base_url: cfg.base_url.clone(),
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
+            reasoning_effort: None,
         }
     }
 
@@ -441,6 +443,9 @@ impl Endpoint {
                 if let Some(key) = &self.api_key {
                     model = model.api_key(key.clone());
                 }
+                if let Some(effort) = &self.reasoning_effort {
+                    model = model.reasoning_effort(effort.clone());
+                }
                 Arc::new(model)
             }
             Provider::OpenAi | Provider::Local => {
@@ -450,12 +455,21 @@ impl Endpoint {
                 if let Some(key) = &self.api_key {
                     model = model.api_key(key.clone());
                 }
+                if let Some(effort) = &self.reasoning_effort {
+                    model = model.reasoning_effort(effort.clone());
+                }
                 Arc::new(model)
             }
-            Provider::OpenAiCodex => Arc::new(OpenAiCodexModel::new(
-                self.model.as_str(),
-                Arc::new(auth::CodexCliCredential::discover()),
-            )),
+            Provider::OpenAiCodex => {
+                let mut model = OpenAiCodexModel::new(
+                    self.model.as_str(),
+                    Arc::new(auth::CodexCliCredential::discover()),
+                );
+                if let Some(effort) = &self.reasoning_effort {
+                    model = model.reasoning_effort(effort.clone());
+                }
+                Arc::new(model)
+            }
         };
 
         // A long-running turn should survive transient provider routing,

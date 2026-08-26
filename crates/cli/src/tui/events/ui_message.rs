@@ -70,10 +70,17 @@ pub(crate) fn handle_ui_msg(
                 }
             }
         }
-        UiMsg::ModelChanged(id) => {
+        UiMsg::ModelChanged {
+            id,
+            reasoning_effort,
+        } => {
             app.cfg.model_name = id.clone();
+            app.reasoning_effort = reasoning_effort.clone();
+            let effort = reasoning_effort
+                .map(|effort| format!(" · effort {effort}"))
+                .unwrap_or_default();
             app.push_line(Line::from(Span::styled(
-                format!("model: {id}"),
+                format!("model: {id}{effort}"),
                 theme().dim,
             )));
         }
@@ -176,6 +183,7 @@ pub(crate) fn handle_ui_msg(
         UiMsg::ProviderChanged { provider, model } => {
             app.cfg.provider = provider;
             app.cfg.model_name = model.clone();
+            app.reasoning_effort = None;
             app.context_window = None;
             app.push_line(Line::from(Span::styled(
                 format!("provider: {} · model: {model}", provider.label()),

@@ -13,6 +13,41 @@ pub struct ModelInfo {
     pub context_length: Option<u64>,
     #[serde(default)]
     pub pricing: Option<Pricing>,
+    /// Provider-advertised reasoning controls for this model. Endpoints
+    /// that do not publish capability metadata leave this absent.
+    #[serde(default)]
+    pub reasoning: Option<ReasoningCapabilities>,
+}
+
+/// The effort values a provider says one model accepts.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ReasoningCapabilities {
+    #[serde(default, deserialize_with = "deserialize_supported_efforts")]
+    pub supported_efforts: Option<SupportedEfforts>,
+    #[serde(default)]
+    pub default_effort: Option<String>,
+}
+
+/// Whether a provider enumerates effort values or accepts its complete
+/// gateway-level set. Absence means the model offers no effort selector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupportedEfforts {
+    Any,
+    Listed(Vec<String>),
+}
+
+fn deserialize_supported_efforts<'de, D>(
+    deserializer: D,
+) -> Result<Option<SupportedEfforts>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(
+        match Option::<Vec<String>>::deserialize(deserializer)? {
+            Some(efforts) => SupportedEfforts::Listed(efforts),
+            None => SupportedEfforts::Any,
+        },
+    ))
 }
 
 /// USD per token, carried as decimal strings on the wire.

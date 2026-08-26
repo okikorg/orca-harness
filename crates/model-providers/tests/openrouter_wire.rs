@@ -96,6 +96,7 @@ async fn generation_delegates_with_attribution_headers() {
         .referer("https://example.com")
         .title("Orca Code")
         .categories("cli-agent")
+        .reasoning_effort("high")
         .parallel_tool_calls(true);
     let mut context = Context::new();
     context.push_user("hi");
@@ -110,6 +111,8 @@ async fn generation_delegates_with_attribution_headers() {
     assert!(sent.head.contains("x-openrouter-categories: cli-agent"));
     let body: Value = serde_json::from_str(&sent.body).unwrap();
     assert_eq!(body["model"], json!("openai/gpt-4o"));
+    assert_eq!(body["reasoning"], json!({"effort": "high"}));
+    assert!(body.get("reasoning_effort").is_none());
 
     let ModelResponse::Final { text, .. } = response else {
         panic!("expected a final answer");

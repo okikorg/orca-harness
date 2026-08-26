@@ -148,8 +148,11 @@ pub enum UiMsg {
         request_id: u64,
         result: Result<Vec<ModelInfo>, String>,
     },
-    /// The worker switched the active model to this id.
-    ModelChanged(String),
+    /// The worker switched the active model and optional reasoning effort.
+    ModelChanged {
+        id: String,
+        reasoning_effort: Option<String>,
+    },
     /// The worker compacted the conversation (or could not).
     Compacted(Result<CompactReport, String>),
     /// A one-line status notice for the transcript (session warnings,
@@ -243,8 +246,12 @@ pub enum WorkerCmd {
         attempt: u64,
         result: Result<(), String>,
     },
-    /// Switch the active model for subsequent runs (context is kept).
-    SetModel { id: String },
+    /// Switch the active model and reasoning effort for subsequent runs
+    /// (context is kept).
+    SetModel {
+        id: String,
+        reasoning_effort: Option<String>,
+    },
     /// Switch endpoint provider; `api_key` overrides env detection.
     SetProvider {
         provider: Provider,

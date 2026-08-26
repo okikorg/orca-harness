@@ -106,6 +106,7 @@ fn choices_with_openrouter_key(
         },
         api_key: None,
         model: String::new(),
+        reasoning_effort: None,
     };
     let mut choices = build(&local, &LOCAL);
 
@@ -120,6 +121,7 @@ fn choices_with_openrouter_key(
             base_url: Provider::OpenRouter.base_url().into(),
             api_key: Some(key),
             model: String::new(),
+            reasoning_effort: None,
         };
         choices.extend(build(&openrouter, &OPENROUTER));
     }
@@ -164,6 +166,7 @@ mod tests {
                 base_url: Provider::Local.base_url().into(),
                 api_key: None,
                 model: "orchestrator".into(),
+                reasoning_effort: None,
             },
             Some("key".into()),
         );
@@ -184,6 +187,7 @@ mod tests {
             base_url: Provider::OpenAi.base_url().into(),
             api_key: Some("openai-key".into()),
             model: "gpt-4o".into(),
+            reasoning_effort: None,
         };
         let choices = choices_with_openrouter_key(&endpoint, None);
         assert_eq!(choices.len(), 3);
@@ -197,6 +201,7 @@ mod tests {
             base_url: Provider::Local.base_url().into(),
             api_key: None,
             model: "qwen3.5:9b".into(),
+            reasoning_effort: None,
         };
         let choices = choices_with_openrouter_key(&endpoint, Some("openrouter-key".into()));
         assert_eq!(choices.len(), 12);

@@ -8,7 +8,7 @@ pub use orca_harness_provider_auth::{
     BearerCredential, CredentialError, CredentialErrorKind, CredentialSource, StaticCredential,
 };
 
-use crate::catalog::ModelInfo;
+use crate::catalog::{ModelInfo, ReasoningCapabilities, SupportedEfforts};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
@@ -44,6 +44,37 @@ pub struct CodexModelInfo {
     pub name: Option<String>,
     #[serde(default)]
     pub context_window: Option<u64>,
+    #[serde(default)]
+    pub supported_reasoning_levels: Vec<CodexReasoningLevel>,
+    #[serde(default)]
+    pub default_reasoning_level: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct CodexReasoningLevel {
+    pub effort: String,
+}
+
+impl From<CodexModelInfo> for ModelInfo {
+    fn from(info: CodexModelInfo) -> Self {
+        Self {
+            id: info.id,
+            name: info.name,
+            context_length: info.context_window,
+            pricing: None,
+            reasoning: (!info.supported_reasoning_levels.is_empty()).then(|| {
+                ReasoningCapabilities {
+                    supported_efforts: Some(SupportedEfforts::Listed(
+                        info.supported_reasoning_levels
+                            .into_iter()
+                            .map(|level| level.effort)
+                            .collect(),
+                    )),
+                    default_effort: info.default_reasoning_level,
+                }
+            }),
+        }
+    }
 }
 
 /// Fetch the subscription-backed Codex catalog with OAuth and account headers.
@@ -102,12 +133,7 @@ async fn parse_catalog_response(response: reqwest::Response) -> Result<Vec<Model
         .map(|row| {
             let info: CodexModelInfo = serde_json::from_value(row)
                 .map_err(|error| ModelError::InvalidResponse(error.to_string()))?;
-            Ok(ModelInfo {
-                id: info.id,
-                name: info.name,
-                context_length: info.context_window,
-                pricing: None,
-            })
+            Ok(info.into())
         })
         .collect()
 }
@@ -131,6 +157,7 @@ pub struct OpenAiCodexModel {
     client: reqwest::Client,
     base_url: String,
     model: String,
+    reasoning_effort: Option<String>,
     credentials: Arc<dyn CodexCredentialSource>,
     reasoning_by_call: Mutex<HashMap<String, Vec<serde_json::Value>>>,
 }
@@ -141,6 +168,7 @@ impl OpenAiCodexModel {
             client: client(),
             base_url: CODEX_BASE_URL.into(),
             model: model.into(),
+            reasoning_effort: None,
             credentials,
             reasoning_by_call: Mutex::new(HashMap::new()),
         }
@@ -148,6 +176,11 @@ impl OpenAiCodexModel {
 
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
+        self
+    }
+
+    pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
         self
     }
 
@@ -206,6 +239,7 @@ impl OpenAiCodexModel {
                 tools,
                 stream,
                 &continuation,
+                self.reasoning_effort.as_deref(),
             ));
         request = request.header("chatgpt-account-id", credential.account_id);
         request
@@ -337,11 +371,36 @@ async fn collect_stream(
 
 #[cfg(test)]
 mod catalog_tests {
+    use serde_json::json;
+
     #[test]
     fn catalog_identifies_the_client_version() {
         assert_eq!(
             super::catalog_url("https://example.test/codex/"),
             "https://example.test/codex/models?client_version=0.144.1"
         );
+    }
+
+    #[test]
+    fn catalog_maps_supported_and_default_reasoning_levels() {
+        let wire: super::CodexModelInfo = serde_json::from_value(json!({
+            "slug": "gpt-test",
+            "display_name": "GPT Test",
+            "context_window": 200000,
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "Fast"},
+                {"effort": "high", "description": "Deep"}
+            ],
+            "default_reasoning_level": "high"
+        }))
+        .unwrap();
+
+        let model: crate::ModelInfo = wire.into();
+        let reasoning = model.reasoning.unwrap();
+        assert_eq!(
+            reasoning.supported_efforts.unwrap(),
+            crate::SupportedEfforts::Listed(vec!["low".into(), "high".into()])
+        );
+        assert_eq!(reasoning.default_effort.as_deref(), Some("high"));
     }
 }

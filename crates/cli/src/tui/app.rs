@@ -32,6 +32,7 @@ impl App {
         set_transcript_spacing(spacing);
         Self {
             cfg,
+            reasoning_effort: None,
             pending_history: Vec::new(),
             transcript: Vec::new(),
             scroll: 0,

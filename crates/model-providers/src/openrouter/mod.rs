@@ -11,9 +11,12 @@ use serde::Deserialize;
 
 pub use crate::catalog::{ModelInfo, Pricing};
 use crate::openai::OpenAiModel;
+use crate::SupportedEfforts;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
 
 pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const ALL_REASONING_EFFORTS: [&str; 7] =
+    ["max", "xhigh", "high", "medium", "low", "minimal", "none"];
 
 /// An OpenRouter-hosted model. Construction presets the endpoint; use
 /// [`base_url`](Self::base_url) only to point tests elsewhere.
@@ -79,6 +82,11 @@ impl OpenRouterModel {
 
     pub fn max_tokens(mut self, max_tokens: u64) -> Self {
         self.inner = self.inner.max_tokens(max_tokens);
+        self
+    }
+
+    pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.inner = self.inner.nested_reasoning_effort(effort);
         self
     }
 
@@ -153,9 +161,27 @@ pub async fn list_models(
     }
     let listing: Listing = serde_json::from_str(&body)
         .map_err(|e| ModelError::InvalidResponse(format!("{e}: {body}")))?;
-    let mut models = listing.data;
+    let mut models = listing
+        .data
+        .into_iter()
+        .map(normalize_reasoning_efforts)
+        .collect::<Vec<_>>();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
+}
+
+fn normalize_reasoning_efforts(mut model: ModelInfo) -> ModelInfo {
+    if let Some(reasoning) = &mut model.reasoning {
+        if reasoning.supported_efforts == Some(SupportedEfforts::Any) {
+            reasoning.supported_efforts = Some(SupportedEfforts::Listed(
+                ALL_REASONING_EFFORTS
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ));
+        }
+    }
+    model
 }
 
 #[cfg(test)]
@@ -198,5 +224,52 @@ mod tests {
     fn million_token_contexts_use_m() {
         let m = info(json!({"id": "google/gemini-pro", "context_length": 1000000}));
         assert_eq!(m.summary(), "google/gemini-pro  1M ctx");
+    }
+
+    #[test]
+    fn catalog_retains_provider_reasoning_capabilities() {
+        let m = info(json!({
+            "id": "openai/gpt-5",
+            "reasoning": {
+                "supported_efforts": ["high", "medium", "low"],
+                "default_effort": "medium",
+                "mandatory": true
+            }
+        }));
+        let reasoning = m.reasoning.unwrap();
+        assert_eq!(
+            reasoning.supported_efforts.unwrap(),
+            SupportedEfforts::Listed(vec!["high".into(), "medium".into(), "low".into()])
+        );
+        assert_eq!(reasoning.default_effort.as_deref(), Some("medium"));
+    }
+
+    #[test]
+    fn null_supported_efforts_expands_to_openrouter_gateway_values() {
+        let m = normalize_reasoning_efforts(info(json!({
+            "id": "openai/future-model",
+            "reasoning": {
+                "supported_efforts": null,
+                "default_effort": "medium"
+            }
+        })));
+        assert_eq!(
+            m.reasoning.unwrap().supported_efforts.unwrap(),
+            SupportedEfforts::Listed(
+                ALL_REASONING_EFFORTS
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            )
+        );
+    }
+
+    #[test]
+    fn omitted_supported_efforts_does_not_invent_a_picker() {
+        let m = normalize_reasoning_efforts(info(json!({
+            "id": "openai/fixed-model",
+            "reasoning": {"default_effort": "medium"}
+        })));
+        assert!(m.reasoning.unwrap().supported_efforts.is_none());
     }
 }

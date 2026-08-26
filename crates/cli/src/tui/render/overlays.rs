@@ -7,7 +7,7 @@ use crate::tui::components::transcript::BlockSpacing;
 use crate::view::{self, theme};
 
 use super::super::format::fmt_tokens;
-use super::super::{App, ModelPicker, ToolActivity};
+use super::super::{App, EffortPicker, ModelPicker, ToolActivity};
 use super::pickers::command_picker_row;
 /// Exact, source-preserving edit context beneath an `edit_file` row. Small
 /// edits remain fully visible; large replacements stay bounded so one call
@@ -213,6 +213,18 @@ pub(crate) fn model_picker_lines(
         [(8, 48), (0, usize::MAX)],
         width,
         rows,
+    )
+}
+
+pub(crate) fn effort_picker_lines(picker: &EffortPicker, width: usize) -> Vec<Line<'static>> {
+    picker.picker.table_lines(
+        &format!(
+            "Reasoning effort · {} · ↑↓ move · →/enter use · ← models · esc close",
+            picker.model_id
+        ),
+        picker.efforts.iter().map(|effort| [effort.clone()]),
+        [(0, usize::MAX)],
+        width,
     )
 }
 
