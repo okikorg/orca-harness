@@ -222,8 +222,8 @@ struct Recorder {
 
 /// Records the transcript as the run progresses. Registered as an
 /// Extension; hosts also drive it directly (`sync` after post-run
-/// repairs, `reset` for /clear, `switch_to` for /sessions, and
-/// `start_new` for hosts that prefer rotation over in-place clears).
+/// repairs, `switch_to` for /sessions, `start_new_with_context` for
+/// /clear, and `start_new` for hosts that prefer an empty rotation).
 pub struct SessionHandler {
     inner: Mutex<Recorder>,
     warn: Box<dyn Fn(&str) + Send + Sync>,
@@ -281,7 +281,35 @@ impl SessionHandler {
         Ok((handler, loaded))
     }
 
-    /// Rotate to a fresh session file (used by /clear). Returns the id.
+    /// Rotate to a fresh session file and persist its initial context before
+    /// adopting it. If creation or writing fails, the old recorder remains
+    /// active and the incomplete candidate is removed best-effort.
+    pub fn start_new_with_context(&self, context: &Context) -> std::io::Result<String> {
+        let mut rec = self.inner.lock().unwrap();
+        let meta = SessionMeta {
+            v: SESSION_FORMAT_VERSION,
+            id: new_session_id(),
+            created_at: unix_now(),
+            workspace: rec.meta.workspace.clone(),
+            model: rec.meta.model.clone(),
+            parent: None,
+        };
+        let (path, mut file) = open_new(&rec.dir, &meta)?;
+        if let Err(err) = append(&mut file, context.messages()) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(err);
+        }
+        rec.meta = meta;
+        rec.path = path;
+        rec.file = file;
+        rec.cursor = context.messages().len();
+        rec.disabled = false;
+        Ok(rec.meta.id.clone())
+    }
+
+    /// Rotate to a fresh session file (used by hosts that will sync later).
+    /// Returns the id.
     pub fn start_new(&self) -> std::io::Result<String> {
         self.rotate(None)
     }
@@ -316,9 +344,8 @@ impl SessionHandler {
         Ok(rec.meta.id.clone())
     }
 
-    /// Empty the current session in place (used by /clear): the file is
-    /// truncated back to its header — same id, same path — and
-    /// recording restarts from zero.
+    /// Empty the current session in place. Kept for hosts that explicitly
+    /// want destructive reset semantics; orcacode `/clear` rotates instead.
     pub fn reset(&self) -> std::io::Result<()> {
         let mut rec = self.inner.lock().unwrap();
         let file = rewrite(&rec.path, &rec.meta, &[])?;
@@ -352,7 +379,7 @@ impl SessionHandler {
 
     /// Bring the file up to date with the context. Append-only in the
     /// common case; a context shorter than what was persisted means it
-    /// was rewritten (compaction, /clear recovery), so rewrite the file.
+    /// was rewritten (compaction or host-driven reset recovery), so rewrite the file.
     pub fn sync(&self, context: &Context) {
         let mut rec = self.inner.lock().unwrap();
         if rec.disabled {
@@ -415,7 +442,11 @@ fn open_new(dir: &Path, meta: &SessionMeta) -> std::io::Result<(PathBuf, File)> 
         .create_new(true)
         .append(true)
         .open(&path)?;
-    write_header(&mut file, meta)?;
+    if let Err(err) = write_header(&mut file, meta) {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(err);
+    }
     Ok((path, file))
 }
 

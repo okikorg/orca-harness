@@ -1,6 +1,11 @@
 use super::effects::After;
 use super::*;
 
+fn finish_picker_flow(app: &mut App) {
+    app.overlay = None;
+    app.overlay_stack.clear();
+}
+
 pub(crate) fn handle_overlay_key(
     app: &mut App,
     key: KeyEvent,
@@ -9,7 +14,14 @@ pub(crate) fn handle_overlay_key(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
         app.overlay = None;
+        app.overlay_stack.clear();
         return;
+    }
+    if key.code == KeyCode::Left {
+        if let Some(parent) = app.overlay_stack.pop() {
+            app.overlay = Some(parent);
+            return;
+        }
     }
     // In-place edits happen under the borrow; anything that replaces the
     // overlay or talks to the worker is deferred until the borrow ends.
@@ -47,7 +59,7 @@ pub(crate) fn handle_overlay_key(
                 let provider = Provider::ALL[index];
                 match provider.auth() {
                     ProviderAuth::ApiKey { .. } if provider.resolve_key().is_none() => {
-                        After::Replace(Overlay::ApiKey {
+                        After::Push(Overlay::ApiKey {
                             provider,
                             input: String::new(),
                         })
@@ -140,7 +152,7 @@ pub(crate) fn handle_overlay_key(
                         .iter()
                         .position(|p| *p == current_provider)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Providers {
+                    After::Push(Overlay::Providers {
                         picker: ListPicker::with_selected(Provider::ALL.len(), selected),
                     })
                 }
@@ -151,7 +163,7 @@ pub(crate) fn handle_overlay_key(
                         .iter()
                         .position(|name| *name == current)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Themes {
+                    After::Push(Overlay::Themes {
                         picker: ListPicker::with_selected(view::ThemeName::ALL.len(), selected),
                     })
                 }
@@ -160,7 +172,7 @@ pub(crate) fn handle_overlay_key(
                         .iter()
                         .position(|mode| *mode == current_view)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Views {
+                    After::Push(Overlay::Views {
                         picker: ListPicker::with_selected(ViewMode::ALL.len(), selected),
                     })
                 }
@@ -169,7 +181,7 @@ pub(crate) fn handle_overlay_key(
                         .iter()
                         .position(|mode| *mode == current_inspector)
                         .unwrap_or(0);
-                    After::Replace(Overlay::Inspector {
+                    After::Push(Overlay::Inspector {
                         picker: ListPicker::with_selected(InspectorMode::ALL.len(), selected),
                     })
                 }
@@ -180,7 +192,7 @@ pub(crate) fn handle_overlay_key(
                             current_provider.label()
                         ))
                     } else {
-                        After::Replace(Overlay::ApiKey {
+                        After::Push(Overlay::ApiKey {
                             provider: current_provider,
                             input: String::new(),
                         })
@@ -191,7 +203,7 @@ pub(crate) fn handle_overlay_key(
                     if tools.is_empty() {
                         After::CloseWithNote("no saved approvals for this workspace".into())
                     } else {
-                        After::Replace(Overlay::Approvals {
+                        After::Push(Overlay::Approvals {
                             picker: ListPicker::new(tools.len()),
                             tools,
                         })
@@ -202,11 +214,40 @@ pub(crate) fn handle_overlay_key(
                         .iter()
                         .position(|spacing| *spacing == current_spacing)
                         .unwrap_or(1);
-                    After::Replace(Overlay::TranscriptSpacing {
+                    After::Push(Overlay::TranscriptSpacing {
                         picker: ListPicker::with_selected(TranscriptSpacing::ALL.len(), selected),
                     })
                 }
             },
+            _ => After::Nothing,
+        },
+        Overlay::Subagents { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(row) => {
+                let setting = SubagentSetting::ALL[row];
+                let values = subagent_values(&app.cfg.subagent_depth, setting);
+                let selected = subagent_selected(&app.cfg.subagent_depth, setting, &values);
+                After::Push(Overlay::SubagentValues {
+                    setting,
+                    picker: ListPicker::with_selected(values.len(), selected),
+                    values,
+                })
+            }
+            _ => After::Nothing,
+        },
+        Overlay::SubagentValues {
+            setting,
+            values,
+            picker,
+        } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                let value = values[index].clone();
+                apply_subagent_value(&app.cfg.subagent_depth, *setting, &value);
+                After::CloseWithNote(format!(
+                    "subagent {} set to {} (applies to the next spawn)",
+                    subagent_setting_label(*setting),
+                    value
+                ))
+            }
             _ => After::Nothing,
         },
         Overlay::Approvals { tools, picker } => match picker.on_key(key.code) {
@@ -394,7 +435,7 @@ pub(crate) fn handle_overlay_key(
                         let session = &sessions[row];
                         if current_session.as_deref() == Some(session.meta.id.as_str()) {
                             After::Note(
-                                "the active session cannot be deleted (use /clear to empty it)"
+                                "the active session cannot be deleted (use /clear to preserve it and start fresh)"
                                     .into(),
                             )
                         } else {
@@ -419,30 +460,34 @@ pub(crate) fn handle_overlay_key(
     };
     match after {
         After::Nothing => {}
-        After::Close => app.overlay = None,
+        After::Close => finish_picker_flow(app),
         After::CloseAndCompose(command) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             app.composer = command;
             app.cursor = app.composer.chars().count();
             app.reset_palette_picker();
         }
-        After::Replace(next) => app.overlay = Some(next),
+        After::Push(next) => {
+            if let Some(current) = app.overlay.replace(next) {
+                app.overlay_stack.push(current);
+            }
+        }
         After::Send(cmd) => send_or_report(app, worker, cmd),
         After::CloseAndSend(cmd) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             send_or_report(app, worker, cmd);
         }
         After::CloseAndSetModel { id, window } => {
-            app.overlay = None;
+            finish_picker_flow(app);
             app.context_window = window;
             send_or_report(app, worker, WorkerCmd::SetModel { id });
         }
         After::CloseAndSetMode(mode) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             crate::tui::commands::apply_mode(app, mode);
         }
         After::CloseAndSetView(mode) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             app.view_mode = mode;
             if mode == ViewMode::Classic {
                 clear_tool_connectors(&mut app.transcript);
@@ -457,7 +502,7 @@ pub(crate) fn handle_overlay_key(
             push_notice(app, note);
         }
         After::CloseAndSetTranscriptSpacing(spacing) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             set_transcript_spacing(spacing);
             let note = match crate::config::save_transcript_spacing(spacing.slug()) {
                 Ok(_) => format!("transcript spacing set to {}", spacing.label()),
@@ -469,7 +514,7 @@ pub(crate) fn handle_overlay_key(
             push_notice(app, note);
         }
         After::CloseAndSetInspector(mode) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             app.inspector_mode = mode;
             app.split_inspector_cache = None;
             app.split_scroll = 0;
@@ -480,14 +525,14 @@ pub(crate) fn handle_overlay_key(
             push_notice(app, note);
         }
         After::CloseWithNote(note) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             push_notice(app, note);
         }
         After::Note(note) => {
             push_notice(app, note);
         }
         After::SendWithNote(cmd, note) => {
-            app.overlay = None;
+            finish_picker_flow(app);
             send_or_report(app, worker, cmd);
             push_notice(app, note);
         }
@@ -511,15 +556,21 @@ pub(crate) fn handle_overlay_key(
             }
         }
         After::FetchModels => {
-            app.overlay = None;
-            app.picker_pending = Some(String::new());
+            if let Some(current) = app.overlay.take() {
+                app.overlay_stack.push(current);
+            }
+            let request_id = app.next_picker_request;
+            app.next_picker_request += 1;
+            app.picker_pending = Some((request_id, String::new()));
             if worker
                 .send(WorkerCmd::ListModels {
+                    request_id,
                     filter: String::new(),
                 })
                 .is_err()
             {
                 app.picker_pending = None;
+                app.overlay = app.overlay_stack.pop();
                 push_error(app, "worker is gone; restart orcacode");
             } else {
                 push_notice(app, "fetching models…");

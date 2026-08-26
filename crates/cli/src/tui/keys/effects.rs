@@ -5,7 +5,8 @@ pub(super) enum After {
     Close,
     /// Close a catalog overlay and place its selected command in the composer.
     CloseAndCompose(String),
-    Replace(Overlay),
+    /// Replace the active picker while retaining it as a left-arrow parent.
+    Push(Overlay),
     /// Send to the worker with the overlay left open (toggle rows).
     Send(WorkerCmd),
     CloseAndSend(WorkerCmd),

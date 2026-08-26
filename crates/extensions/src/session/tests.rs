@@ -248,6 +248,54 @@ fn resume_continues_appending_to_the_same_file() {
 }
 
 #[test]
+fn start_new_with_context_preserves_old_file_and_records_initial_context() {
+    let dir = temp_dir("rotate-with-context");
+    let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+    let first = handler.path();
+    let mut old = Context::new();
+    old.push_system("old sys");
+    old.push_user("old turn");
+    handler.sync(&old);
+    let first_bytes = fs::read(&first).unwrap();
+    let mut fresh = Context::new();
+    fresh.push_system("fresh sys");
+
+    let new_id = handler.start_new_with_context(&fresh).unwrap();
+
+    assert_eq!(handler.session_id(), new_id);
+    assert_ne!(handler.path(), first);
+    assert_eq!(fs::read(&first).unwrap(), first_bytes);
+    let loaded = SessionFile::load(&handler.path()).unwrap();
+    assert_eq!(
+        serde_json::to_string(loaded.context.messages()).unwrap(),
+        serde_json::to_string(fresh.messages()).unwrap()
+    );
+}
+
+#[test]
+fn start_new_with_context_creation_failure_keeps_old_recorder_active() {
+    let dir = temp_dir("rotate-with-context-failure");
+    let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+    let old_path = handler.path();
+    let old_id = handler.session_id();
+    let mut old = Context::new();
+    old.push_system("old sys");
+    handler.sync(&old);
+    let moved = dir.with_extension("preserved");
+    fs::rename(&dir, &moved).unwrap();
+    fs::write(&dir, "blocks create_dir_all").unwrap();
+    let mut fresh = Context::new();
+    fresh.push_system("fresh sys");
+
+    assert!(handler.start_new_with_context(&fresh).is_err());
+    assert_eq!(handler.session_id(), old_id);
+    assert_eq!(handler.path(), old_path);
+
+    fs::remove_file(&dir).unwrap();
+    fs::remove_dir_all(moved).unwrap();
+}
+
+#[test]
 fn start_new_rotates_to_a_fresh_file() {
     let dir = temp_dir("rotate");
     let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();

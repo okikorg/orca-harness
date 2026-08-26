@@ -10,8 +10,13 @@ use tokio::sync::oneshot;
 use orca_harness_core::{Context, Model, ModelResponse, ToolSchema};
 use orca_harness_model_providers::openai::OpenAiModel;
 
-/// Serve exactly one request: capture its body, reply with `response_json`.
-async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<String>) {
+struct Captured {
+    head: String,
+    body: String,
+}
+
+/// Serve exactly one request: capture it, then reply with `response_json`.
+async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<Captured>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
@@ -20,15 +25,15 @@ async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<St
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
-        let body = loop {
+        let captured = loop {
             let n = stream.read(&mut buf).await.unwrap();
             assert!(n > 0, "connection closed before full request arrived");
             raw.extend_from_slice(&buf[..n]);
             let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
                 continue;
             };
-            let headers = String::from_utf8_lossy(&raw[..split]).to_lowercase();
-            let length: usize = headers
+            let head = String::from_utf8_lossy(&raw[..split]).to_lowercase();
+            let length: usize = head
                 .lines()
                 .find_map(|l| l.strip_prefix("content-length:"))
                 .expect("request has content-length")
@@ -36,10 +41,11 @@ async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<St
                 .parse()
                 .unwrap();
             if raw.len() >= split + 4 + length {
-                break String::from_utf8(raw[split + 4..split + 4 + length].to_vec()).unwrap();
+                let body = String::from_utf8(raw[split + 4..split + 4 + length].to_vec()).unwrap();
+                break Captured { head, body };
             }
         };
-        let _ = tx.send(body);
+        let _ = tx.send(captured);
         let reply = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             response_json.len(),
@@ -82,13 +88,16 @@ async fn parallel_tool_calls_goes_over_the_wire_and_multi_call_batches_parse() {
 
     let model = OpenAiModel::new("test-model")
         .base_url(base_url)
+        .user_agent("orcacode/1.2.3")
         .parallel_tool_calls(true);
     let mut context = Context::new();
     context.push_user("fan out");
 
     let response = model.generate(&context, &schemas()).await.unwrap();
 
-    let sent: Value = serde_json::from_str(&captured.await.unwrap()).unwrap();
+    let captured = captured.await.unwrap();
+    assert!(captured.head.contains("user-agent: orcacode/1.2.3"));
+    let sent: Value = serde_json::from_str(&captured.body).unwrap();
     assert_eq!(sent["parallel_tool_calls"], json!(true));
     assert_eq!(sent["tools"].as_array().unwrap().len(), 2);
 
@@ -113,7 +122,7 @@ async fn unset_knob_sends_no_parallel_tool_calls_field() {
 
     let response = model.generate(&context, &schemas()).await.unwrap();
 
-    let sent: Value = serde_json::from_str(&captured.await.unwrap()).unwrap();
+    let sent: Value = serde_json::from_str(&captured.await.unwrap().body).unwrap();
     assert!(sent.get("parallel_tool_calls").is_none());
     assert!(matches!(response, ModelResponse::Final { .. }));
 }

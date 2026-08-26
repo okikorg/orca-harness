@@ -1,0 +1,219 @@
+<section class="section" id="execution-boundary">
+    <h2>The execution boundary</h2>
+    <p>
+        The harness owns agent configuration, context, model invocation, the
+        agent loop, tool dispatch, concurrent execution, cancellation,
+        deadlines, limits, tool-call/result pairing, deterministic result
+        ordering, and the extension lifecycle. It deliberately does not own a
+        fleet: distributed scheduling, durable sessions, microVM lifecycle,
+        networking, tenancy, and control-plane APIs belong around it.
+    </p>
+    <figure
+        class="system-diagram"
+        aria-labelledby="boundary-diagram-caption"
+        data-mobile-flow="Task → Orcacode → Harness → tools. Extensions observe the kernel."
+    >
+        <svg
+            viewBox="0 0 960 420"
+            role="img"
+            aria-labelledby="boundary-title boundary-desc"
+        >
+            <title id="boundary-title">Orca Harness execution boundary</title>
+            <desc id="boundary-desc">
+                Orcacode composes the execution kernel with tools and extensions
+                while fleet concerns remain outside the boundary.
+            </desc>
+            <defs>
+                <marker
+                    id="boundary-g"
+                    markerWidth="9"
+                    markerHeight="9"
+                    refX="8"
+                    refY="4.5"
+                    orient="auto"
+                >
+                    <path d="M0 0 L8 4.5 L0 9 Z" class="diagram-marker-green" />
+                </marker>
+                <marker
+                    id="boundary-b"
+                    markerWidth="9"
+                    markerHeight="9"
+                    refX="8"
+                    refY="4.5"
+                    orient="auto"
+                >
+                    <path d="M0 0 L8 4.5 L0 9 Z" class="diagram-marker-blue" />
+                </marker>
+            </defs>
+            <text class="diagram-kicker" x="32" y="32">
+                ONE TURN · EXECUTION BOUNDARY
+            </text>
+            <rect class="diagram-card" x="32" y="169" width="180" height="82" />
+            <text class="diagram-card-title" x="50" y="201">TASK</text>
+            <text class="diagram-card-copy" x="50" y="223">user request</text>
+            <text class="diagram-card-copy" x="50" y="239">
+                or queued prompt
+            </text>
+            <rect
+                class="diagram-card acid"
+                x="284"
+                y="169"
+                width="180"
+                height="82"
+            />
+            <text class="diagram-card-title" x="302" y="201">ORCACODE</text>
+            <text class="diagram-card-copy" x="302" y="223">
+                session + approvals
+            </text>
+            <text class="diagram-card-copy" x="302" y="239">terminal host</text>
+            <path
+                class="diagram-connector green"
+                d="M212 210H284"
+                marker-end="url(#boundary-g)"
+            />
+            <rect
+                class="diagram-card acid"
+                x="536"
+                y="169"
+                width="180"
+                height="82"
+            />
+            <text class="diagram-card-title" x="554" y="201">HARNESS</text>
+            <text class="diagram-card-copy" x="554" y="223">agent · loop</text>
+            <text class="diagram-card-copy" x="554" y="239">dispatcher</text>
+            <path
+                class="diagram-connector green"
+                d="M464 210H536"
+                marker-end="url(#boundary-g)"
+            />
+            <rect
+                class="diagram-card blue"
+                x="748"
+                y="169"
+                width="180"
+                height="82"
+            />
+            <text class="diagram-card-title" x="766" y="201">TOOLS</text>
+            <text class="diagram-card-copy" x="766" y="223">
+                files · shell · MCP
+            </text>
+            <text class="diagram-card-copy" x="766" y="239">
+                web · subagents
+            </text>
+            <path
+                class="diagram-connector blue"
+                d="M716 210H748"
+                marker-end="url(#boundary-b)"
+            />
+            <rect
+                class="diagram-zone"
+                x="284"
+                y="300"
+                width="432"
+                height="64"
+            />
+            <text class="diagram-zone-title" x="304" y="328">EXTENSIONS</text>
+            <text class="diagram-card-copy" x="304" y="349">
+                events · policy · retry · truncation · usage
+            </text>
+            <path
+                class="diagram-connector blue"
+                d="M626 251V300"
+                marker-end="url(#boundary-b)"
+            />
+            <rect class="diagram-zone" x="32" y="382" width="896" height="24" />
+            <text class="diagram-zone-title" x="48" y="399">
+                OUTSIDE THE HARNESS: SCHEDULING · DURABLE SESSIONS · ISOLATION ·
+                NETWORKING · TENANCY
+            </text>
+        </svg>
+        <figcaption id="boundary-diagram-caption">
+            <span>01 / EXECUTION BOUNDARY</span> Orcacode composes the kernel
+            into a local terminal agent. Fleet concerns remain intentionally
+            outside the harness.
+        </figcaption>
+    </figure>
+</section>
+<section class="section" id="crate-roles">
+    <h2>Runtime pieces</h2>
+    <table class="command-table">
+        <thead>
+            <tr>
+                <th>Crate / layer</th>
+                <th>Responsibility</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>harness-core</code></td>
+                <td>
+                    The agent contracts, loop, dispatcher, limits, and test
+                    primitives.
+                </td>
+            </tr>
+            <tr>
+                <td><code>provider-auth</code></td>
+                <td>Provider-neutral credential contracts.</td>
+            </tr>
+            <tr>
+                <td><code>model-providers</code></td>
+                <td>
+                    OpenAI-compatible, OpenRouter, and Codex model adapters.
+                </td>
+            </tr>
+            <tr>
+                <td><code>tools</code></td>
+                <td>
+                    Workspace files, shell/processes, Python/Bun compute,
+                    subagents, tasks, and questions.
+                </td>
+            </tr>
+            <tr>
+                <td><code>tool-extensions</code></td>
+                <td>Optional MCP, skills, and web integrations.</td>
+            </tr>
+            <tr>
+                <td><code>extensions</code></td>
+                <td>
+                    Events, policy, compaction, truncation, retry, usage, and
+                    sessions.
+                </td>
+            </tr>
+            <tr>
+                <td><code>orcacode</code></td>
+                <td>
+                    The composition root: terminal UI, approvals, configuration,
+                    and runtime wiring.
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <p>
+        The dependency direction is intentional: tools and extensions depend on
+        the core contracts; the core does not depend on an individual provider,
+        tool, terminal UI, or control plane.
+    </p>
+</section>
+<section class="section" id="turn-lifecycle">
+    <h2>One turn</h2>
+    <ol>
+        <li>
+            The host builds a context from the session, instructions, mode, and
+            active capabilities.
+        </li>
+        <li>The model emits text and, when needed, one or more tool calls.</li>
+        <li>
+            The dispatcher classifies calls, applies policy and approvals, then
+            executes eligible calls concurrently.
+        </li>
+        <li>
+            Results return to the model paired to the original call IDs and
+            ordered by call position, even when execution completes out of
+            order.
+        </li>
+        <li>
+            Extensions observe or alter defined lifecycle seams without becoming
+            part of the core loop.
+        </li>
+    </ol>
+</section>

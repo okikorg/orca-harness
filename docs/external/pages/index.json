@@ -1,0 +1,121 @@
+[
+  {
+    "group": "START HERE",
+    "id": "start",
+    "label": "Welcome",
+    "title": "Your Orcacode field manual",
+    "lede": "Orcacode is the interactive terminal host for Orca Harness. It works inside a chosen workspace, asks before actions that change state, and keeps your work as a recoverable session."
+  },
+  {
+    "group": "GETTING STARTED",
+    "id": "install",
+    "label": "Install & run",
+    "title": "Start in your workspace",
+    "lede": "Run Orcacode from the workspace where you want its file tools to operate. It defaults to a local OpenAI-compatible endpoint when no API key is set."
+  },
+  {
+    "group": "WORK SAFELY",
+    "id": "approvals",
+    "label": "Approvals",
+    "title": "Approve every action",
+    "lede": "Approvals make the tool call visible before it runs. They are designed for the moment a model moves from explanation to local action."
+  },
+  {
+    "group": "WORK SAFELY",
+    "id": "plan-mode",
+    "label": "Plan mode",
+    "title": "Investigate, then plan",
+    "lede": "Plan mode is a read-only stance for exploration and design. It does not try to guess whether a shell command is safe; it allows only a small, explicit set of research tools."
+  },
+  {
+    "group": "CONFIGURE",
+    "id": "providers",
+    "label": "Providers & models",
+    "title": "Choose a provider and model",
+    "lede": "Orcacode supports local OpenAI-compatible servers, OpenAI API, OpenRouter, and the OpenAI Codex provider for a ChatGPT subscription."
+  },
+  {
+    "group": "USE THE AGENT",
+    "id": "tools",
+    "label": "Workspace tools",
+    "title": "Tools stay in your workspace",
+    "lede": "The default toolset gives an agent useful local capabilities while rejecting absolute paths and attempts to escape upward from the workspace root."
+  },
+  {
+    "group": "USE THE AGENT",
+    "id": "tool-reference",
+    "label": "Tools & extensions",
+    "title": "Tools available now",
+    "lede": "This is the current Orcacode capability set—not a generic harness API list. Availability depends on session mode, optional configuration, and whether you are in the interactive terminal or a headless run."
+  },
+  {
+    "group": "USE THE AGENT",
+    "id": "sessions",
+    "label": "Sessions & controls",
+    "title": "Keep the thread. Branch safely.",
+    "lede": "Sessions are recorded per workspace as append-only JSONL, so routine exploration remains resumable without asking you to manage transcript files by hand."
+  },
+  {
+    "group": "USE THE AGENT",
+    "id": "terminal-ui",
+    "label": "Terminal UI",
+    "title": "See work as it happens",
+    "lede": "The terminal UI is composed from small, explicit components. The transcript holds the durable conversation; the live rail makes model activity and tool work inspectable before it collapses into the record."
+  },
+  {
+    "group": "EXTEND",
+    "id": "subagents",
+    "label": "Subagents",
+    "title": "Delegate bounded work",
+    "lede": "A subagent is an independent worker with its own context, loop, and tools. Use it for one clearly defined result—not as a second copy of the entire conversation."
+  },
+  {
+    "group": "EXTEND",
+    "id": "mcp",
+    "label": "MCP servers",
+    "title": "Connect MCP servers",
+    "lede": "MCP servers add tools, resources, and prompts through a stdio process. Orcacode keeps discovery separate from schema selection so a large server catalog stays manageable."
+  },
+  {
+    "group": "EXTEND",
+    "id": "skills",
+    "label": "Skills & instructions",
+    "title": "Add durable guidance",
+    "lede": "Instructions give every session the project context it needs. Skills package focused procedures that you can discover, enable, or disable when they apply."
+  },
+  {
+    "group": "AUTOMATE",
+    "id": "headless",
+    "label": "Headless runs",
+    "title": "Run one prompt",
+    "lede": "Headless mode is for scripts and CI-like workflows where you want a single invocation instead of an interactive terminal session."
+  },
+  {
+    "group": "UNDER THE HOOD",
+    "id": "architecture",
+    "label": "Architecture",
+    "title": "A narrow execution kernel",
+    "lede": "Orca Harness owns the short path from a model response to correctly ordered tool results. Orcacode is the composition layer that turns that kernel into a local terminal agent."
+  },
+  {
+    "group": "UNDER THE HOOD",
+    "id": "philosophy",
+    "label": "Design philosophy",
+    "title": "Keep the loop small",
+    "lede": "The project is built around one constraint: the execution path that can act on a machine should stay understandable, measurable, and difficult to accidentally widen."
+  },
+  {
+    "group": "UNDER THE HOOD",
+    "id": "benchmarks",
+    "label": "Performance & benchmarks",
+    "title": "Measure useful work",
+    "lede": "The benchmark tree separates harness overhead, host startup, deterministic MCP retrieval, fake-subagent stress, and cross-product comparison. Kernel and startup are regression-gated; the other suites are evidence with explicit limits."
+  },
+  {
+    "group": "REFERENCE",
+    "id": "troubleshooting",
+    "label": "Troubleshooting",
+    "title": "Find the blocked layer",
+    "lede": "Most setup issues are resolved by identifying which layer is refusing the work: the provider connection, the workspace guard, or a deliberate safety policy."
+  }
+]

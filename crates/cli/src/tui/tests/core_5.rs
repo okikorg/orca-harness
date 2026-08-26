@@ -306,11 +306,38 @@
     }
 
     #[test]
+    fn stale_catalog_reply_is_ignored() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.picker_pending = Some((9, "current".into()));
+        handle_ui_msg(
+            &mut app,
+            UiMsg::Models {
+                request_id: 8,
+                result: Ok(catalog()),
+            },
+            &tx,
+            80,
+        );
+        assert!(app.overlay.is_none());
+        assert_eq!(app.picker_pending, Some((9, "current".into())));
+    }
+
+    #[test]
     fn catalog_reply_opens_the_picker_seeded_with_the_command_filter() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.picker_pending = Some("acme".into());
-        handle_ui_msg(&mut app, UiMsg::Models(Ok(catalog())), &tx, 80);
+        app.picker_pending = Some((7, "acme".into()));
+        let request_id = app.picker_pending.as_ref().unwrap().0;
+        handle_ui_msg(
+            &mut app,
+            UiMsg::Models {
+                request_id,
+                result: Ok(catalog()),
+            },
+            &tx,
+            80,
+        );
         let Some(Overlay::Models(picker)) = &app.overlay else {
             panic!("expected the model picker to open");
         };
@@ -478,14 +505,41 @@
         press(&mut app, &tx, KeyCode::Enter);
         assert!(app.overlay.is_none());
         assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ListModels { .. })));
-        assert_eq!(app.picker_pending.as_deref(), Some(""));
+        assert_eq!(
+            app.picker_pending
+                .as_ref()
+                .map(|(_, seed)| seed.as_str()),
+            Some("")
+        );
+        press(&mut app, &tx, KeyCode::Left);
+        assert!(matches!(app.overlay, Some(Overlay::Settings { .. })));
+        assert!(app.picker_pending.is_none());
 
-        // Theme row: opens the theme picker.
+        // Model fetch can also be cancelled as a whole with escape.
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::ListModels { .. })));
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(app.overlay.is_none());
+        assert!(app.overlay_stack.is_empty());
+        assert!(app.picker_pending.is_none());
+
+        // Theme row: right opens the theme picker; left returns with the
+        // settings cursor preserved, then right opens it again.
         app.overlay = Some(Overlay::Settings {
             picker: ListPicker::with_selected(SETTINGS_ROWS, 2),
         });
-        press(&mut app, &tx, KeyCode::Enter);
+        press(&mut app, &tx, KeyCode::Right);
         assert!(matches!(app.overlay, Some(Overlay::Themes { .. })));
+        press(&mut app, &tx, KeyCode::Left);
+        match &app.overlay {
+            Some(Overlay::Settings { picker }) => assert_eq!(picker.index(), 2),
+            _ => panic!("expected settings parent"),
+        }
+        press(&mut app, &tx, KeyCode::Right);
+        assert!(matches!(app.overlay, Some(Overlay::Themes { .. })));
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(app.overlay.is_none());
+        assert!(app.overlay_stack.is_empty());
 
         // View row opens a picker preselected on the current layout.
         app.view_mode = ViewMode::Classic;

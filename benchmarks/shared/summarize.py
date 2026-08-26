@@ -13,7 +13,7 @@ import json
 import os
 import sys
 
-BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def ms(value: float) -> str:

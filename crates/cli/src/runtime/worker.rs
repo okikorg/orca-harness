@@ -28,6 +28,22 @@ async fn run_interactive_context(
     }
 }
 
+/// Prepare a cleared conversation without destroying the recorded one.
+/// Rotation happens before the caller replaces any in-memory state, so a
+/// filesystem error leaves both the active context and old JSONL untouched.
+fn rotate_for_clear(
+    system: &str,
+    session: Option<&SessionHandler>,
+) -> std::io::Result<(Context, Option<String>)> {
+    let mut fresh = Context::new();
+    fresh.push_system(system);
+    let id = match session {
+        Some(session) => Some(session.start_new_with_context(&fresh)?),
+        None => None,
+    };
+    Ok((fresh, id))
+}
+
 /// Owns the Agent and the conversation; runs prompts sent by the UI.
 /// `build` produces a fresh agent for the current endpoint; the
 /// conversation context survives model and provider swaps.
@@ -136,8 +152,16 @@ pub(crate) async fn worker<F>(
                 }
             }
             WorkerCmd::Clear => {
-                context = Context::new();
-                context.push_system(&system);
+                let (fresh, new_session_id) = match rotate_for_clear(&system, session.as_deref()) {
+                    Ok(rotated) => rotated,
+                    Err(err) => {
+                        let _ = ui.send(UiMsg::Notice(format!(
+                            "session not cleared: could not preserve history: {err}"
+                        )));
+                        continue;
+                    }
+                };
+                context = fresh;
                 // The plan belonged to the conversation being cleared,
                 // and so did every "I have read this file": the model
                 // that did the reading is gone. The planning episode
@@ -146,25 +170,12 @@ pub(crate) async fn worker<F>(
                 todos.clear();
                 files.clear();
                 planning.area.end();
-                if let Some(session) = &session {
-                    // Same session, emptied in place: /clear does not
-                    // litter the sessions directory with rotations.
-                    match session.reset() {
-                        Ok(()) => {
-                            let _ = ui.send(UiMsg::SessionCleared {
-                                id: session.session_id(),
-                            });
-                        }
-                        Err(err) => {
-                            let _ =
-                                ui.send(UiMsg::Notice(format!("session file not cleared: {err}")));
-                        }
-                    }
-                }
                 // A fresh agent drops the old process/pykernel/bun_repl/subagent
                 // tools; their Drop kills background process groups and
-                // the interpreter, so /clear leaves nothing running.
+                // the interpreter, so /clear leaves nothing running. Do this
+                // before acknowledging success to the UI.
                 agent = build(&endpoint);
+                let _ = ui.send(UiMsg::SessionCleared { id: new_session_id });
             }
             WorkerCmd::Compact => {
                 let result = compact(&mut context, &store, &CompactConfig::default())
@@ -249,7 +260,7 @@ pub(crate) async fn worker<F>(
                     }
                 }
             }
-            WorkerCmd::ListModels { filter } => {
+            WorkerCmd::ListModels { request_id, filter } => {
                 // Detached: a slow catalog fetch must not wedge the worker
                 // (runs and model switches would queue behind it).
                 let ui = ui.clone();
@@ -265,7 +276,7 @@ pub(crate) async fn worker<F>(
                             models
                         })
                         .map_err(|e| e.to_string());
-                    let _ = ui.send(UiMsg::Models(result));
+                    let _ = ui.send(UiMsg::Models { request_id, result });
                 });
             }
             WorkerCmd::LoginProvider { provider } => {
@@ -397,7 +408,78 @@ mod tests {
     use super::*;
     use orca_harness_core::testing::{call, ScriptedModel};
     use orca_harness_core::{FnTool, Limits, ModelResponse};
+    use orca_harness_extensions::SessionFile;
     use serde_json::json;
+
+    fn temp_session_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "orca-worker-{name}-{}-{}",
+            std::process::id(),
+            orca_harness_extensions::new_session_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn clear_rotation_preserves_old_transcript_and_records_fresh_context() {
+        let dir = temp_session_dir("clear");
+        let session = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+        let old_path = session.path();
+        let old_id = session.session_id();
+        let mut old_context = Context::new();
+        old_context.push_system("old system");
+        old_context.push_user("keep this history");
+        session.sync(&old_context);
+        let old_bytes = std::fs::read(&old_path).unwrap();
+
+        let (fresh, new_id) = rotate_for_clear("fresh system", Some(&session)).unwrap();
+
+        assert_ne!(new_id.as_deref(), Some(old_id.as_str()));
+        assert_ne!(session.path(), old_path);
+        assert_eq!(std::fs::read(&old_path).unwrap(), old_bytes);
+        assert_eq!(fresh.messages().len(), 1);
+        let recorded = SessionFile::load(&session.path()).unwrap();
+        assert_eq!(
+            serde_json::to_string(recorded.context.messages()).unwrap(),
+            serde_json::to_string(fresh.messages()).unwrap()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn clear_without_session_prepares_fresh_context_and_no_session_id() {
+        let (fresh, id) = rotate_for_clear("fresh system", None).unwrap();
+        assert!(id.is_none());
+        assert_eq!(fresh.messages().len(), 1);
+    }
+
+    #[test]
+    fn clear_rotation_failure_leaves_context_and_old_transcript_unchanged() {
+        let dir = temp_session_dir("clear-failure");
+        let session = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+        let old_path = session.path();
+        let old_id = session.session_id();
+        let mut context = Context::new();
+        context.push_system("old system");
+        context.push_user("must survive");
+        session.sync(&context);
+        let old_bytes = std::fs::read(&old_path).unwrap();
+
+        let moved_dir = dir.with_extension("preserved");
+        std::fs::rename(&dir, &moved_dir).unwrap();
+        std::fs::write(&dir, "blocks create_dir_all").unwrap();
+
+        assert!(rotate_for_clear("fresh system", Some(&session)).is_err());
+        assert_eq!(session.session_id(), old_id);
+        assert_eq!(
+            std::fs::read(moved_dir.join(old_path.file_name().unwrap())).unwrap(),
+            old_bytes
+        );
+
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::remove_dir_all(moved_dir).unwrap();
+    }
 
     #[tokio::test]
     async fn long_session_continues_across_bounded_agent_runs() {

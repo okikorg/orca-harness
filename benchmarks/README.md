@@ -1,14 +1,17 @@
 # Benchmarks
 
-Two suites, because the harness has two costs worth defending:
+The benchmark tree is organized by workload. Kernel and startup are the two
+regression-gated suites; comparison, MCP search, and subagent stress are
+informational or deterministic evaluation suites:
 
 | Suite      | Script                    | Measures                                                     |
 | :--------- | :------------------------ | :----------------------------------------------------------- |
-| **kernel** | `./benchmarks/kernel.sh`  | overhead between a model emitting tool calls and tools running |
-| startup    | `./benchmarks/startup.sh` | fixed cost the `orcacode` host pays before accepting input     |
+| **kernel** | `./benchmarks/kernel/run.sh`  | overhead between a model emitting tool calls and tools running |
+| startup    | `./benchmarks/startup/run.sh` | fixed cost the `orcacode` host pays before accepting input     |
 | MCP search | `benchmarks/mcp/`          | metadata-search cutoff distribution and labeled query accuracy  |
+| subagent   | `benchmarks/subagent/`     | fake-model in-flight concurrency, latency, and failure observations |
 
-Plus `./benchmarks/compare.sh`, which puts orcacode next to `fx` on the
+Plus `./benchmarks/compare/run.sh`, which puts orcacode next to `fx` on the
 same host — see [Comparing against fx](#comparing-against-fx), and read it
 before quoting a number from it.
 
@@ -23,32 +26,34 @@ and both end with a budget check that fails the run on regression.
 ## Running them
 
 ```bash
-./benchmarks/kernel.sh                # dispatch probes + real-tool probe
-./benchmarks/kernel.sh --quick        # fewer iterations, probes only
-./benchmarks/kernel.sh --criterion    # also run cargo bench and record it
+./benchmarks/kernel/run.sh                # dispatch probes + real-tool probe
+./benchmarks/kernel/run.sh --quick        # fewer iterations, probes only
+./benchmarks/kernel/run.sh --criterion    # also run cargo bench and record it
 
-./benchmarks/startup.sh               # 100 runs per command
-./benchmarks/startup.sh --quick       # 20 runs
+./benchmarks/startup/run.sh               # 100 runs per command
+./benchmarks/startup/run.sh --quick       # 20 runs
 ```
 
-`startup.sh` needs [hyperfine](https://github.com/sharkdp/hyperfine)
+`startup/run.sh` needs [hyperfine](https://github.com/sharkdp/hyperfine)
 (`brew install hyperfine` / `apt install hyperfine` / `cargo install
 hyperfine`). Everything else needs only `python3` and the Rust toolchain.
 
 The reporting layer has its own tests:
 
 ```bash
-python3 benchmarks/check_budgets_test.py
-python3 benchmarks/kernel_report_test.py
+python3 benchmarks/shared/check_budgets_test.py
+python3 benchmarks/kernel/report_test.py
 python3 -m unittest discover -s benchmarks/mcp -p '*_test.py' -v
 ```
 
 MCP search benchmark details and standalone reports live in
-[`benchmarks/mcp/`](mcp/README.md).
+[`benchmarks/mcp/`](mcp/README.md). The informational fake-worker stress suite
+lives in [`benchmarks/subagent/`](subagent/README.md); its high-memory boundary
+mode is deliberately excluded from CI and performance budgets.
 
 ## The kernel suite
 
-`kernel.sh` runs `examples/fanout_probe` at batch sizes 1, 10 and 100 with
+`kernel/run.sh` runs `examples/fanout_probe` at batch sizes 1, 10 and 100 with
 no-op tools — so the numbers are pure harness overhead — and then
 `examples/tool_fanout_perf`, which drives the same dispatcher through the
 real `write_file`, `read_file` and `shell` tools.
@@ -84,8 +89,8 @@ workspace bench first rather than trusting what is already there.
 
 ## The startup suite
 
-`startup.sh` benchmarks the `orcacode` binary against a fixture tree built
-by `fixtures.py` — a private HOME, config dir, sessions and skills — so the
+`startup/run.sh` benchmarks the `orcacode` binary against a fixture tree built
+by `shared/fixtures.py` — a private HOME, config dir, sessions and skills — so the
 numbers do not depend on what the developer happens to have installed.
 
 | Command                           | What it exercises                                                |
@@ -123,7 +128,7 @@ variable is read in exactly one place and does nothing else.
 
 `config_path()` resolves `ORCA_CONFIG_DIR`, then `XDG_CONFIG_HOME`, then
 `HOME/.config`, and skills discovery reads `HOME` directly for its
-`~/.claude/skills` compatibility roots. `startup.sh` therefore pins
+`~/.claude/skills` compatibility roots. `startup/run.sh` therefore pins
 `ORCA_CONFIG_DIR` *and* `HOME`, unsets `XDG_CONFIG_HOME`, and unsets every
 API-key variable so provider resolution cannot differ between machines.
 
@@ -138,13 +143,13 @@ Two rules keep the measurements honest, and both are load-bearing:
 
 ## Comparing against fx
 
-`compare.sh` runs orcacode and [fx](https://github.com/vercel-labs/fx)
+`compare/run.sh` runs orcacode and [fx](https://github.com/vercel-labs/fx)
 side by side on the same host, from the same shell, each with its own
 fixture home, against the same `/usr/bin/true` baseline.
 
 ```bash
-./benchmarks/compare.sh                          # whatever `fx` is on PATH
-FX_BIN=/path/to/fx ./benchmarks/compare.sh       # a specific build
+./benchmarks/compare/run.sh                          # whatever `fx` is on PATH
+FX_BIN=/path/to/fx ./benchmarks/compare/run.sh       # a specific build
 ```
 
 **The obvious pairing is wrong, and the script exists partly to say so.**
@@ -180,7 +185,7 @@ at any non-Debug optimize level). Work above a 1.22 ms process floor:
 Read tier 2 carefully. fx has no command that exits after a full
 interactive-launch startup, so `status`/`doctor` stand in — and they probe
 auth and the system, which orcacode's startup does not. fx's own
-`check_budgets.py` evaluates those commands on Linux only; on macOS they
+`benchmarks/check_budgets.py` evaluates those commands on Linux only; on macOS they
 cost ~50 ms here, ~35 ms of it in-process CPU rather than I/O. It is a data
 point about those commands, not a verdict about startup.
 
@@ -202,7 +207,7 @@ Building fx from source needs Zig 0.16 (`minimum_zig_version` in
 
 ## Budgets
 
-`check_budgets.py` gates the mean of each startup command and the p99 of
+`shared/check_budgets.py` gates the mean of each startup command and the p99 of
 each kernel metric. Ceilings live at the top of that file.
 
 They are enforced on **Linux only** — that is what CI runs on — and are
@@ -214,22 +219,22 @@ that matter: a blocking call added to the dispatch path, a directory walk
 added to startup. Use the trend chart for drift, the gate for cliffs.
 
 To re-baseline after an intentional change: run both suites on a quiet
-machine, update the budget tables in `check_budgets.py` and the measured
+machine, update the budget tables in `shared/check_budgets.py` and the measured
 tables above.
 
 ## Files
 
 ```text
 benchmarks/
-├── startup.sh              hyperfine suite over the orcacode binary
-├── kernel.sh               dispatch and real-tool probes
-├── compare.sh              orcacode vs fx, same host, same baseline
-├── fixtures.py             hermetic HOME / config / sessions / skills tree
-├── summarize.py            hyperfine JSON → table + summary.json
-├── kernel_report.py        probe stdout + criterion → table + summary.json
-├── compare_report.py       the comparison, grouped by work done
-├── check_budgets.py        the gate, for both suites
-├── check_budgets_test.py   tests for the gate
-├── kernel_report_test.py   tests for the probe parser
-└── results/                generated; git-ignored except .gitkeep
+├── README.md               suite index, methodology, and published baselines
+├── kernel/                 dispatch suite: runner, report parser, parser tests
+├── startup/                cold-start runner
+├── compare/                orcacode-vs-fx runner and comparison report
+├── shared/                 fixtures, hyperfine summary, budgets, budget tests
+├── mcp/                    deterministic MCP search corpus and reports
+├── subagent/               fake-subagent stress runner, analysis, and tests
+├── kernel.sh               compatibility launcher → kernel/run.sh
+├── startup.sh              compatibility launcher → startup/run.sh
+├── compare.sh              compatibility launcher → compare/run.sh
+└── results/                generated; git-ignored except .gitkeep files
 ```

@@ -24,6 +24,7 @@ use crate::approval::Approval;
 use crate::mode::{ModeHandle, PlanGate};
 use crate::msg::UiMsg;
 use crate::plan::PlanArea;
+use crate::subagent_models;
 use crate::{
     extensions, headless, instructions, mcp, skills, system_prompt, tui, workspace_scope, Config,
     Endpoint, Planning,
@@ -84,6 +85,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let code = headless::run(
             &cfg,
             endpoint.build_model(),
+            subagent_models::choices(&endpoint),
             &ws,
             &system,
             handler,
@@ -175,6 +177,9 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
                 endpoint.build_model_for_ui(Some(ui_tx.clone())),
+                endpoint.provider.label(),
+                &endpoint.model,
+                subagent_models::choices(endpoint),
                 &cfg,
                 &ws,
                 &ui_tx,
@@ -196,7 +201,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // Everything above is the cold-start path — arg parse, config load,
     // skills scan, system prompt, session open, MCP connect, agent build.
     // Everything below needs a terminal, so `ORCA_BENCH` stops here: it is
-    // what lets `benchmarks/startup.sh` time the whole startup without a
+    // what lets `benchmarks/startup/run.sh` time the whole startup without a
     // TTY. Nothing else in the binary reads it.
     if std::env::var("ORCA_BENCH").is_ok_and(|v| !v.trim().is_empty() && v != "0") {
         eprintln!("ORCA_BENCH set: exiting after startup, before the terminal UI");
@@ -255,6 +260,9 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_agent<M: Model + Clone + 'static>(
     model: M,
+    inherited_provider: &str,
+    inherited_model: &str,
+    subagent_models: Vec<orca_harness_tools::SubagentModel<Arc<dyn Model>>>,
     cfg: &Config,
     ws: &Workspace,
     ui: &mpsc::UnboundedSender<UiMsg>,
@@ -366,22 +374,34 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     ));
     let ui_events = ui.clone();
     let mut subagent = SubagentTool::new(model_for_subagents, ws)
+        .inherited_identity(inherited_provider, inherited_model)
+        .models(
+            subagent_models
+                .into_iter()
+                .map(|choice| orca_harness_tools::SubagentModel {
+                    model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
+                    ..choice
+                }),
+        )
         .max_depth(subagent_depth.clone())
         .stats(stats.clone());
     if extensions::enabled("retry") {
-        // Inner agents get the same retry policy as the orchestrator:
-        // three attempts, and data failures (nonzero exit, HTTP 5xx)
-        // retry too.
-        subagent = subagent.retry_with_rule(
-            3,
-            std::time::Duration::from_millis(250),
-            extensions::data_failure,
-        );
+        // Install defaults once; subsequent rebuilds preserve `/subagents`
+        // choices while attaching the same data-failure classifier.
+        subagent_depth.ensure_retry_defaults(3, 250);
+        subagent = subagent.retry_ok_when(extensions::data_failure);
     }
     let subagent_mode = mode.clone();
     let subagent_plan = plan_area.clone();
+    let subagent_settings = subagent_depth.clone();
     subagent = subagent.spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
-        subagent_extensions(spawn, &ui_events, &subagent_mode, &subagent_plan)
+        subagent_extensions(
+            spawn,
+            &ui_events,
+            &subagent_mode,
+            &subagent_plan,
+            &subagent_settings,
+        )
     }));
     agent = agent.tool_arc(std::sync::Arc::new(subagent));
     agent

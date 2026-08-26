@@ -89,6 +89,11 @@ impl OpenAiModel {
         self
     }
 
+    /// Identify the client to provider usage and diagnostics surfaces.
+    pub fn user_agent(self, user_agent: impl Into<String>) -> Self {
+        self.header(reqwest::header::USER_AGENT.as_str(), user_agent)
+    }
+
     async fn post(&self, body: &Value) -> Result<reqwest::Response, ModelError> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let mut request = self.client.post(&url).json(body);

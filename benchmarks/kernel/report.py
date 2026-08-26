@@ -22,7 +22,8 @@ import os
 import re
 import sys
 
-BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
+SUITE_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCH_DIR = os.path.dirname(SUITE_DIR)
 REPO_ROOT = os.path.dirname(BENCH_DIR)
 
 # "dispatch (T1-T0) n=   1  p50=     0.4µs  p90=..."

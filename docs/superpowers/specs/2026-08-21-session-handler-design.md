@@ -74,9 +74,10 @@ keeps a cursor — the count of messages already persisted — behind a
 On each hook, compare `context.messages().len()` to the cursor:
 
 - `len > cursor`: append the new messages, flush, advance the cursor.
-- `len < cursor`: the context was rewritten (`compact` or `/clear`);
-  truncate the file and rewrite header plus all current messages, then
-  set the cursor to `len`. Correct without knowing compaction internals.
+- `len < cursor`: the context was rewritten (for example, `compact` or
+  a host-driven destructive reset); truncate the file and rewrite header
+  plus all current messages, then set the cursor to `len`. Correct without
+  knowing compaction internals.
 - `len == cursor`: no-op.
 
 Hook coverage: `before_model` catches the user prompt and prior tool
@@ -107,19 +108,19 @@ anything new to record there; the next `before_model` or the final
 - The handler is created once per session in `run_mode` and registered
   in `build_agent` via `extension_arc`, so it survives model/provider
   rebuilds the same way `TruncationStore` does.
-- `/clear` empties the current session file in place — same id, same
-  path, truncated back to its header — and rebuilds the agent:
-  dropping the old process/pykernel/subagent tools kills background
+- `/clear` preserves the current session file, creates a fresh session,
+  persists the new system-only context, and only then rebuilds the agent.
+  Dropping the old process/pykernel/subagent tools kills background
   process groups and the interpreter, so `/clear` leaves nothing
-  running. (`SessionHandler::start_new` still exists for hosts that
-  prefer rotation.)
+  running. If fresh-session creation fails, the old transcript and active
+  conversation remain unchanged.
 - `/sessions` opens a picker overlay (same interface as `/provider`
   and `/theme`): newest first, current session marked, enter resumes,
   esc closes. `/sessions <id>` resumes directly by unique id prefix.
   Space arms the picker's row-action strip (a shared component
   feature any overlay can declare actions on); `d` deletes the
   selected recording. The active session is protected from deletion;
-  `/clear` empties it instead.
+  `/clear` preserves it and starts a fresh session instead.
 - Every session, interactive and headless, records by default. A
   `--no-session` flag (and matching config field) opts out.
 
@@ -152,7 +153,9 @@ anything new to record there; the next `before_model` or the final
 Unit (extensions crate):
 
 - Cursor append and advance across hooks.
-- Rewrite-on-shrink after a simulated compaction and `/clear`.
+- Rewrite-on-shrink after a simulated compaction or host-driven reset.
+- Transactional `/clear` rotation preserves the old file and records the
+  fresh system context before adoption; creation failure keeps the old recorder.
 - Header round-trip; unknown version rejected.
 - Truncated final line dropped with warning; orphaned trailing
   tool-call message dropped.

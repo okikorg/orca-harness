@@ -195,6 +195,14 @@ pub(crate) enum Overlay {
     /// Settings menu: shows the persisted preferences and jumps into
     /// the provider, model, theme, api-key, and approval pickers.
     Settings { picker: ListPicker },
+    /// Session-live subagent governance menu.
+    Subagents { picker: ListPicker },
+    /// Preset values for one subagent setting row.
+    SubagentValues {
+        setting: SubagentSetting,
+        values: Vec<String>,
+        picker: ListPicker,
+    },
     /// This workspace's saved always-allowed tools; enter revokes one.
     Approvals {
         tools: Vec<String>,
@@ -223,6 +231,39 @@ pub(crate) enum Overlay {
         sessions: Vec<orca_harness_extensions::SessionFile>,
         picker: ListPicker,
     },
+}
+
+pub(crate) const SUBAGENT_ROWS: usize = 11;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubagentSetting {
+    Route,
+    LocalModel,
+    FlashModel,
+    MidModel,
+    FrontierModel,
+    Depth,
+    Steps,
+    Timeout,
+    Output,
+    ToolAttempts,
+    Backoff,
+}
+
+impl SubagentSetting {
+    pub(crate) const ALL: [Self; SUBAGENT_ROWS] = [
+        Self::Route,
+        Self::LocalModel,
+        Self::FlashModel,
+        Self::MidModel,
+        Self::FrontierModel,
+        Self::Depth,
+        Self::Steps,
+        Self::Timeout,
+        Self::Output,
+        Self::ToolAttempts,
+        Self::Backoff,
+    ];
 }
 
 /// Rows in the settings overlay: provider, model, theme, transcript view,
@@ -358,12 +399,19 @@ pub(crate) struct InspectorBodyCache {
     pub(crate) lines: Vec<Line<'static>>,
 }
 
+pub(crate) struct SubagentDisplay {
+    pub(crate) task: String,
+    pub(crate) identity: orca_harness_tools::SubagentIdentity,
+}
+
 /// One spawned inner agent's tool activity while it runs.
 pub(crate) struct SpawnActivity {
     /// Tool-call id of the subagent call that spawned it.
     pub(crate) call_id: String,
     pub(crate) parent_id: Option<u64>,
     pub(crate) depth: u32,
+    pub(crate) task: String,
+    pub(crate) identity: Option<orca_harness_tools::SubagentIdentity>,
     pub(crate) tools: Vec<ToolActivity>,
     /// Inner call id -> index into `tools`.
     pub(crate) pending: HashMap<String, usize>,
@@ -388,7 +436,7 @@ impl HeldInput {
             Self::Text(text) => {
                 let lines = text.lines().count().max(1);
                 let unit = if lines == 1 { "line" } else { "lines" };
-                format!("[Pasted text #{index}, {lines} {unit}]")
+                format!("[▤ Pasted text #{index}, {lines} {unit}]")
             }
             Self::Image { label, .. } => format!("[▧ {label}]"),
         }
@@ -480,12 +528,19 @@ pub(crate) struct App {
     pub(crate) split_scroll: u16,
     /// Live inner activity of running subagents, keyed by spawn id.
     pub(crate) subagent_activity: HashMap<u64, SpawnActivity>,
+    /// Resolved top-level worker identity retained until the work phase commits,
+    /// including when a failed tool result has no structured identity payload.
+    pub(crate) subagent_display: HashMap<String, SubagentDisplay>,
     /// Shared selection state for the slash-command palette.
     pub(crate) palette_picker: ListPicker,
     /// Open modal selector, if any.
     pub(crate) overlay: Option<Overlay>,
+    /// Parent picker pages. Right/enter descends, left returns one page,
+    /// and escape clears the whole flow.
+    pub(crate) overlay_stack: Vec<Overlay>,
     /// Filter to seed the model picker with once the catalog reply arrives.
-    pub(crate) picker_pending: Option<String>,
+    pub(crate) picker_pending: Option<(u64, String)>,
+    pub(crate) next_picker_request: u64,
     /// Text waiting to be handed to the terminal's clipboard: decided
     /// here, written by the run loop between frames.
     pub(crate) clipboard_pending: Option<String>,

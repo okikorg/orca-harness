@@ -290,7 +290,7 @@ as append-only JSONL:
 | `--resume <id>` | resume a specific session                                                                                  |
 | `/sessions`     | open a picker and resume from the TUI                                                                      |
 | `--no-session`  | opt out of recording                                                                                       |
-| `/clear`        | empty the current session in place (same id) and stop all background work (processes, pykernel, bun_repl, subagents) |
+| `/clear`        | preserve the current transcript, start a fresh session, and stop all background work (processes, pykernel, bun_repl, subagents) |
 | `/rewind [n]`   | drop the last `n` user turns (default 1) from the conversation and the file                                |
 | `/fork`         | continue this conversation in a new session file, leaving the current one as it is                         |
 
@@ -519,8 +519,8 @@ started:
 cargo run --release --example fanout_probe -- 100 300   # batch size, iterations
 ```
 
-`./benchmarks/kernel.sh` runs that probe across batch sizes, records the
-results as JSON and holds them to a budget; `./benchmarks/startup.sh` does
+`./benchmarks/kernel/run.sh` runs that probe across batch sizes, records the
+results as JSON and holds them to a budget; `./benchmarks/startup/run.sh` does
 the same for the CLI's cold start. See [benchmarks/](benchmarks/).
 
 Measured on a 4-core Linux box (release build, tokio multi-thread):
@@ -632,8 +632,8 @@ cargo run -p orca-harness-tools --example agent_with_tools
 cargo bench              # criterion suite: dispatch latency, fan-out,
                          # extension overhead, keyed scheduling
 cargo clippy --workspace --all-targets
-./benchmarks/kernel.sh   # dispatch + real-tool probes, budget-checked
-./benchmarks/startup.sh  # orcacode cold start, budget-checked
+./benchmarks/kernel/run.sh   # dispatch + real-tool probes, budget-checked
+./benchmarks/startup/run.sh  # orcacode cold start, budget-checked
 ```
 
 From the repo root: `make harness-test` / `make harness-bench`.

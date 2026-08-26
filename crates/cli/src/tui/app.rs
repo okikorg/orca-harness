@@ -82,9 +82,12 @@ impl App {
             inspector_mode: super::state::InspectorMode::stored(),
             split_scroll: 0,
             subagent_activity: std::collections::HashMap::new(),
+            subagent_display: std::collections::HashMap::new(),
             palette_picker: ListPicker::new(super::command_catalog::COMMANDS.len()),
             overlay: None,
+            overlay_stack: Vec::new(),
             picker_pending: None,
+            next_picker_request: 1,
             clipboard_pending: None,
             last_answer: None,
         }
@@ -215,6 +218,7 @@ impl App {
         self.split_tool = None;
         self.split_scroll = 0;
         self.subagent_activity.clear();
+        self.subagent_display.clear();
         self.pending_calls.clear();
         self.pending_assistant = None;
         self.assistant_started = false;
@@ -273,6 +277,7 @@ impl App {
         }
         self.thinking_log.clear();
         self.activity_tools.clear();
+        self.subagent_display.clear();
         self.pending_calls.clear();
         self.split_tool = None;
         self.split_scroll = 0;

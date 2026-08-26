@@ -223,9 +223,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     } else if app.ask.is_some() {
         "↑↓ question · ←→ option · space choose · tab topic · enter send"
     } else if app.overlay.is_some() && app.approval.is_none() {
-        "↑↓ navigate · enter use · esc close"
+        if app.overlay_stack.is_empty() {
+            "↑↓ move · →/enter use · esc close"
+        } else {
+            "↑↓ move · ← back · →/enter use · esc close"
+        }
     } else if app.palette_query().is_some() && app.approval.is_none() {
-        "↑↓ navigate · enter use · tab complete · esc close"
+        "↑↓ move · →/enter use · tab complete · esc close"
     } else if split_active && app.running() && app.activity_tools.is_empty() {
         "split ready · waiting for tool call · esc interrupt"
     } else if app.running() {
@@ -417,7 +421,7 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         return ask.lines(width);
     }
     if let Some(overlay) = &app.overlay {
-        return match overlay {
+        let mut lines = match overlay {
             Overlay::Help { filter, picker } => help_picker_lines(filter, picker, width),
             Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
             Overlay::Locations(picker) => location_picker_lines(picker, width),
@@ -433,6 +437,12 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Usage => usage_lines(app, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
             Overlay::Settings { picker } => settings_lines(app, picker, width),
+            Overlay::Subagents { picker } => subagent_settings_lines(app, picker, width),
+            Overlay::SubagentValues {
+                setting,
+                values,
+                picker,
+            } => subagent_value_lines(*setting, values, picker, width),
             Overlay::Approvals { tools, picker } => approvals_lines(tools, picker, width),
             Overlay::Extensions { picker } => extensions_picker_lines(picker, width),
             Overlay::Mcp {
@@ -449,6 +459,15 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
         };
+        if !app.overlay_stack.is_empty() {
+            if let Some(span) = lines.first_mut().and_then(|line| line.spans.first_mut()) {
+                span.content = span
+                    .content
+                    .replace(" · esc close", " · ← back · esc close")
+                    .into();
+            }
+        }
+        return lines;
     }
     if app.palette_query().is_some() {
         return palette_lines(app, PALETTE_ROWS + 2, width);

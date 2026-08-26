@@ -36,7 +36,7 @@ pub struct ListPicker {
 pub enum PickerEvent {
     /// Consumed by navigation; the overlay stays open.
     Moved,
-    /// Enter activated this row (always in bounds).
+    /// Enter or right-arrow activated this row (always in bounds).
     Activated(usize),
     /// An armed action fired on this row (always in bounds).
     Action { key: char, row: usize },
@@ -128,8 +128,8 @@ impl ListPicker {
                 self.index = (self.index() + 1).min(self.len.saturating_sub(1));
                 PickerEvent::Moved
             }
-            KeyCode::Enter if self.len > 0 => PickerEvent::Activated(self.index()),
-            KeyCode::Enter => PickerEvent::Moved,
+            KeyCode::Enter | KeyCode::Right if self.len > 0 => PickerEvent::Activated(self.index()),
+            KeyCode::Enter | KeyCode::Right => PickerEvent::Moved,
             KeyCode::Char(' ') if !self.actions.is_empty() && self.len > 0 => {
                 self.armed = true;
                 PickerEvent::Moved
@@ -295,6 +295,10 @@ mod tests {
         picker.on_key(KeyCode::Down);
         picker.on_key(KeyCode::Down);
         assert_eq!(picker.index(), 2);
+        assert!(matches!(
+            picker.on_key(KeyCode::Right),
+            PickerEvent::Activated(2)
+        ));
     }
 
     #[test]
@@ -302,6 +306,12 @@ mod tests {
         let mut picker = ListPicker::with_selected(3, 1);
         assert!(matches!(
             picker.on_key(KeyCode::Enter),
+            PickerEvent::Activated(1)
+        ));
+        // Right and enter share activation semantics.
+        let mut picker = ListPicker::with_selected(3, 1);
+        assert!(matches!(
+            picker.on_key(KeyCode::Right),
             PickerEvent::Activated(1)
         ));
     }

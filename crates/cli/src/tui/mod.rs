@@ -33,6 +33,7 @@ pub(crate) use self::keys::{
 };
 mod render;
 mod state;
+mod subagents;
 mod text;
 
 pub(crate) use self::text::{clear_tool_connectors, line_text, push_wrapped_lines, replace_block};

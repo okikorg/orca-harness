@@ -92,8 +92,10 @@ async fn generation_delegates_with_attribution_headers() {
     let model = OpenRouterModel::new("openai/gpt-4o")
         .base_url(base_url)
         .api_key("sk-or-test")
+        .user_agent("orcacode/1.2.3")
         .referer("https://example.com")
-        .title("orca")
+        .title("Orca Code")
+        .categories("cli-agent")
         .parallel_tool_calls(true);
     let mut context = Context::new();
     context.push_user("hi");
@@ -102,8 +104,10 @@ async fn generation_delegates_with_attribution_headers() {
 
     let sent = captured.await.unwrap();
     assert!(sent.head.contains("bearer sk-or-test"));
+    assert!(sent.head.contains("user-agent: orcacode/1.2.3"));
     assert!(sent.head.contains("http-referer: https://example.com"));
-    assert!(sent.head.contains("x-title: orca"));
+    assert!(sent.head.contains("x-openrouter-title: orca code"));
+    assert!(sent.head.contains("x-openrouter-categories: cli-agent"));
     let body: Value = serde_json::from_str(&sent.body).unwrap();
     assert_eq!(body["model"], json!("openai/gpt-4o"));
 

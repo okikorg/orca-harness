@@ -349,24 +349,101 @@
 
         slash_command(&mut app, "clear", &tx, 80);
 
-        assert!(app.transcript.is_empty(), "transcript wiped");
-        assert_eq!(app.scroll, 0);
-        assert_eq!(app.tokens_in, 0);
-        assert!(app.prompt_queue.is_empty(), "prompt queue wiped");
-        assert!(app.tool_log.is_empty(), "expandable log wiped");
+        assert_eq!(app.scroll, 20, "UI waits for worker acknowledgement");
+        assert_eq!(app.tokens_in, 100);
+        assert_eq!(app.prompt_queue.len(), 1);
+        assert_eq!(app.tool_log.len(), 1);
         assert!(
             matches!(rx.try_recv(), Ok(WorkerCmd::Clear)),
             "worker told to reset the context"
         );
-        assert!(
-            app.pending_history.is_empty(),
-            "clear leaves an empty transcript"
+
+        handle_ui_msg(
+            &mut app,
+            UiMsg::SessionCleared {
+                id: Some("new-session".into()),
+            },
+            &tx,
+            80,
         );
+
+        assert!(app.transcript.is_empty(), "transcript wiped after acknowledgement");
+        assert_eq!(app.scroll, 0);
+        assert_eq!(app.tokens_in, 0);
+        assert!(app.prompt_queue.is_empty(), "prompt queue wiped");
+        assert!(app.tool_log.is_empty(), "expandable log wiped");
+        assert_eq!(app.cfg.session_id.as_deref(), Some("new-session"));
+        let notice = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(notice.contains("previous transcript preserved"), "{notice}");
         let screen = rendered_rows(&mut app, 80, 24).join("\n");
         assert!(
             !screen.contains("ORCA HARNESS"),
             "welcome should stay removed: {screen}"
         );
+    }
+
+    #[test]
+    fn failed_clear_notice_keeps_visible_conversation_state() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.tokens_in = 100;
+        app.prompt_queue.push_back("waiting prompt".into());
+        app.tool_log.push(ToolRecord {
+            call_line: "shell $ ls".into(),
+            tool_name: "shell".into(),
+            output: serde_json::json!({}),
+            inner: Vec::new(),
+        });
+
+        slash_command(&mut app, "clear", &tx, 80);
+        assert!(matches!(rx.try_recv(), Ok(WorkerCmd::Clear)));
+        handle_ui_msg(
+            &mut app,
+            UiMsg::Notice("session not cleared: could not preserve history".into()),
+            &tx,
+            80,
+        );
+
+        assert_eq!(app.tokens_in, 100);
+        assert_eq!(app.prompt_queue.len(), 1);
+        assert_eq!(app.tool_log.len(), 1);
+        let notice = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(notice.contains("session not cleared"), "{notice}");
+    }
+
+    #[test]
+    fn no_session_clear_acknowledgement_resets_ui_without_assigning_an_id() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.cfg.session_id = None;
+        app.tokens_in = 100;
+
+        handle_ui_msg(
+            &mut app,
+            UiMsg::SessionCleared { id: None },
+            &tx,
+            80,
+        );
+
+        assert_eq!(app.tokens_in, 0);
+        assert!(app.cfg.session_id.is_none());
+        let notice = app
+            .pending_history
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(notice.contains("conversation cleared"), "{notice}");
     }
 
     #[test]

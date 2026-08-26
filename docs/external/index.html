@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="External documentation for Orcacode, the terminal host for Orca Harness." />
+  <title>Orcacode — Field Manual</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./diagrams.css" />
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="#start" aria-label="Orcacode field manual home"><span class="brand-mark" aria-hidden="true">▀▄</span><span class="brand-name">ORCACODE</span> <span>/ field manual</span></a>
+    <div class="topbar-actions">
+      <button class="search-trigger" type="button" data-open-search aria-label="Search documentation"><kbd>⌘</kbd><kbd>K</kbd> search</button>
+      <button class="menu-trigger" type="button" data-toggle-nav aria-expanded="false" aria-controls="sidebar">menu</button>
+    </div>
+  </header>
+
+  <div class="docs-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Documentation navigation">
+      <div class="sidebar-scroll">
+        <p class="eyebrow">ORCA HARNESS / v0.1</p>
+        <nav id="nav"></nav>
+        <div class="sidebar-note"><span class="status-dot"></span> local-first terminal agent<br><a href="https://github.com/okikorg/orca">View source ↗</a></div>
+      </div>
+    </aside>
+
+    <main id="content" class="content" tabindex="-1">
+      <article id="article"></article>
+      <footer class="article-footer"><span>Orcacode field manual</span><span>Built from the source in this repository.</span></footer>
+    </main>
+
+    <aside class="page-outline" aria-label="On this page">
+      <p class="eyebrow">ON THIS PAGE</p>
+      <nav id="outline"></nav>
+    </aside>
+  </div>
+
+  <dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+    <form method="dialog" class="search-panel">
+      <div class="search-head"><label id="search-title" for="search-input">Search the manual</label><button value="cancel" aria-label="Close search">esc</button></div>
+      <input id="search-input" type="search" placeholder="Try “plan mode”, “MCP”, or “session”" autocomplete="off" />
+      <div id="search-results" class="search-results" role="listbox"></div>
+      <p class="search-hint">↑ ↓ to navigate &nbsp; ↵ to open &nbsp; esc to close</p>
+    </form>
+  </dialog>
+
+  <template id="copy-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="1"></rect><path d="M15 9V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h4"></path></svg></template>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

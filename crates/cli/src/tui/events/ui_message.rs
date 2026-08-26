@@ -1,4 +1,4 @@
-use super::harness::{handle_harness_event, handle_subagent_event};
+use super::harness::{handle_harness_event, handle_subagent_event, start_subagent};
 
 use ratatui::text::{Line, Span};
 use tokio::sync::mpsc;
@@ -19,6 +19,14 @@ pub(crate) fn handle_ui_msg(
 ) {
     match msg {
         UiMsg::Event(event) => handle_harness_event(app, event, width),
+        UiMsg::SubagentStarted {
+            id,
+            parent_id,
+            depth,
+            call_id,
+            task,
+            identity,
+        } => start_subagent(app, id, parent_id, depth, call_id, task, identity),
         UiMsg::SubagentEvent {
             id,
             parent_id,
@@ -28,9 +36,15 @@ pub(crate) fn handle_ui_msg(
         } => handle_subagent_event(app, id, parent_id, depth, call_id, event),
         UiMsg::Approval(request) => app.approval = Some(request),
         UiMsg::Ask(request) => app.ask = Some(crate::tui::components::ask::AskForm::new(request)),
-        UiMsg::Models(result) => {
+        UiMsg::Models { request_id, result } => {
+            let Some((pending_id, seed)) = app.picker_pending.take() else {
+                return;
+            };
+            if pending_id != request_id {
+                app.picker_pending = Some((pending_id, seed));
+                return;
+            }
             let t = theme();
-            let seed = app.picker_pending.take().unwrap_or_default();
             // Learn the active model's window from the catalog in passing.
             if let Ok(models) = &result {
                 if let Some(info) = models.iter().find(|m| m.id == app.cfg.model_name) {
@@ -41,15 +55,19 @@ pub(crate) fn handle_ui_msg(
             }
             match result {
                 Ok(models) if models.is_empty() => {
+                    app.overlay = app.overlay_stack.pop();
                     app.push_line(Line::from(Span::styled("no models available", t.dim)));
                 }
                 Ok(models) => {
                     app.overlay = Some(Overlay::Models(ModelPicker::new(models, seed)));
                 }
-                Err(err) => app.push_line(Line::from(Span::styled(
-                    format!("model list failed: {err}"),
-                    t.error,
-                ))),
+                Err(err) => {
+                    app.overlay = app.overlay_stack.pop();
+                    app.push_line(Line::from(Span::styled(
+                        format!("model list failed: {err}"),
+                        t.error,
+                    )));
+                }
             }
         }
         UiMsg::ModelChanged(id) => {
@@ -105,11 +123,16 @@ pub(crate) fn handle_ui_msg(
             push_notice(app, text);
         }
         UiMsg::SessionCleared { id } => {
-            app.cfg.session_id = Some(id.clone());
-            push_notice(
-                app,
-                format!("session {id} cleared · background work stopped"),
-            );
+            reset_conversation_ui(app);
+            if let Some(id) = id {
+                app.cfg.session_id = Some(id.clone());
+                push_notice(
+                    app,
+                    format!("session {id} started · previous transcript preserved · background work stopped"),
+                );
+            } else {
+                push_notice(app, "conversation cleared · background work stopped");
+            }
         }
         UiMsg::ContextRewound { messages, notice } => {
             // The transcript is redrawn from the shortened context, but

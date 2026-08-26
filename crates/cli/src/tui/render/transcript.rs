@@ -6,8 +6,10 @@ use orca_harness_tools::TodoStatus;
 
 use crate::tui::components::activity_rail::{ActivityRail, ActivityRailKind};
 use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
+use crate::tui::components::subagent_row::SubagentRow;
 use crate::tui::components::tool_row::ToolRow;
 use crate::tui::components::transcript::{append_block, BlockSpacing};
+use crate::tui::state::SubagentDisplay;
 use crate::view::{self, theme};
 
 use super::super::format::{elapsed_label, plural};
@@ -42,10 +44,10 @@ pub(crate) fn location_picker_lines(picker: &LocationPicker, width: usize) -> Ve
         ))];
     }
     let header = if picker.query.is_empty() {
-        "Files and folders · type to filter · enter add · esc close".to_string()
+        "Files and folders · type to filter · →/enter add · esc close".to_string()
     } else {
         format!(
-            "Files and folders matching @{} · enter add · esc close",
+            "Files and folders matching @{} · →/enter add · esc close",
             picker.query
         )
     };
@@ -74,10 +76,10 @@ pub(crate) fn skill_mention_picker_lines(
         ))];
     }
     let header = if picker.query.is_empty() {
-        "Skills · type to filter · enter invoke · esc close".to_string()
+        "Skills · type to filter · →/enter invoke · esc close".to_string()
     } else {
         format!(
-            "Skills matching ${} · enter invoke · esc close",
+            "Skills matching ${} · →/enter invoke · esc close",
             picker.query
         )
     };
@@ -130,6 +132,37 @@ pub(crate) fn projected_transcript_selected(
     lines
 }
 
+fn identity_label(identity: &orca_harness_tools::SubagentIdentity) -> String {
+    format!("{}:{}", identity.provider, identity.model)
+}
+
+fn result_identity(output: &serde_json::Value) -> Option<orca_harness_tools::SubagentIdentity> {
+    let identity = output.get("identity")?;
+    Some(orca_harness_tools::SubagentIdentity {
+        provider: identity.get("provider")?.as_str()?.to_string(),
+        model: identity.get("model")?.as_str()?.to_string(),
+        route: identity
+            .get("route")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn subagent_display(app: &App, tool: &ToolActivity) -> Option<SubagentDisplay> {
+    app.subagent_display
+        .get(&tool.call_id)
+        .map(|display| SubagentDisplay {
+            task: display.task.clone(),
+            identity: display.identity.clone(),
+        })
+        .or_else(|| {
+            Some(SubagentDisplay {
+                task: tool.input.get("task")?.as_str()?.to_string(),
+                identity: result_identity(tool.output.as_ref()?)?,
+            })
+        })
+}
+
 /// Cap on rendered inner tool rows per spawn while live.
 const NESTED_TOOL_ROWS: usize = 4;
 
@@ -144,13 +177,14 @@ pub(crate) fn nested_subagent_lines(
     continuation: &str,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let mut roots: Vec<u64> = app
+    let roots: Vec<u64> = app
         .subagent_activity
         .iter()
-        .filter(|(_, spawn)| spawn.call_id == call_id)
+        .filter(|(_, spawn)| spawn.parent_id.is_none() && spawn.call_id == call_id)
         .map(|(id, _)| *id)
+        .max()
+        .into_iter()
         .collect();
-    roots.sort_unstable();
     let prefix = format!("    {continuation} ");
     for id in roots {
         nested_spawn_rows(app, id, width, &prefix, lines);
@@ -191,24 +225,47 @@ pub(crate) fn nested_spawn_rows(
             &tool.call_line,
             width.saturating_sub(prefix.len() + 20).max(8),
         );
-        lines.push(Line::from(vec![
-            Span::styled(format!("{prefix}{branch} "), t.dim),
-            Span::styled(format!("{glyph} "), style),
-            Span::styled(call, t.accent),
-            Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
-        ]));
-        // A running nested subagent call: its spawns branch off this row.
+        let child = (tool.tool_name == "subagent")
+            .then(|| {
+                app.subagent_activity
+                    .iter()
+                    .filter(|(_, child)| {
+                        child.parent_id == Some(id) && child.call_id == tool.call_id
+                    })
+                    .max_by_key(|(child_id, _)| *child_id)
+            })
+            .flatten();
+        if let Some((_, child)) = child.filter(|(_, child)| child.identity.is_some()) {
+            let identity = identity_label(child.identity.as_ref().unwrap());
+            let elapsed = elapsed_label(elapsed);
+            let row = SubagentRow {
+                last,
+                prefix,
+                glyph,
+                identity: &identity,
+                task: &child.task,
+                elapsed: &elapsed,
+                selected: false,
+                width,
+                branch_style: t.dim,
+                glyph_style: style,
+                label_style: t.accent,
+                identity_style: t.accent,
+                task_style: t.accent,
+            };
+            lines.push(row.line());
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{prefix}{branch} "), t.dim),
+                Span::styled(format!("{glyph} "), style),
+                Span::styled(call, t.accent),
+                Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
+            ]));
+        }
         if tool.tool_name == "subagent" && tool.output.is_none() {
-            let child_prefix = format!("{prefix}{}  ", if last { " " } else { "│" });
-            let mut children: Vec<u64> = app
-                .subagent_activity
-                .iter()
-                .filter(|(_, s)| s.parent_id == Some(id))
-                .map(|(child, _)| *child)
-                .collect();
-            children.sort_unstable();
-            for child in children {
-                nested_spawn_rows(app, child, width, &child_prefix, lines);
+            if let Some((child_id, _)) = child {
+                let child_prefix = format!("{prefix}{}  ", if last { " " } else { "│" });
+                nested_spawn_rows(app, *child_id, width, &child_prefix, lines);
             }
         }
     }
@@ -421,20 +478,61 @@ pub(crate) fn activity_lines_selected(
         let elapsed = elapsed_label(elapsed);
         let selected = selected_tool == Some(index);
         let row_style = if selected { t.select } else { t.accent };
-        let row = ToolRow {
-            last,
-            glyph,
-            call: &tool.call_line,
-            detail: &detail,
-            elapsed: &elapsed,
-            selected,
-            width,
-            branch_style: t.dim,
-            glyph_style: status_style,
-            call_style: row_style,
+        let continuation = if tool.tool_name == "subagent" {
+            if let Some(display) = subagent_display(app, tool) {
+                let identity = identity_label(&display.identity);
+                let row = SubagentRow {
+                    last,
+                    prefix: "    ",
+                    glyph,
+                    identity: &identity,
+                    task: &display.task,
+                    elapsed: &elapsed,
+                    selected,
+                    width,
+                    branch_style: t.dim,
+                    glyph_style: status_style,
+                    label_style: row_style,
+                    identity_style: t.accent,
+                    task_style: row_style,
+                };
+                let continuation = row.continuation();
+                work.push(row.line());
+                continuation
+            } else {
+                let row = ToolRow {
+                    last,
+                    glyph,
+                    call: &tool.call_line,
+                    detail: &detail,
+                    elapsed: &elapsed,
+                    selected,
+                    width,
+                    branch_style: t.dim,
+                    glyph_style: status_style,
+                    call_style: row_style,
+                };
+                let continuation = row.continuation();
+                work.push(row.line());
+                continuation
+            }
+        } else {
+            let row = ToolRow {
+                last,
+                glyph,
+                call: &tool.call_line,
+                detail: &detail,
+                elapsed: &elapsed,
+                selected,
+                width,
+                branch_style: t.dim,
+                glyph_style: status_style,
+                call_style: row_style,
+            };
+            let continuation = row.continuation();
+            work.push(row.line());
+            continuation
         };
-        let continuation = row.continuation();
-        work.push(row.line());
         if tool.tool_name == "edit_file" {
             work.extend(edit_diff_preview_lines(tool, width, continuation));
         }

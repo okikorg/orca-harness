@@ -33,6 +33,15 @@ mod main_tests {
         assert!(prompt.contains("one response"));
     }
 
+    #[test]
+    fn system_prompt_requires_bounded_subagent_delegation() {
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
+        assert!(prompt.contains("Delegate to subagents deliberately"));
+        assert!(prompt.contains("exact result or deliverable expected"));
+        assert!(prompt.contains("explicit stopping condition"));
+        assert!(prompt.contains("Avoid open-ended delegation"));
+    }
+
     /// The advertised tool list must match what build_agent registers:
     /// web_fetch is always on, search/crawl only with a Firecrawl key.
     #[test]
@@ -237,10 +246,16 @@ mod main_tests {
             depth: 0,
             call_id: "c1".into(),
             task: "do the thing".into(),
+            identity: Some(orca_harness_tools::SubagentIdentity::new(
+                "openrouter",
+                "anthropic/claude-sonnet-5",
+            )),
         };
-        let extensions = subagent_extensions(&spawn, &ui, &mode, &PlanArea::new());
+        let settings = orca_harness_tools::SubagentDepth::default();
+        let extensions = subagent_extensions(&spawn, &ui, &mode, &PlanArea::new(), &settings);
         let names: Vec<&str> = extensions.iter().map(|ext| ext.name()).collect();
         assert!(names.contains(&"plan-mode"), "{names:?}");
+        assert!(names.contains(&"truncation"), "{names:?}");
 
         let gate = extensions
             .iter()

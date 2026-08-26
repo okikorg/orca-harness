@@ -17,9 +17,17 @@ use stream::{Accumulator, SseBuffer};
 use tokio::sync::Mutex;
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const ORCACODE_USER_AGENT: &str = concat!("orcacode/", env!("CARGO_PKG_VERSION"));
 // Codex uses this protocol-client version for catalog compatibility filtering.
 // It is deliberately independent of Orcacode's package version.
 const CODEX_PROTOCOL_VERSION: &str = "0.144.1";
+
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(ORCACODE_USER_AGENT)
+        .build()
+        .expect("the static Orcacode user agent is valid")
+}
 
 fn catalog_url(base_url: &str) -> String {
     format!(
@@ -44,7 +52,7 @@ pub async fn list_models(
 ) -> Result<Vec<ModelInfo>, ModelError> {
     let credential = credentials.codex_credential().await.map_err(auth_error)?;
     let rejected = credential.bearer.access_token.clone();
-    let client = reqwest::Client::new();
+    let client = client();
     let mut response = send_catalog_request(&client, credential).await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let renewed = credentials
@@ -130,7 +138,7 @@ pub struct OpenAiCodexModel {
 impl OpenAiCodexModel {
     pub fn new(model: impl Into<String>, credentials: Arc<dyn CodexCredentialSource>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: client(),
             base_url: CODEX_BASE_URL.into(),
             model: model.into(),
             credentials,

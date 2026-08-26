@@ -81,7 +81,7 @@ pub(crate) fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<
     let mut picker = app.palette_picker;
     picker.set_len(filtered.len());
     picker.windowed_table_lines(
-        "Commands · type to filter · enter run · tab complete · esc close",
+        "Commands · type to filter · →/enter run · tab complete · esc close",
         filtered.into_iter().map(command_picker_row),
         [(6, 16), (12, 64), (0, 10)],
         width,
@@ -186,7 +186,7 @@ pub(crate) fn model_picker_lines(
         format!("filter: {}", picker.filter)
     };
     let header_left = format!(
-        "  Models {} · {filter_note} · enter switch · esc close",
+        "  Models {} · {filter_note} · →/enter switch · esc close",
         filtered.len()
     );
     if filtered.is_empty() {
@@ -200,7 +200,7 @@ pub(crate) fn model_picker_lines(
 
     let rows = height.saturating_sub(2).max(1);
     picker.picker.windowed_table_lines(
-        &format!("Models · {filter_note} · enter switch · esc close"),
+        &format!("Models · {filter_note} · →/enter switch · esc close"),
         filtered.into_iter().map(|model| {
             let summary = model.summary();
             let detail = summary

@@ -29,7 +29,7 @@ fn a_multiline_paste_is_one_marker_and_submits_nothing() {
 
     paste(&mut app, &tx, &block);
 
-    assert_eq!(app.composer, "[Pasted text #1, 23 lines]");
+    assert_eq!(app.composer, "[▤ Pasted text #1, 23 lines]");
     assert_eq!(app.cursor, app.composer.chars().count());
     assert!(app.prompt_queue.is_empty(), "paste must not queue prompts");
     assert!(rx.try_recv().is_err(), "paste must not start a run");
@@ -44,7 +44,7 @@ fn a_marker_expands_to_the_held_text_on_send() {
     for c in " explain this".chars() {
         press(&mut app, &tx, KeyCode::Char(c));
     }
-    assert_eq!(app.composer, "[Pasted text #1, 3 lines] explain this");
+    assert_eq!(app.composer, "[▤ Pasted text #1, 3 lines] explain this");
     submit(&mut app, &tx, TEST_TERMINAL_WIDTH);
 
     match rx.try_recv() {
@@ -65,7 +65,7 @@ fn a_marker_expands_to_the_held_text_on_send() {
         "transcript should unfurl the paste: {shown}"
     );
     assert!(
-        !shown.contains("[Pasted text #"),
+        !shown.contains("[▤ Pasted text #"),
         "no marker should survive into the transcript: {shown}"
     );
 }
@@ -125,7 +125,7 @@ fn a_removed_marker_leaves_later_markers_expanding() {
     assert_eq!(app.composer, "");
 
     paste(&mut app, &tx, "second\nblock");
-    assert_eq!(app.composer, "[Pasted text #2, 2 lines]");
+    assert_eq!(app.composer, "[▤ Pasted text #2, 2 lines]");
     submit(&mut app, &tx, TEST_TERMINAL_WIDTH);
 
     match rx.try_recv() {
@@ -261,7 +261,7 @@ fn crlf_pastes_are_normalized_before_counting() {
 
     paste(&mut app, &tx, "one\r\ntwo\r\nthree\r\n");
 
-    assert_eq!(app.composer, "[Pasted text #1, 3 lines]");
+    assert_eq!(app.composer, "[▤ Pasted text #1, 3 lines]");
     assert!(matches!(&app.pastes[0], HeldInput::Text(text) if text == "one\ntwo\nthree\n"));
 }
 
@@ -274,7 +274,7 @@ fn markers_number_upward_and_expand_independently() {
     paste(&mut app, &tx, "second\nblock");
     assert_eq!(
         app.composer,
-        "[Pasted text #1, 2 lines][Pasted text #2, 2 lines]"
+        "[▤ Pasted text #1, 2 lines][▤ Pasted text #2, 2 lines]"
     );
 
     submit(&mut app, &tx, TEST_TERMINAL_WIDTH);

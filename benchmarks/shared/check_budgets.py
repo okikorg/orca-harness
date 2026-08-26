@@ -5,7 +5,7 @@ Two suites, two shapes:
 
   startup  hyperfine exports in benchmarks/results/startup/, gated on each
            command's mean wall clock
-  kernel   the summary written by kernel_report.py, gated on the percentile
+  kernel   the summary written by kernel/report.py, gated on the percentile
            metrics the README publishes as the kernel's targets
 
 Budgets are enforced on Linux only, because that is what CI runs and what
@@ -26,10 +26,10 @@ import platform
 import sys
 from typing import NamedTuple, Optional
 
-BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Seconds, roughly 3-4x the means an Apple Silicon Mac produces (2.8ms
-# startup, 4.7ms resume). Re-baseline with `./benchmarks/startup.sh` and
+# startup, 4.7ms resume). Re-baseline with `./benchmarks/startup/run.sh` and
 # the table in benchmarks/README.md if the shape of startup changes.
 STARTUP_BUDGETS = {
     "orcacode --help": 0.010,
@@ -40,7 +40,7 @@ STARTUP_BUDGETS = {
 }
 DEFAULT_STARTUP_BUDGET = 0.012
 
-# Seconds. p99 over the iteration count kernel.sh runs (5000 in --ci), so
+# Seconds. p99 over the iteration count kernel/run.sh runs (5000 in --ci), so
 # these are percentiles rather than worst samples. Roughly 5-20x what a
 # quiet Apple Silicon Mac measures — enough headroom for a shared runner's
 # scheduler, not enough to hide a regression. The 1ms fan-out ceiling is
@@ -99,7 +99,7 @@ def startup_measurements(results_dir: str) -> list[Measurement]:
 
 
 def kernel_measurements(results_dir: str) -> list[Measurement]:
-    """kernel_report.py's summary. Only the second-valued entries are
+    """kernel/report.py's summary. Only the second-valued entries are
     latencies; throughput and speedup are reported by the report itself."""
     path = os.path.join(results_dir, "summary.json")
     if not os.path.isfile(path):

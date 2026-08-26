@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use orca_harness_core::Extension;
-use orca_harness_extensions::EventStream;
+use orca_harness_extensions::{EventStream, Truncation};
 use orca_harness_tools::SubagentSpawn;
 
 use crate::mode::{ModeHandle, PlanGate};
@@ -11,8 +11,8 @@ use crate::msg::UiMsg;
 use crate::plan::PlanArea;
 
 /// The extensions every spawned subagent gets: a relay that tags its
-/// events with the spawn's identity, and the same plan gate the
-/// orchestrator has.
+/// events with the spawn's identity, context-safe tool-output truncation,
+/// and the same plan gate the orchestrator has.
 ///
 /// The gate has to be here as well, not only on the top-level agent, for
 /// the same reason tool retry is mirrored into subagents: a restriction
@@ -26,10 +26,19 @@ pub(crate) fn subagent_extensions(
     ui: &mpsc::UnboundedSender<UiMsg>,
     mode: &ModeHandle,
     plan_area: &PlanArea,
+    settings: &orca_harness_tools::SubagentDepth,
 ) -> Vec<Arc<dyn Extension>> {
     let ui = ui.clone();
     let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
     let call_id = spawn.call_id.clone();
+    let _ = ui.send(UiMsg::SubagentStarted {
+        id,
+        parent_id,
+        depth,
+        call_id: call_id.clone(),
+        task: spawn.task.clone(),
+        identity: spawn.identity.clone(),
+    });
     vec![
         Arc::new(EventStream::from_fn(move |event| {
             let _ = ui.send(UiMsg::SubagentEvent {
@@ -40,6 +49,7 @@ pub(crate) fn subagent_extensions(
                 event,
             });
         })) as Arc<dyn Extension>,
+        Arc::new(Truncation::new(settings.output_chars() as usize)) as Arc<dyn Extension>,
         Arc::new(PlanGate::new(mode.clone(), plan_area.clone())) as Arc<dyn Extension>,
     ]
 }

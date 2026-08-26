@@ -8,7 +8,7 @@ that survives being quoted somewhere else.
 
 Commands are grouped into tiers rather than paired one-to-one, because
 `FX_BENCH=1 fx` and `ORCA_BENCH=1 orcacode` do not measure the same thing.
-See the header of compare.sh; the note is repeated in the output so a
+See the header of compare/run.sh; the note is repeated in the output so a
 pasted table carries its own caveat.
 """
 
@@ -18,7 +18,7 @@ import json
 import os
 import sys
 
-BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BASELINE = "process baseline"
 

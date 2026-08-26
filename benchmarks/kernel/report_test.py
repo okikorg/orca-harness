@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the probe parser: `python3 benchmarks/kernel_report_test.py`.
+"""Tests for the probe parser: `python3 benchmarks/kernel/report_test.py`.
 
 The parser reads the probes' printed tables. Those are `println!` format
 strings in examples/fanout_probe.rs and examples/tool_fanout_perf.rs, so
@@ -12,7 +12,7 @@ import importlib.util
 import pathlib
 import unittest
 
-MODULE_PATH = pathlib.Path(__file__).with_name("kernel_report.py")
+MODULE_PATH = pathlib.Path(__file__).with_name("report.py")
 SPEC = importlib.util.spec_from_file_location("kernel_report", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 kernel_report = importlib.util.module_from_spec(SPEC)
@@ -61,7 +61,7 @@ class FanoutProbeTests(unittest.TestCase):
     def test_names_match_the_budget_table(self) -> None:
         """The gate looks metrics up by name; a rename on either side would
         silently stop enforcing them."""
-        budgets_path = pathlib.Path(__file__).with_name("check_budgets.py")
+        budgets_path = pathlib.Path(__file__).parents[1] / "shared" / "check_budgets.py"
         spec = importlib.util.spec_from_file_location("check_budgets", budgets_path)
         assert spec is not None and spec.loader is not None
         check_budgets = importlib.util.module_from_spec(spec)

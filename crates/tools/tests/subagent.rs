@@ -12,7 +12,9 @@ use orca_harness_core::{
     CancellationToken, Context, Limits, Model, ModelError, ModelResponse, Tool, ToolContext,
     ToolError, ToolSchema, Usage,
 };
-use orca_harness_tools::{SubagentTool, Workspace};
+use orca_harness_tools::{
+    SubagentModel, SubagentTool, Workspace, DEFAULT_SUBAGENT_MAX_STEPS, DEFAULT_SUBAGENT_TIMEOUT,
+};
 
 static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -30,6 +32,12 @@ fn ctx() -> ToolContext {
         cancellation: CancellationToken::new(),
         deadline: None,
     }
+}
+
+#[test]
+fn default_governance_is_bounded() {
+    assert_eq!(DEFAULT_SUBAGENT_MAX_STEPS, 12);
+    assert_eq!(DEFAULT_SUBAGENT_TIMEOUT, Duration::from_secs(5 * 60));
 }
 
 #[tokio::test]
@@ -51,6 +59,27 @@ async fn runs_task_and_reports_answer_and_usage() {
     assert_eq!(out["answer"], "found 3 files");
     assert_eq!(out["usage"]["inputTokens"], 10);
     assert_eq!(out["usage"]["outputTokens"], 5);
+    assert_eq!(out["steps"], 1);
+    assert_eq!(out["toolCalls"], 0);
+    assert_eq!(out["termination"], "completed");
+    assert!(out["runtimeMs"].is_u64());
+}
+
+#[tokio::test]
+async fn telemetry_counts_model_issued_unknown_tool_calls() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tool_calls(vec![call("1", "missing_tool", json!({}))]),
+        ModelResponse::final_text("recovered"),
+    ]));
+    let (ws, _dir) = temp_ws();
+    let out = SubagentTool::new(model, &ws)
+        .call(json!({"task": "recover"}), &ctx())
+        .await
+        .unwrap();
+
+    assert_eq!(out["answer"], "recovered");
+    assert_eq!(out["steps"], 2);
+    assert_eq!(out["toolCalls"], 1);
 }
 
 #[tokio::test]
@@ -178,6 +207,29 @@ async fn parent_cancellation_reaches_the_inner_run() {
 }
 
 #[tokio::test]
+async fn parent_deadline_bounds_the_inner_run() {
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(Arc::new(StallModel), &ws);
+    let tctx = ToolContext {
+        call_id: "t".into(),
+        tool_name: "subagent".into(),
+        cancellation: CancellationToken::new(),
+        deadline: Some(tokio::time::Instant::now() + Duration::from_millis(50)),
+    };
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(1),
+        tool.call(json!({"task": "stall"}), &tctx),
+    )
+    .await
+    .expect("the parent deadline must bound the worker")
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("deadline exceeded"), "{err}");
+    assert!(err.contains("steps=1"), "{err}");
+}
+
+#[tokio::test]
 async fn step_limit_exhaustion_is_a_tool_error() {
     // One permitted step that returns tool calls: the run cannot finish.
     let model = Arc::new(ScriptedModel::new(vec![ModelResponse::tool_calls(vec![
@@ -189,7 +241,10 @@ async fn step_limit_exhaustion_is_a_tool_error() {
         ..Limits::default()
     });
     let result = tool.call(json!({"task": "loop forever"}), &ctx()).await;
-    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("step limit exceeded"), "{err}");
+    assert!(err.contains("steps=1"), "{err}");
+    assert!(err.contains("toolCalls=1"), "{err}");
 }
 
 #[tokio::test]
@@ -198,6 +253,83 @@ async fn task_is_required() {
     let tool = SubagentTool::new(Arc::new(StallModel), &ws);
     let err = tool.call(json!({}), &ctx()).await.unwrap_err();
     assert!(err.to_string().contains("task"));
+}
+
+#[tokio::test]
+async fn selected_model_runs_while_omission_keeps_the_default() {
+    let default = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
+        "default",
+    )]));
+    let flash = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash")]));
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(default.clone(), &ws)
+        .inherited_identity("openrouter", "default/model")
+        .models([
+            SubagentModel::new("flash/test", "fast test model", flash.clone())
+                .identity("openrouter", "vendor/flash-model"),
+        ]);
+
+    let selected = tool
+        .call(json!({"task": "one", "model": "flash/test"}), &ctx())
+        .await
+        .unwrap();
+    let inherited = tool.call(json!({"task": "two"}), &ctx()).await.unwrap();
+
+    assert_eq!(selected["answer"], "flash");
+    assert_eq!(selected["identity"]["provider"], "openrouter");
+    assert_eq!(selected["identity"]["model"], "vendor/flash-model");
+    assert_eq!(selected["identity"]["route"], "flash/test");
+    assert_eq!(inherited["answer"], "default");
+    assert_eq!(inherited["identity"]["provider"], "openrouter");
+    assert_eq!(inherited["identity"]["model"], "default/model");
+    assert!(inherited["identity"]["route"].is_null());
+    assert_eq!(flash.generate_calls(), 1);
+    assert_eq!(default.generate_calls(), 1);
+}
+
+#[tokio::test]
+async fn unknown_model_fails_before_spawning() {
+    let default = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
+        "unused",
+    )]));
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(default.clone(), &ws).models([SubagentModel::new(
+        "flash/test",
+        "fast test model",
+        default.clone(),
+    )]);
+
+    let err = tool
+        .call(json!({"task": "one", "model": "invented"}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("unknown subagent model `invented`"));
+    assert_eq!(default.generate_calls(), 0);
+}
+
+#[test]
+fn schema_only_advertises_configured_model_ids() {
+    let (ws, _dir) = temp_ws();
+    let model = Arc::new(ScriptedModel::new(vec![]));
+    let plain = SubagentTool::new(model.clone(), &ws);
+    let description = plain.schema().description;
+    assert!(description.contains("one bounded task"));
+    assert!(description.contains("exact result expected"));
+    assert!(description.contains("explicit stopping condition"));
+    assert!(description.contains("Avoid open-ended goals"));
+    assert!(plain.schema().parameters["properties"]["model"].is_null());
+
+    let configured = SubagentTool::new(model.clone(), &ws).models([
+        SubagentModel::new("flash/one", "fast", model.clone()),
+        SubagentModel::new("frontier/two", "strong", model),
+    ]);
+    assert_eq!(
+        configured.schema().parameters["properties"]["model"]["enum"],
+        json!(["flash/one", "frontier/two"])
+    );
+    assert_eq!(configured.schema().parameters["required"], json!(["task"]));
 }
 
 use orca_harness_core::Message;
@@ -223,6 +355,44 @@ async fn depth_two_lets_a_subagent_spawn_a_grandchild() {
         3,
         "grandchild must actually have run"
     );
+}
+
+#[tokio::test]
+async fn nested_subagents_inherit_selected_model_and_choices() {
+    let default = Arc::new(ScriptedModel::new(vec![]));
+    let flash = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tool_calls(vec![call("1", "subagent", json!({"task": "inner"}))]),
+        ModelResponse::final_text("grandchild on inherited flash"),
+        ModelResponse::final_text("child done"),
+    ]));
+    let (ws, _dir) = temp_ws();
+    let spawns: Arc<Mutex<Vec<SubagentSpawn>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = spawns.clone();
+    let tool = SubagentTool::new(default.clone(), &ws)
+        .models([SubagentModel::new("flash/test", "fast", flash.clone())
+            .identity("openrouter", "vendor/flash")])
+        .max_depth(SubagentDepth::new(2))
+        .spawn_extensions(Arc::new(move |spawn| {
+            recorded.lock().unwrap().push(spawn.clone());
+            Vec::new()
+        }));
+
+    let out = tool
+        .call(json!({"task": "outer", "model": "flash/test"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(out["answer"], "child done");
+    assert_eq!(default.generate_calls(), 0);
+    assert_eq!(flash.generate_calls(), 3);
+    let spawns = spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 2);
+    assert!(spawns.iter().all(|spawn| {
+        spawn.identity.as_ref().is_some_and(|identity| {
+            identity.provider == "openrouter"
+                && identity.model == "vendor/flash"
+                && identity.route.as_deref() == Some("flash/test")
+        })
+    }));
 }
 
 #[tokio::test]
@@ -269,6 +439,165 @@ async fn raising_the_shared_depth_applies_to_the_next_spawn() {
     let out = tool.call(json!({"task": "two"}), &ctx()).await.unwrap();
     assert_eq!(out["answer"], "second done");
     assert_eq!(model.generate_calls(), 5);
+}
+
+#[test]
+fn settings_handle_clamps_live_governance() {
+    let settings = SubagentDepth::new(1);
+    assert_eq!(settings.set_max_steps(0), 1);
+    assert_eq!(settings.set_max_steps(99), 99);
+    assert_eq!(settings.set_timeout_secs(1), 30);
+    assert_eq!(settings.set_timeout_secs(99_999), 99_999);
+    assert_eq!(settings.set_output_chars(1), 1_000);
+    assert_eq!(settings.set_output_chars(99_999), 99_999);
+    assert_eq!(settings.set_tool_attempts(0), 1);
+    assert_eq!(settings.set_tool_attempts(99), 99);
+    assert_eq!(settings.set_retry_backoff_ms(99_999), 99_999);
+    settings.ensure_retry_defaults(3, 250);
+    assert_eq!(
+        settings.tool_attempts(),
+        99,
+        "defaults do not replace live choices"
+    );
+    assert_eq!(settings.retry_backoff_ms(), 99_999);
+}
+
+#[tokio::test]
+async fn explicit_builders_survive_later_shared_settings_attachment() {
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::tool_calls(vec![
+        call("1", "list_dir", json!({"path": "."})),
+    ])]));
+    let settings = SubagentDepth::new(1);
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(model, &ws)
+        .limits(Limits {
+            max_steps: 1,
+            ..Limits::default()
+        })
+        .max_depth(settings.clone());
+    let err = tool
+        .call(json!({"task": "loop"}), &ctx())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("step limit exceeded"), "{err}");
+    assert_eq!(settings.max_steps(), 1);
+
+    let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let tool = SubagentTool::with_tools(
+        Arc::new(ScriptedModel::tool_round(
+            vec![call("2", "shell", json!({}))],
+            "done",
+        )),
+        {
+            let attempts = attempts.clone();
+            Arc::new(move || {
+                vec![Arc::new(FlakyShell {
+                    attempts: attempts.clone(),
+                })]
+            })
+        },
+    )
+    .retry_with_rule(3, Duration::from_millis(1), |_, out| {
+        out["success"].as_bool() == Some(false)
+    })
+    .max_depth(SubagentDepth::new(1));
+    tool.call(json!({"task": "retry"}), &ctx()).await.unwrap();
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[test]
+fn catalog_rebuild_preserves_valid_tier_choices_and_reconciles_removed_ones() {
+    let settings = SubagentDepth::new(1);
+    let model = Arc::new(ScriptedModel::new(vec![]));
+    let (ws, _dir) = temp_ws();
+    let _first = SubagentTool::new(model.clone(), &ws)
+        .models([
+            SubagentModel::new("local/a", "a", model.clone()),
+            SubagentModel::new("local/b", "b", model.clone()),
+            SubagentModel::new("flash/a", "f", model.clone()),
+        ])
+        .max_depth(settings.clone());
+    assert!(settings.set_preferred_model("local", "local/b".into()));
+    assert!(settings.set_model_route(Some("local".into())));
+
+    let _same = SubagentTool::new(model.clone(), &ws)
+        .models([
+            SubagentModel::new("local/a", "a", model.clone()),
+            SubagentModel::new("local/b", "b", model.clone()),
+        ])
+        .max_depth(settings.clone());
+    assert_eq!(settings.model_route().as_deref(), Some("local"));
+    assert_eq!(
+        settings.preferred_model("local").as_deref(),
+        Some("local/b")
+    );
+
+    let _removed = SubagentTool::new(model.clone(), &ws)
+        .models([SubagentModel::new("local/a", "a", model.clone())])
+        .max_depth(settings.clone());
+    assert_eq!(settings.model_route().as_deref(), Some("local"));
+    assert_eq!(
+        settings.preferred_model("local").as_deref(),
+        Some("local/a")
+    );
+
+    let _tier_gone = SubagentTool::new(model, &ws).max_depth(settings.clone());
+    assert_eq!(settings.model_route(), None);
+    assert_eq!(settings.preferred_model("local"), None);
+}
+
+#[tokio::test]
+async fn tier_route_uses_its_preferred_model_and_explicit_call_wins() {
+    let default = Arc::new(ScriptedModel::new(vec![]));
+    let local = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("local")]));
+    let flash = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash")]));
+    let settings = SubagentDepth::new(1);
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(default.clone(), &ws)
+        .models([
+            SubagentModel::new("local/test", "local", local.clone()),
+            SubagentModel::new("flash/test", "flash", flash.clone()),
+        ])
+        .max_depth(settings.clone());
+
+    assert_eq!(
+        settings.preferred_model("local").as_deref(),
+        Some("local/test")
+    );
+    assert_eq!(
+        settings.preferred_model("flash").as_deref(),
+        Some("flash/test")
+    );
+    assert!(settings.set_model_route(Some("local".into())));
+    assert!(!settings.set_model_route(Some("frontier".into())));
+
+    let routed = tool.call(json!({"task": "one"}), &ctx()).await.unwrap();
+    let explicit = tool
+        .call(json!({"task": "two", "model": "flash/test"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(routed["answer"], "local");
+    assert_eq!(explicit["answer"], "flash");
+    assert_eq!(default.generate_calls(), 0);
+}
+
+#[tokio::test]
+async fn configured_default_model_applies_when_call_omits_model() {
+    let default = Arc::new(ScriptedModel::new(vec![]));
+    let flash = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash")]));
+    let settings = SubagentDepth::new(1);
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(default.clone(), &ws)
+        .models([SubagentModel::new("flash/test", "fast", flash.clone())])
+        .max_depth(settings.clone());
+    assert!(settings.set_default_model(Some("flash/test".into())));
+
+    let out = tool.call(json!({"task": "one"}), &ctx()).await.unwrap();
+    assert_eq!(out["answer"], "flash");
+    assert_eq!(default.generate_calls(), 0);
+    assert_eq!(flash.generate_calls(), 1);
+    assert!(!settings.set_default_model(Some("missing".into())));
 }
 
 #[test]
@@ -321,6 +650,7 @@ async fn spawn_extensions_receive_identity_and_events() {
     assert_eq!(spawns[0].parent_id, None);
     assert_eq!(spawns[0].call_id, "outer-call-7");
     assert_eq!(spawns[0].task, "explore");
+    assert!(spawns[0].identity.is_none());
 
     let events = events.lock().unwrap();
     assert!(events.iter().any(|(id, e)| *id == spawns[0].id

@@ -79,6 +79,10 @@ mod subagents_command_tests {
     use super::*;
     use orca_harness_tools::SubagentDepth;
 
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
     fn depth_app(depth: SubagentDepth) -> App {
         App::new(TuiConfig {
             model_name: "m".into(),
@@ -97,6 +101,28 @@ mod subagents_command_tests {
     }
 
     #[tokio::test]
+    async fn subagents_picker_updates_live_presets() {
+        let settings = SubagentDepth::new(1);
+        let mut app = depth_app(settings.clone());
+        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        slash_command(&mut app, "subagents", &worker, 80);
+        // route plus four tier preferences, then depth and steps
+        for _ in 0..6 {
+            handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
+        }
+        handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
+        let Some(Overlay::SubagentValues { ref picker, .. }) = app.overlay else {
+            panic!("steps preset picker");
+        };
+        assert_eq!(picker.index(), 1, "12 steps is the default preset");
+        handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
+        handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
+        assert_eq!(settings.max_steps(), 18);
+        assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
     async fn subagents_command_sets_and_clamps_depth() {
         let depth = SubagentDepth::new(1);
         let mut app = depth_app(depth.clone());
@@ -108,9 +134,11 @@ mod subagents_command_tests {
         slash_command(&mut app, "subagents 99", &worker, 80);
         assert_eq!(depth.get(), 5, "out-of-range input clamps");
 
-        // Bare form only reports; it must not change the value.
+        // Bare form opens the full live settings menu and changes nothing.
         slash_command(&mut app, "subagents", &worker, 80);
         assert_eq!(depth.get(), 5);
+        assert!(matches!(app.overlay, Some(Overlay::Subagents { .. })));
+        handle_overlay_key(&mut app, key(KeyCode::Esc), &worker);
 
         // Garbage input leaves the value alone.
         slash_command(&mut app, "subagents lots", &worker, 80);
@@ -203,7 +231,6 @@ mod mode_rewind_todo_tests {
         assert!(app.overlay.is_none());
         let rendered = texts(&app);
         assert!(rendered.contains("yolo mode ·"), "{rendered}");
-
 
         // Reopening from yolo highlights the yolo row; picking normal
         // ends any plan episode exactly like /mode normal would.
@@ -327,11 +354,7 @@ mod mode_rewind_todo_tests {
 
         slash_command(&mut app, "mode yolo", &worker, 80);
         let rendered = texts(&app);
-        assert!(
-            rendered.contains("yolo mode ·"),
-            "{rendered}"
-        );
-
+        assert!(rendered.contains("yolo mode ·"), "{rendered}");
 
         // And back down to normal through the same command.
         slash_command(&mut app, "mode normal", &worker, 80);
@@ -533,4 +556,3 @@ mod mode_rewind_todo_tests {
         assert!(rendered.contains("old-id is left as it was"), "{rendered}");
     }
 }
-

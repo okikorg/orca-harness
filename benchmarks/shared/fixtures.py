@@ -193,7 +193,7 @@ def main() -> None:
     parser.add_argument("--skills", type=int, default=64)
     args = parser.parse_args()
     paths = build(args.root.resolve(), args.sessions, args.messages, args.skills)
-    # Printed as shell assignments so startup.sh can `eval` the result.
+    # Printed as shell assignments so startup/run.sh can `eval` the result.
     for key, value in paths.items():
         print(f"FIXTURE_{key.upper()}={value}")
 

@@ -144,7 +144,10 @@ pub enum UiMsg {
     /// already been appended to the model context by the worker.
     ShellDone,
     /// The endpoint's model catalog (already filtered), or the fetch error.
-    Models(Result<Vec<ModelInfo>, String>),
+    Models {
+        request_id: u64,
+        result: Result<Vec<ModelInfo>, String>,
+    },
     /// The worker switched the active model to this id.
     ModelChanged(String),
     /// The worker compacted the conversation (or could not).
@@ -158,9 +161,9 @@ pub enum UiMsg {
         id: String,
         messages: Vec<orca_harness_core::Message>,
     },
-    /// /clear emptied the current session file in place.
+    /// /clear preserved the previous transcript and began a fresh session.
     SessionCleared {
-        id: String,
+        id: Option<String>,
     },
     /// /rewind dropped the tail of the conversation. The transcript is
     /// redrawn from `messages`; the session's cumulative token totals
@@ -181,6 +184,16 @@ pub enum UiMsg {
     ProviderChanged {
         provider: Provider,
         model: String,
+    },
+    /// A subagent's resolved runtime identity, emitted before its first model
+    /// step so the live rail can name the worker immediately.
+    SubagentStarted {
+        id: u64,
+        parent_id: Option<u64>,
+        depth: u32,
+        call_id: String,
+        task: String,
+        identity: Option<orca_harness_tools::SubagentIdentity>,
     },
     /// A lifecycle event from inside a running subagent (any depth).
     SubagentEvent {
@@ -221,7 +234,7 @@ pub enum WorkerCmd {
     /// Adopt a recorded session: replace the context and record there.
     LoadSession { path: std::path::PathBuf },
     /// Fetch the endpoint's model catalog, keeping ids containing `filter`.
-    ListModels { filter: String },
+    ListModels { request_id: u64, filter: String },
     /// Run a provider-owned interactive OAuth flow, then activate it.
     LoginProvider { provider: Provider },
     /// Result of a detached provider login; `attempt` rejects stale completions.

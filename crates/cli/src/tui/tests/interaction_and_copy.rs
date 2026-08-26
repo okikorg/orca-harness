@@ -210,7 +210,7 @@ fn command_palette_uses_the_shared_tabular_window() {
     let help = text.iter().find(|line| line.contains("/help")).unwrap();
     let clear = text.iter().find(|line| line.contains("/clear")).unwrap();
     let help_detail = help[..help.find("show available").unwrap()].chars().count();
-    let clear_detail = clear[..clear.find("reset the conversation").unwrap()]
+    let clear_detail = clear[..clear.find("preserve this session").unwrap()]
         .chars()
         .count();
     assert_eq!(help_detail, clear_detail);

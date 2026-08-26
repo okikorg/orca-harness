@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::tui::components::transcript::BlockSpacing;
-use crate::tui::state::{SpawnActivity, ToolRecord};
+use crate::tui::state::{SpawnActivity, SubagentDisplay, ToolRecord};
 use orca_harness_extensions::HarnessEvent;
 
 pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
@@ -151,7 +151,7 @@ pub(crate) fn fold_subagent_activity(app: &mut App, call_id: &str) -> Vec<String
     let mut roots: Vec<u64> = app
         .subagent_activity
         .iter()
-        .filter(|(_, spawn)| spawn.call_id == call_id)
+        .filter(|(_, spawn)| spawn.parent_id.is_none() && spawn.call_id == call_id)
         .map(|(id, _)| *id)
         .collect();
     roots.sort_unstable();
@@ -192,6 +192,40 @@ pub(crate) fn collect_spawn_log(app: &mut App, id: u64, lines: &mut Vec<String>)
     }
 }
 
+pub(crate) fn start_subagent(
+    app: &mut App,
+    id: u64,
+    parent_id: Option<u64>,
+    depth: u32,
+    call_id: String,
+    task: String,
+    identity: Option<orca_harness_tools::SubagentIdentity>,
+) {
+    if parent_id.is_none() {
+        if let Some(identity) = identity.clone() {
+            app.subagent_display.insert(
+                call_id.clone(),
+                SubagentDisplay {
+                    task: task.clone(),
+                    identity,
+                },
+            );
+        }
+    }
+    app.subagent_activity.insert(
+        id,
+        SpawnActivity {
+            call_id,
+            parent_id,
+            depth,
+            task,
+            identity,
+            tools: Vec::new(),
+            pending: std::collections::HashMap::new(),
+        },
+    );
+}
+
 pub(crate) fn handle_subagent_event(
     app: &mut App,
     id: u64,
@@ -213,6 +247,8 @@ pub(crate) fn handle_subagent_event(
                     call_id,
                     parent_id,
                     depth,
+                    task: String::new(),
+                    identity: None,
                     tools: Vec::new(),
                     pending: std::collections::HashMap::new(),
                 });

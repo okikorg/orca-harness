@@ -19,7 +19,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "clear",
-        description: "reset the conversation, empty the session, and stop background work",
+        description: "preserve this session, start fresh, and stop background work",
         category: "Session",
         takes_args: false,
     },
@@ -68,7 +68,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "subagents",
-        description: "show or set subagent nesting depth (1-5)",
+        description: "configure subagent model, depth, steps, timeout, output, and retries",
         category: "Session",
         takes_args: true,
     },

@@ -174,10 +174,13 @@ impl Tool for ReadFileTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "read_file".into(),
-            description: "Read a UTF-8 text file relative to the workspace root.".into(),
+            description: "Read a UTF-8 text file relative to the workspace root. Absolute paths are rejected.".into(),
             parameters: json!({
                 "type": "object",
-                "properties": { "path": {"type": "string", "description": "Workspace-relative path."} },
+                "properties": { "path": {
+                    "type": "string",
+                    "description": "Path relative to the workspace root; absolute paths are rejected."
+                } },
                 "required": ["path"]
             }),
         }
@@ -396,10 +399,14 @@ impl Tool for ListDirTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "list_dir".into(),
-            description: "List the entries of a workspace directory (non-recursive).".into(),
+            description: "List the entries of a workspace-relative directory (non-recursive). Absolute paths are rejected.".into(),
             parameters: json!({
                 "type": "object",
-                "properties": { "path": {"type": "string", "default": "."} },
+                "properties": { "path": {
+                    "type": "string",
+                    "description": "Path relative to the workspace root; absolute paths are rejected.",
+                    "default": "."
+                } },
             }),
         }
     }
@@ -432,8 +439,25 @@ impl Tool for ListDirTool {
 // `items_after_test_module` treats anything below it as misplaced.
 #[cfg(test)]
 mod tests {
-    use super::take_string_arg;
+    use super::{take_string_arg, ListDirTool, ReadFileTool};
+    use crate::Workspace;
+    use orca_harness_core::Tool;
     use serde_json::json;
+
+    #[test]
+    fn read_and_list_schemas_require_workspace_relative_paths() {
+        let ws = Workspace::new("/work");
+        for schema in [
+            ReadFileTool::new(ws.clone()).schema(),
+            ListDirTool::new(ws).schema(),
+        ] {
+            assert!(schema.description.contains("Absolute paths are rejected."));
+            assert_eq!(
+                schema.parameters["properties"]["path"]["description"],
+                "Path relative to the workspace root; absolute paths are rejected."
+            );
+        }
+    }
 
     /// The write path hands content to tokio's `fs::write`, whose
     /// zero-copy fast path needs an OWNED String — taking it out of the

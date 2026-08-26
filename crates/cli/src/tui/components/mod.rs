@@ -10,6 +10,7 @@ pub mod picker;
 pub mod progress_list;
 pub mod rail;
 pub mod status_bar;
+pub mod subagent_row;
 pub mod tool_row;
 pub mod transcript;
 pub mod tray;

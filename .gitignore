@@ -9,4 +9,9 @@ compact_report*.json
 answer.txt
 benchmarks/results/**/*.json
 benchmarks/results/**/*.txt
+benchmarks/results/**/*.csv
 __pycache__/
+
+# GitBook / HonKit build output and local tooling
+docs/external/_book/
+docs/external/node_modules/

@@ -15,8 +15,7 @@ use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::BlockSpacing;
 use crate::view::{self, theme};
 
-use super::super::render::reset_conversation_ui;
-use super::super::state::{App, Overlay, SESSION_ACTIONS, SETTINGS_ROWS};
+use super::super::state::{App, Overlay, SESSION_ACTIONS, SETTINGS_ROWS, SUBAGENT_ROWS};
 use super::super::{copy_command, expand_tool, push_error, push_notice, SESSIONS_WINDOW};
 
 pub(crate) fn slash_command(
@@ -29,6 +28,8 @@ pub(crate) fn slash_command(
     // Dismiss the empty-state card before writing command output so `/help`
     // (and command errors/notices) are visible on the first frame afterward.
     app.welcome_dismissed = true;
+    app.overlay_stack.clear();
+    app.picker_pending = None;
     let dim = theme().dim;
     if command == "queue" {
         let queued = app.prompt_queue.len();
@@ -80,10 +81,9 @@ pub(crate) fn slash_command(
     }
     if let Some(rest) = command.strip_prefix("subagents") {
         if rest.is_empty() {
-            push_notice(
-                app,
-                format!("subagent nesting depth: {}", app.cfg.subagent_depth.get()),
-            );
+            app.overlay = Some(Overlay::Subagents {
+                picker: ListPicker::new(SUBAGENT_ROWS),
+            });
             return;
         }
         if let Some(arg) = rest.strip_prefix(' ') {
@@ -194,9 +194,12 @@ pub(crate) fn slash_command(
         if rest.is_empty() || rest.starts_with(' ') {
             // Fetch the full catalog; the argument seeds the picker's
             // live filter so the user can widen it without refetching.
-            app.picker_pending = Some(rest.trim().to_lowercase());
+            let request_id = app.next_picker_request;
+            app.next_picker_request += 1;
+            app.picker_pending = Some((request_id, rest.trim().to_lowercase()));
             if worker
                 .send(WorkerCmd::ListModels {
+                    request_id,
                     filter: String::new(),
                 })
                 .is_err()
@@ -298,8 +301,9 @@ pub(crate) fn slash_command(
     match command {
         "quit" | "exit" | "q" => app.quit = true,
         "clear" => {
-            let _ = worker.send(WorkerCmd::Clear);
-            reset_conversation_ui(app);
+            if worker.send(WorkerCmd::Clear).is_err() {
+                push_error(app, "worker is gone; restart orcacode");
+            }
         }
         "usage" => {
             app.overlay = Some(Overlay::Usage);

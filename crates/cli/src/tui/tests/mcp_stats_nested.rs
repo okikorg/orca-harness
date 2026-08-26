@@ -375,7 +375,7 @@ mod stats_segment_tests {
 }
 mod nested_rail_tests {
     use super::*;
-    #[cfg(test)]
+    use crate::tui::events::start_subagent;
     use orca_harness_extensions::HarnessEvent;
     use serde_json::json;
 
@@ -402,6 +402,80 @@ mod nested_rail_tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn subagent_row_names_resolved_provider_and_model() {
+        let mut app = nested_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "c1".into(),
+                tool_name: "subagent".into(),
+                input: json!({"task": "Explore the benchmarks directory"}),
+            },
+            120,
+        );
+        start_subagent(
+            &mut app,
+            7,
+            None,
+            0,
+            "c1".into(),
+            "Explore the benchmarks directory".into(),
+            Some(orca_harness_tools::SubagentIdentity::new(
+                "openrouter",
+                "anthropic/claude-sonnet-5",
+            )),
+        );
+
+        let live = rail_text(&app);
+        assert!(
+            live.contains("subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            "{live}"
+        );
+        assert!(!live.contains("{\"task\""), "raw JSON should be replaced: {live}");
+
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolResult {
+                tool_call_id: "c1".into(),
+                tool_name: "subagent".into(),
+                output: json!({
+                    "answer": "done",
+                    "identity": {
+                        "provider": "openrouter",
+                        "model": "anthropic/claude-sonnet-5",
+                        "route": "frontier/claude-sonnet-5"
+                    }
+                }),
+                is_error: false,
+            },
+            120,
+        );
+        let completed = activity_lines(&app, 120, false)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            completed.contains("subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            "{completed}"
+        );
+
+        if let Some(tool) = app.activity_tools.first_mut() {
+            tool.output = Some(json!({"error": "worker timed out"}));
+            tool.is_error = true;
+        }
+        let failed = activity_lines(&app, 120, false)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            failed.contains("subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            "{failed}"
+        );
     }
 
     #[test]
@@ -512,6 +586,107 @@ mod nested_rail_tests {
             indent(grandchild) > indent(child),
             "child: {child:?} grandchild: {grandchild:?}"
         );
+    }
+
+    #[test]
+    fn parallel_nested_subagents_keep_identity_and_children_under_their_own_rows() {
+        let mut app = nested_app();
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ToolCall {
+                tool_call_id: "root".into(),
+                tool_name: "subagent".into(),
+                input: json!({"task": "root"}),
+            },
+            140,
+        );
+        start_subagent(
+            &mut app,
+            1,
+            None,
+            0,
+            "root".into(),
+            "root".into(),
+            Some(orca_harness_tools::SubagentIdentity::new("openrouter", "root/model")),
+        );
+        for (call_id, task, model, inner_tool) in [
+            ("root", "task alpha", "vendor/alpha", "read_file"),
+            ("b", "task beta", "vendor/beta", "grep"),
+        ] {
+            handle_subagent_event(
+                &mut app,
+                1,
+                None,
+                0,
+                "root".into(),
+                HarnessEvent::ToolCall {
+                    tool_call_id: call_id.into(),
+                    tool_name: "subagent".into(),
+                    input: json!({"task": task}),
+                },
+            );
+            let child_id = if call_id == "root" { 2 } else { 3 };
+            start_subagent(
+                &mut app,
+                child_id,
+                Some(1),
+                1,
+                call_id.into(),
+                task.into(),
+                Some(orca_harness_tools::SubagentIdentity::new("openrouter", model)),
+            );
+            handle_subagent_event(
+                &mut app,
+                child_id,
+                Some(1),
+                1,
+                call_id.into(),
+                HarnessEvent::ToolCall {
+                    tool_call_id: format!("{call_id}-inner"),
+                    tool_name: inner_tool.into(),
+                    input: json!({}),
+                },
+            );
+        }
+        handle_subagent_event(
+            &mut app,
+            1,
+            None,
+            0,
+            "root".into(),
+            HarnessEvent::ToolResult {
+                tool_call_id: "root".into(),
+                tool_name: "subagent".into(),
+                output: json!({"answer": "alpha done"}),
+                is_error: false,
+            },
+        );
+
+        let text = rail_text(&app);
+        assert_eq!(text.matches("openrouter:vendor/alpha").count(), 1, "{text}");
+        assert_eq!(text.matches("openrouter:vendor/beta").count(), 1, "{text}");
+        assert!(text.contains("✓ subagent · openrouter:vendor/alpha · task alpha"), "{text}");
+        let alpha = text.find("vendor/alpha").unwrap();
+        let beta = text.find("vendor/beta").unwrap();
+        let grep = text.find("grep").unwrap();
+        assert!(alpha < beta && beta < grep, "beta's child stays below beta: {text}");
+        assert!(!text[alpha..beta].contains("grep"), "grep must not appear under alpha: {text}");
+
+        start_subagent(
+            &mut app,
+            4,
+            Some(1),
+            1,
+            "b".into(),
+            "task beta retry".into(),
+            Some(orca_harness_tools::SubagentIdentity::new(
+                "openrouter",
+                "vendor/beta-retry",
+            )),
+        );
+        let retried = rail_text(&app);
+        assert!(!retried.contains("openrouter:vendor/beta ·"), "stale attempt: {retried}");
+        assert_eq!(retried.matches("openrouter:vendor/beta-retry").count(), 1, "{retried}");
     }
 
     #[test]

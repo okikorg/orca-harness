@@ -17,7 +17,12 @@ use crate::view;
 
 use super::format::byte_index;
 use super::render::matching_indices;
-use super::state::{App, InspectorMode, LocationEntry, ModelPicker, Overlay, ViewMode};
+use super::state::{
+    App, InspectorMode, LocationEntry, ModelPicker, Overlay, SubagentSetting, ViewMode,
+};
+use super::subagents::{
+    apply_subagent_value, subagent_selected, subagent_setting_label, subagent_values,
+};
 use super::{clear_tool_connectors, push_error, push_notice, remove_skill, PICKER_ROWS};
 
 mod catalogs;

@@ -56,7 +56,19 @@ impl OpenRouterModel {
 
     /// Attribution: the app name shown on OpenRouter dashboards.
     pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.inner = self.inner.header("X-Title", title);
+        self.inner = self.inner.header("X-OpenRouter-Title", title);
+        self
+    }
+
+    /// Attribution: OpenRouter marketplace categories for this app.
+    pub fn categories(mut self, categories: impl Into<String>) -> Self {
+        self.inner = self.inner.header("X-OpenRouter-Categories", categories);
+        self
+    }
+
+    /// Identify the client to provider usage and diagnostics surfaces.
+    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.inner = self.inner.user_agent(user_agent);
         self
     }
 

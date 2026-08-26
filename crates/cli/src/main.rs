@@ -16,6 +16,7 @@ mod plan;
 mod presentation;
 mod prompt;
 mod skills;
+mod subagent_models;
 mod tui;
 mod view;
 
@@ -35,6 +36,9 @@ use orca_harness_tools::Workspace;
 use crate::mode::{Mode, ModeHandle};
 use crate::msg::{Provider, UiMsg};
 use crate::plan::PlanArea;
+
+const ORCACODE_USER_AGENT: &str = concat!("orcacode/", env!("CARGO_PKG_VERSION"));
+const ORCACODE_REFERER: &str = env!("CARGO_PKG_REPOSITORY");
 
 /// What the worker needs to open a planning episode: the live mode and
 /// the area a plan may be written to. Bundled because they only ever
@@ -355,6 +359,11 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          todo_write and keep it current — one step in_progress, finished steps marked \
          completed as you go — so the list always says where the work actually is.\n\
          \n\
+         Delegate to subagents deliberately: they can run for many model steps. Give each \
+         subagent one bounded, self-contained task, the exact result or deliverable expected, \
+         and an explicit stopping condition. Avoid open-ended delegation such as \"investigate \
+         this\" without defining what evidence to return and when to stop.\n\
+         \n\
          Use the harness's full concurrency. Tool calls issued in the same response \
          execute concurrently. Before acting, plan the batch: decide everything you \
          can learn or do right now that does not depend on another call's result, and \
@@ -425,15 +434,19 @@ impl Endpoint {
             Provider::OpenRouter => {
                 let mut model = OpenRouterModel::new(self.model.as_str())
                     .base_url(self.base_url.clone())
-                    .title("orcacode");
+                    .user_agent(ORCACODE_USER_AGENT)
+                    .referer(ORCACODE_REFERER)
+                    .title("Orca Code")
+                    .categories("cli-agent");
                 if let Some(key) = &self.api_key {
                     model = model.api_key(key.clone());
                 }
                 Arc::new(model)
             }
             Provider::OpenAi | Provider::Local => {
-                let mut model =
-                    OpenAiModel::new(self.model.as_str()).base_url(self.base_url.clone());
+                let mut model = OpenAiModel::new(self.model.as_str())
+                    .base_url(self.base_url.clone())
+                    .user_agent(ORCACODE_USER_AGENT);
                 if let Some(key) = &self.api_key {
                     model = model.api_key(key.clone());
                 }

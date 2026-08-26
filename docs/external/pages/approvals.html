@@ -1,0 +1,63 @@
+<section class="section" id="approval-choices">
+    <h2>Answer an approval prompt</h2>
+    <table class="command-table">
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Effect</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>y</code></td>
+                <td>Allow this call once.</td>
+            </tr>
+            <tr>
+                <td><code>a</code></td>
+                <td>Always allow this tool for the current session.</td>
+            </tr>
+            <tr>
+                <td><code>A</code></td>
+                <td>Always allow it in this workspace; save the grant.</td>
+            </tr>
+            <tr>
+                <td><code>n</code></td>
+                <td>Deny the call.</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>
+        Saved grants are scoped to the canonical workspace directory, not
+        globally. Review or revoke them from <code>/settings</code>.
+    </p>
+</section>
+<section class="section" id="gated-tools">
+    <h2>What is gated</h2>
+    <p>
+        Shell commands, file writes and edits, persistent Python and Bun
+        compute, background processes, and subagents ask before they run.
+        Read-only file inspection and directory search do not require a prompt
+        in normal mode.
+    </p>
+    <p>
+        The prompt is about the operation, not the agent’s wording. A precise
+        request is still worth inspecting when it will run a command or
+        overwrite a file.
+    </p>
+</section>
+<section class="section" id="yolo-mode">
+    <h2>Yolo mode</h2>
+    <p>
+        <code>/mode yolo</code> or <code>--yolo</code> runs gated tools without
+        approval prompts. Its status remains visible as <code>yolo</code> for
+        the entire session and it is never persisted.
+    </p>
+    <div class="callout warn">
+        <span class="callout-label">USE WITH INTENT</span>
+        <p>
+            Yolo mode is appropriate for a disposable environment or a
+            well-understood automation path. It is not a substitute for a
+            workspace boundary, source control, or backups.
+        </p>
+    </div>
+</section>

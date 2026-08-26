@@ -8,6 +8,8 @@ use crate::tui::components::tray::Tray;
 use crate::view::{self, theme};
 
 use super::super::format::{age_label, redact_command, size};
+use super::super::state::SubagentSetting;
+use super::super::subagents::{subagent_current, subagent_setting_label};
 use super::super::{App, InspectorMode, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
 
 pub(super) fn command_picker_row(spec: &CommandSpec) -> [String; 3] {
@@ -36,7 +38,7 @@ pub(crate) fn help_picker_lines(
         format!("filter: {filter}")
     };
     picker.windowed_table_lines(
-        &format!("Help · {filter_note} · ↑↓ navigate · enter use · esc close"),
+        &format!("Help · {filter_note} · ↑↓ move · →/enter use · esc close"),
         commands.into_iter().map(command_picker_row),
         [(6, 16), (12, 64), (0, 10)],
         width,
@@ -66,7 +68,7 @@ pub(crate) fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'sta
         ]
     });
     picker.table_lines(
-        "Select provider · ↑↓ navigate · enter use · esc close",
+        "Select provider · ↑↓ move · →/enter use · esc close",
         rows,
         [(12, 12), (36, 36), (0, usize::MAX)],
         width,
@@ -119,7 +121,7 @@ pub(crate) fn theme_picker_lines(picker: &ListPicker, width: usize) -> Vec<Line<
         ]
     });
     picker.table_lines(
-        "Select theme · ↑↓ navigate · enter use · esc close",
+        "Select theme · ↑↓ move · →/enter use · esc close",
         rows,
         [(16, 16), (16, 16), (0, usize::MAX)],
         width,
@@ -144,7 +146,7 @@ pub(crate) fn view_picker_lines(
         ]
     });
     picker.table_lines(
-        "Select view · ↑↓ navigate · enter use · esc close",
+        "Select view · ↑↓ move · →/enter use · esc close",
         rows,
         [(10, 10), (38, 38), (0, usize::MAX)],
         width,
@@ -169,7 +171,7 @@ pub(crate) fn mode_picker_lines(
         [label.to_string(), description.to_string(), note.to_string()]
     });
     picker.table_lines(
-        "Select mode · ↑↓ navigate · enter use · esc close",
+        "Select mode · ↑↓ move · →/enter use · esc close",
         rows,
         [(10, 10), (46, 46), (0, usize::MAX)],
         width,
@@ -204,7 +206,7 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         ("spacing", transcript_spacing().label().to_string()),
     ];
     let mut lines = picker.table_lines(
-        "Settings · ↑↓ navigate · enter change · esc close",
+        "Settings · ↑↓ move · →/enter open · esc close",
         rows.iter()
             .map(|(name, value)| [name.to_string(), value.clone()]),
         [(10, 10), (0, usize::MAX)],
@@ -218,6 +220,41 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         )));
     }
     lines
+}
+
+pub(crate) fn subagent_settings_lines(
+    app: &App,
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let rows = SubagentSetting::ALL.iter().map(|setting| {
+        [
+            subagent_setting_label(*setting).to_string(),
+            subagent_current(&app.cfg.subagent_depth, *setting),
+        ]
+    });
+    picker.table_lines(
+        "Subagents (this session) · ↑↓ move · →/enter open · esc close",
+        rows,
+        [(18, 18), (0, usize::MAX)],
+        width,
+    )
+}
+
+pub(crate) fn subagent_value_lines(
+    setting: SubagentSetting,
+    values: &[String],
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    picker.lines(
+        &format!(
+            "Subagent {} · ↑↓ move · ← back · →/enter use · esc close",
+            subagent_setting_label(setting)
+        ),
+        values.iter().cloned(),
+        width,
+    )
 }
 
 pub(crate) fn inspector_picker_lines(
@@ -238,7 +275,7 @@ pub(crate) fn inspector_picker_lines(
         ]
     });
     picker.table_lines(
-        "Tool Inspector · ↑↓ navigate · enter use · esc close",
+        "Tool Inspector · ↑↓ move · →/enter use · esc close",
         rows,
         [(10, 10), (38, 38), (0, usize::MAX)],
         width,
@@ -260,7 +297,7 @@ pub(crate) fn transcript_spacing_lines(picker: &ListPicker, width: usize) -> Vec
         ]
     });
     picker.table_lines(
-        "Transcript spacing · ↑↓ navigate · enter use · esc close",
+        "Transcript spacing · ↑↓ move · →/enter use · esc close",
         rows,
         [(14, 14), (36, 36), (0, usize::MAX)],
         width,
@@ -275,7 +312,7 @@ pub(crate) fn approvals_lines(
     width: usize,
 ) -> Vec<Line<'static>> {
     picker.lines(
-        "Saved approvals (this workspace) · ↑↓ navigate · enter revoke · esc close",
+        "Saved approvals (this workspace) · ↑↓ move · →/enter revoke · esc close",
         tools.iter().cloned(),
         width,
     )
@@ -297,7 +334,7 @@ pub(crate) fn extensions_picker_lines(picker: &ListPicker, width: usize) -> Vec<
         ]
     });
     picker.table_lines(
-        "Extensions · ↑↓ navigate · enter toggle · esc close",
+        "Extensions · ↑↓ move · →/enter toggle · esc close",
         rows,
         [(12, 12), (3, 3), (0, usize::MAX)],
         width,
@@ -349,7 +386,7 @@ pub(crate) fn mcp_picker_lines(
         format!("filter: {filter}")
     };
     picker.windowed_table_lines(
-        &format!("MCP servers · {filter_note} · ↑↓ navigate · space toggle · esc close"),
+        &format!("MCP servers · {filter_note} · ↑↓ move · →/enter/space toggle · esc close"),
         rows,
         [(4, 16), (3, 3), (9, 9), (0, usize::MAX)],
         width,
@@ -402,7 +439,7 @@ pub(crate) fn skills_picker_lines(
         format!("filter: {filter}")
     };
     picker.windowed_table_lines(
-        &format!("Skills · {filter_note} · ↑↓ navigate · enter toggle · esc close"),
+        &format!("Skills · {filter_note} · ↑↓ move · →/enter toggle · esc close"),
         rows,
         [(4, 20), (3, 3), (0, 28), (0, 8), (0, usize::MAX)],
         width,
@@ -446,7 +483,7 @@ pub(crate) fn sessions_picker_lines(
         ]
     });
     picker.windowed_table_lines(
-        "Sessions (this workspace) · ↑↓ navigate · PgUp/PgDn page · enter resume · esc close",
+        "Sessions (this workspace) · ↑↓ move · PgUp/PgDn page · →/enter resume · esc close",
         rows,
         [(36, 36), (8, 8), (0, usize::MAX)],
         width,
@@ -458,7 +495,7 @@ pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static
     let t = theme();
     let mut tray = Tray::new(
         format!(
-            "{} API key (saved for future sessions) · enter confirm · esc cancel",
+            "{} API key (saved for future sessions) · enter confirm · esc close",
             provider.label()
         ),
         t.warn,

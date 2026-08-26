@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the budget gate: `python3 benchmarks/check_budgets_test.py`."""
+"""Tests for the budget gate: `python3 benchmarks/shared/check_budgets_test.py`."""
 
 import contextlib
 import importlib.util

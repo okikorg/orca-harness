@@ -597,7 +597,8 @@ struct Recorder {
 
 /// Records the transcript as the run progresses. Registered as an
 /// Extension; hosts also drive it directly (`sync` after post-run
-/// repairs, `start_new` for /clear, `switch_to` for /sessions).
+/// repairs, `start_new_with_context` for /clear, `start_new` for hosts
+/// that will sync later, and `switch_to` for /sessions).
 pub struct SessionHandler {
     inner: Mutex<Recorder>,
     warn: Box<dyn Fn(&str) + Send + Sync>,
@@ -658,7 +659,32 @@ impl SessionHandler {
         Ok((handler, loaded))
     }
 
-    /// Rotate to a fresh session file (used by /clear). Returns the id.
+    /// Create and fully persist a fresh session before adopting it. Used by
+    /// /clear so failure leaves the old recorder active.
+    pub fn start_new_with_context(&self, context: &Context) -> std::io::Result<String> {
+        let mut rec = self.inner.lock().unwrap();
+        let meta = SessionMeta {
+            v: SESSION_FORMAT_VERSION,
+            id: new_session_id(),
+            created_at: unix_now(),
+            workspace: rec.meta.workspace.clone(),
+            model: rec.meta.model.clone(),
+        };
+        let (path, mut file) = open_new(&rec.dir, &meta)?;
+        if let Err(err) = append(&mut file, context.messages()) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(err);
+        }
+        rec.meta = meta;
+        rec.path = path;
+        rec.file = file;
+        rec.cursor = context.messages().len();
+        rec.disabled = false;
+        Ok(rec.meta.id.clone())
+    }
+
+    /// Rotate to an empty fresh session for hosts that will sync later.
     pub fn start_new(&self) -> std::io::Result<String> {
         let mut rec = self.inner.lock().unwrap();
         let meta = SessionMeta {
@@ -701,7 +727,7 @@ impl SessionHandler {
 
     /// Bring the file up to date with the context. Append-only in the
     /// common case; a context shorter than what was persisted means it
-    /// was rewritten (compaction, /clear recovery), so rewrite the file.
+    /// was rewritten (compaction or host-driven reset recovery), so rewrite the file.
     pub fn sync(&self, context: &Context) {
         let mut rec = self.inner.lock().unwrap();
         if rec.disabled {
@@ -760,7 +786,11 @@ fn open_new(dir: &Path, meta: &SessionMeta) -> std::io::Result<(PathBuf, File)> 
     fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.jsonl", meta.id));
     let mut file = OpenOptions::new().create_new(true).append(true).open(&path)?;
-    write_header(&mut file, meta)?;
+    if let Err(err) = write_header(&mut file, meta) {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(err);
+    }
     Ok((path, file))
 }
 
@@ -1194,16 +1224,28 @@ In the `Run` arm, after `repair_dangling_tool_calls(&mut context);`:
                 }
 ```
 
-In the `Clear` arm, after `context.push_system(&system);`:
+In the `Clear` arm, prepare a system-only context and persist it transactionally
+before replacing any in-memory state:
 
 ```rust
-                if let Some(session) = &session {
-                    if let Err(err) = session.start_new() {
-                        let _ = ui.send(UiMsg::Notice(format!(
-                            "session file not rotated: {err}"
-                        )));
-                    }
-                }
+                let mut fresh = Context::new();
+                fresh.push_system(&system);
+                let new_session_id = match session.as_deref() {
+                    Some(session) => match session.start_new_with_context(&fresh) {
+                        Ok(id) => Some(id),
+                        Err(err) => {
+                            let _ = ui.send(UiMsg::Notice(format!(
+                                "session not cleared: could not preserve history: {err}"
+                            )));
+                            continue;
+                        }
+                    },
+                    None => None,
+                };
+                context = fresh;
+                // Clear conversation-owned state and rebuild the agent here.
+                // Send SessionCleared only after the old agent has been dropped.
+                let _ = ui.send(UiMsg::SessionCleared { id: new_session_id });
 ```
 
 In the `Compact` arm, after the `compact(...)` call:
@@ -1312,7 +1354,11 @@ In `crates/cli/src/tui.rs`:
         }
 ```
 
-- Extract the body of the `"clear"` command arm (everything after `let _ = worker.send(WorkerCmd::Clear);` — the `app.transcript.clear()` through `app.split_snapshot = None;` block) into:
+- Extract the per-conversation reset block into `reset_conversation_ui(app)`.
+  The `"clear"` command arm only sends `WorkerCmd::Clear`; call the reset helper
+  when `UiMsg::SessionCleared` arrives, after the worker has preserved the old
+  transcript and adopted the fresh session. A failed rotation reports a notice
+  and leaves the visible conversation unchanged.
 
 ```rust
 /// Reset every piece of per-conversation UI state. Used by /clear and
@@ -1338,7 +1384,9 @@ fn reset_conversation_ui(app: &mut App) {
 }
 ```
 
-and call it from the `"clear"` arm. (Match the field list to whatever the current `"clear"` arm at tui.rs:1606-1625 actually resets — copy it verbatim, do not re-type from this plan.)
+and call it from session-load handling and the worker's successful
+`UiMsg::SessionCleared` acknowledgement. Do not reset in the command-dispatch
+arm: rotation failure must preserve the visible conversation.
 
 - [ ] **Step 7: Compile and test the CLI crate**
 
@@ -1525,4 +1573,4 @@ git commit -m "docs: session recording, resume flags, and /sessions"
 
 - Spec coverage: format+header (T1), extension behavior+cursor+rewrite (T2), resume+list (T1/T2), CLI flags+default recording+/clear rotation (T4/T5), headless (T5), error handling warn-once/disable + corrupt-file behavior (T1/T2), /sessions (T6), out-of-scope items untouched. Spec's `after_model` claim corrected in T3.
 - No placeholders: every step carries the code or exact command.
-- Type consistency: `SessionHandler::{create,resume,start_new,switch_to,sync,session_id,path,on_warn}`, `SessionFile::{list,load}`, `LoadedSession{meta,context,warnings}` used identically across tasks.
+- Type consistency: `SessionHandler::{create,resume,start_new_with_context,start_new,switch_to,sync,session_id,path,on_warn}`, `SessionFile::{list,load}`, `LoadedSession{meta,context,warnings}` used identically across tasks.

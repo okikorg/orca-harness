@@ -101,6 +101,22 @@ pub(crate) fn handle_terminal_event(
         handle_overlay_key(app, key, worker);
         return;
     }
+    if app.picker_pending.is_some() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if key.code == KeyCode::Left && !app.overlay_stack.is_empty() {
+            app.picker_pending = None;
+            app.overlay = app.overlay_stack.pop();
+            return;
+        }
+        if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+            app.picker_pending = None;
+            app.overlay_stack.clear();
+            return;
+        }
+        if !app.overlay_stack.is_empty() {
+            return;
+        }
+    }
     let content_width = transcript_content_width(app, width);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
@@ -191,6 +207,7 @@ pub(crate) fn handle_terminal_event(
             app.reset_palette_picker();
             if c == '@' && mention_starts_at(&app.composer, app.cursor - 1) {
                 let entries = workspace_locations(Path::new(&app.cfg.workspace_root));
+                app.overlay_stack.clear();
                 app.overlay = Some(Overlay::Locations(LocationPicker {
                     picker: ListPicker::new(entries.len()),
                     entries,
@@ -203,6 +220,7 @@ pub(crate) fn handle_terminal_event(
             {
                 let entries = app.cfg.skills.invokable();
                 if !entries.is_empty() {
+                    app.overlay_stack.clear();
                     app.overlay = Some(Overlay::SkillMentions(SkillMentionPicker {
                         picker: ListPicker::new(entries.len()),
                         entries,
@@ -249,6 +267,20 @@ pub(crate) fn handle_terminal_event(
                 Some((start, _)) => start,
                 None => app.cursor.saturating_sub(1),
             }
+        }
+        KeyCode::Right if app.palette_query().is_some() => {
+            if let Some(spec) = palette_selection(app) {
+                let args = app
+                    .composer
+                    .find(char::is_whitespace)
+                    .map(|at| app.composer[at..].to_string())
+                    .unwrap_or_default();
+                app.composer = format!("/{}{args}", spec.name);
+                app.cursor = app.composer.chars().count();
+            }
+            app.scroll = 0;
+            submit(app, worker, content_width);
+            app.reset_palette_picker();
         }
         KeyCode::Right => {
             app.cursor = match marker_starting_at(&app.pastes, &app.composer, app.cursor) {

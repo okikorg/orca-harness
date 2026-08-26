@@ -30,16 +30,52 @@ use orca_harness_core::{
 
 use crate::{core_tools, BackgroundStats, Workspace};
 
+/// Default governance for workers: enough room for a focused tool task, but
+/// deliberately below the orchestrator's budget.
+pub const DEFAULT_SUBAGENT_MAX_STEPS: u32 = 12;
+pub const DEFAULT_SUBAGENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Bounds on subagent nesting depth. Each extra level multiplies model
 /// calls, so the ceiling is deliberately low.
 pub const MIN_SUBAGENT_DEPTH: u32 = 1;
 pub const MAX_SUBAGENT_DEPTH: u32 = 5;
+pub const MIN_SUBAGENT_MAX_STEPS: u32 = 1;
+pub const MAX_SUBAGENT_MAX_STEPS: u32 = 48;
+pub const MIN_SUBAGENT_TIMEOUT_SECS: u32 = 30;
+pub const MAX_SUBAGENT_TIMEOUT_SECS: u32 = 30 * 60;
+pub const MIN_SUBAGENT_OUTPUT_CHARS: u32 = 1_000;
+pub const MAX_SUBAGENT_OUTPUT_CHARS: u32 = 64_000;
+pub const MAX_SUBAGENT_RETRY_ATTEMPTS: u32 = 10;
+pub const MAX_SUBAGENT_RETRY_BACKOFF_MS: u32 = 2_000;
 
-/// Shared, host-adjustable cap on subagent nesting. `1` (the default)
-/// lets a top-level agent spawn workers that cannot nest further; read
-/// at spawn time, so changes apply to the next spawn.
+#[derive(Debug, Clone, Copy)]
+struct LiveRetry {
+    attempts: u32,
+    backoff_ms: u32,
+    configured: bool,
+}
+
+#[derive(Debug, Default)]
+struct ModelRouting {
+    route: Option<String>,
+    preferred: std::collections::HashMap<String, String>,
+    available: Vec<String>,
+}
+
+#[derive(Debug)]
+struct SubagentSettingsInner {
+    depth: AtomicU32,
+    max_steps: AtomicU32,
+    timeout_secs: AtomicU32,
+    output_chars: AtomicU32,
+    retry: StdMutex<LiveRetry>,
+    routing: StdMutex<ModelRouting>,
+}
+
+/// Shared, session-live governance for spawned agents. The historical name is
+/// retained for API compatibility; `/subagents` now adjusts every field.
 #[derive(Clone, Debug)]
-pub struct SubagentDepth(Arc<AtomicU32>);
+pub struct SubagentDepth(Arc<SubagentSettingsInner>);
 
 impl Default for SubagentDepth {
     fn default() -> Self {
@@ -49,20 +85,191 @@ impl Default for SubagentDepth {
 
 impl SubagentDepth {
     pub fn new(max_depth: u32) -> Self {
-        Self(Arc::new(AtomicU32::new(clamp_depth(max_depth))))
+        Self(Arc::new(SubagentSettingsInner {
+            depth: AtomicU32::new(clamp_depth(max_depth)),
+            max_steps: AtomicU32::new(DEFAULT_SUBAGENT_MAX_STEPS),
+            timeout_secs: AtomicU32::new(DEFAULT_SUBAGENT_TIMEOUT.as_secs() as u32),
+            output_chars: AtomicU32::new(8_000),
+            retry: StdMutex::new(LiveRetry {
+                attempts: 1,
+                backoff_ms: 250,
+                configured: false,
+            }),
+            routing: StdMutex::new(ModelRouting::default()),
+        }))
     }
 
     pub fn get(&self) -> u32 {
-        self.0.load(Ordering::Relaxed)
+        self.0.depth.load(Ordering::Relaxed)
     }
 
-    /// Set the cap, clamped to the permitted range; returns the value
-    /// actually stored.
     pub fn set(&self, max_depth: u32) -> u32 {
         let clamped = clamp_depth(max_depth);
-        self.0.store(clamped, Ordering::Relaxed);
+        self.0.depth.store(clamped, Ordering::Relaxed);
         clamped
     }
+
+    pub fn max_steps(&self) -> u32 {
+        self.0.max_steps.load(Ordering::Relaxed)
+    }
+
+    pub fn set_max_steps(&self, value: u32) -> u32 {
+        set_min(&self.0.max_steps, value, MIN_SUBAGENT_MAX_STEPS)
+    }
+
+    pub fn timeout_secs(&self) -> u32 {
+        self.0.timeout_secs.load(Ordering::Relaxed)
+    }
+
+    pub fn set_timeout_secs(&self, value: u32) -> u32 {
+        set_min(&self.0.timeout_secs, value, MIN_SUBAGENT_TIMEOUT_SECS)
+    }
+
+    pub fn output_chars(&self) -> u32 {
+        self.0.output_chars.load(Ordering::Relaxed)
+    }
+
+    pub fn set_output_chars(&self, value: u32) -> u32 {
+        set_min(&self.0.output_chars, value, MIN_SUBAGENT_OUTPUT_CHARS)
+    }
+
+    pub fn tool_attempts(&self) -> u32 {
+        self.0.retry.lock().unwrap().attempts
+    }
+
+    pub fn set_tool_attempts(&self, value: u32) -> u32 {
+        let value = value.max(1);
+        let mut retry = self.0.retry.lock().unwrap();
+        retry.attempts = value;
+        retry.configured = true;
+        value
+    }
+
+    pub fn retry_backoff_ms(&self) -> u32 {
+        self.0.retry.lock().unwrap().backoff_ms
+    }
+
+    pub fn set_retry_backoff_ms(&self, value: u32) -> u32 {
+        let mut retry = self.0.retry.lock().unwrap();
+        retry.backoff_ms = value;
+        retry.configured = true;
+        value
+    }
+
+    /// Install host retry defaults once without overwriting later live choices.
+    pub fn ensure_retry_defaults(&self, attempts: u32, backoff_ms: u32) {
+        let mut retry = self.0.retry.lock().unwrap();
+        if !retry.configured {
+            retry.attempts = attempts.max(1);
+            retry.backoff_ms = backoff_ms;
+            retry.configured = true;
+        }
+    }
+
+    pub fn model_route(&self) -> Option<String> {
+        self.0.routing.lock().unwrap().route.clone()
+    }
+
+    pub fn set_model_route(&self, route: Option<String>) -> bool {
+        let mut routing = self.0.routing.lock().unwrap();
+        if route
+            .as_ref()
+            .is_some_and(|tier| models_for_tier(&routing.available, tier).is_empty())
+        {
+            return false;
+        }
+        routing.route = route;
+        true
+    }
+
+    pub fn preferred_model(&self, tier: &str) -> Option<String> {
+        self.0.routing.lock().unwrap().preferred.get(tier).cloned()
+    }
+
+    pub fn set_preferred_model(&self, tier: &str, model: String) -> bool {
+        let mut routing = self.0.routing.lock().unwrap();
+        if !models_for_tier(&routing.available, tier).contains(&model) {
+            return false;
+        }
+        routing.preferred.insert(tier.to_string(), model);
+        true
+    }
+
+    pub fn models_for_tier(&self, tier: &str) -> Vec<String> {
+        models_for_tier(&self.0.routing.lock().unwrap().available, tier)
+    }
+
+    pub fn default_model(&self) -> Option<String> {
+        let routing = self.0.routing.lock().unwrap();
+        routing
+            .route
+            .as_ref()
+            .and_then(|tier| routing.preferred.get(tier))
+            .cloned()
+    }
+
+    pub fn set_default_model(&self, model: Option<String>) -> bool {
+        let mut routing = self.0.routing.lock().unwrap();
+        let Some(model) = model else {
+            routing.route = None;
+            return true;
+        };
+        let Some((tier, _)) = model.split_once('/') else {
+            return false;
+        };
+        let tier = tier.to_string();
+        if !models_for_tier(&routing.available, &tier).contains(&model) {
+            return false;
+        }
+        routing.preferred.insert(tier.clone(), model);
+        routing.route = Some(tier);
+        true
+    }
+
+    pub fn available_models(&self) -> Vec<String> {
+        self.0.routing.lock().unwrap().available.clone()
+    }
+
+    fn set_available_models(&self, models: Vec<String>) {
+        let mut routing = self.0.routing.lock().unwrap();
+        routing.available = models;
+        for tier in ["local", "flash", "mid", "frontier"] {
+            let choices = models_for_tier(&routing.available, tier);
+            match routing.preferred.get(tier) {
+                Some(current) if choices.contains(current) => {}
+                _ => match choices.first() {
+                    Some(first) => {
+                        routing.preferred.insert(tier.into(), first.clone());
+                    }
+                    None => {
+                        routing.preferred.remove(tier);
+                    }
+                },
+            }
+        }
+        if routing
+            .route
+            .as_ref()
+            .is_some_and(|tier| models_for_tier(&routing.available, tier).is_empty())
+        {
+            routing.route = None;
+        }
+    }
+}
+
+fn models_for_tier(models: &[String], tier: &str) -> Vec<String> {
+    let prefix = format!("{tier}/");
+    models
+        .iter()
+        .filter(|id| id.starts_with(&prefix))
+        .cloned()
+        .collect()
+}
+
+fn set_min(target: &AtomicU32, value: u32, min: u32) -> u32 {
+    let value = value.max(min);
+    target.store(value, Ordering::Relaxed);
+    value
 }
 
 fn clamp_depth(depth: u32) -> u32 {
@@ -77,6 +284,57 @@ type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 /// Inner-agent retry policy: total attempts plus backoff.
 type RetryPolicy = (u32, std::time::Duration);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubagentIdentity {
+    pub provider: String,
+    pub model: String,
+    /// Stable tool-facing route such as `frontier/claude-sonnet-5`.
+    /// `None` means the worker inherited the orchestrator model.
+    pub route: Option<String>,
+}
+
+impl SubagentIdentity {
+    pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.into(),
+            route: None,
+        }
+    }
+
+    fn with_route(mut self, route: String) -> Self {
+        self.route = Some(route);
+        self
+    }
+}
+
+/// One host-approved model the orchestrator may select for a spawned agent.
+/// The host owns provider construction and credentials; this tool only exposes
+/// the stable `id` and `description` to the model.
+#[derive(Clone)]
+pub struct SubagentModel<M> {
+    pub id: String,
+    pub description: String,
+    pub model: M,
+    pub identity: Option<SubagentIdentity>,
+}
+
+impl<M> SubagentModel<M> {
+    pub fn new(id: impl Into<String>, description: impl Into<String>, model: M) -> Self {
+        Self {
+            id: id.into(),
+            description: description.into(),
+            model,
+            identity: None,
+        }
+    }
+
+    pub fn identity(mut self, provider: impl Into<String>, model: impl Into<String>) -> Self {
+        self.identity = Some(SubagentIdentity::new(provider, model));
+        self
+    }
+}
+
 /// Identity of one spawned inner agent, handed to the host's
 /// spawn-extension factory.
 #[derive(Clone, Debug)]
@@ -90,6 +348,7 @@ pub struct SubagentSpawn {
     /// The spawning agent's tool-call id (anchors UI rendering).
     pub call_id: String,
     pub task: String,
+    pub identity: Option<SubagentIdentity>,
 }
 
 /// Builds extensions to attach to each spawned inner agent.
@@ -106,8 +365,11 @@ impl Drop for InFlight {
 
 pub struct SubagentTool<M: Model + Clone + 'static> {
     model: M,
+    inherited_identity: Option<SubagentIdentity>,
+    models: Vec<SubagentModel<M>>,
     tools: ToolFactory,
     limits: Limits,
+    limits_configured: bool,
     system_prompt: Option<String>,
     /// Distance from the top-level agent; the instance registered there
     /// is depth 0.
@@ -139,13 +401,16 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
     pub fn with_tools(model: M, tools: ToolFactory) -> Self {
         Self {
             model,
+            inherited_identity: None,
+            models: Vec::new(),
             tools,
-            // Deliberately below Limits::default() (32): workers get a
-            // tighter leash than the orchestrator.
+            // Focused workers must synthesize rather than explore until the
+            // orchestrator's larger budget is exhausted.
             limits: Limits {
-                max_steps: 24,
+                max_steps: DEFAULT_SUBAGENT_MAX_STEPS,
                 ..Limits::default()
             },
+            limits_configured: false,
             system_prompt: None,
             depth: 0,
             max_depth: SubagentDepth::default(),
@@ -173,6 +438,28 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
 
     pub fn limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
+        self.limits_configured = true;
+        self
+    }
+
+    /// Name the model inherited when a call has no explicit or configured
+    /// route. Hosts that omit this still run normally, but cannot surface a
+    /// resolved provider/model for inherited workers.
+    pub fn inherited_identity(
+        mut self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        self.inherited_identity = Some(SubagentIdentity::new(provider, model));
+        self
+    }
+
+    /// Offer a host-approved model shortlist to the orchestrator. Omitting
+    /// `model` in a call continues to use the model passed to [`Self::new`].
+    pub fn models(mut self, models: impl IntoIterator<Item = SubagentModel<M>>) -> Self {
+        self.models = models.into_iter().collect();
+        self.max_depth
+            .set_available_models(self.models.iter().map(|model| model.id.clone()).collect());
         self
     }
 
@@ -185,6 +472,19 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
 
     /// Share a depth handle (and thus a runtime-adjustable nesting cap).
     pub fn max_depth(mut self, depth: SubagentDepth) -> Self {
+        depth.set_available_models(self.models.iter().map(|model| model.id.clone()).collect());
+        if self.limits_configured {
+            depth
+                .0
+                .max_steps
+                .store(self.limits.max_steps, Ordering::Relaxed);
+        }
+        if let Some((attempts, backoff)) = self.retry_policy {
+            let mut retry = depth.0.retry.lock().unwrap();
+            retry.attempts = attempts;
+            retry.backoff_ms = backoff.as_millis().min(u32::MAX as u128) as u32;
+            retry.configured = true;
+        }
         self.max_depth = depth;
         self
     }
@@ -197,6 +497,12 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
     /// agent build (the CLI does).
     pub fn retry(mut self, max_attempts: u32, backoff: std::time::Duration) -> Self {
         self.retry_policy = Some((max_attempts.max(1), backoff));
+        {
+            let mut retry = self.max_depth.0.retry.lock().unwrap();
+            retry.attempts = max_attempts.max(1);
+            retry.backoff_ms = backoff.as_millis().min(u32::MAX as u128) as u32;
+            retry.configured = true;
+        }
         self
     }
 
@@ -208,15 +514,34 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         ok_failure: impl Fn(&ToolCall, &Value) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.retry_policy = Some((max_attempts.max(1), backoff));
+        {
+            let mut retry = self.max_depth.0.retry.lock().unwrap();
+            retry.attempts = max_attempts.max(1);
+            retry.backoff_ms = backoff.as_millis().min(u32::MAX as u128) as u32;
+            retry.configured = true;
+        }
         self.ok_failure = Some(std::sync::Arc::new(ok_failure));
         self
     }
 
-    fn child_replica(&self, spawn_id: u64) -> Self {
+    /// Set only the data-failure classifier. Retry attempts and backoff remain
+    /// controlled by the shared live settings handle.
+    pub fn retry_ok_when(
+        mut self,
+        ok_failure: impl Fn(&ToolCall, &Value) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.ok_failure = Some(std::sync::Arc::new(ok_failure));
+        self
+    }
+
+    fn child_replica(&self, spawn_id: u64, model: M, identity: Option<SubagentIdentity>) -> Self {
         Self {
-            model: self.model.clone(),
+            model,
+            inherited_identity: identity,
+            models: self.models.clone(),
             tools: self.tools.clone(),
             limits: self.limits.clone(),
+            limits_configured: self.limits_configured,
             system_prompt: self.system_prompt.clone(),
             depth: self.depth + 1,
             max_depth: self.max_depth.clone(),
@@ -234,11 +559,23 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
 /// pulling in the extensions crate for one hook would invert the crate
 /// layering.
 #[derive(Clone, Default)]
-struct Meter(Arc<StdMutex<Usage>>);
+struct Meter {
+    usage: Arc<StdMutex<Usage>>,
+    steps: Arc<AtomicU32>,
+    tool_calls: Arc<AtomicU32>,
+}
 
 impl Meter {
     fn total(&self) -> Usage {
-        *self.0.lock().unwrap()
+        *self.usage.lock().unwrap()
+    }
+
+    fn steps(&self) -> u32 {
+        self.steps.load(Ordering::Relaxed)
+    }
+
+    fn tool_calls(&self) -> u32 {
+        self.tool_calls.load(Ordering::Relaxed)
     }
 }
 
@@ -249,7 +586,12 @@ impl Extension for Meter {
     }
 
     fn subscriptions(&self) -> Subscriptions {
-        Subscriptions::none().after_model()
+        Subscriptions::none().before_model().after_model()
+    }
+
+    async fn before_model(&self, _context: &mut Context) -> Result<(), ExtensionError> {
+        self.steps.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
     async fn after_model(
@@ -258,7 +600,11 @@ impl Extension for Meter {
         response: &ModelResponse,
     ) -> Result<(), ExtensionError> {
         if let Some(usage) = response.usage() {
-            self.0.lock().unwrap().add(usage);
+            self.usage.lock().unwrap().add(usage);
+        }
+        if let ModelResponse::ToolCalls { calls, .. } = response {
+            self.tool_calls
+                .fetch_add(calls.len() as u32, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -343,21 +689,55 @@ impl Extension for SubagentRetry {
 #[async_trait]
 impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
     fn schema(&self) -> ToolSchema {
+        let mut properties = serde_json::Map::from_iter([
+            (
+                "task".into(),
+                json!({"type": "string", "description": "Complete, self-contained task for the agent."}),
+            ),
+            (
+                "systemPrompt".into(),
+                json!({"type": "string", "description": "Optional system prompt override for this agent."}),
+            ),
+        ]);
+        if !self.models.is_empty() {
+            let ids: Vec<&str> = self
+                .models
+                .iter()
+                .map(|choice| choice.id.as_str())
+                .collect();
+            let choices = self
+                .models
+                .iter()
+                .map(|choice| format!("{} — {}", choice.id, choice.description))
+                .collect::<Vec<_>>()
+                .join("; ");
+            properties.insert(
+                "model".into(),
+                json!({
+                    "type": "string",
+                    "enum": ids,
+                    "description": format!(
+                        "Optional worker model. Omit to use the orchestrator's current model. Choices: {choices}"
+                    )
+                }),
+            );
+        }
+
         ToolSchema {
             name: "subagent".into(),
             description: "Spawn an independent agent with its own context and full file/shell \
-                tool access to work on one task. Give it a complete, self-contained task \
-                description — it sees nothing of this conversation and returns only its final \
-                answer. Several subagent calls issued in the same response run in parallel."
+                tool access to work on one bounded task. Subagents can run for many model steps, \
+                so delegate deliberately: give a complete, self-contained task with the exact \
+                result expected and an explicit stopping condition. Avoid open-ended goals or \
+                investigation without a defined deliverable. It sees nothing of this conversation \
+                and returns only its final answer. Several subagent calls issued in the same \
+                response run in parallel."
                 .into(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string", "description": "Complete, self-contained task for the agent."},
-                    "systemPrompt": {"type": "string", "description": "Optional system prompt override for this agent."}
-                },
-                "required": ["task"]
-            }),
+            parameters: Value::Object(serde_json::Map::from_iter([
+                ("type".into(), Value::String("object".into())),
+                ("properties".into(), Value::Object(properties)),
+                ("required".into(), json!(["task"])),
+            ])),
         }
     }
 
@@ -370,6 +750,27 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             .get("task")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`task` (string) is required"))?;
+        let requested = input.get("model").and_then(Value::as_str);
+        let selected = requested
+            .map(str::to_string)
+            .or_else(|| self.max_depth.default_model());
+        let (model, identity) = match selected.as_deref() {
+            None => (self.model.clone(), self.inherited_identity.clone()),
+            Some(id) => {
+                let choice = self
+                    .models
+                    .iter()
+                    .find(|choice| choice.id == id)
+                    .ok_or_else(|| ToolError::msg(format!("unknown subagent model `{id}`")))?;
+                (
+                    choice.model.clone(),
+                    choice
+                        .identity
+                        .clone()
+                        .map(|identity| identity.with_route(id.to_string())),
+                )
+            }
+        };
         let system = input
             .get("systemPrompt")
             .and_then(Value::as_str)
@@ -381,10 +782,21 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
         let _in_flight = InFlight(self.stats.clone());
 
         let meter = Meter::default();
-        let usage = meter.clone();
-        let mut agent = Agent::new(self.model.clone())
-            .limits(self.limits.clone())
-            .extension(meter);
+        let telemetry = meter.clone();
+        let started = std::time::Instant::now();
+        let mut limits = self.limits.clone();
+        if !self.limits_configured {
+            limits.max_steps = self.max_depth.max_steps();
+        }
+        let worker_deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(self.max_depth.timeout_secs() as u64);
+        limits.deadline = Some(match (limits.deadline, ctx.deadline) {
+            (Some(configured), Some(parent)) => configured.min(parent).min(worker_deadline),
+            (Some(configured), None) => configured.min(worker_deadline),
+            (None, Some(parent)) => parent.min(worker_deadline),
+            (None, None) => worker_deadline,
+        });
+        let mut agent = Agent::new(model.clone()).limits(limits).extension(meter);
         if let Some(system) = system {
             agent = agent.system_prompt(system);
         }
@@ -392,7 +804,11 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             agent = agent.tool_arc(tool);
         }
         if self.depth + 1 < self.max_depth.get() {
-            agent = agent.tool_arc(Arc::new(self.child_replica(spawn_id)));
+            agent = agent.tool_arc(Arc::new(self.child_replica(
+                spawn_id,
+                model,
+                identity.clone(),
+            )));
         }
         if let Some(factory) = &self.spawn_extensions {
             let spawn = SubagentSpawn {
@@ -401,6 +817,7 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
                 depth: self.depth,
                 call_id: ctx.call_id.clone(),
                 task: task.to_string(),
+                identity: identity.clone(),
             };
             for extension in factory(&spawn) {
                 agent = agent.extension_arc(extension);
@@ -413,24 +830,45 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
         // build, retry wraps their `around_tool`, and denials from
         // `before_tool` never reach the around chain, so a `Deny` verdict
         // is not retried.
-        if let Some(policy) = self.retry_policy {
+        let tool_attempts = self.max_depth.tool_attempts();
+        if tool_attempts > 1 {
             agent = agent.extension_arc(std::sync::Arc::new(SubagentRetry::new(
-                policy,
+                (
+                    tool_attempts,
+                    std::time::Duration::from_millis(self.max_depth.retry_backoff_ms() as u64),
+                ),
                 self.ok_failure.clone(),
             )));
         }
 
-        let answer = agent
+        let result = agent
             .run_with_cancellation(task, ctx.cancellation.child_token())
-            .await
-            .map_err(|e| ToolError::msg(format!("subagent failed: {e}")))?;
-        let total = usage.total();
+            .await;
+        let elapsed_ms = started.elapsed().as_millis();
+        let total = telemetry.total();
+        let steps = telemetry.steps();
+        let tool_calls = telemetry.tool_calls();
+        let answer = result.map_err(|err| {
+            ToolError::msg(format!(
+                "subagent failed: {err} (runtimeMs={elapsed_ms}, steps={steps}, toolCalls={tool_calls}, inputTokens={}, outputTokens={})",
+                total.input_tokens, total.output_tokens
+            ))
+        })?;
         Ok(json!({
             "answer": answer,
             "usage": {
                 "inputTokens": total.input_tokens,
                 "outputTokens": total.output_tokens,
-            }
+            },
+            "runtimeMs": elapsed_ms,
+            "steps": steps,
+            "toolCalls": tool_calls,
+            "termination": "completed",
+            "identity": identity.as_ref().map(|identity| json!({
+                "provider": identity.provider,
+                "model": identity.model,
+                "route": identity.route,
+            })),
         }))
     }
 }
