@@ -1,4 +1,35 @@
 #[test]
+fn shift_tab_cycles_session_modes() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+
+    for (code, expected) in [
+        (KeyCode::BackTab, crate::mode::Mode::Plan),
+        (KeyCode::BackTab, crate::mode::Mode::Yolo),
+        (KeyCode::Tab, crate::mode::Mode::Normal),
+    ] {
+        handle_terminal_event(
+            &mut app,
+            CtEvent::Key(KeyEvent::new(code, KeyModifiers::SHIFT)),
+            &tx,
+            80,
+        );
+        assert_eq!(app.cfg.mode.get(), expected);
+    }
+
+    assert!(app.composer.is_empty(), "shortcut is not composer input");
+    let text = app
+        .pending_history
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("plan mode"), "{text}");
+    assert!(text.contains("yolo mode"), "{text}");
+    assert!(text.contains("normal mode"), "{text}");
+}
+
+#[test]
 fn split_view_connects_the_selected_tool_to_its_inspector() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();

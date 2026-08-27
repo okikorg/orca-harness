@@ -63,7 +63,7 @@ pub(crate) fn subagent_values(settings: &SubagentDepth, setting: SubagentSetting
     }
     let numbers: &[u32] = match setting {
         SubagentSetting::Depth => &[1, 2, 3, 4, 5],
-        SubagentSetting::Steps => &[6, 12, 18, 24, 36, 48],
+        SubagentSetting::Steps => &[6, 12, 18, 24, 36, 48, 72, 96],
         SubagentSetting::Timeout => &[30, 60, 180, 300, 600, 1_800],
         SubagentSetting::Output => &[1_000, 4_000, 8_000, 16_000, 32_000, 64_000],
         SubagentSetting::ToolAttempts => &[1, 2, 3, 5, 10],

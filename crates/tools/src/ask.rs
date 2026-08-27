@@ -170,7 +170,7 @@ fn generated_id(prefix: &str, index: usize) -> String {
 
 fn humanize_id(id: &str) -> String {
     let words = id
-        .split(|ch: char| ch == '_' || ch == '-')
+        .split(['_', '-'])
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ");

@@ -160,6 +160,15 @@ pub(crate) fn handle_terminal_event(
         }
         KeyCode::PageUp => scroll_transcript(app, SCROLL_PAGE as isize),
         KeyCode::PageDown => scroll_transcript(app, -(SCROLL_PAGE as isize)),
+        KeyCode::BackTab | KeyCode::Tab if shift => {
+            let current = app.cfg.mode.get();
+            let index = crate::mode::Mode::ALL
+                .iter()
+                .position(|mode| *mode == current)
+                .unwrap_or(0);
+            let next = crate::mode::Mode::ALL[(index + 1) % crate::mode::Mode::ALL.len()];
+            crate::tui::commands::apply_mode(app, next);
+        }
         KeyCode::Esc => {
             if app.palette_query().is_some() {
                 app.composer.clear();
@@ -234,12 +243,13 @@ pub(crate) fn handle_terminal_event(
             if let Some((start, end)) = marker_ending_at(&app.pastes, &app.composer, app.cursor) {
                 remove_marker(app, start, end);
                 app.reset_palette_picker();
-            } else if remove_location_mention_before_cursor(&mut app.composer, &mut app.cursor) {
-                app.reset_palette_picker();
-            } else if !app.composer.starts_with('!')
-                && remove_skill_mention_before_cursor(&mut app.composer, &mut app.cursor, |name| {
-                    app.cfg.skills.is_invokable(name)
-                })
+            } else if remove_location_mention_before_cursor(&mut app.composer, &mut app.cursor)
+                || (!app.composer.starts_with('!')
+                    && remove_skill_mention_before_cursor(
+                        &mut app.composer,
+                        &mut app.cursor,
+                        |name| app.cfg.skills.is_invokable(name),
+                    ))
             {
                 app.reset_palette_picker();
             } else if app.cursor > 0 {

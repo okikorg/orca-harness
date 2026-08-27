@@ -126,9 +126,9 @@ impl Tool for TodoWriteTool {
             description: "Record the task list for the work in progress, replacing the previous \
                 one. Send the complete list every time: marking an item done, adding a step you \
                 discovered, or dropping one that turned out to be unnecessary are all just \
-                another write. Use it for work with several distinct steps, and keep exactly \
-                one item in_progress while you are working on it — a plan nobody updates is \
-                worse than no plan. Skip it for single-step requests."
+                another write. Use it only for complex, ambiguous, or multi-phase work, or when \
+                the user explicitly asks for a todo plan; never for routine follow-ups, simple \
+                requests, or single-step work. Keep exactly one item in_progress while working."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -259,6 +259,15 @@ mod tests {
 
     fn tool() -> TodoWriteTool {
         TodoWriteTool::new(TodoList::new())
+    }
+
+    #[test]
+    fn schema_limits_when_the_tool_should_be_used() {
+        let description = tool().schema().description;
+        assert!(description.contains("complex, ambiguous, or multi-phase"));
+        assert!(description.contains("explicitly asks for a todo plan"));
+        assert!(description.contains("never for routine follow-ups"));
+        assert!(description.contains("simple requests, or single-step work"));
     }
 
     #[tokio::test]

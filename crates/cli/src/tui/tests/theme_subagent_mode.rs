@@ -115,10 +115,10 @@ mod subagents_command_tests {
         let Some(Overlay::SubagentValues { ref picker, .. }) = app.overlay else {
             panic!("steps preset picker");
         };
-        assert_eq!(picker.index(), 1, "12 steps is the default preset");
+        assert_eq!(picker.index(), 3, "24 steps is the default preset");
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
-        assert_eq!(settings.max_steps(), 18);
+        assert_eq!(settings.max_steps(), 36);
         assert!(app.overlay.is_none());
     }
 
