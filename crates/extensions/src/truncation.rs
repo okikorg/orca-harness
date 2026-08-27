@@ -21,6 +21,13 @@ use orca_harness_core::{Extension, ExtensionError, Subscriptions, ToolCall, Tool
 /// (it enforces its own slice cap) and from being stored again.
 pub(crate) const READ_TOOL_RESULT: &str = "read_tool_result";
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredEntry {
+    call_id: String,
+    tool_name: String,
+    full: String,
+}
+
 struct StoreEntry {
     tool_name: String,
     /// Serialized JSON of the original, untruncated output.
@@ -55,6 +62,73 @@ impl TruncationStore {
             inner: Arc::new(Mutex::new(StoreInner::default())),
             budget: budget_bytes,
         }
+    }
+
+    /// Load a store previously written by [`save`](Self::save).
+    pub fn load(path: &std::path::Path, budget_bytes: usize) -> std::io::Result<Self> {
+        let store = Self::new(budget_bytes);
+        if !path.exists() {
+            return Ok(store);
+        }
+        let bytes = std::fs::read(path)?;
+        let entries: Vec<StoredEntry> = serde_json::from_slice(&bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        for entry in entries {
+            store.insert(&entry.call_id, &entry.tool_name, entry.full);
+        }
+        Ok(store)
+    }
+
+    /// Persist the retained originals atomically as a session sidecar.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let entries = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .order
+                .iter()
+                .filter_map(|call_id| {
+                    inner.entries.get(call_id).map(|entry| StoredEntry {
+                        call_id: call_id.clone(),
+                        tool_name: entry.tool_name.clone(),
+                        full: entry.full.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let bytes = serde_json::to_vec(&entries).map_err(std::io::Error::other)?;
+        let temp = path.with_extension("recovery.tmp");
+        std::fs::write(&temp, bytes)?;
+        std::fs::rename(temp, path)
+    }
+
+    /// Create an independent snapshot for a forked session.
+    pub fn snapshot(&self) -> Self {
+        let snapshot = Self::new(self.budget);
+        let entries = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .order
+                .iter()
+                .filter_map(|call_id| {
+                    inner.entries.get(call_id).map(|entry| {
+                        (
+                            call_id.clone(),
+                            entry.tool_name.clone(),
+                            entry.full.to_string(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        for (call_id, tool_name, full) in entries {
+            snapshot.insert(&call_id, &tool_name, full);
+        }
+        snapshot
+    }
+
+    /// Remove all retained originals.
+    pub fn clear(&self) {
+        *self.inner.lock().unwrap() = StoreInner::default();
     }
 
     pub(crate) fn insert(&self, call_id: &str, tool_name: &str, full: String) {

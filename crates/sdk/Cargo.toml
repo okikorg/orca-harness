@@ -1,0 +1,24 @@
+[package]
+name = "orca-harness-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "High-level Rust SDK for composing Orca Harness agents, runs, sessions, tools, memory, MCP, and skills."
+
+[lib]
+name = "orca_harness_sdk"
+
+[dependencies]
+orca-harness-core = { path = "../harness-core" }
+orca-harness-model-providers = { path = "../model-providers" }
+orca-harness-provider-auth = { path = "../provider-auth" }
+orca-harness-tools = { path = "../tools" }
+orca-harness-tool-extensions = { path = "../tool-extensions" }
+orca-harness-extensions = { path = "../extensions" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

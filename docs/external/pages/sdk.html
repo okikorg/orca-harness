@@ -1,0 +1,102 @@
+<section class="section" id="sdk-overview"><h2>When to use the SDK</h2><p><code>orca-harness-sdk</code> is the high-level Rust facade for embedding Orca Harness in your own process. It composes models, workspace tools, extensions, sessions, memory, skills, MCP, events, retries, truncation, compaction, and cancellation without importing the <code>orcacode</code> terminal UI or its configuration layer.</p><div class="callout"><span class="callout-label">HOST RESPONSIBILITY</span><p>The SDK executes with the permissions of your process. Your application owns credential loading, user-facing approvals, configuration, process isolation, shutdown policy, and which tools it exposes. <code>ToolPreset::Coding</code> and <code>ToolPreset::ShellLess</code> can change workspace state; do not enable them for untrusted prompts without an appropriate policy and sandbox.</p></div><table class="command-table"><thead><tr><th>Choose</th><th>When</th></tr></thead><tbody><tr><td><code>orca-harness-sdk</code></td><td>You want a batteries-included Rust composition API with sessions and common extensions.</td></tr><tr><td><code>orca-harness-core</code></td><td>You need direct control over the minimal model → tool loop and will assemble every lifecycle component yourself.</td></tr><tr><td><code>orcacode</code></td><td>You want the ready-made interactive or headless terminal host rather than an embedded library.</td></tr></tbody></table></section>
+<section class="section" id="sdk-install"><h2>Add the crate</h2><p>The SDK is currently a workspace crate. From a checkout of this repository, add it by path:</p><div class="terminal"><pre><span class="prompt">$</span> cargo add --path crates/sdk orca-harness-sdk
+<span class="prompt">$</span> cargo add tokio --features macros,rt-multi-thread</pre></div><p>In <code>Cargo.toml</code>, package names use hyphens while Rust imports use underscores:</p><div class="terminal"><pre>[dependencies]
+orca-harness-sdk = { path = "crates/sdk" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }</pre></div><div class="callout"><span class="callout-label">VERSIONING</span><p>The facade is at <code>0.1.0</code>. Pin the exact revision when consuming it from outside this workspace and expect the API to evolve before a stable release.</p></div></section>
+<section class="section" id="sdk-first-agent"><h2>Build and run an agent</h2><p>A <code>Harness</code> owns workspace-scoped paths. An <code>Agent</code> is a reusable definition. A <code>Session</code> owns conversation context, and each <code>run</code> adds one user turn.</p><div class="terminal"><pre>use orca_harness_sdk::{Harness, OpenAiModel, ToolPreset};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let model = OpenAiModel::new("gpt-4o-mini")
+        .api_key(std::env::var("OPENAI_API_KEY")?);
+
+    let harness = Harness::builder()
+        .workspace(std::env::current_dir()?)
+        .build()?;
+
+    let agent = harness
+        .agent(model)
+        .name("embedded-assistant")
+        .system_prompt("Be concise. Inspect before changing files.")
+        .tools(ToolPreset::ReadOnly)
+        .build()?;
+
+    let session = agent.new_session().ephemeral().open()?;
+    let result = session.run("Summarize this workspace").await?;
+    println!("{}", result.text);
+    Ok(())
+}</pre></div><p><code>HarnessBuilder::workspace</code> defaults to the current directory. The directory must already exist and is canonicalized. State defaults to <code>&lt;workspace&gt;/.orca</code>; call <code>.state_dir(...)</code> to keep SDK state elsewhere.</p></section>
+<section class="section" id="sdk-models"><h2>Supply a model</h2><p><code>Harness::agent</code> accepts any implementation of the re-exported <code>Model</code> trait. The facade re-exports the built-in OpenAI-compatible, OpenRouter, and OpenAI Codex adapters.</p><table class="command-table"><thead><tr><th>Adapter</th><th>Construction</th></tr></thead><tbody><tr><td>OpenAI or compatible endpoint</td><td><code>OpenAiModel::new("model").api_key(key)</code>; add <code>.base_url(url)</code> for vLLM, llama.cpp, or another compatible server.</td></tr><tr><td>OpenRouter</td><td><code>OpenRouterModel::new("provider/model").api_key(key)</code>.</td></tr><tr><td>ChatGPT/Codex credentials</td><td><code>OpenAiCodexModel::new("model", credential_source)</code>. This constructor expects <code>Arc&lt;dyn CodexCredentialSource&gt;</code>. That trait is not re-exported by the SDK, so Codex hosts must also depend on <code>orca-harness-model-providers</code> and import <code>openai_codex::CodexCredentialSource</code>. The host owns credential acquisition, persistence, and refresh.</td></tr><tr><td>Custom or test model</td><td>Implement <code>Model</code>. Repository examples use <code>ScriptedModel</code> for deterministic, offline runs.</td></tr></tbody></table><p>Credentials are plain host inputs to these adapters. The SDK does not read Orcacode’s saved config or start an interactive login flow.</p></section>
+<section class="section" id="sdk-tools"><h2>Choose tools explicitly</h2><table class="command-table"><thead><tr><th>Preset</th><th>Capabilities</th></tr></thead><tbody><tr><td><code>ToolPreset::None</code></td><td>No workspace tools. This is the default.</td></tr><tr><td><code>ToolPreset::ReadOnly</code></td><td>Read files, list directories, grep, and glob.</td></tr><tr><td><code>ToolPreset::ShellLess</code></td><td>Read/write/edit and filesystem administration, but no shell or long-lived process tool.</td></tr><tr><td><code>ToolPreset::Coding</code></td><td>The core coding toolset, including state-changing and command execution capabilities.</td></tr></tbody></table><p>Add host-specific tools with <code>.tool(...)</code> or <code>.tool_arc(...)</code>. <code>FnTool</code> is convenient for a typed JSON-schema boundary:</p><div class="terminal"><pre>use orca_harness_sdk::FnTool;
+use serde_json::json;
+
+let lookup = FnTool::new(
+    "lookup_issue",
+    "Look up an issue by numeric id",
+    json!({
+        "type": "object",
+        "properties": { "id": { "type": "integer" } },
+        "required": ["id"]
+    }),
+    |args, _context| async move {
+        Ok(json!({ "id": args["id"], "status": "open" }))
+    },
+);
+
+let agent = harness.agent(model).tool(lookup).build()?;</pre></div><p>Use <code>.python()</code>, <code>.bun()</code>, and <code>.todos()</code> for the corresponding opt-in tools. Add <code>ToolPolicy</code> with <code>.policy(policy)</code> to allow or deny calls before execution.</p></section>
+<section class="section" id="sdk-runs"><h2>Observe and control runs</h2><p><code>Session::run</code> waits for completion. Use <code>RunRequest</code> to attach images, a deadline, or an event callback. Events and usage metering are enabled by default.</p><div class="terminal"><pre>use std::time::Duration;
+use orca_harness_sdk::{HarnessEvent, RunRequest};
+
+let request = RunRequest::new("Inspect the failing tests")
+    .deadline(Duration::from_secs(90))
+    .on_event(|event| {
+        if let HarnessEvent::ToolCall { tool_name, .. } = event {
+            eprintln!("calling {tool_name}");
+        }
+    });
+
+let result = session.run(request).await?;
+eprintln!("steps: {}", result.metered_steps);
+eprintln!("tokens: {:?}", result.usage);
+println!("{}", result.text);</pre></div><p><code>RunResult</code> contains final text, accumulated usage, metered model steps, and the resulting message list. <code>RunRequest::image_path</code> supports PNG, JPEG, GIF, and WebP files; <code>image</code> accepts an already encoded <code>Image</code>.</p><h3>Background execution</h3><p><code>Session::start</code> returns a <code>RunHandle</code> with an event receiver, a cancellation token, and <code>finish()</code>. Dropping the handle requests cancellation. A session permits only one active run; concurrent use returns <code>SdkError::BusySession</code>.</p><div class="terminal"><pre>let mut run = session.start("Run the analysis")?;
+let cancel = run.cancellation_token();
+
+while let Some(event) = run.events().recv().await {
+    eprintln!("{event:?}");
+    // Call cancel.cancel() from your timeout, signal, or UI handler.
+}
+
+let result = run.finish().await?;</pre></div></section>
+<section class="section" id="sdk-sessions"><h2>Persist and branch sessions</h2><p>Sessions are ephemeral unless <code>.persistent()</code> is selected. Persistent transcripts are stored below the harness state directory and can be listed and resumed by ID.</p><div class="terminal"><pre>let session = agent.new_session().persistent().open()?;
+let id = session.id().expect("persistent session id");
+session.run("Review the current design").await?;
+
+for file in harness.sessions().list() {
+    println!("{} {}", file.meta.id, file.path.display());
+}
+
+let resumed = agent.resume_session(&id)?;
+let branch = resumed.fork().await?;</pre></div><table class="command-table"><thead><tr><th>Method</th><th>Effect</th></tr></thead><tbody><tr><td><code>messages()</code></td><td>Clone the current in-memory conversation.</td></tr><tr><td><code>fork()</code></td><td>Create a persistent child session with inherited context and a new ID.</td></tr><tr><td><code>clear()</code></td><td>Reset context and, for a persistent session, rotate to a new session file and ID.</td></tr><tr><td><code>reset_in_place()</code></td><td>Destructively reset a persistent session while retaining its ID.</td></tr><tr><td><code>load_warnings()</code></td><td>Report non-fatal warnings encountered while restoring persisted data.</td></tr></tbody></table></section>
+<section class="section" id="sdk-state"><h2>Add memory, skills, and MCP</h2><h3>Memory</h3><p><code>harness.memory()</code> opens the workspace-scoped SQLite store. Use its CRUD methods directly, then attach a <code>MemoryConfig</code> to an agent. <code>MemoryConfig::new</code> enables automatic recall and the read-only search tool; <code>MemoryConfig::read_write</code> additionally exposes the management tool.</p><div class="terminal"><pre>use orca_harness_sdk::MemoryConfig;
+
+let memory = harness.memory()?;
+memory.save("Prefer Rust examples", "preference", false, "host-setup")?;
+
+let agent = harness
+    .agent(model)
+    .memory(MemoryConfig::new(memory).max_recalled_items(6))
+    .build()?;</pre></div><h3>Skills</h3><p><code>harness.skills()</code> creates a manager for configured, home, and workspace roots. Call <code>reload()</code> before building the agent so discovered skills can become a tool. The manager also supports scaffold, install, enable, disable, and uninstall operations.</p><h3>MCP</h3><p><code>harness.mcp()</code> creates an empty manager. Connect named stdio servers before passing the manager to the agent:</p><div class="terminal"><pre>let mcp = harness.mcp();
+let status = mcp.connect("tickets", "ticket-mcp --stdio").await?;
+eprintln!("{} tools", status.tool_count);
+
+let agent = harness.agent(model).mcp(mcp.clone()).build()?;
+// Later: mcp.disconnect("tickets");</pre></div><p>The command is launched as a local child process. Validate commands from configuration before connecting them, and arrange process cleanup appropriate to your host.</p></section>
+<section class="section" id="sdk-long-runs"><h2>Harden long-running agents</h2><table class="command-table"><thead><tr><th>Builder option</th><th>Purpose</th></tr></thead><tbody><tr><td><code>tool_retry(RetryConfig)</code></td><td>Retry transient tool failures.</td></tr><tr><td><code>model_retry(RetryConfig)</code></td><td>Retry transient model failures.</td></tr><tr><td><code>truncation(TruncationConfig)</code></td><td>Bound large string results, retain full data in a recovery store, and optionally expose <code>read_tool_result</code>.</td></tr><tr><td><code>automatic_compaction(threshold, tail)</code></td><td>Compact context when estimated use reaches a percentage of <code>context_capacity</code>.</td></tr><tr><td><code>on_compact(callback)</code></td><td>Observe automatic compaction reports.</td></tr><tr><td><code>limits(Limits)</code></td><td>Bound model steps, tool calls, parallelism, and other kernel limits.</td></tr></tbody></table><p>Truncation, event streaming, usage metering, and manual compaction support are configured by default. Call <code>session.compact(CompactConfig { ... })</code> for explicit compaction. Persistent sessions also persist truncation recovery data so <code>read_tool_result</code> can recover full output after resume or fork.</p></section>
+<section class="section" id="sdk-errors"><h2>Handle the SDK boundary</h2><p>Public operations return <code>SdkError</code>. Match variants when the host can recover:</p><table class="command-table"><thead><tr><th>Variant</th><th>Typical response</th></tr></thead><tbody><tr><td><code>BusySession</code></td><td>Wait for or cancel the active run; do not start a second turn on the same session.</td></tr><tr><td><code>SessionNotFound</code></td><td>Refresh the session list or create a new session.</td></tr><tr><td><code>EphemeralSession</code></td><td>Use a persistent session for fork or in-place reset operations that require a recorder.</td></tr><tr><td><code>Harness</code></td><td>Inspect execution failures such as cancellation, deadlines, limits, model errors, or tool errors.</td></tr><tr><td><code>Io</code>, <code>Session</code>, <code>Memory</code>, <code>Mcp</code>, <code>Skill</code></td><td>Report the owned subsystem failure without discarding its source.</td></tr></tbody></table></section>
+<section class="section" id="sdk-examples"><h2>Run the examples</h2><p>The checked-in SDK examples use deterministic scripted models and temporary workspaces, so they require no API key or external network service.</p><div class="terminal"><pre><span class="prompt">$</span> cargo run -p orca-harness-sdk --example host_assembly
+<span class="prompt">$</span> cargo run -p orca-harness-sdk --example custom_tool_events
+<span class="prompt">$</span> cargo run -p orca-harness-sdk --example session_lifecycle
+<span class="prompt">$</span> cargo run -p orca-harness-sdk --example background_cancellation
+<span class="prompt">$</span> cargo run -p orca-harness-sdk --example memory_skills
+<span class="prompt">$</span> cargo run -p orca-harness-sdk --example local_mcp
+<span class="prompt">$</span> cargo run -p orca-harness-sdk --example recovery_compaction_retry</pre></div><table class="command-table"><thead><tr><th>Example</th><th>Focus</th></tr></thead><tbody><tr><td><code>host_assembly</code></td><td>Complete host composition: state, custom tool, policy, events, memory, skills, MCP, and persistence.</td></tr><tr><td><code>custom_tool_events</code></td><td>Custom tool calls, ordered lifecycle events, and usage.</td></tr><tr><td><code>session_lifecycle</code></td><td>List, resume, fork, clear-by-rotation, and reset-in-place.</td></tr><tr><td><code>background_cancellation</code></td><td>Background events, cooperative cancellation, and busy-session rejection.</td></tr><tr><td><code>memory_skills</code></td><td>Memory CRUD and recall plus the skill lifecycle.</td></tr><tr><td><code>local_mcp</code></td><td>Local stdio MCP discovery and connection lifecycle.</td></tr><tr><td><code>recovery_compaction_retry</code></td><td>Retries, truncation recovery, resume/fork, and manual/automatic compaction.</td></tr></tbody></table><p>For the broadest single-file walkthrough, also see <code>crates/sdk/examples/agent_tour.rs</code>. Validate all SDK targets with <code>cargo test -p orca-harness-sdk</code> and <code>cargo clippy -p orca-harness-sdk --all-targets -- -D warnings</code>.</p></section>

@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Architecture boundary and implementation guide for packaging orca-harness-sdk inside an agent-orc platform worker." />
+  <title>Orca Harness SDK × agent-orc worker — integration blueprint</title>
+  <style>
+    :root {
+      --night: #07131c;
+      --deep: #0a1b26;
+      --panel: #0d2430;
+      --panel-2: #102b38;
+      --paper: #d9e7eb;
+      --muted: #8da7b1;
+      --faint: #55717c;
+      --rule: #234653;
+      --rule-hot: #3c6875;
+      --sdk: #4dd9d2;
+      --sdk-soft: #163d43;
+      --platform: #ff826b;
+      --platform-soft: #442b2d;
+      --worker: #f5c95f;
+      --worker-soft: #40391f;
+      --ok: #9be47f;
+      --danger: #ff6685;
+      --code: #051017;
+      --max: 1560px;
+      --nav: 246px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --display: "Avenir Next Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+      --body: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--night); }
+    body {
+      margin: 0;
+      color: var(--paper);
+      background:
+        linear-gradient(rgba(77,217,210,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(77,217,210,.035) 1px, transparent 1px),
+        var(--night);
+      background-size: 26px 26px;
+      font: 16px/1.65 var(--body);
+    }
+    a { color: inherit; text-underline-offset: 4px; text-decoration-color: var(--rule-hot); }
+    a:hover { color: var(--worker); }
+    code, pre, nav, .mono, .eyebrow, .tag, .status, th, .owner { font-family: var(--mono); }
+    code { color: #e6f2f4; background: #102934; padding: 2px 5px; font-size: .88em; }
+    ::selection { color: var(--night); background: var(--worker); }
+    .skip { position: fixed; left: 12px; top: 10px; z-index: 30; transform: translateY(-160%); padding: 8px 11px; color: var(--night); background: var(--worker); }
+    .skip:focus { transform: none; }
+    .topbar {
+      height: 58px; position: sticky; top: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between; gap: 20px;
+      padding: 0 26px; border-bottom: 1px solid var(--rule-hot);
+      background: rgba(7,19,28,.94); backdrop-filter: blur(14px);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font: 800 14px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
+    .brand-mark { color: var(--worker); font: 700 18px/1 var(--mono); }
+    .brand span:last-child { color: var(--muted); font-weight: 600; }
+    .status { display: flex; align-items: center; gap: 8px; color: var(--ok); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 14px rgba(155,228,127,.65); }
+    .shell { width: min(var(--max), 100%); margin: 0 auto; display: grid; grid-template-columns: var(--nav) minmax(0, 1fr); border-inline: 1px solid var(--rule); }
+    nav.sidebar { position: sticky; top: 58px; align-self: start; height: calc(100vh - 58px); overflow: auto; padding: 32px 24px 50px; border-right: 1px solid var(--rule); background: rgba(7,19,28,.88); font-size: 12px; }
+    .nav-label { margin: 0 0 10px; color: var(--faint); font-size: 10px; letter-spacing: .15em; }
+    nav.sidebar a { display: block; padding: 5px 0; color: var(--muted); text-decoration: none; }
+    nav.sidebar a:hover { color: var(--paper); }
+    nav.sidebar a.sdk-link { color: var(--sdk); }
+    nav.sidebar a.worker-link { color: var(--worker); }
+    nav.sidebar a.platform-link { color: var(--platform); }
+    nav.sidebar hr { margin: 22px 0; border: 0; border-top: 1px solid var(--rule); }
+    .nav-note { margin-top: 24px; color: var(--faint); font-size: 10px; line-height: 1.7; }
+    main { min-width: 0; background: rgba(10,27,38,.54); }
+    section { scroll-margin-top: 78px; padding: 68px clamp(30px, 6vw, 96px); border-bottom: 1px solid var(--rule); }
+    section > * { max-width: 1120px; }
+    .hero { min-height: 620px; position: relative; overflow: hidden; display: grid; align-content: center; }
+    .hero::after {
+      content: "BOUNDARY"; position: absolute; right: -28px; bottom: -55px; pointer-events: none;
+      color: transparent; -webkit-text-stroke: 1px rgba(245,201,95,.16);
+      font: 900 clamp(100px, 18vw, 250px)/.8 var(--display); letter-spacing: -.05em;
+    }
+    .eyebrow { color: var(--worker); font-size: 11px; letter-spacing: .15em; text-transform: uppercase; }
+    h1, h2, h3, h4 { font-family: var(--display); }
+    h1 { max-width: 1050px; margin: 20px 0 24px; font-size: clamp(52px, 7.5vw, 104px); line-height: .89; letter-spacing: -.055em; text-transform: uppercase; }
+    h1 .platform-text { color: var(--platform); }
+    h1 .sdk-text { color: var(--sdk); }
+    .lede { max-width: 850px; margin: 0; color: #b6cbd2; font-size: clamp(18px, 2vw, 23px); line-height: 1.5; }
+    .verdict { position: relative; z-index: 1; display: inline-grid; grid-template-columns: auto 1fr; align-items: stretch; margin-top: 36px; border: 1px solid var(--rule-hot); background: rgba(5,16,23,.74); box-shadow: 8px 8px 0 rgba(245,201,95,.09); }
+    .verdict strong { display: grid; place-items: center; padding: 13px 16px; color: var(--night); background: var(--ok); font: 700 11px/1.2 var(--mono); letter-spacing: .08em; }
+    .verdict span { padding: 12px 16px; color: var(--paper); font: 12px/1.5 var(--mono); }
+    .section-head { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 24px; margin-bottom: 30px; align-items: start; }
+    .section-code { color: var(--worker); padding-top: 8px; border-top: 3px solid var(--worker); font: 11px/1.3 var(--mono); letter-spacing: .1em; }
+    h2 { margin: 0; font-size: clamp(36px, 5vw, 62px); line-height: .95; letter-spacing: -.04em; text-transform: uppercase; }
+    h3 { margin: 36px 0 12px; font-size: 25px; line-height: 1.15; }
+    h4 { margin: 0 0 8px; font-size: 18px; }
+    p { max-width: 870px; color: #bdd0d6; }
+    ul, ol { max-width: 900px; color: #bdd0d6; padding-left: 23px; }
+    li { margin: 7px 0; padding-left: 5px; }
+    .callout { max-width: 930px; margin: 26px 0; padding: 18px 20px; border-left: 4px solid var(--worker); background: linear-gradient(90deg, rgba(245,201,95,.1), transparent); }
+    .callout strong { display: block; margin-bottom: 4px; color: var(--worker); font: 700 11px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .callout.sdk { border-color: var(--sdk); background: linear-gradient(90deg, rgba(77,217,210,.1), transparent); }
+    .callout.sdk strong { color: var(--sdk); }
+    .callout.platform { border-color: var(--platform); background: linear-gradient(90deg, rgba(255,130,107,.1), transparent); }
+    .callout.platform strong { color: var(--platform); }
+    .legend { display: flex; flex-wrap: wrap; gap: 17px; margin: 18px 0 10px; color: var(--muted); font: 11px/1.4 var(--mono); }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .legend i { width: 11px; height: 11px; display: inline-block; }
+    .legend .p { background: var(--platform); } .legend .w { background: var(--worker); } .legend .s { background: var(--sdk); }
+    .blueprint { margin: 30px 0; border: 1px solid var(--rule-hot); background: var(--code); overflow: auto; box-shadow: 9px 9px 0 rgba(3,11,16,.34); }
+    .blueprint-head { display: flex; justify-content: space-between; gap: 16px; padding: 9px 13px; border-bottom: 1px solid var(--rule); color: var(--faint); font: 10px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .blueprint svg { display: block; min-width: 900px; width: 100%; height: auto; }
+    .boundary-grid { display: grid; grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr); margin: 30px 0; border: 1px solid var(--rule-hot); background: var(--code); }
+    .lane { padding: 25px; }
+    .lane.platform { background: linear-gradient(145deg, rgba(255,130,107,.09), transparent 58%); }
+    .lane.sdk { background: linear-gradient(215deg, rgba(77,217,210,.09), transparent 58%); }
+    .membrane { display: grid; place-items: center; color: var(--worker); border-inline: 1px dashed var(--worker); background: repeating-linear-gradient(135deg, rgba(245,201,95,.08) 0 6px, transparent 6px 12px); writing-mode: vertical-rl; font: 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    .lane-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+    .lane-title h3 { margin: 0; font-size: 27px; }
+    .lane.platform .lane-title h3 { color: var(--platform); }
+    .lane.sdk .lane-title h3 { color: var(--sdk); }
+    .owner { padding: 4px 7px; border: 1px solid currentColor; font-size: 9px; letter-spacing: .09em; }
+    .responsibility { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; margin: 13px 0; color: #b9ccd2; font-size: 14px; }
+    .responsibility::before { content: "✓"; display: grid; place-items: center; width: 19px; height: 19px; color: var(--night); background: var(--ok); font: 800 11px/1 var(--mono); }
+    .matrix { width: 100%; margin: 25px 0; border-collapse: collapse; background: rgba(5,16,23,.65); font-size: 14px; }
+    .matrix th { padding: 11px 13px; color: var(--muted); border-bottom: 1px solid var(--rule-hot); text-align: left; text-transform: uppercase; font-size: 10px; letter-spacing: .08em; }
+    .matrix td { padding: 12px 13px; border-bottom: 1px solid var(--rule); vertical-align: top; color: #bacdd3; }
+    .matrix td:first-child { color: var(--paper); font-weight: 700; }
+    .matrix .sdk-cell { border-left: 3px solid var(--sdk); }
+    .matrix .worker-cell { border-left: 3px solid var(--worker); }
+    .matrix .platform-cell { border-left: 3px solid var(--platform); }
+    .tag { display: inline-block; padding: 3px 7px; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+    .tag.ready { color: var(--night); background: var(--ok); }
+    .tag.adapter { color: var(--night); background: var(--worker); }
+    .tag.missing { color: white; background: var(--danger); }
+    .tag.choice { color: var(--sdk); border: 1px solid var(--sdk); }
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; margin: 24px 0; }
+    .card { padding: 20px; border: 1px solid var(--rule); background: rgba(5,16,23,.58); }
+    .card h3 { margin: 0 0 9px; font-size: 21px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; }
+    .card.sdk-card { border-top: 3px solid var(--sdk); }
+    .card.worker-card { border-top: 3px solid var(--worker); }
+    .card.platform-card { border-top: 3px solid var(--platform); }
+    .code { max-width: 1060px; margin: 22px 0; border: 1px solid var(--rule-hot); background: var(--code); overflow: auto; }
+    .code-head { display: flex; justify-content: space-between; gap: 14px; padding: 9px 13px; border-bottom: 1px solid var(--rule); color: var(--faint); font: 10px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    pre { margin: 0; padding: 20px; overflow: auto; color: #d4e7ea; font: 12px/1.7 var(--mono); }
+    .kw { color: #79bfff; } .ty { color: var(--sdk); } .str { color: var(--worker); } .cm { color: var(--faint); } .platform-code { color: var(--platform); }
+    .flow-list { max-width: 1000px; margin: 25px 0; counter-reset: flow; }
+    .flow-step { counter-increment: flow; display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 17px; padding: 17px 0; border-bottom: 1px solid var(--rule); }
+    .flow-step::before { content: counter(flow, decimal-leading-zero); color: var(--worker); font: 700 22px/1.2 var(--mono); }
+    .flow-step h3 { margin: 0 0 5px; font-size: 20px; }
+    .flow-step p { margin: 0; color: var(--muted); font-size: 14px; }
+    .contract { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 0; margin: 24px 0; border: 1px solid var(--rule-hot); }
+    .contract > div { padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+    .contract > div:nth-last-child(-n+2) { border-bottom: 0; }
+    .contract .key { color: var(--worker); background: rgba(245,201,95,.06); font: 11px/1.5 var(--mono); }
+    .contract .value { color: #bdd0d6; font-size: 14px; }
+    .source-list { display: grid; grid-template-columns: 1fr; gap: 7px; margin: 24px 0; }
+    .source { padding: 11px 13px; border-left: 3px solid var(--rule-hot); background: rgba(5,16,23,.45); color: var(--muted); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
+    .source.sdk-source { border-color: var(--sdk); } .source.platform-source { border-color: var(--platform); }
+    .decision { display: grid; grid-template-columns: 160px minmax(0, 1fr); margin: 22px 0; border: 1px solid var(--rule-hot); }
+    .decision strong { display: grid; place-items: center; padding: 16px; color: var(--night); background: var(--ok); font: 700 12px/1.4 var(--mono); text-align: center; text-transform: uppercase; }
+    .decision div { padding: 16px 19px; color: #c0d2d7; }
+    footer { padding: 34px clamp(30px, 6vw, 96px); color: var(--faint); font: 10px/1.6 var(--mono); }
+    @media (max-width: 930px) {
+      .shell { display: block; }
+      nav.sidebar { position: static; height: auto; display: flex; gap: 14px; padding: 14px 20px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+      nav.sidebar .nav-label, nav.sidebar hr, .nav-note { display: none; }
+      nav.sidebar a { display: inline-block; }
+      .boundary-grid { grid-template-columns: 1fr; }
+      .membrane { min-height: 34px; writing-mode: horizontal-tb; border-inline: 0; border-block: 1px dashed var(--worker); }
+      .section-head { grid-template-columns: 1fr; gap: 10px; }
+      .section-code { width: 110px; }
+    }
+    @media (max-width: 680px) {
+      .topbar { padding: 0 14px; }
+      .status { display: none; }
+      section { padding: 48px 18px; }
+      h1 { font-size: 48px; }
+      .hero { min-height: 540px; }
+      .verdict { grid-template-columns: 1fr; }
+      .cards { grid-template-columns: 1fr; }
+      .matrix, .matrix tbody, .matrix tr, .matrix td { display: block; width: 100%; }
+      .matrix thead { display: none; }
+      .matrix tr { padding: 12px 0; border-bottom: 1px solid var(--rule-hot); }
+      .matrix td { border-bottom: 0; padding: 7px 12px; }
+      .matrix td:first-child { font-size: 16px; }
+      .worker-table td:nth-child(2)::before { content: "BEHAVIOR · "; color: var(--worker); font: 10px var(--mono); }
+      .worker-table td:nth-child(3)::before { content: "FAILURE · "; color: var(--danger); font: 10px var(--mono); }
+      .sdk-table td:nth-child(2)::before { content: "WORKER USE · "; color: var(--sdk); font: 10px var(--mono); }
+      .sdk-table td:nth-child(3)::before { content: "STATUS · "; color: var(--worker); font: 10px var(--mono); }
+      .event-table td:nth-child(2)::before { content: "PLATFORM · "; color: var(--platform); font: 10px var(--mono); }
+      .event-table td:nth-child(3)::before { content: "RULE · "; color: var(--worker); font: 10px var(--mono); }
+      .gate-table td:nth-child(2)::before { content: "PROOF · "; color: var(--sdk); font: 10px var(--mono); }
+      .gate-table td:nth-child(3)::before { content: "OWNER · "; color: var(--worker); font: 10px var(--mono); }
+      .contract, .decision { grid-template-columns: 1fr; }
+      .contract > div { border-bottom: 1px solid var(--rule); }
+      .contract > div:nth-last-child(2) { border-bottom: 1px solid var(--rule); }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="#top"><span class="brand-mark">◫↔◩</span><span>Orca worker integration</span></a>
+    <div class="status">ready behind platform adapter</div>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Document sections">
+      <p class="nav-label">DECISION</p>
+      <a href="#verdict">Integration verdict</a>
+      <a href="#architecture">System map</a>
+      <a href="#boundary">Ownership boundary</a>
+      <hr />
+      <p class="nav-label">IMPLEMENT</p>
+      <a class="worker-link" href="#worker">Worker package</a>
+      <a class="sdk-link" href="#sdk">SDK contract</a>
+      <a class="platform-link" href="#platform">Platform contract</a>
+      <a href="#flows">Runtime flows</a>
+      <a href="#translation">Translation rules</a>
+      <a href="#state">State and identity</a>
+      <a href="#mcp-skills">MCP and skills</a>
+      <hr />
+      <p class="nav-label">SHIP</p>
+      <a href="#sequence">Build sequence</a>
+      <a href="#acceptance">Acceptance gates</a>
+      <a href="#sources">Source map</a>
+      <p class="nav-note">Implementation guide for agents building the platform-owned worker. This document describes the current source audit; it does not define a new SDK wire protocol.</p>
+    </nav>
+
+    <main id="content">
+      <section class="hero" id="top">
+        <p class="eyebrow">Architecture decision record · runner ↔ worker ↔ SDK</p>
+        <h1><span class="platform-text">Platform owns the wire.</span><br /><span class="sdk-text">SDK owns the loop.</span></h1>
+        <p class="lede">Package <code>orca-harness-sdk</code> inside an <code>agent-orc</code>-owned worker binary. Keep transport, tenant identity, profile interpretation, state envelopes, and platform MCP in the worker. Keep model/tool execution, session context, events, cancellation primitives, and recovery in the general SDK.</p>
+        <div class="verdict"><strong>GO</strong><span>Integration can begin now. No major SDK redesign is required. A platform adapter is an intentional architecture layer, not a workaround.</span></div>
+      </section>
+
+      <section id="verdict">
+        <div class="section-head"><div class="section-code">ADR / 001</div><h2>The decision</h2></div>
+        <div class="decision"><strong>Integrate now</strong><div>The current SDK is sufficiently complete to act as the execution engine in a platform-owned worker. The worker must implement the <code>agent-orc</code> outbound protocol and translate platform concepts into SDK objects.</div></div>
+        <div class="cards">
+          <article class="card sdk-card"><h3>Do not add platform wire code to the SDK</h3><p>The SDK remains transport-agnostic and reusable in CLIs, desktop apps, servers, sandboxes, and tests.</p></article>
+          <article class="card worker-card"><h3>Do add a dedicated worker package</h3><p>The worker is the anti-corruption layer between platform wire DTOs and the SDK’s in-process Rust API.</p></article>
+          <article class="card platform-card"><h3>Target outbound protocol v1</h3><p>Use the authenticated, outbound-only sandbox contract rather than making the runner dial into a worker.</p></article>
+          <article class="card worker-card"><h3>Resolve capabilities per run</h3><p>Build one immutable SDK <code>Agent</code> for each effective profile snapshot. If capabilities change, finish the active run, build a new agent, and resume the persisted SDK transcript through that agent.</p></article>
+        </div>
+        <div class="callout"><strong>Boundary test</strong>If a concern mentions HTTP, bearer tokens, runner session IDs, tenant policy, profile selectors, state upload, sandbox readiness, or process shutdown, it belongs in the platform worker. If it concerns model invocation, tool dispatch, context, extension hooks, usage, cancellation tokens, or compaction, it belongs in the SDK.</div>
+        <div class="callout platform"><strong>Current protocol limits</strong>Outbound v1 has no explicit cancel command. A runner cancellation is observed when the events handler processes another uploaded line and rejects the stream; a silent model/tool may not notice promptly. Protocol-major negotiation is also worker-side today: the runner accepts the first authenticated poll as readiness but does not inspect <code>X-Orca-Worker-Protocol</code>. Implement against these facts rather than stronger intended semantics.</div>
+      </section>
+
+      <section id="architecture">
+        <div class="section-head"><div class="section-code">MAP / SYSTEM</div><h2>Three owners, one run</h2></div>
+        <p>The worker is a deliberate membrane. It prevents platform-specific protocol and policy from leaking into the SDK while preventing SDK-specific identifiers and event shapes from leaking into the platform contract.</p>
+        <div class="legend"><span><i class="p"></i> agent-orc platform</span><span><i class="w"></i> platform-owned worker</span><span><i class="s"></i> orca-harness SDK</span></div>
+        <div class="blueprint">
+          <div class="blueprint-head"><span>runtime topology</span><span>outbound worker v1</span></div>
+          <svg viewBox="0 0 1120 650" role="img" aria-labelledby="arch-title arch-desc">
+            <title id="arch-title">Orca platform worker and SDK architecture</title>
+            <desc id="arch-desc">The agent-orc runner sends commands to a platform-owned worker, which translates profiles, sessions, MCP, skills, events, and state around the orca-harness SDK execution engine.</desc>
+            <defs>
+              <marker id="arrow-p" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#ff826b" /></marker>
+              <marker id="arrow-w" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#f5c95f" /></marker>
+              <marker id="arrow-s" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#4dd9d2" /></marker>
+              <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#16313d" stroke-width="1" /></pattern>
+            </defs>
+            <rect width="1120" height="650" fill="url(#grid)" />
+            <rect x="35" y="45" width="260" height="550" rx="3" fill="#1d2028" stroke="#ff826b" stroke-width="2" />
+            <text x="60" y="80" fill="#ff826b" font-family="monospace" font-size="13" letter-spacing="2">AGENT-ORC PLATFORM</text>
+            <rect x="60" y="110" width="210" height="92" fill="#2d252b" stroke="#70413e" />
+            <text x="80" y="140" fill="#d9e7eb" font-family="sans-serif" font-size="18" font-weight="700">Runner</text>
+            <text x="80" y="166" fill="#8da7b1" font-family="monospace" font-size="11">sessions · profiles · tenants</text>
+            <text x="80" y="183" fill="#8da7b1" font-family="monospace" font-size="11">run broker · state durability</text>
+            <rect x="60" y="238" width="210" height="92" fill="#2d252b" stroke="#70413e" />
+            <text x="80" y="268" fill="#d9e7eb" font-family="sans-serif" font-size="18" font-weight="700">Runner MCP</text>
+            <text x="80" y="294" fill="#8da7b1" font-family="monospace" font-size="11">platform tools · VFS</text>
+            <text x="80" y="311" fill="#8da7b1" font-family="monospace" font-size="11">sandbox · orchestration</text>
+            <rect x="60" y="366" width="210" height="92" fill="#2d252b" stroke="#70413e" />
+            <text x="80" y="396" fill="#d9e7eb" font-family="sans-serif" font-size="18" font-weight="700">Substrate</text>
+            <text x="80" y="422" fill="#8da7b1" font-family="monospace" font-size="11">process · Docker · E2B</text>
+            <text x="80" y="439" fill="#8da7b1" font-family="monospace" font-size="11">workspace · network isolation</text>
+
+            <rect x="355" y="45" width="410" height="550" rx="3" fill="#22251f" stroke="#f5c95f" stroke-width="2" />
+            <text x="380" y="80" fill="#f5c95f" font-family="monospace" font-size="13" letter-spacing="2">PLATFORM-OWNED RUST WORKER</text>
+            <rect x="385" y="110" width="160" height="92" fill="#302d20" stroke="#756332" />
+            <text x="405" y="140" fill="#d9e7eb" font-family="sans-serif" font-size="16" font-weight="700">Wire client</text>
+            <text x="405" y="165" fill="#8da7b1" font-family="monospace" font-size="10">poll · auth · NDJSON</text>
+            <text x="405" y="181" fill="#8da7b1" font-family="monospace" font-size="10">retry · shutdown</text>
+            <rect x="575" y="110" width="160" height="92" fill="#302d20" stroke="#756332" />
+            <text x="595" y="140" fill="#d9e7eb" font-family="sans-serif" font-size="16" font-weight="700">Profile resolver</text>
+            <text x="595" y="165" fill="#8da7b1" font-family="monospace" font-size="10">model · tools · policy</text>
+            <text x="595" y="181" fill="#8da7b1" font-family="monospace" font-size="10">skills · contexts</text>
+            <rect x="385" y="238" width="160" height="92" fill="#302d20" stroke="#756332" />
+            <text x="405" y="268" fill="#d9e7eb" font-family="sans-serif" font-size="16" font-weight="700">MCP adapter</text>
+            <text x="405" y="293" fill="#8da7b1" font-family="monospace" font-size="10">runner HTTP channel</text>
+            <text x="405" y="309" fill="#8da7b1" font-family="monospace" font-size="10">external servers + headers</text>
+            <rect x="575" y="238" width="160" height="92" fill="#302d20" stroke="#756332" />
+            <text x="595" y="268" fill="#d9e7eb" font-family="sans-serif" font-size="16" font-weight="700">Event mapper</text>
+            <text x="595" y="293" fill="#8da7b1" font-family="monospace" font-size="10">camelCase · timestamp</text>
+            <text x="595" y="309" fill="#8da7b1" font-family="monospace" font-size="10">run correlation</text>
+            <rect x="385" y="366" width="160" height="92" fill="#302d20" stroke="#756332" />
+            <text x="405" y="396" fill="#d9e7eb" font-family="sans-serif" font-size="16" font-weight="700">Session map</text>
+            <text x="405" y="421" fill="#8da7b1" font-family="monospace" font-size="10">runner ID ↔ SDK ID</text>
+            <text x="405" y="437" fill="#8da7b1" font-family="monospace" font-size="10">state bundle version</text>
+            <rect x="575" y="366" width="160" height="92" fill="#302d20" stroke="#756332" />
+            <text x="595" y="396" fill="#d9e7eb" font-family="sans-serif" font-size="16" font-weight="700">Run supervisor</text>
+            <text x="595" y="421" fill="#8da7b1" font-family="monospace" font-size="10">upload health · cancel</text>
+            <text x="595" y="437" fill="#8da7b1" font-family="monospace" font-size="10">drain · export</text>
+            <text x="560" y="530" text-anchor="middle" fill="#f5c95f" font-family="monospace" font-size="11">ANTI-CORRUPTION BOUNDARY</text>
+
+            <rect x="825" y="45" width="260" height="550" rx="3" fill="#132c35" stroke="#4dd9d2" stroke-width="2" />
+            <text x="850" y="80" fill="#4dd9d2" font-family="monospace" font-size="13" letter-spacing="2">ORCA-HARNESS SDK</text>
+            <rect x="850" y="110" width="210" height="92" fill="#153640" stroke="#34736f" />
+            <text x="870" y="140" fill="#d9e7eb" font-family="sans-serif" font-size="18" font-weight="700">Agent definition</text>
+            <text x="870" y="166" fill="#8da7b1" font-family="monospace" font-size="11">model · tool objects · limits</text>
+            <text x="870" y="183" fill="#8da7b1" font-family="monospace" font-size="11">extensions · policy</text>
+            <rect x="850" y="238" width="210" height="92" fill="#153640" stroke="#34736f" />
+            <text x="870" y="268" fill="#d9e7eb" font-family="sans-serif" font-size="18" font-weight="700">Session + RunHandle</text>
+            <text x="870" y="294" fill="#8da7b1" font-family="monospace" font-size="11">context · events · usage</text>
+            <text x="870" y="311" fill="#8da7b1" font-family="monospace" font-size="11">cancellation · busy guard</text>
+            <rect x="850" y="366" width="210" height="92" fill="#153640" stroke="#34736f" />
+            <text x="870" y="396" fill="#d9e7eb" font-family="sans-serif" font-size="18" font-weight="700">Persistent state</text>
+            <text x="870" y="422" fill="#8da7b1" font-family="monospace" font-size="11">JSONL transcript · recovery</text>
+            <text x="870" y="439" fill="#8da7b1" font-family="monospace" font-size="11">compaction · resume</text>
+
+            <path d="M270 156 H380" fill="none" stroke="#ff826b" stroke-width="2" marker-end="url(#arrow-p)" />
+            <text x="325" y="144" text-anchor="middle" fill="#ff826b" font-family="monospace" font-size="9">commands</text>
+            <path d="M385 187 H276" fill="none" stroke="#f5c95f" stroke-width="2" marker-end="url(#arrow-w)" />
+            <text x="330" y="205" text-anchor="middle" fill="#f5c95f" font-family="monospace" font-size="9">events + state</text>
+            <path d="M270 284 H385" fill="none" stroke="#ff826b" stroke-width="2" marker-end="url(#arrow-p)" />
+            <text x="327" y="272" text-anchor="middle" fill="#ff826b" font-family="monospace" font-size="9">MCP HTTP</text>
+            <path d="M545 284 H845" fill="none" stroke="#f5c95f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow-w)" />
+            <text x="695" y="272" text-anchor="middle" fill="#f5c95f" font-family="monospace" font-size="9">platform-owned Tool objects</text>
+            <path d="M735 156 H845" fill="none" stroke="#f5c95f" stroke-width="2" marker-end="url(#arrow-w)" />
+            <text x="790" y="144" text-anchor="middle" fill="#f5c95f" font-family="monospace" font-size="9">build Agent</text>
+            <path d="M735 412 H845" fill="none" stroke="#f5c95f" stroke-width="2" marker-end="url(#arrow-w)" />
+            <text x="790" y="400" text-anchor="middle" fill="#f5c95f" font-family="monospace" font-size="9">resume</text>
+            <path d="M850 309 H740" fill="none" stroke="#4dd9d2" stroke-width="2" marker-end="url(#arrow-s)" />
+            <text x="795" y="327" text-anchor="middle" fill="#4dd9d2" font-family="monospace" font-size="9">HarnessEvent</text>
+            <path d="M385 412 H276" fill="none" stroke="#f5c95f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow-w)" />
+            <text x="330" y="430" text-anchor="middle" fill="#f5c95f" font-family="monospace" font-size="9">opaque bundle</text>
+            <path d="M270 412 H60" fill="none" stroke="#ff826b" stroke-width="0" />
+            <path d="M165 458 V485 H560 V460" fill="none" stroke="#ff826b" stroke-width="1.5" stroke-dasharray="6 5" />
+            <text x="362" y="505" text-anchor="middle" fill="#ff826b" font-family="monospace" font-size="9">substrate supplies OS / network / workspace isolation</text>
+          </svg>
+        </div>
+      </section>
+
+      <section id="boundary">
+        <div class="section-head"><div class="section-code">MAP / OWNER</div><h2>The ownership membrane</h2></div>
+        <div class="boundary-grid">
+          <div class="lane platform">
+            <div class="lane-title"><h3>Platform worker</h3><span class="owner">ADAPTER OWNER</span></div>
+            <div class="responsibility">Speak outbound worker protocol v1 over authenticated HTTP.</div>
+            <div class="responsibility">Interpret platform profiles, tool selectors, model strings, contexts, and tenant policy.</div>
+            <div class="responsibility">Map runner session and run IDs to SDK objects.</div>
+            <div class="responsibility">Translate SDK events into platform NDJSON DTOs with timestamps.</div>
+            <div class="responsibility">Bridge runner and external streamable-HTTP MCP into SDK <code>Tool</code> objects.</div>
+            <div class="responsibility">Materialize or adapt inline skills and resources.</div>
+            <div class="responsibility">Bundle SDK-owned files into opaque platform state.</div>
+            <div class="responsibility">Supervise cancellation, retries, readiness, drain, export, and shutdown.</div>
+          </div>
+          <div class="membrane">explicit translation only</div>
+          <div class="lane sdk">
+            <div class="lane-title"><h3>General SDK</h3><span class="owner">EXECUTION OWNER</span></div>
+            <div class="responsibility">Compose a model, typed tools, limits, policy, and extensions into an <code>Agent</code>.</div>
+            <div class="responsibility">Own conversation context and enforce one active run per session.</div>
+            <div class="responsibility">Execute model/tool rounds with deterministic result pairing.</div>
+            <div class="responsibility">Emit typed lifecycle events and normalized token usage.</div>
+            <div class="responsibility">Propagate cancellation and per-run deadlines.</div>
+            <div class="responsibility">Persist and resume session transcripts and truncation recovery.</div>
+            <div class="responsibility">Provide retries, policies, compaction, and optional memory.</div>
+            <div class="responsibility">Remain independent of HTTP, tenants, runner IDs, and platform profiles.</div>
+          </div>
+        </div>
+        <div class="callout platform"><strong>Security boundary</strong>The SDK’s workspace guard is defense in depth, not tenant isolation. The platform substrate remains responsible for process, filesystem, network, credential, and resource isolation.</div>
+      </section>
+
+      <section id="worker">
+        <div class="section-head"><div class="section-code">OWNER / WORKER</div><h2>What the worker package must contain</h2></div>
+        <table class="matrix worker-table">
+          <thead><tr><th>Module</th><th>Required behavior</th><th>Failure posture</th></tr></thead>
+          <tbody>
+            <tr><td>Boot config</td><td>Read runner URL, worker token, runner session ID, protocol major, state/workspace paths, and provider credentials.</td><td>Fail closed before polling on missing identity or unsupported protocol.</td></tr>
+            <tr><td>Outbound client</td><td>Long-poll <code>next-run</code>; upload chunked NDJSON and opaque state with bearer auth and run correlation.</td><td>Retry transient network/5xx failures with capped jitter; never spin.</td></tr>
+            <tr><td>Profile resolver</td><td>Resolve model, prompt, platform selectors, SDK-local tools, limits, skills, contexts, and MCP into one immutable agent snapshot per effective command profile. Rebuild between runs when the platform changes effective capabilities.</td><td>Reject unknown security-sensitive selectors; never widen to <code>Coding</code> implicitly.</td></tr>
+            <tr><td>Session registry</td><td>Keep <code>runner sessionId → SDK session ID</code>, open once, resume later, and record the last effective profile fingerprint. To refresh capabilities, finish the current run, persist, build the new agent, then call <code>resume_session(sdk_id)</code> on that agent so the transcript survives while the tool snapshot changes.</td><td>Never mutate capabilities during an active run; never keep using a stale agent after an effective profile change.</td></tr>
+            <tr><td>Event mapper</td><td>Map supported <code>HarnessEvent</code> variants to platform camelCase wire DTOs and add RFC3339 timestamps.</td><td>Make delta-event policy explicit; do not depend on unknown-event degradation.</td></tr>
+            <tr><td>Run supervisor</td><td>Drive <code>Session::start</code>, drain SDK events, observe event-upload responses, finish the handle, and export state. Also honor local deadline and process-shutdown cancellation.</td><td>Cancel on any observed upload rejection or loss, but do not claim prompt remote cancellation for a silent run: outbound v1 has no independent cancel signal.</td></tr>
+            <tr><td>MCP adapter</td><td>Expose runner platform tools and external HTTP MCP servers as SDK <code>Tool</code> objects or through a bundled transport bridge.</td><td>Preserve headers, session scope, optional-server degradation, and URL secrecy.</td></tr>
+            <tr><td>Skill adapter</td><td>Serve inline skill bodies/resources directly or materialize them under a contained per-session root.</td><td>Reject absolute paths, traversal, backslashes, duplicate names, and unsafe executable handling.</td></tr>
+            <tr><td>State bundler</td><td>Version and archive SDK transcript, recovery data, and identity mapping for opaque upload.</td><td>Atomic local writes; corrupt state starts clean only with a visible diagnostic.</td></tr>
+            <tr><td>Lifecycle</td><td>Implement first-poll readiness, <code>export_state</code>, <code>shutdown</code>, SIGTERM drain, and orphan policy.</td><td>Do not drop an active session because the runner briefly restarts.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout"><strong>Recommended package boundary</strong>Create a platform-owned binary such as <code>orca-harness-worker</code> in the platform repository or its deployment workspace. Depend on the SDK as a library. Do not make the SDK depend on <code>agent-orc</code> DTOs.</div>
+      </section>
+
+      <section id="sdk">
+        <div class="section-head"><div class="section-code">OWNER / SDK</div><h2>The stable SDK contract to build on</h2></div>
+        <table class="matrix sdk-table">
+          <thead><tr><th>SDK surface</th><th>Worker use</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><code>Harness::builder</code></td><td>Bind the SDK to the worker’s provisioned workspace and state directory.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>Harness::agent</code></td><td>Start profile resolution from a platform-selected <code>Model</code>.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>AgentBuilder</code></td><td>Apply system prompt, exact tool objects, policy, limits, retries, compaction, skills, and optional memory.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>Session::start</code></td><td>Begin a background run while the worker concurrently uploads events and watches transport health.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>RunHandle::events</code></td><td>Receive typed lifecycle events for translation.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>RunHandle::cancellation_token</code></td><td>Propagate runner disconnect, stale run, deadline, or shutdown.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>RunHandle::finish</code></td><td>Join execution and distinguish SDK/core failure from successful terminal result.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td>Persistent sessions</td><td>Create and resume conversation state; list transcript paths for state bundling.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>FnTool</code> / <code>Tool</code></td><td>Implement platform MCP and other remote capabilities without changing the SDK.</td><td><span class="tag ready">ready</span></td></tr>
+            <tr><td><code>Skills</code></td><td>Expose materialized filesystem skills after the worker validates inline input.</td><td><span class="tag adapter">adapter input</span></td></tr>
+            <tr><td><code>Mcp</code></td><td>Use local stdio MCP where appropriate; it does not currently consume platform HTTP MCP URLs.</td><td><span class="tag choice">optional</span></td></tr>
+          </tbody>
+        </table>
+        <h3>Intentional non-goals</h3>
+        <ul>
+          <li>No runner HTTP client, bearer-token parser, worker command loop, or server endpoint.</li>
+          <li>No platform profile schema, tenant identity, tool-selector language, or sandbox placement logic.</li>
+          <li>No platform event DTO, timestamp policy, run correlation, state envelope, or health endpoint.</li>
+          <li>No assumption that one host means one platform; the same SDK should support unrelated hosts.</li>
+        </ul>
+      </section>
+
+      <section id="platform">
+        <div class="section-head"><div class="section-code">OWNER / PLATFORM</div><h2>The protocol the worker must honor</h2></div>
+        <div class="contract">
+          <div class="key">PROTOCOL</div><div class="value">Major version <code>1</code>; worker sends <code>X-Orca-Worker-Protocol: 1</code> when polling and validates every command’s <code>protocol</code>.</div>
+          <div class="key">READINESS</div><div class="value">The runner marks the session ready when the first bearer-authenticated long poll enters rendezvous, before a command is returned. Outbound workers bind no inbound health port.</div>
+          <div class="key">VERSION CHECK</div><div class="value">The worker sends <code>X-Orca-Worker-Protocol: 1</code>, but the current v1 runner does not inspect it. The worker must validate each returned command’s <code>protocol</code> and skip/reject an unsupported major before executing work.</div>
+          <div class="key">COMMANDS</div><div class="value"><code>run</code>, <code>export_state</code>, and <code>shutdown</code>.</div>
+          <div class="key">RUN INPUT</div><div class="value"><code>runId</code>, runner <code>sessionId</code>, full profile, subtask, optional runner MCP URL, resolved external MCP servers, inline skills, and context documents.</div>
+          <div class="key">EVENTS</div><div class="value">Chunked <code>application/x-ndjson</code>; one platform event per line; <code>X-Orca-Run-Id</code> must match the active command.</div>
+          <div class="key">CANCEL</div><div class="value">Transport-level and event-driven in current v1: after runner cancellation, the next event line lets the runner reject the upload and the worker then cancels its SDK token. There is no independent cancel command, so a silent in-flight model/tool is a known promptness gap. Local deadlines and process shutdown can cancel directly.</div>
+          <div class="key">STATE</div><div class="value">Opaque bytes uploaded with content type and optional runtime-session identity. Local sandbox state remains the fast restore path.</div>
+          <div class="key">AUTH</div><div class="value">Every worker request carries the session-scoped bearer token. Treat token-bearing MCP URLs as secrets.</div>
+          <div class="key">RETRY</div><div class="value">Runner restart and network failure are expected. Back off with jitter and preserve session state.</div>
+        </div>
+        <div class="callout platform"><strong>Preferred target</strong>Implement the sandbox outbound contract first. A static inbound <code>POST /run</code> compatibility frontend can be added later over the same resolver, session registry, event mapper, and SDK execution core.</div>
+      </section>
+
+      <section id="flows">
+        <div class="section-head"><div class="section-code">FLOW / RUN</div><h2>One command from poll to result</h2></div>
+        <div class="blueprint">
+          <div class="blueprint-head"><span>sequence</span><span>cancellation path shown in coral</span></div>
+          <svg viewBox="0 0 1120 590" role="img" aria-labelledby="seq-title seq-desc">
+            <title id="seq-title">Worker run sequence</title>
+            <desc id="seq-desc">The worker polls the runner, resolves the command into an SDK agent and session, starts a run, translates events, uploads state, and cancels when an upload rejection or local cancellation signal is observed.</desc>
+            <defs><marker id="a1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#f5c95f" /></marker><marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#4dd9d2" /></marker><marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#ff826b" /></marker></defs>
+            <rect width="1120" height="590" fill="#051017" />
+            <g font-family="monospace" font-size="12"><text x="130" y="42" text-anchor="middle" fill="#ff826b">RUNNER</text><text x="390" y="42" text-anchor="middle" fill="#f5c95f">WORKER ADAPTER</text><text x="695" y="42" text-anchor="middle" fill="#4dd9d2">SDK SESSION</text><text x="970" y="42" text-anchor="middle" fill="#8da7b1">MODEL / TOOLS</text></g>
+            <g stroke="#234653" stroke-dasharray="4 5"><line x1="130" y1="60" x2="130" y2="555" /><line x1="390" y1="60" x2="390" y2="555" /><line x1="695" y1="60" x2="695" y2="555" /><line x1="970" y1="60" x2="970" y2="555" /></g>
+            <g font-family="monospace" font-size="10">
+              <path d="M390 90 H145" stroke="#f5c95f" stroke-width="2" marker-end="url(#a1)" /><text x="268" y="82" text-anchor="middle" fill="#f5c95f">GET next-run + bearer + protocol</text>
+              <path d="M145 125 H375" stroke="#ff826b" stroke-width="2" marker-end="url(#a3)" /><text x="260" y="117" text-anchor="middle" fill="#ff826b">200 run command</text>
+              <rect x="315" y="146" width="150" height="52" fill="#302d20" stroke="#756332" /><text x="390" y="167" text-anchor="middle" fill="#d9e7eb">validate + resolve</text><text x="390" y="184" text-anchor="middle" fill="#8da7b1">profile / skills / MCP</text>
+              <path d="M465 222 H680" stroke="#f5c95f" stroke-width="2" marker-end="url(#a1)" /><text x="572" y="214" text-anchor="middle" fill="#f5c95f">open/resume session; start(request)</text>
+              <path d="M710 255 H955" stroke="#4dd9d2" stroke-width="2" marker-end="url(#a2)" /><text x="832" y="247" text-anchor="middle" fill="#4dd9d2">generate + tool rounds</text>
+              <path d="M680 295 H405" stroke="#4dd9d2" stroke-width="2" marker-end="url(#a2)" /><text x="542" y="287" text-anchor="middle" fill="#4dd9d2">HarnessEvent channel</text>
+              <path d="M375 330 H145" stroke="#f5c95f" stroke-width="2" marker-end="url(#a1)" /><text x="260" y="322" text-anchor="middle" fill="#f5c95f">POST events · platform NDJSON</text>
+              <path d="M955 375 H710" stroke="#4dd9d2" stroke-width="2" marker-end="url(#a2)" /><text x="832" y="367" text-anchor="middle" fill="#4dd9d2">final result</text>
+              <path d="M680 410 H405" stroke="#4dd9d2" stroke-width="2" marker-end="url(#a2)" /><text x="542" y="402" text-anchor="middle" fill="#4dd9d2">Result + finish()</text>
+              <path d="M375 445 H145" stroke="#f5c95f" stroke-width="2" marker-end="url(#a1)" /><text x="260" y="437" text-anchor="middle" fill="#f5c95f">EOF; POST opaque state</text>
+              <path d="M145 500 H375" stroke="#ff826b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#a3)" /><text x="260" y="492" text-anchor="middle" fill="#ff826b">observed rejection / loss / local cancel</text>
+              <path d="M405 525 H680" stroke="#ff826b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#a3)" /><text x="542" y="517" text-anchor="middle" fill="#ff826b">CancellationToken.cancel()</text>
+            </g>
+          </svg>
+        </div>
+        <div class="flow-list">
+          <div class="flow-step"><div><h3>Poll and authenticate</h3><p>The runner marks readiness when the first authenticated poll enters rendezvous. A <code>204</code> means poll again; a transient failure means back off. The current runner does not negotiate the protocol header.</p></div></div>
+          <div class="flow-step"><div><h3>Validate command identity and version</h3><p>Worker-side, require command protocol 1, matching runner session identity, non-empty run ID, profile, and subtask before executing work.</p></div></div>
+          <div class="flow-step"><div><h3>Resolve the effective capability snapshot</h3><p>Build or retrieve an immutable agent for this run’s effective profile. If tools or MCP changed since the prior run, build a replacement agent rather than mutating the current one.</p></div></div>
+          <div class="flow-step"><div><h3>Open or rebind the SDK session</h3><p>Use the runner-to-SDK mapping to resume the persisted transcript through the selected agent, or create one persistent SDK session and save its ID.</p></div></div>
+          <div class="flow-step"><div><h3>Start and supervise</h3><p>Retain the cancellation token. Drain events and observe event-upload responses concurrently. Cancel on an observed rejection/loss, local deadline, or shutdown; document that a silent run has no prompt remote-cancel signal in v1.</p></div></div>
+          <div class="flow-step"><div><h3>Translate and upload</h3><p>Emit only platform wire DTOs. End the request body after the terminal event and SDK task completion.</p></div></div>
+          <div class="flow-step"><div><h3>Checkpoint</h3><p>Atomically persist local state after every run; upload the versioned opaque bundle best-effort or when explicitly requested.</p></div></div>
+        </div>
+      </section>
+
+      <section id="translation">
+        <div class="section-head"><div class="section-code">MAP / EVENTS</div><h2>Translate; never serialize blindly</h2></div>
+        <table class="matrix event-table">
+          <thead><tr><th>SDK event</th><th>Platform event</th><th>Worker rule</th></tr></thead>
+          <tbody>
+            <tr><td><code>Assistant { message }</code></td><td><code>assistant</code></td><td>Copy <code>message</code>; add timestamp.</td></tr>
+            <tr><td><code>ToolCall</code></td><td><code>tool_call</code></td><td>Rename <code>tool_call_id → toolCallId</code> and <code>tool_name → toolName</code>.</td></tr>
+            <tr><td><code>ToolResult</code></td><td><code>tool_result</code></td><td>Rename IDs and <code>is_error → isError</code>; preserve JSON output.</td></tr>
+            <tr><td><code>Usage</code></td><td><code>usage</code></td><td>Usage fields already use compatible camelCase semantics; guard integer conversion.</td></tr>
+            <tr><td><code>Result { message }</code></td><td><code>result</code></td><td>Terminal success. Do not emit another synthetic result after it.</td></tr>
+            <tr><td><code>Error { message }</code></td><td><code>error</code></td><td>Terminal failure; redact secrets and transport URLs.</td></tr>
+            <tr><td><code>AgentStart</code></td><td><code>progress</code> or drop</td><td>Choose once. It has no platform-native semantic.</td></tr>
+            <tr><td>Delta events</td><td><code>progress</code> or drop</td><td>V1 has no delta DTO. Avoid flooding progress unless UI value is proven.</td></tr>
+            <tr><td><code>ToolFinished</code></td><td>drop</td><td><code>tool_result</code> remains the platform completion event.</td></tr>
+          </tbody>
+        </table>
+        <div class="code"><div class="code-head"><span>worker-owned pseudocode</span><span>not an SDK API proposal</span></div><pre><span class="kw">fn</span> <span class="ty">to_wire</span>(event: HarnessEvent, now: Timestamp) -&gt; Option&lt;WorkerEvent&gt; {
+    <span class="kw">match</span> event {
+        HarnessEvent::ToolCall { tool_call_id, tool_name, input } =&gt; Some(WorkerEvent {
+            type_: <span class="str">"tool_call"</span>, ts: now,
+            toolCallId: tool_call_id, toolName: tool_name, input,
+        }),
+        HarnessEvent::ToolResult { tool_call_id, output, is_error, .. } =&gt; Some(WorkerEvent {
+            type_: <span class="str">"tool_result"</span>, ts: now,
+            toolCallId: tool_call_id, output, isError: is_error,
+        }),
+        HarnessEvent::ToolFinished { .. } =&gt; None,
+        <span class="cm">// Map the remaining supported variants explicitly.</span>
+    }
+}</pre></div>
+      </section>
+
+      <section id="state">
+        <div class="section-head"><div class="section-code">MAP / STATE</div><h2>Two identities, one checkpoint</h2></div>
+        <div class="blueprint"><div class="blueprint-head"><span>identity mapping</span><span>worker-owned durable metadata</span></div><pre><span class="platform-code">runner sessionId: sess-abc</span>
+        │
+        │  worker mapping, profile revision, bundle version
+        ▼
+<span class="str">SDK sessionId: 1787851061-0216e-0</span>
+        ├── 1787851061-0216e-0.jsonl       <span class="cm"># transcript</span>
+        └── 1787851061-0216e-0.recovery.json <span class="cm"># full truncated outputs</span></pre></div>
+        <p>The runner ID remains the platform identity. The SDK ID remains the SDK persistence identity. The worker must not assume they are interchangeable or try to force the runner ID into SDK internals.</p>
+        <h3>Minimum bundle manifest</h3>
+        <div class="code"><div class="code-head"><span>conceptual state envelope</span><span>worker owns the format</span></div><pre>{
+  <span class="str">"version"</span>: 1,
+  <span class="str">"runnerSessionId"</span>: <span class="str">"sess-abc"</span>,
+  <span class="str">"sdkSessionId"</span>: <span class="str">"1787851061-0216e-0"</span>,
+  <span class="str">"effectiveProfileFingerprint"</span>: <span class="str">"sha256:…"</span>,
+  <span class="str">"files"</span>: [
+    { <span class="str">"path"</span>: <span class="str">"sessions/…jsonl"</span>, <span class="str">"sha256"</span>: <span class="str">"…"</span> },
+    { <span class="str">"path"</span>: <span class="str">"sessions/…recovery.json"</span>, <span class="str">"sha256"</span>: <span class="str">"…"</span> }
+  ]
+}</pre></div>
+        <ul>
+          <li>Write local state atomically after each run.</li>
+          <li>Include transcript and recovery sidecar together.</li>
+          <li>Keep memory out unless the platform profile explicitly enables and scopes it.</li>
+          <li>On every run, compare the effective profile fingerprint. If capabilities changed, let the active run finish, persist its context, build a new SDK agent, and resume the same SDK session ID through that agent.</li>
+          <li>Treat platform state upload as opaque durability, not as the SDK’s internal file API.</li>
+        </ul>
+      </section>
+
+      <section id="mcp-skills">
+        <div class="section-head"><div class="section-code">MAP / CAPABILITY</div><h2>MCP and skills cross the membrane</h2></div>
+        <h3>Runner MCP</h3>
+        <p><code>sessionMcpUrl</code> is a platform streamable-HTTP capability channel. The current SDK <code>Mcp::connect</code> accepts a local stdio command, so the worker must adapt the platform transport.</p>
+        <div class="cards">
+          <article class="card worker-card"><h3>Option A · platform Tool objects</h3><p>Implement lazy search/select/feature tools in the worker and forward calls to the runner HTTP MCP endpoint. Register them through <code>AgentBuilder::tool_arc</code>.</p></article>
+          <article class="card worker-card"><h3>Option B · bundled MCP bridge</h3><p>Run a contained stdio-to-streamable-HTTP bridge and connect the existing SDK MCP manager to it. This reuses SDK catalog behavior but adds a child-process boundary.</p></article>
+        </div>
+        <p>Either option is compatible with the SDK today. Native HTTP MCP in the general harness could reduce adapter code later, but it is not a prerequisite for platform integration.</p>
+        <h3>Inline skills</h3>
+        <p>The platform sends complete skill bodies and base64 resources. The SDK discovers skills from contained filesystem roots. The worker chooses one of two adapters:</p>
+        <div class="cards">
+          <article class="card worker-card"><h3>Materialize safely</h3><p>Write a per-session skill tree, validate every relative path, set executable bits only under policy, then build <code>Skills::from_roots</code> and reload.</p></article>
+          <article class="card worker-card"><h3>Serve in memory</h3><p>Implement platform-owned <code>activate_skill</code> and resource tools over the inline envelope, then register them as SDK tools.</p></article>
+        </div>
+        <div class="callout"><strong>Isolation rule</strong>Never call <code>harness.skills()</code> in a sandbox worker if doing so can discover unrelated home-directory skills. Construct explicit roots or in-memory tools from the command payload.</div>
+      </section>
+
+      <section id="sequence">
+        <div class="section-head"><div class="section-code">PLAN / BUILD</div><h2>Smallest delivery sequence</h2></div>
+        <div class="flow-list">
+          <div class="flow-step"><div><h3>Protocol shell with a scripted model</h3><p>Implement environment validation, poll, protocol check, event upload, export, shutdown, retries, and a container/process entry point. Use a deterministic SDK model first.</p></div></div>
+          <div class="flow-step"><div><h3>Explicit event compatibility</h3><p>Add worker wire DTOs and table-driven mappings for every SDK event variant. Prove timestamps, casing, terminal behavior, and cancellation on upload loss.</p></div></div>
+          <div class="flow-step"><div><h3>Session identity and bundle</h3><p>Create one persistent SDK session per runner session, version the mapping, archive transcript/recovery, and exercise restart.</p></div></div>
+          <div class="flow-step"><div><h3>Profile and provider resolver</h3><p>Resolve only supported models and exact capabilities. Make unsupported runtime/model/tool combinations fail visibly and closed.</p></div></div>
+          <div class="flow-step"><div><h3>Inline contexts and skills</h3><p>Inject current context documents according to platform rules and expose validated skill content without ambient host discovery.</p></div></div>
+          <div class="flow-step"><div><h3>Runner MCP, then external MCP</h3><p>Connect the platform tool surface first; add resolved external HTTP MCP servers and optional-server degradation second.</p></div></div>
+          <div class="flow-step"><div><h3>Conformance and packaging</h3><p>Run captured protocol fixtures against the built worker image, including restart, stale run, cancellation, malformed input, and runner outage.</p></div></div>
+        </div>
+      </section>
+
+      <section id="acceptance">
+        <div class="section-head"><div class="section-code">GATE / SHIP</div><h2>Definition of integration-ready</h2></div>
+        <table class="matrix gate-table">
+          <thead><tr><th>Gate</th><th>Required proof</th><th>Owner</th></tr></thead>
+          <tbody>
+            <tr><td>Boot</td><td>First bearer-authenticated poll enters readiness; before execution, the worker rejects/skips any command with unsupported protocol or mismatched identity.</td><td class="worker-cell">Worker</td></tr>
+            <tr><td>Run</td><td>A v1 command drives a real SDK model/tool round and returns one platform terminal event.</td><td class="worker-cell">Worker + SDK</td></tr>
+            <tr><td>Events</td><td>All principal events have exact type and camelCase fields; every line is bounded and timestamped.</td><td class="worker-cell">Worker</td></tr>
+            <tr><td>Cancellation</td><td>An observed runner rejection of an active event upload reaches an in-flight cooperative SDK tool. A separate test records the known v1 gap: cancellation during a silent model/tool is not prompt without a local deadline or future protocol signal.</td><td class="worker-cell">Worker + SDK</td></tr>
+            <tr><td>Continuity</td><td>Two runs with one runner session preserve SDK context; another session cannot observe it.</td><td class="sdk-cell">Worker + SDK</td></tr>
+            <tr><td>Restart</td><td>Local bundle restores after process restart; uploaded opaque state contains transcript, recovery, and mapping.</td><td class="worker-cell">Worker</td></tr>
+            <tr><td>Profiles</td><td>When effective tools/MCP change between runs, the worker rebuilds the immutable SDK agent and resumes the same persisted transcript through it; unknown selectors never broaden access.</td><td class="worker-cell">Worker</td></tr>
+            <tr><td>Runner MCP</td><td>A model discovers and calls one session-scoped platform tool over the reverse channel.</td><td class="platform-cell">Worker + platform</td></tr>
+            <tr><td>Skills</td><td>Inline body and resource are available; traversal and ambient home skills are absent.</td><td class="worker-cell">Worker</td></tr>
+            <tr><td>Failure</td><td>Runner restart retries with jitter; an observed stale-run rejection cancels; malformed commands emit no privileged work.</td><td class="worker-cell">Worker</td></tr>
+            <tr><td>Isolation</td><td>Substrate proves filesystem, process, network, credential, and resource isolation independently of SDK guards.</td><td class="platform-cell">Platform</td></tr>
+          </tbody>
+        </table>
+        <div class="callout sdk"><strong>SDK readiness conclusion</strong>The SDK already supplies the execution, event, cancellation, persistence, policy, retry, and tool-extension seams required by these tests. The remaining gates test the platform-owned wrapper and deployment boundary.</div>
+      </section>
+
+      <section id="sources">
+        <div class="section-head"><div class="section-code">REF / SOURCE</div><h2>Source-of-truth map</h2></div>
+        <p>Agents implementing the worker should re-check these files before changing protocol or SDK assumptions. Line numbers may drift; file ownership is the durable guide.</p>
+        <h3>agent-orc platform</h3>
+        <div class="source-list">
+          <div class="source platform-source"><code>agent-runtime/runtime/workerwire/wire.go</code> — outbound protocol version, routes, commands, headers, event DTO.</div>
+          <div class="source platform-source"><code>agent-worker/src/outbound/client.js</code> — implemented polling, retry, command, state, shutdown, and orphan behavior.</div>
+          <div class="source platform-source"><code>agent-runtime/runtime/dynamic_adapter.go</code> — command construction, event parsing, rendezvous, state integration.</div>
+          <div class="source platform-source"><code>agent-runtime/runtime/httpapi/worker_routes.go</code> — authentication, line/body limits, run correlation, event/state status codes.</div>
+          <div class="source platform-source"><code>agent-runtime/types/profile.go</code> — profile fields and platform tool selector semantics.</div>
+          <div class="source platform-source"><code>agent-runtime/runtime/runnerwire/wire.go</code> — resolved inline skill and resource shape.</div>
+          <div class="source platform-source"><code>docs/agent-worker-contract.md</code> — static sidecar contract and load-bearing behavioral couplings.</div>
+        </div>
+        <h3>orca-harness SDK</h3>
+        <div class="source-list">
+          <div class="source sdk-source"><code>crates/sdk/src/agent.rs</code> — agent assembly and immutable tool/extension capability snapshot.</div>
+          <div class="source sdk-source"><code>crates/sdk/src/session.rs</code> — run/start, busy guard, persistence, resume, fork, compaction, recovery.</div>
+          <div class="source sdk-source"><code>crates/sdk/src/run.rs</code> — request, result, event receiver, cancellation token, run handle.</div>
+          <div class="source sdk-source"><code>crates/extensions/src/events.rs</code> — typed lifecycle event source; not the platform wire DTO.</div>
+          <div class="source sdk-source"><code>crates/sdk/src/skills.rs</code> — filesystem-root skill lifecycle and tool snapshot.</div>
+          <div class="source sdk-source"><code>crates/sdk/src/mcp.rs</code> — current stdio MCP manager and lazy catalog tools.</div>
+          <div class="source sdk-source"><code>crates/harness-core/src/model.rs</code> — normalized usage semantics and camelCase usage serialization.</div>
+        </div>
+        <div class="callout"><strong>Document authority</strong>This blueprint records an integration decision and implementation boundary. The platform wire files remain authoritative for protocol compatibility; SDK source remains authoritative for library behavior.</div>
+      </section>
+
+      <footer>orca-harness SDK × agent-orc worker integration blueprint · platform owns wire and policy · SDK owns execution · substrate owns isolation</footer>
+    </main>
+  </div>
+</body>
+</html>

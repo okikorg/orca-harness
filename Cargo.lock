@@ -1156,6 +1156,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "orca-harness-sdk"
+version = "0.1.0"
+dependencies = [
+ "orca-harness-core",
+ "orca-harness-extensions",
+ "orca-harness-model-providers",
+ "orca-harness-provider-auth",
+ "orca-harness-tool-extensions",
+ "orca-harness-tools",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "orca-harness-tool-extensions"
 version = "0.1.0"
 dependencies = [

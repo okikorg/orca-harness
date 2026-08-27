@@ -614,20 +614,20 @@ processes:
 | Metric                                                              |      Value |
 | :------------------------------------------------------------------ | ---------: |
 | Release binary (default profile)                                    |    11.7 MB |
-| Release binary (`lto = "fat"`, `codegen-units = 1`, `strip = true`) | **5.2 MB** |
+| Release binary (`lto = "fat"`, `codegen-units = 1`, `strip = true`) | **6.3 MB** |
 | Idle resident memory (one live session)                             |      ~8 MB |
 | Processes at runtime                                                |          1 |
 
 ### Compare to
 
 Measurements come from the same Apple Silicon Mac, not vendor claims. Binary
-sizes were refreshed on 2026-08-24 and use decimal MB (1 MB = 1,000,000
+sizes were refreshed on 2026-08-27 and use decimal MB (1 MB = 1,000,000
 bytes). Idle RSS was measured on 2026-08-22; every row was a live session
 doing nothing, sampled with `ps` over the CLI's process tree after ~10 s idle:
 
 | CLI (version)                                           |                     Binary | Idle RSS (live session) | Processes |
 | :------------------------------------------------------ | -------------------------: | ----------------------: | --------: |
-| `orcacode` 0.1.0 (this repo)                            |                 **5.2 MB** |               **~8 MB** |         1 |
+| `orcacode` 0.1.0 (this repo)                            |                 **6.3 MB** |               **~8 MB** |         1 |
 | `fx` 0.0.5 (for scale)                                  |                     6.4 MB |                  ~21 MB |         1 |
 | Grok Build 1.0.5 (`grok`)                               |                   134.3 MB |                 ~90 MB |         1 |
 | `pi` 0.84.2 (`@earendil-works/pi-coding-agent`)         |             131 MB install |                 ~211 MB |  1 + node |

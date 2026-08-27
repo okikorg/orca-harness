@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Design proposal for orca-harness-sdk, a small Rust facade over the Orca Harness crates without the Orcacode terminal interface." />
+  <title>orca-harness-sdk — Rust facade design</title>
+  <style>
+    :root {
+      --paper: #e8edf0;
+      --paper-2: #f6f8f9;
+      --ink: #10232d;
+      --muted: #526874;
+      --line: #aebdc4;
+      --line-dark: #718994;
+      --blue: #0a63d8;
+      --cyan: #00a9b7;
+      --red: #cf3e30;
+      --amber: #c07a09;
+      --navy: #071b26;
+      --code: #0b202b;
+      --code-ink: #d9f4f2;
+      --code-muted: #8fb4b8;
+      --max: 1500px;
+      --aside: 245px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(16,35,45,.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16,35,45,.045) 1px, transparent 1px),
+        var(--paper);
+      background-size: 24px 24px;
+      font: 16px/1.65 "Avenir Next", Avenir, "Segoe UI", sans-serif;
+    }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    a:hover { color: var(--red); }
+    code, pre, .mono, .eyebrow, nav, .tag, .stamp, th {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    .skip {
+      position: fixed; left: 10px; top: 10px; z-index: 20; padding: 8px 11px;
+      color: white; background: var(--blue); transform: translateY(-150%);
+    }
+    .skip:focus { transform: none; }
+    header {
+      border-bottom: 2px solid var(--ink);
+      background: rgba(232,237,240,.94);
+      backdrop-filter: blur(12px);
+    }
+    .mast {
+      width: min(var(--max), 100%); margin: 0 auto; padding: 20px 28px 18px;
+      display: flex; justify-content: space-between; align-items: end; gap: 24px;
+    }
+    .wordmark { margin: 0; font: 800 20px/1 "Arial Narrow", "Avenir Next Condensed", sans-serif; letter-spacing: .03em; }
+    .wordmark span { color: var(--blue); }
+    .stamp { color: var(--muted); font-size: 11px; text-align: right; letter-spacing: .06em; }
+    .shell { width: min(var(--max), 100%); margin: 0 auto; display: grid; grid-template-columns: var(--aside) minmax(0, 1fr); }
+    nav {
+      position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto;
+      padding: 34px 24px 50px 28px; border-right: 1px solid var(--line-dark);
+      background: rgba(232,237,240,.91); font-size: 12px;
+    }
+    nav .label { color: var(--muted); letter-spacing: .12em; font-size: 10px; margin: 0 0 12px; }
+    nav a { display: block; padding: 5px 0; color: var(--muted); text-decoration: none; }
+    nav a:hover { color: var(--blue); }
+    nav hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
+    main { min-width: 0; background: rgba(246,248,249,.82); border-right: 1px solid var(--line-dark); }
+    .hero { min-height: 570px; padding: 74px clamp(28px, 7vw, 110px) 58px; border-bottom: 1px solid var(--line-dark); position: relative; overflow: hidden; }
+    .hero::after {
+      content: "SDK"; position: absolute; right: -18px; bottom: -72px;
+      color: transparent; -webkit-text-stroke: 1px rgba(10,99,216,.22);
+      font: 900 clamp(150px, 25vw, 350px)/1 "Arial Narrow", sans-serif; letter-spacing: -.08em;
+      pointer-events: none;
+    }
+    .eyebrow { color: var(--blue); font-size: 11px; letter-spacing: .15em; text-transform: uppercase; }
+    h1, h2, h3 { font-family: "Arial Narrow", "Avenir Next Condensed", "Segoe UI", sans-serif; }
+    h1 { max-width: 1000px; margin: 22px 0 25px; font-size: clamp(52px, 8vw, 108px); line-height: .88; letter-spacing: -.055em; text-transform: uppercase; }
+    h1 em { display: block; color: var(--blue); font-style: normal; }
+    .lede { max-width: 830px; margin: 0; color: #304d5b; font-size: clamp(18px, 2vw, 23px); line-height: 1.5; }
+    .formula {
+      position: relative; z-index: 1; display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-top: 38px; padding: 13px 15px; border: 1px solid var(--line-dark); background: var(--paper-2);
+      box-shadow: 6px 6px 0 rgba(10,99,216,.12); font: 13px/1.4 "SFMono-Regular", monospace;
+    }
+    .formula b { color: var(--blue); }
+    .formula .minus { color: var(--red); }
+    section { padding: 66px clamp(28px, 7vw, 110px); border-bottom: 1px solid var(--line-dark); scroll-margin-top: 20px; }
+    section > * { max-width: 1080px; }
+    section h2 { margin: 0 0 22px; font-size: clamp(34px, 5vw, 58px); line-height: 1; letter-spacing: -.035em; text-transform: uppercase; }
+    section h3 { margin: 36px 0 12px; font-size: 23px; line-height: 1.2; }
+    section p { max-width: 840px; }
+    .section-head { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 22px; align-items: start; margin-bottom: 28px; }
+    .section-code { color: var(--blue); border-top: 3px solid var(--blue); padding-top: 8px; font: 12px/1.2 "SFMono-Regular", monospace; }
+    .section-head h2 { margin: 0; }
+    .callout { max-width: 880px; padding: 17px 20px; margin: 24px 0; border-left: 4px solid var(--blue); background: #dce9f1; }
+    .callout.warn { border-color: var(--amber); background: #f2e8d5; }
+    .callout strong { display: block; margin-bottom: 4px; font-family: "SFMono-Regular", monospace; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .rail {
+      max-width: 1080px; margin: 30px 0; display: grid; grid-template-columns: repeat(6, minmax(115px, 1fr));
+      border: 1px solid var(--line-dark); background: var(--paper-2); position: relative;
+    }
+    .rail::before { content: ""; position: absolute; left: 5%; right: 5%; top: 35px; height: 4px; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+    .rail-item { min-height: 112px; padding: 56px 12px 14px; border-right: 1px solid var(--line); position: relative; font: 11px/1.4 "SFMono-Regular", monospace; }
+    .rail-item:last-child { border-right: 0; }
+    .rail-item::before { content: ""; position: absolute; z-index: 1; top: 29px; left: 16px; width: 14px; height: 14px; border: 3px solid var(--paper-2); border-radius: 50%; background: var(--blue); }
+    .rail-item b { display: block; color: var(--ink); margin-bottom: 4px; }
+    .rail-item span { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-width: 1080px; margin: 24px 0; }
+    .card { padding: 20px; border: 1px solid var(--line-dark); background: rgba(246,248,249,.9); }
+    .card h3 { margin: 0 0 8px; font-size: 20px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; }
+    .tag { display: inline-block; margin-bottom: 14px; padding: 3px 7px; color: white; background: var(--blue); font-size: 10px; letter-spacing: .07em; }
+    .tag.existing { background: var(--cyan); }
+    .tag.no { background: var(--red); }
+    .code { max-width: 1080px; margin: 20px 0 28px; border: 1px solid #0b3441; background: var(--code); box-shadow: 5px 5px 0 rgba(7,27,38,.12); }
+    .code-head { display: flex; justify-content: space-between; gap: 12px; padding: 8px 13px; color: var(--code-muted); border-bottom: 1px solid #21414b; font: 10px/1.4 "SFMono-Regular", monospace; letter-spacing: .08em; text-transform: uppercase; }
+    pre { margin: 0; padding: 20px; overflow: auto; color: var(--code-ink); font-size: 13px; line-height: 1.65; tab-size: 4; }
+    .kw { color: #70c8ff; } .ty { color: #82e0bd; } .str { color: #ffd58a; } .cm { color: #77949b; }
+    table { width: 100%; max-width: 1080px; border-collapse: collapse; margin: 24px 0 32px; background: rgba(246,248,249,.75); font-size: 14px; }
+    th { color: var(--muted); text-align: left; text-transform: uppercase; letter-spacing: .07em; font-size: 10px; }
+    th, td { padding: 12px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    td code { color: var(--blue); font-size: 12px; }
+    ul, ol { max-width: 850px; padding-left: 24px; }
+    li { margin: 7px 0; }
+    .tree { white-space: pre; }
+    .api { display: grid; grid-template-columns: 240px minmax(0, 1fr); max-width: 1080px; border-top: 1px solid var(--line-dark); }
+    .api > div { padding: 18px 12px; border-bottom: 1px solid var(--line); }
+    .api .name { color: var(--blue); font: 13px/1.5 "SFMono-Regular", monospace; }
+    .api .desc { color: var(--muted); }
+    footer { padding: 26px clamp(28px, 7vw, 110px); color: var(--muted); font: 11px/1.5 "SFMono-Regular", monospace; background: var(--paper); }
+    :focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+    @media (max-width: 900px) {
+      .shell { display: block; }
+      nav { position: static; width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--line-dark); columns: 2; }
+      nav .label, nav hr { column-span: all; }
+      .rail { grid-template-columns: repeat(3, 1fr); }
+      .rail::before { display: none; }
+      .rail-item { padding-top: 40px; }
+      .rail-item::before { top: 18px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .mast { padding: 16px; }
+      .stamp { display: none; }
+      nav { padding: 20px 16px; columns: 1; }
+      .hero, section { padding-left: 18px; padding-right: 18px; }
+      .section-head { grid-template-columns: 1fr; gap: 10px; }
+      .section-code { width: 90px; }
+      .rail { grid-template-columns: 1fr 1fr; }
+      .api { grid-template-columns: 1fr; }
+      .api .name { padding-bottom: 0; border-bottom: 0; }
+      .api .desc { padding-top: 7px; }
+      table, tbody, tr, td { display: block; width: 100%; }
+      thead { display: none; }
+      tr { border-bottom: 1px solid var(--line-dark); padding: 8px 0; }
+      td { border: 0; padding: 5px 8px; }
+      pre { font-size: 11px; padding: 15px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print { nav { display: none; } .shell { display: block; } main { border: 0; } .hero { min-height: 0; } .code { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to design</a>
+  <header>
+    <div class="mast">
+      <p class="wordmark"><span>ORCA</span> / HARNESS / SDK</p>
+      <div class="stamp">DESIGN PROPOSAL · 2026-08-27<br />RUST LIBRARY · NO TUI</div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav aria-label="Document sections">
+      <p class="label">DESIGN INDEX</p>
+      <a href="#decision">Decision</a>
+      <a href="#boundary">Boundary</a>
+      <a href="#shape">Package shape</a>
+      <a href="#model">Object model</a>
+      <a href="#api">Proposed API</a>
+      <hr />
+      <a href="#quickstart">Quick start</a>
+      <a href="#sessions">Sessions</a>
+      <a href="#runs">Runs &amp; events</a>
+      <a href="#agents">Agents &amp; models</a>
+      <a href="#tools">Tools</a>
+      <a href="#mcp">MCP</a>
+      <a href="#memory">Memory</a>
+      <a href="#skills">Skills</a>
+      <a href="#compaction">Compaction</a>
+      <a href="#extensions">Extensions</a>
+      <a href="#complete">Complete assembly</a>
+      <hr />
+      <a href="#mapping">Existing mapping</a>
+      <a href="#lifecycle">Lifecycle &amp; safety</a>
+      <a href="#delivery">Delivery plan</a>
+    </nav>
+
+    <main id="main">
+      <div class="hero">
+        <p class="eyebrow">Small composition layer / all harness capabilities</p>
+        <h1>One Rust crate.<em>No terminal attached.</em></h1>
+        <p class="lede">
+          <strong>orca-harness-sdk</strong> is a thin, meaningful facade over the existing
+          kernel, providers, tools, tool extensions, and lifecycle extensions. It gives Rust
+          hosts agents, runs, persistent sessions, memory, MCP, skills, and compaction without
+          importing or emulating Orcacode’s TUI.
+        </p>
+        <div class="formula" aria-label="Product relationship">
+          <span>orcacode</span><span>=</span><b>orca-harness</b><span>+</span><span>TUI host</span>
+          <span aria-hidden="true">·</span>
+          <span>orca-harness-sdk</span><span>=</span><b>orca-harness</b><span>+</span><span>crate wrappers</span><span class="minus">− TUI</span>
+        </div>
+      </div>
+
+      <section id="decision">
+        <div class="section-head"><div class="section-code">DECISION</div><h2>Build the facade, not a framework</h2></div>
+        <p>
+          Add one library crate named <code>orca-harness-sdk</code>. It owns composition and
+          host-neutral lifecycle objects. Existing crates remain independently usable and remain
+          the source of truth for execution. The SDK does not copy tool logic, model protocols,
+          persistence formats, or extension hooks.
+        </p>
+        <div class="callout">
+          <strong>Status of code in this document</strong>
+          The snippets specify the proposed facade API. They are examples for the implementation
+          contract and will not compile until the new SDK crate is implemented. Names from the
+          existing crates are called out separately in the mapping section.
+        </div>
+        <div class="grid">
+          <div class="card"><span class="tag">IN</span><h3>Meaningful defaults</h3><p>One builder connects model, tools, extensions, stores, and workspace boundaries correctly.</p></div>
+          <div class="card"><span class="tag">IN</span><h3>Direct control</h3><p>Every built-in capability can be enabled, configured, replaced, or omitted.</p></div>
+          <div class="card"><span class="tag no">OUT</span><h3>No TUI</h3><p>No Ratatui, Crossterm, views, keymaps, slash commands, clipboard, or terminal approval prompts.</p></div>
+          <div class="card"><span class="tag no">OUT</span><h3>No platform layer</h3><p>No HTTP service, distributed scheduler, tenant model, VM manager, queue, or language bindings.</p></div>
+        </div>
+      </section>
+
+      <section id="boundary">
+        <div class="section-head"><div class="section-code">BOUNDARY</div><h2>The SDK is a composition root</h2></div>
+        <p>
+          The SDK sits beside Orcacode as a second host. Both compose the same execution crates;
+          neither depends on the other. A custom host may use the SDK for the common path and drop
+          to the underlying crates whenever it needs lower-level control.
+        </p>
+        <div class="rail" aria-label="SDK capability rail">
+          <div class="rail-item"><b>MODEL</b><span>providers or custom trait</span></div>
+          <div class="rail-item"><b>AGENT</b><span>tools + extensions</span></div>
+          <div class="rail-item"><b>RUN</b><span>events + cancellation</span></div>
+          <div class="rail-item"><b>SESSION</b><span>context + JSONL</span></div>
+          <div class="rail-item"><b>MEMORY</b><span>SQLite + recall</span></div>
+          <div class="rail-item"><b>EXTERNAL</b><span>MCP + skills + web</span></div>
+        </div>
+        <div class="code"><div class="code-head"><span>Dependency direction</span><span>no cli edge</span></div><pre class="tree">orcacode ───────────────┐
+                        ├──&gt; orca-harness-core
+orca-harness-sdk ───────┼──&gt; orca-harness-model-providers
+                        ├──&gt; orca-harness-provider-auth
+custom low-level host ──┼──&gt; orca-harness-tools
+                        ├──&gt; orca-harness-tool-extensions
+                        └──&gt; orca-harness-extensions
+
+orca-harness-sdk  -X-&gt;  orcacode</pre></div>
+      </section>
+
+      <section id="shape">
+        <div class="section-head"><div class="section-code">PACKAGE</div><h2>Small crate, focused modules</h2></div>
+        <div class="code"><div class="code-head"><span>Proposed workspace addition</span><span>crates/sdk</span></div><pre class="tree">crates/sdk/
+├── Cargo.toml
+└── src/
+    ├── lib.rs          # curated re-exports
+    ├── harness.rs      # state roots and shared managers
+    ├── agent.rs        # AgentBuilder + reusable Agent definition
+    ├── run.rs          # RunRequest, RunResult, RunHandle, events
+    ├── session.rs      # Session + Sessions facade
+    ├── tools.rs        # presets and custom tool registration
+    ├── extensions.rs   # typed built-in controls + custom extensions
+    ├── memory.rs       # MemoryStore/Scope facade
+    ├── mcp.rs          # live catalog and server lifecycle
+    ├── skills.rs       # discovery, enablement, install/scaffold
+    └── error.rs        # one SDK error boundary</pre></div>
+        <p>
+          These modules should mostly hold configuration and delegate. Do not move implementation
+          out of existing crates unless the same host-neutral lifecycle is genuinely required by
+          both Orcacode and the SDK later.
+        </p>
+        <h3>Feature flags</h3>
+        <div class="code"><div class="code-head"><span>Cargo.toml</span><span>illustrative</span></div><pre>[dependencies]
+orca-harness-sdk = { version = <span class="str">"0.1"</span>, features = [
+    <span class="str">"openai"</span>, <span class="str">"tools"</span>, <span class="str">"sessions"</span>, <span class="str">"memory"</span>, <span class="str">"mcp"</span>, <span class="str">"skills"</span>, <span class="str">"web"</span>
+] }</pre></div>
+        <table>
+          <thead><tr><th>Feature</th><th>Wraps</th><th>Default?</th></tr></thead>
+          <tbody>
+            <tr><td><code>tools</code></td><td>Workspace, files, shell/process, compute, todos, subagents, ask</td><td>Yes</td></tr>
+            <tr><td><code>sessions</code></td><td>JSONL session files and handler</td><td>Yes</td></tr>
+            <tr><td><code>openai</code></td><td>OpenAI-compatible provider</td><td>Yes</td></tr>
+            <tr><td><code>openrouter</code>, <code>codex</code></td><td>Other shipped model adapters</td><td>No</td></tr>
+            <tr><td><code>memory</code></td><td>SQLite FTS memory, tools, model decorator</td><td>No</td></tr>
+            <tr><td><code>mcp</code>, <code>skills</code>, <code>web</code></td><td>Optional external capabilities</td><td>No</td></tr>
+            <tr><td><code>full</code></td><td>All shipped wrappers</td><td>No</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="model">
+        <div class="section-head"><div class="section-code">OBJECTS</div><h2>Four objects, clear ownership</h2></div>
+        <div class="api">
+          <div class="name">Harness</div><div class="desc">Process-level state: workspace, state directory, session index, memory store, skill catalog, and MCP manager.</div>
+          <div class="name">Agent</div><div class="desc">Reusable immutable definition: model, prompt, limits, tool registrations, and extension configuration. It creates run-local core agents.</div>
+          <div class="name">Session</div><div class="desc">Conversation-level state: mutable Context plus optional JSONL recorder. It can run multiple turns, compact, fork, clear, and resume.</div>
+          <div class="name">RunResult / RunHandle</div><div class="desc">One invocation. Carries final text, usage, events, cancellation, and the completed context state.</div>
+        </div>
+        <div class="callout warn">
+          <strong>Why not wrap one permanent core Agent?</strong>
+          Usage meters, event channels, cancellation, and some extension state belong to one run.
+          The SDK’s <code>Agent</code> should therefore be a reusable definition that assembles a
+          fresh <code>orca_harness_core::Agent</code> per run while a <code>Session</code> retains the context.
+        </div>
+      </section>
+
+      <section id="api">
+        <div class="section-head"><div class="section-code">API</div><h2>Proposed public surface</h2></div>
+        <div class="code"><div class="code-head"><span>Core types</span><span>facade contract</span></div><pre><span class="kw">pub struct</span> <span class="ty">Harness</span>;
+<span class="kw">pub struct</span> <span class="ty">HarnessBuilder</span>;
+<span class="kw">pub struct</span> <span class="ty">Agent</span>;
+<span class="kw">pub struct</span> <span class="ty">AgentBuilder</span>;
+<span class="kw">pub struct</span> <span class="ty">Session</span>;
+<span class="kw">pub struct</span> <span class="ty">Sessions</span>;
+<span class="kw">pub struct</span> <span class="ty">RunRequest</span>;
+<span class="kw">pub struct</span> <span class="ty">RunResult</span>;
+<span class="kw">pub struct</span> <span class="ty">RunHandle</span>;
+<span class="kw">pub struct</span> <span class="ty">Memory</span>;
+<span class="kw">pub struct</span> <span class="ty">Mcp</span>;
+<span class="kw">pub struct</span> <span class="ty">Skills</span>;
+
+<span class="kw">pub enum</span> <span class="ty">ToolPreset</span> { None, ReadOnly, Coding, ShellLess }
+<span class="kw">pub enum</span> <span class="ty">BuiltinExtension</span> {
+    Events, Sessions, Truncation, LongSession, ToolRetry, Usage, Memory,
+}
+<span class="kw">pub enum</span> <span class="ty">Compaction</span> { Manual, Automatic(<span class="ty">LongSessionConfig</span>), Off }
+<span class="kw">pub enum</span> <span class="ty">SessionMode</span> { Ephemeral, Persistent }
+
+<span class="cm">// Curated re-exports: no need to depend on core for common customization.</span>
+<span class="kw">pub use</span> orca_harness_core::{
+    CancellationToken, Context, Extension, FnTool, Image, Limits, Message,
+    Model, Tool, Usage,
+};</pre></div>
+        <p>
+          The facade should expose common operations but not hide the underlying contracts.
+          Custom <code>Model</code>, <code>Tool</code>, and <code>Extension</code> implementations use the
+          existing traits directly—there must not be parallel SDK-only traits.
+        </p>
+      </section>
+
+      <section id="quickstart">
+        <div class="section-head"><div class="section-code">EXAMPLE</div><h2>Quick start</h2></div>
+        <div class="code"><div class="code-head"><span>Cargo.toml</span><span>minimum useful host</span></div><pre>[dependencies]
+orca-harness-sdk = <span class="str">"0.1"</span>
+tokio = { version = <span class="str">"1"</span>, features = [<span class="str">"macros"</span>, <span class="str">"rt-multi-thread"</span>] }</pre></div>
+        <div class="code"><div class="code-head"><span>src/main.rs</span><span>coding agent + persistent session</span></div><pre><span class="kw">use</span> orca_harness_sdk::{Harness, OpenAiModel, RunRequest, ToolPreset};
+
+#[tokio::main]
+<span class="kw">async fn</span> main() -&gt; Result&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    <span class="kw">let</span> sdk = Harness::builder()
+        .workspace(<span class="str">"./my-project"</span>)
+        .state_dir(<span class="str">"./.orca-state"</span>)
+        .build()?;
+
+    <span class="kw">let</span> model = OpenAiModel::new(<span class="str">"gpt-5"</span>)
+        .api_key(std::env::var(<span class="str">"OPENAI_API_KEY"</span>)?);
+
+    <span class="kw">let</span> agent = sdk.agent(model)
+        .system_prompt(<span class="str">"You are a careful Rust coding agent."</span>)
+        .tools(ToolPreset::Coding)
+        .build()
+        .await?;
+
+    <span class="kw">let mut</span> session = agent.new_session().persistent().open()?;
+    <span class="kw">let</span> result = session.run(RunRequest::new(<span class="str">"Explain this workspace"</span>)).await?;
+
+    println!(<span class="str">"{}"</span>, result.text);
+    println!(<span class="str">"usage: {:?}"</span>, result.usage);
+    println!(<span class="str">"session: {}"</span>, session.id());
+    Ok(())
+}</pre></div>
+        <p>
+          Defaults: usage metering, typed events, truncation with recoverable originals, and
+          manual compaction are available. Shell/write access appears only because the caller
+          explicitly selected <code>ToolPreset::Coding</code>.
+        </p>
+      </section>
+
+      <section id="sessions">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Session management</h2></div>
+        <p>
+          A session owns the mutable conversation context. Persistent sessions delegate to the
+          existing append-only JSONL format and <code>SessionHandler</code>; ephemeral sessions keep
+          the same API without disk writes.
+        </p>
+        <h3>Create, continue, inspect</h3>
+        <div class="code"><div class="code-head"><span>session.rs</span><span>multiple turns</span></div><pre><span class="kw">let mut</span> session = agent.new_session()
+    .persistent()
+    .open()?;
+
+<span class="kw">let</span> first = session.run(<span class="str">"Inspect the schema"</span>.into()).await?;
+<span class="kw">let</span> second = session.run(<span class="str">"Now propose the migration"</span>.into()).await?;
+
+println!(<span class="str">"{} messages"</span>, session.messages().len());
+println!(<span class="str">"saved at {}"</span>, session.path().unwrap().display());</pre></div>
+        <h3>List and resume</h3>
+        <div class="code"><div class="code-head"><span>resume.rs</span><span>durable session index</span></div><pre><span class="kw">for</span> item <span class="kw">in</span> sdk.sessions().list()? {
+    println!(<span class="str">"{}  {}  {}"</span>, item.id, item.model, item.created_at);
+}
+
+<span class="kw">let mut</span> session = agent.resume_session(<span class="str">"1780000000-abcde-0"</span>)?;
+<span class="kw">for</span> warning <span class="kw">in</span> session.load_warnings() {
+    eprintln!(<span class="str">"repaired: {warning}"</span>);
+}
+<span class="kw">let</span> answer = session.run(<span class="str">"Continue from where we stopped"</span>.into()).await?;</pre></div>
+        <h3>Fork, clear, and ephemeral operation</h3>
+        <div class="code"><div class="code-head"><span>session-control.rs</span><span>explicit history semantics</span></div><pre><span class="kw">let mut</span> branch = session.fork()?;  <span class="cm">// copies context, records parent id</span>
+branch.run(<span class="str">"Try the alternative approach"</span>.into()).await?;
+
+session.clear()?;                 <span class="cm">// rotate; preserve old transcript</span>
+session.reset_in_place()?;        <span class="cm">// destructive; intentionally explicit</span>
+
+<span class="kw">let mut</span> scratch = agent.new_session().ephemeral().open()?;
+scratch.run(<span class="str">"One-off analysis"</span>.into()).await?;</pre></div>
+        <div class="callout warn"><strong>One session, one active run</strong>A mutable session must reject or prevent overlapping runs. Parallel work uses separate sessions or subagents. This keeps Context ordering and JSONL persistence deterministic.</div>
+      </section>
+
+      <section id="runs">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Runs, events, and cancellation</h2></div>
+        <h3>Structured request and result</h3>
+        <div class="code"><div class="code-head"><span>run.rs</span><span>images, limits, metadata</span></div><pre><span class="kw">let</span> request = RunRequest::new(<span class="str">"Describe this screenshot and inspect the matching view"</span>)
+    .image_path(<span class="str">"./failure.png"</span>)?
+    .deadline(std::time::Duration::from_secs(120));
+
+<span class="kw">let</span> result = session.run(request).await?;
+println!(<span class="str">"{}"</span>, result.text);
+println!(<span class="str">"steps metered: {}"</span>, result.metered_steps);
+println!(<span class="str">"context messages: {}"</span>, result.messages.len());</pre></div>
+        <h3>Stream typed harness events</h3>
+        <div class="code"><div class="code-head"><span>events.rs</span><span>no UI assumptions</span></div><pre><span class="kw">use</span> orca_harness_sdk::{HarnessEvent, RunRequest};
+
+<span class="kw">let</span> request = RunRequest::new(<span class="str">"Run the tests"</span>).on_event(|event| {
+    <span class="kw">match</span> event {
+        HarnessEvent::AssistantDelta { text } =&gt; print!(<span class="str">"{text}"</span>),
+        HarnessEvent::ToolCall { tool_name, .. } =&gt; eprintln!(<span class="str">"start {tool_name}"</span>),
+        HarnessEvent::ToolFinished { tool_name, is_error, .. } =&gt; {
+            eprintln!(<span class="str">"finish {tool_name}; error={is_error}"</span>)
+        }
+        _ =&gt; {}
+    }
+});
+
+<span class="kw">let</span> result = session.run(request).await?;</pre></div>
+        <h3>Start in the background and cancel</h3>
+        <div class="code"><div class="code-head"><span>cancel.rs</span><span>RunHandle</span></div><pre><span class="kw">let mut</span> handle = session.start(RunRequest::new(<span class="str">"Investigate all failures"</span>))?;
+<span class="kw">let</span> cancel = handle.cancellation_token();
+
+<span class="kw">while let</span> Some(event) = handle.events().recv().await {
+    <span class="kw">if</span> should_stop(&amp;event) {
+        cancel.cancel(); <span class="cm">// reaches model, tools, processes, MCP, subagents</span>
+    }
+}
+
+<span class="kw">let</span> result = handle.finish().await?;</pre></div>
+        <p>
+          A started run temporarily owns the session borrow/state. The SDK should make it
+          impossible to begin another turn before <code>finish</code> returns the session to an idle state.
+        </p>
+      </section>
+
+      <section id="agents">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Agents and models</h2></div>
+        <h3>Provider adapters</h3>
+        <div class="code"><div class="code-head"><span>providers.rs</span><span>existing adapters, curated exports</span></div><pre><span class="kw">use</span> orca_harness_sdk::{OpenAiModel, OpenRouterModel};
+
+<span class="kw">let</span> local = OpenAiModel::new(<span class="str">"qwen3-coder"</span>)
+    .base_url(<span class="str">"http://127.0.0.1:11434/v1"</span>)
+    .parallel_tool_calls(<span class="kw">true</span>);
+
+<span class="kw">let</span> routed = OpenRouterModel::new(<span class="str">"anthropic/claude-sonnet-4"</span>, api_key)
+    .reasoning_effort(<span class="str">"high"</span>);
+
+<span class="kw">let</span> local_agent = sdk.agent(local).tools(ToolPreset::ReadOnly).build().await?;
+<span class="kw">let</span> routed_agent = sdk.agent(routed).tools(ToolPreset::Coding).build().await?;</pre></div>
+        <h3>Custom model and limits</h3>
+        <div class="code"><div class="code-head"><span>custom-model.rs</span><span>uses the existing Model trait</span></div><pre><span class="kw">use</span> orca_harness_sdk::{Agent, Limits, Model};
+
+<span class="kw">let</span> agent = sdk.agent(my_model_implementing_model_trait)
+    .name(<span class="str">"reviewer"</span>)
+    .system_prompt(include_str!(<span class="str">"reviewer.md"</span>))
+    .limits(Limits {
+        max_steps: 40,
+        max_parallel_tools: 16,
+        ..Limits::default()
+    })
+    .tools(ToolPreset::ReadOnly)
+    .build()
+    .await?;</pre></div>
+        <h3>Several specialized agents</h3>
+        <div class="code"><div class="code-head"><span>agents.rs</span><span>same Harness, separate definitions</span></div><pre><span class="kw">let</span> planner = sdk.agent(model.clone())
+    .name(<span class="str">"planner"</span>)
+    .tools(ToolPreset::ReadOnly)
+    .build().await?;
+
+<span class="kw">let</span> implementer = sdk.agent(model.clone())
+    .name(<span class="str">"implementer"</span>)
+    .tools(ToolPreset::Coding)
+    .build().await?;
+
+<span class="kw">let</span> verifier = sdk.agent(model)
+    .name(<span class="str">"verifier"</span>)
+    .tools(ToolPreset::ReadOnly)
+    .build().await?;</pre></div>
+      </section>
+
+      <section id="tools">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Tools and tool extensions</h2></div>
+        <table>
+          <thead><tr><th>Preset</th><th>Contents</th><th>Intent</th></tr></thead>
+          <tbody>
+            <tr><td><code>None</code></td><td>No host tools</td><td>Text-only or custom tool hosts</td></tr>
+            <tr><td><code>ReadOnly</code></td><td>read_file, list_dir, grep, glob</td><td>Inspection without mutation</td></tr>
+            <tr><td><code>Coding</code></td><td>Read-only + write/edit + local shell/process</td><td>Normal coding agent</td></tr>
+            <tr><td><code>ShellLess</code></td><td>Files/search + filesystem admin bundle</td><td>Restricted hosts without shell</td></tr>
+          </tbody>
+        </table>
+        <h3>Preset plus optional shipped tools</h3>
+        <div class="code"><div class="code-head"><span>tools.rs</span><span>explicit capabilities</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .tools(ToolPreset::Coding)
+    .tool(PyKernelTool::new())
+    .tool(BunReplTool::new())
+    .todo_tools()
+    .subagents(subagent_model, SubagentDepth::default())
+    .ask_tool(my_question_handler)
+    .web_fetch(WebFetchTool::default())
+    .build()
+    .await?;</pre></div>
+        <h3>Custom function tool</h3>
+        <div class="code"><div class="code-head"><span>custom-tool.rs</span><span>existing FnTool</span></div><pre><span class="kw">use</span> orca_harness_sdk::{FnTool, ToolPreset};
+<span class="kw">use</span> serde_json::json;
+
+<span class="kw">let</span> lookup = FnTool::new(
+    <span class="str">"lookup_ticket"</span>,
+    <span class="str">"Look up one issue by id"</span>,
+    json!({
+        <span class="str">"type"</span>: <span class="str">"object"</span>,
+        <span class="str">"properties"</span>: { <span class="str">"id"</span>: { <span class="str">"type"</span>: <span class="str">"string"</span> } },
+        <span class="str">"required"</span>: [<span class="str">"id"</span>]
+    }),
+    |input, _ctx| <span class="kw">async move</span> { lookup_ticket(input[<span class="str">"id"</span>].as_str().unwrap()).await },
+);
+
+<span class="kw">let</span> agent = sdk.agent(model)
+    .tools(ToolPreset::ReadOnly)
+    .tool(lookup)
+    .build().await?;</pre></div>
+        <h3>Custom Tool implementation and remote executor</h3>
+        <div class="code"><div class="code-head"><span>advanced-tools.rs</span><span>drop to existing crates</span></div><pre><span class="kw">let</span> ssh = Executor::ssh(<span class="str">"deploy@example.internal"</span>);
+<span class="kw">let</span> remote_tools = core_tools_with_executor(sdk.workspace(), ssh);
+
+<span class="kw">let mut</span> builder = sdk.agent(model).tools(ToolPreset::None);
+<span class="kw">for</span> tool <span class="kw">in</span> remote_tools {
+    builder = builder.tool_arc(tool);
+}
+<span class="kw">let</span> agent = builder.tool(MyTool).build().await?;</pre></div>
+        <div class="callout warn"><strong>Permission rule</strong>Supplying a workspace never silently enables shell or writes. Capability selection stays explicit, and mutating tools should normally be paired with a ToolPolicy or a host-provided approval Extension.</div>
+      </section>
+
+      <section id="mcp">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>MCP server interface</h2></div>
+        <p>
+          The SDK wrapper owns server lifecycle that currently belongs to the CLI host, while
+          delegating protocol work to <code>McpClient</code>, <code>McpCatalog</code>,
+          <code>McpModel</code>, and <code>McpTool</code>. Connecting a server adds the three lazy
+          MCP interface tools and hidden remote tools; the model decorator controls schema visibility.
+        </p>
+        <h3>Add, inspect, and attach servers</h3>
+        <div class="code"><div class="code-head"><span>mcp.rs</span><span>live stdio connections</span></div><pre><span class="kw">let</span> mcp = sdk.mcp();
+
+<span class="kw">let</span> status = mcp.connect(
+    <span class="str">"github"</span>,
+    <span class="str">"npx -y @modelcontextprotocol/server-github"</span>,
+).await?;
+println!(<span class="str">"connected {} tools"</span>, status.tool_count);
+
+<span class="kw">for</span> server <span class="kw">in</span> mcp.servers() {
+    println!(<span class="str">"{} healthy={} tools={}"</span>, server.name, server.healthy, server.tool_count);
+}
+
+<span class="kw">let</span> agent = sdk.agent(model)
+    .tools(ToolPreset::ReadOnly)
+    .mcp(mcp.clone())
+    .build()
+    .await?;</pre></div>
+        <h3>Replace, disconnect, reconnect</h3>
+        <div class="code"><div class="code-head"><span>mcp-control.rs</span><span>host-driven lifecycle</span></div><pre>mcp.connect(<span class="str">"docs"</span>, <span class="str">"my-mcp-server --stdio"</span>).await?;
+mcp.reconnect(<span class="str">"docs"</span>).await?;
+mcp.disconnect(<span class="str">"docs"</span>)?;
+
+<span class="cm">// Dropping the final manager/agent reference kills connected child processes.</span>
+sdk.shutdown().await?;</pre></div>
+        <h3>What the model receives</h3>
+        <div class="code"><div class="code-head"><span>model-facing tools</span><span>existing lazy catalog contract</span></div><pre>mcp_search_tools  <span class="cm">// search metadata across connected servers</span>
+mcp_select_tool   <span class="cm">// expose one exact remote schema on the next turn</span>
+mcp_features      <span class="cm">// resources, prompts, templates, completion</span>
+mcp__github__...  <span class="cm">// selected remote tools, normal dispatch/policy/cancellation</span></pre></div>
+        <p>
+          V1 should support the existing stdio command transport only. Do not invent HTTP MCP
+          configuration until the underlying MCP crate supports it.
+        </p>
+      </section>
+
+      <section id="memory">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Memory management</h2></div>
+        <p>
+          The facade combines direct application access, model-time recall, and model-callable
+          search/manage tools over the same <code>MemoryStore</code> and <code>MemoryScope</code>.
+        </p>
+        <h3>Open and manage directly</h3>
+        <div class="code"><div class="code-head"><span>memory.rs</span><span>host API</span></div><pre><span class="kw">let</span> memory = sdk.memory().open()?;
+
+<span class="kw">let</span> saved = memory.save(
+    <span class="str">"Use cargo nextest for this workspace"</span>,
+    MemoryKind::Workflow,
+    MemoryVisibility::Workspace,
+    <span class="str">"host-import"</span>,
+)?;
+
+<span class="kw">let</span> hits = memory.search(<span class="str">"test runner"</span>, 8)?;
+memory.update(&amp;saved.id, <span class="str">"Use cargo nextest --workspace"</span>, None)?;
+memory.forget(&amp;saved.id)?;</pre></div>
+        <h3>Attach recall and memory tools to an agent</h3>
+        <div class="code"><div class="code-head"><span>memory-agent.rs</span><span>one configuration, three pieces</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .tools(ToolPreset::Coding)
+    .memory(
+        MemoryConfig::new(memory.clone())
+            .automatic_recall(<span class="kw">true</span>)
+            .search_tool(<span class="kw">true</span>)
+            .manage_tool(<span class="kw">true</span>)
+            .max_recalled_items(8)
+            .max_recalled_chars(4 * 1024),
+    )
+    .build()
+    .await?;</pre></div>
+        <h3>Read-only memory</h3>
+        <div class="code"><div class="code-head"><span>memory-readonly.rs</span><span>recall without mutation</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .memory(MemoryConfig::new(memory)
+        .automatic_recall(<span class="kw">true</span>)
+        .search_tool(<span class="kw">true</span>)
+        .manage_tool(<span class="kw">false</span>))
+    .build().await?;</pre></div>
+        <div class="callout"><strong>Meaningful wrapper behavior</strong><code>AgentBuilder::memory</code> must wire <code>MemoryModel</code> for automatic recall and register <code>MemorySearchTool</code>/<code>MemoryManageTool</code> as requested. It must not merely re-export the store.</div>
+      </section>
+
+      <section id="skills">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Skills discovery and control</h2></div>
+        <p>
+          Skills remain text instructions loaded through the existing <code>SkillTool</code>. The SDK
+          manager supplies the host lifecycle currently provided by Orcacode: roots, reload,
+          enablement, installation, scaffolding, and removal.
+        </p>
+        <h3>Discover and attach</h3>
+        <div class="code"><div class="code-head"><span>skills.rs</span><span>workspace + compatibility roots</span></div><pre><span class="kw">let</span> skills = sdk.skills();
+<span class="kw">let</span> report = skills.reload()?;
+
+<span class="kw">for</span> item <span class="kw">in</span> skills.catalog() {
+    println!(<span class="str">"{} [{}] enabled={}"</span>, item.name, item.root, item.enabled);
+}
+
+skills.disable(<span class="str">"deploy-production"</span>)?;
+skills.enable(<span class="str">"rust-review"</span>)?;
+
+<span class="kw">let</span> agent = sdk.agent(model)
+    .tools(ToolPreset::Coding)
+    .skills(skills.clone())
+    .build().await?;</pre></div>
+        <h3>Install, scaffold, uninstall</h3>
+        <div class="code"><div class="code-head"><span>skill-management.rs</span><span>host actions, never model actions</span></div><pre><span class="kw">let</span> installed = skills.install(
+    <span class="str">"owner/repository@rust-review"</span>,
+    SkillDestination::Managed,
+).await?;
+
+<span class="kw">let</span> path = skills.scaffold(<span class="str">"release"</span>, SkillDestination::Workspace)?;
+skills.reload()?;
+
+<span class="kw">let</span> removed = skills.uninstall(<span class="str">"release"</span>)?;</pre></div>
+        <h3>Custom roots only</h3>
+        <div class="code"><div class="code-head"><span>skill-roots.rs</span><span>deterministic embedding</span></div><pre><span class="kw">let</span> skills = Skills::builder()
+    .root(<span class="str">"application"</span>, <span class="str">"./agent-skills"</span>)
+    .root(<span class="str">"shared"</span>, <span class="str">"/opt/company/skills"</span>)
+    .build();
+skills.reload()?;</pre></div>
+        <div class="callout warn"><strong>Trust boundary</strong>Skill installation is a host API, not a model tool. Skill bodies are instructions; letting the model install its own instructions would bypass the caller’s trust decision.</div>
+      </section>
+
+      <section id="compaction">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Compacting controls</h2></div>
+        <h3>Manual compaction</h3>
+        <div class="code"><div class="code-head"><span>compact.rs</span><span>deterministic, no model call</span></div><pre><span class="kw">let</span> report = session.compact(CompactConfig {
+    tail_budget_tokens: 2_000,
+})?;
+
+println!(
+    <span class="str">"{} -&gt; {} messages; {} bytes elided"</span>,
+    report.messages_before,
+    report.messages_after,
+    report.elided_bytes,
+);</pre></div>
+        <h3>Automatic long-session control</h3>
+        <div class="code"><div class="code-head"><span>auto-compact.rs</span><span>model-aware threshold</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .compaction(Compaction::Automatic(LongSessionConfig {
+        compact_at_percent: 80,
+        tail_percent: 20,
+    }))
+    .context_capacity(200_000)
+    .on_compact(|report| {
+        eprintln!(<span class="str">"compacted to ~{} tokens"</span>, report.est_tokens_after);
+    })
+    .build().await?;</pre></div>
+        <h3>Recover truncated or compacted output</h3>
+        <div class="code"><div class="code-head"><span>recovery.rs</span><span>paired extension + tool</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .truncation(TruncationConfig {
+        max_string_chars: 16_000,
+        store_budget_bytes: 16 * 1024 * 1024,
+        expose_reader_tool: <span class="kw">true</span>,
+    })
+    .build().await?;
+
+<span class="cm">// The SDK pairs TruncationStore, Truncation, and ReadToolResultTool.</span>
+<span class="cm">// Manual and automatic compaction use that same store.</span></pre></div>
+        <div class="callout"><strong>Shared store invariant</strong>Truncation, <code>read_tool_result</code>, manual compaction, and automatic long-session compaction must all use the same run/session <code>TruncationStore</code>. The facade exists partly to make this correct by default.</div>
+      </section>
+
+      <section id="extensions">
+        <div class="section-head"><div class="section-code">EXAMPLES</div><h2>Extension controls</h2></div>
+        <p>
+          Built-in controls should be typed because several extensions require companion handles,
+          tools, or model decorators. Arbitrary custom extensions remain accepted through the
+          existing trait.
+        </p>
+        <h3>Configure built-ins</h3>
+        <div class="code"><div class="code-head"><span>extensions.rs</span><span>typed controls</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .extensions(|ext| ext
+        .events(<span class="kw">true</span>)
+        .usage(<span class="kw">true</span>)
+        .sessions(<span class="kw">true</span>)
+        .truncation(TruncationConfig::default())
+        .tool_retry(RetryConfig::attempts(3).backoff_ms(250))
+        .compaction(Compaction::Manual)
+    )
+    .build().await?;</pre></div>
+        <h3>Disable a default</h3>
+        <div class="code"><div class="code-head"><span>minimal-agent.rs</span><span>no hidden behavior</span></div><pre><span class="kw">let</span> agent = sdk.agent(model)
+    .tools(ToolPreset::None)
+    .extensions(|ext| ext
+        .events(<span class="kw">false</span>)
+        .usage(<span class="kw">false</span>)
+        .truncation_off()
+        .compaction(Compaction::Off)
+    )
+    .build().await?;</pre></div>
+        <h3>Add policy and custom extensions</h3>
+        <div class="code"><div class="code-head"><span>custom-extension.rs</span><span>existing Extension trait</span></div><pre><span class="kw">let</span> policy = ToolPolicy::new()
+    .deny([<span class="str">"delete_file"</span>, <span class="str">"memory_manage"</span>])
+    .rule(|call| {
+        <span class="kw">if</span> call.name == <span class="str">"shell"</span> &amp;&amp; outside_business_hours() {
+            PolicyOutcome::Deny(<span class="str">"shell is disabled after hours"</span>.into())
+        } <span class="kw">else</span> {
+            PolicyOutcome::Allow
+        }
+    });
+
+<span class="kw">let</span> agent = sdk.agent(model)
+    .extension(policy)
+    .extension(MyTracingExtension::new())
+    .extension_arc(shared_approval_extension)
+    .build().await?;</pre></div>
+        <h3>Inspect effective configuration</h3>
+        <div class="code"><div class="code-head"><span>introspection.rs</span><span>before a run</span></div><pre><span class="kw">for</span> extension <span class="kw">in</span> agent.extension_summary() {
+    println!(<span class="str">"{} enabled={} source={:?}"</span>, extension.name, extension.enabled, extension.source);
+}
+<span class="kw">for</span> tool <span class="kw">in</span> agent.tool_summary() {
+    println!(<span class="str">"{} ({:?})"</span>, tool.name, tool.source);
+}</pre></div>
+        <p>
+          Runtime toggling should produce a rebuilt <code>Agent</code> definition rather than mutate a
+          core Agent during a run. A simple <code>agent.reconfigure(|builder| ...).await?</code> can be
+          added only if a real consumer needs it; builder-time controls are enough for v0.1.
+        </p>
+      </section>
+
+      <section id="complete">
+        <div class="section-head"><div class="section-code">EXAMPLE</div><h2>Complete host assembly</h2></div>
+        <p>This example uses every requested domain while staying independent of Orcacode.</p>
+        <div class="code"><div class="code-head"><span>full.rs</span><span>all core crates, no TUI</span></div><pre><span class="kw">use</span> orca_harness_sdk::{
+    Compaction, Harness, HarnessEvent, LongSessionConfig, MemoryConfig,
+    OpenAiModel, RetryConfig, RunRequest, SkillDestination, ToolPolicy,
+    ToolPreset, TruncationConfig,
+};
+
+#[tokio::main]
+<span class="kw">async fn</span> main() -&gt; Result&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    <span class="kw">let</span> sdk = Harness::builder()
+        .workspace(<span class="str">"./repo"</span>)
+        .state_dir(<span class="str">"./.orca-state"</span>)
+        .build()?;
+
+    <span class="cm">// Shared host services.</span>
+    <span class="kw">let</span> memory = sdk.memory().open()?;
+    <span class="kw">let</span> skills = sdk.skills();
+    skills.reload()?;
+
+    <span class="kw">let</span> mcp = sdk.mcp();
+    mcp.connect(<span class="str">"project"</span>, <span class="str">"project-mcp --stdio"</span>).await?;
+
+    <span class="kw">let</span> model = OpenAiModel::new(<span class="str">"gpt-5"</span>)
+        .api_key(std::env::var(<span class="str">"OPENAI_API_KEY"</span>)?)
+        .parallel_tool_calls(<span class="kw">true</span>);
+
+    <span class="kw">let</span> agent = sdk.agent(model)
+        .name(<span class="str">"rust-maintainer"</span>)
+        .system_prompt(<span class="str">"Maintain this Rust workspace. Verify every change."</span>)
+        .tools(ToolPreset::Coding)
+        .python()
+        .todos()
+        .subagents_default()
+        .mcp(mcp)
+        .skills(skills)
+        .memory(MemoryConfig::read_write(memory))
+        .extension(ToolPolicy::new().deny([<span class="str">"delete_file"</span>]))
+        .truncation(TruncationConfig::default())
+        .tool_retry(RetryConfig::attempts(3))
+        .compaction(Compaction::Automatic(LongSessionConfig {
+            compact_at_percent: 80,
+            tail_percent: 20,
+        }))
+        .build()
+        .await?;
+
+    <span class="kw">let mut</span> session = agent.new_session().persistent().open()?;
+    <span class="kw">let</span> request = RunRequest::new(<span class="str">"Review the workspace and fix the failing tests"</span>)
+        .on_event(|event| <span class="kw">match</span> event {
+            HarnessEvent::ToolCall { tool_name, .. } =&gt; eprintln!(<span class="str">"→ {tool_name}"</span>),
+            HarnessEvent::AssistantDelta { text } =&gt; print!(<span class="str">"{text}"</span>),
+            _ =&gt; {}
+        });
+
+    <span class="kw">let</span> result = session.run(request).await?;
+    println!(<span class="str">"\n\n{}"</span>, result.text);
+    println!(<span class="str">"usage: {:?}"</span>, result.usage);
+
+    sdk.shutdown().await?;
+    Ok(())
+}</pre></div>
+      </section>
+
+      <section id="mapping">
+        <div class="section-head"><div class="section-code">MAPPING</div><h2>Facade to existing code</h2></div>
+        <table>
+          <thead><tr><th>SDK capability</th><th>Existing source of truth</th><th>New wrapper responsibility</th></tr></thead>
+          <tbody>
+            <tr><td>Agent execution</td><td><code>core::Agent, Context, Model, Tool, Extension</code></td><td>Run-local assembly and curated re-exports</td></tr>
+            <tr><td>Providers</td><td><code>model-providers::{OpenAiModel, OpenRouterModel, OpenAiCodexModel}</code></td><td>Feature gating and exports only</td></tr>
+            <tr><td>Workspace tools</td><td><code>tools::core_tools*, fs_admin_tools</code></td><td>Explicit presets and companion state</td></tr>
+            <tr><td>Compute/subagents/todos/ask</td><td><code>tools::{PyKernelTool, BunReplTool, SubagentTool, TodoWriteTool, AskTool}</code></td><td>Builder convenience and lifecycle ownership</td></tr>
+            <tr><td>Sessions</td><td><code>extensions::{SessionFile, SessionHandler}</code></td><td>Directory index, create/resume/fork/clear API</td></tr>
+            <tr><td>Events/runs</td><td><code>extensions::{EventStream, HarnessEvent, UsageMeter}</code></td><td>Run request/result/handle and channels</td></tr>
+            <tr><td>Memory</td><td><code>extensions::{MemoryStore, MemoryModel, Memory*Tool}</code></td><td>One typed configuration joining all pieces</td></tr>
+            <tr><td>Compaction</td><td><code>extensions::{compact, LongSession, TruncationStore}</code></td><td>Session method and shared-store wiring</td></tr>
+            <tr><td>Truncation/recovery</td><td><code>extensions::{Truncation, ReadToolResultTool}</code></td><td>Always pair extension, store, and reader</td></tr>
+            <tr><td>Policies/retries</td><td><code>extensions::{ToolPolicy, ToolRetry, RetryModel}</code></td><td>Typed enable/configuration</td></tr>
+            <tr><td>MCP</td><td><code>tool-extensions::mcp::{McpClient, McpCatalog, McpModel}</code></td><td>Named connection manager independent of CLI config</td></tr>
+            <tr><td>Skills</td><td><code>tool-extensions::skills::{discover, SkillTool, install, scaffold}</code></td><td>Roots, enabled set, reload, and host operations</td></tr>
+            <tr><td>Web</td><td><code>tool-extensions::web</code></td><td>Convenience registration only</td></tr>
+          </tbody>
+        </table>
+        <div class="callout"><strong>Deliberate duplication avoided</strong>The CLI’s <code>McpServers</code> and <code>Skills</code> types cannot be imported because the CLI is binary-only and config/TUI-aware. The SDK wrappers should copy only the small host lifecycle concept, not protocol, discovery, installation, or tool implementations.</div>
+      </section>
+
+      <section id="lifecycle">
+        <div class="section-head"><div class="section-code">RULES</div><h2>Lifecycle, errors, and safety</h2></div>
+        <h3>One SDK error boundary</h3>
+        <div class="code"><div class="code-head"><span>error.rs</span><span>preserve typed sources</span></div><pre>#[derive(Debug, thiserror::Error)]
+<span class="kw">pub enum</span> <span class="ty">SdkError</span> {
+    Config(String),
+    Workspace(#[source] std::io::Error),
+    Harness(#[from] HarnessError),
+    Session(#[from] SessionError),
+    Memory(#[from] MemoryError),
+    Mcp(#[from] McpError),
+    Skill(String),
+    BusySession,
+    Shutdown,
+}</pre></div>
+        <ul>
+          <li>Do not flatten underlying errors to strings unless no typed error exists.</li>
+          <li>Never include credentials in <code>Debug</code>, errors, events, or configuration summaries.</li>
+          <li>Dropping a run cancels it; dropping the final MCP/process tool owner terminates children.</li>
+          <li><code>Harness::shutdown()</code> is explicit and idempotent; <code>Drop</code> remains a best-effort fallback.</li>
+          <li>All filesystem paths are rooted through the existing <code>Workspace</code> type.</li>
+          <li>Extension and tool ordering is deterministic and documented.</li>
+          <li>Custom tools and extensions are never silently granted special permissions.</li>
+        </ul>
+        <h3>Assembly order</h3>
+        <ol>
+          <li>Create provider model.</li>
+          <li>Apply model decorators: retry, skill mention behavior if retained, MCP schema visibility, memory recall.</li>
+          <li>Create run-local event, usage, cancellation, and truncation state.</li>
+          <li>Register presets, custom tools, recovery tool, memory tools, skills tool, and MCP tools.</li>
+          <li>Register policy and lifecycle extensions in deterministic order.</li>
+          <li>Run against the Session’s Context; sync the recorder after completion or repair.</li>
+        </ol>
+      </section>
+
+      <section id="delivery">
+        <div class="section-head"><div class="section-code">PLAN</div><h2>Minimal delivery sequence</h2></div>
+        <div class="api">
+          <div class="name">1 · Skeleton</div><div class="desc">Create the crate, error type, curated exports, Harness, AgentBuilder, ToolPreset, Session, RunRequest, and RunResult.</div>
+          <div class="name">2 · Correct wiring</div><div class="desc">Implement events, usage, cancellation, sessions, truncation/recovery, and manual compaction with shared state.</div>
+          <div class="name">3 · Core wrappers</div><div class="desc">Add memory, typed extension controls, tools, providers, and automatic long-session compaction.</div>
+          <div class="name">4 · External wrappers</div><div class="desc">Add MCP manager, skill manager, web convenience, and subagent composition.</div>
+          <div class="name">5 · Proof</div><div class="desc">Compile examples from every section, add fake-model integration tests, publish dry-run, and make Orcacode behavior parity tests where useful.</div>
+        </div>
+        <h3>Acceptance tests</h3>
+        <ul>
+          <li>A fake model can complete a run through a custom tool and emit ordered events.</li>
+          <li>A persistent session survives process restart, resumes, forks, clears by rotation, and repairs crash artifacts.</li>
+          <li>Memory recall, search, save, update, and forget share one scoped store.</li>
+          <li>Manual and automatic compaction preserve a recoverable result index.</li>
+          <li>MCP add/remove affects only named servers and selected schemas remain lazy.</li>
+          <li>Skills reload, precedence, enablement, paging, containment, install, and uninstall retain existing guarantees.</li>
+          <li>Cancellation reaches shell/process, MCP, compute kernels, and subagent descendants.</li>
+          <li>The SDK dependency graph contains no <code>orcacode</code>, Ratatui, or Crossterm dependency.</li>
+        </ul>
+        <div class="callout">
+          <strong>V0.1 stopping point</strong>
+          Stop when a Rust application can compose all current harness capabilities with the APIs
+          above. Do not add an HTTP server, macros, workflow DAGs, plugin loading, distributed runs,
+          or non-Rust bindings to justify the word “SDK.”
+        </div>
+      </section>
+
+      <footer>
+        orca-harness-sdk design · facade over existing crates · Orcacode remains TUI + Orca Harness · no source implementation included in this document
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

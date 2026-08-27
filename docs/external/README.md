@@ -41,8 +41,8 @@ audited together.
 - Durable memory, automatic scoped recall, explicit management, and local storage
 - Sessions, task lists, and transcript controls
 - Complete current tool and extension reference, including mode and availability rules
+- Rust SDK embedding guide covering setup, models, tool presets, runs, sessions, memory, skills, MCP, recovery, errors, and runnable examples
 - Benchmark methodology, checked-in results, regression budgets, MCP retrieval accuracy, and subagent stress evidence
-- Terminal UI composition, activity rails, tool inspection, and decision overlays
 - Subagents and multi-provider worker routing, MCP servers, and skills (including discovery, scope, and lifecycle diagrams)
 - Headless automation and troubleshooting
 - Harness architecture, design philosophy, and benchmark methodology/results

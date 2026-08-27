@@ -63,13 +63,6 @@
     "lede": "Sessions are recorded per workspace as append-only JSONL, so routine exploration remains resumable without asking you to manage transcript files by hand."
   },
   {
-    "group": "USE THE AGENT",
-    "id": "terminal-ui",
-    "label": "Terminal UI",
-    "title": "See work as it happens",
-    "lede": "The terminal UI is composed from small, explicit components. The transcript holds the durable conversation; the live rail makes model activity and tool work inspectable before it collapses into the record."
-  },
-  {
     "group": "EXTEND",
     "id": "subagents",
     "label": "Subagents",
@@ -89,6 +82,13 @@
     "label": "Skills & instructions",
     "title": "Add durable guidance",
     "lede": "Instructions give every session the project context it needs. Skills package focused procedures that you can discover, enable, or disable when they apply."
+  },
+  {
+    "group": "EMBED",
+    "id": "sdk",
+    "label": "Rust SDK",
+    "title": "Embed Orca Harness in Rust",
+    "lede": "The orca-harness-sdk crate is a CLI-independent facade for composing models, tools, extensions, sessions, memory, skills, MCP, events, cancellation, and long-context recovery in your own Rust host."
   },
   {
     "group": "AUTOMATE",
