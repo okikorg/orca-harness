@@ -24,6 +24,7 @@ pub const GATED_TOOLS: &[&str] = &[
     "pykernel",
     "bun_repl",
     "subagent",
+    "memory_manage",
 ];
 
 pub struct Approval {
@@ -270,10 +271,11 @@ mod tests {
     }
 
     #[test]
-    fn persistent_compute_and_subagent_are_gated() {
+    fn persistent_compute_subagent_and_memory_writes_are_gated() {
         assert!(GATED_TOOLS.contains(&"pykernel"));
         assert!(GATED_TOOLS.contains(&"bun_repl"));
         assert!(GATED_TOOLS.contains(&"subagent"));
+        assert!(GATED_TOOLS.contains(&"memory_manage"));
     }
 
     /// In yolo no gated tool prompts, whatever the session or saved

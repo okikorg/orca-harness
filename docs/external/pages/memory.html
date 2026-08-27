@@ -1,0 +1,106 @@
+<section class="section" id="memory-contract">
+  <h2>Deliberate storage, automatic recall</h2>
+  <p>Memory is durable context that you ask Orcacode to keep or that the model identifies as stable and useful beyond the current session. It is not the session transcript, a project instruction file, or an automatic summary of everything you say. Orcacode does not run a background extraction process.</p>
+  <div class="callout"><span class="callout-label">THE WRITE RULE</span><p>The system prompt instructs the model to call <code>memory_manage</code> when you explicitly ask or when directly stated user information is stable and likely to help in future sessions. It must skip ordinary conversation, one-off task details, current progress, duplicates, secrets, and unverified inferences. Repository-specific information uses workspace scope; clearly universal information may use global scope. In normal mode, the approval gate is your final decision on the proposed mutation.</p></div>
+  <p>Recall is automatic. Before each model request, Orcacode searches for records related to the latest user message. Matching records are added to a temporary request context as user-owned reference material, never as system policy or permission to act. The durable conversation itself is not modified.</p>
+</section>
+
+<section class="section" id="memory-flow">
+  <h2>How one turn retrieves memory</h2>
+  <figure class="system-diagram integration-diagram" aria-labelledby="memory-flow-caption" data-mobile-flow="Latest user message -> scoped SQLite FTS5 search -> bounded recalled records -> transient model context -> answer. The saved session is unchanged.">
+    <svg viewBox="0 0 960 420" role="img" aria-labelledby="memory-flow-title memory-flow-desc">
+      <title id="memory-flow-title">Orcacode automatic memory retrieval</title>
+      <desc id="memory-flow-desc">The latest user message is searched against the local memory database, filtered to global and current-workspace records, bounded, and inserted into a transient model request.</desc>
+      <defs>
+        <marker id="memory-flow-g" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 L8 4.5 L0 9 Z" class="diagram-marker-green"/></marker>
+        <marker id="memory-flow-b" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 L8 4.5 L0 9 Z" class="diagram-marker-blue"/></marker>
+      </defs>
+      <text class="diagram-kicker" x="32" y="32">MEMORY RECALL / ONE MODEL REQUEST</text>
+      <rect class="diagram-card acid" x="32" y="92" width="168" height="82"/>
+      <text class="diagram-card-title" x="50" y="124">USER MESSAGE</text>
+      <text class="diagram-card-copy" x="50" y="146">latest prompt</text>
+      <text class="diagram-card-copy" x="50" y="162">unchanged</text>
+      <rect class="diagram-card" x="248" y="92" width="168" height="82"/>
+      <text class="diagram-card-title" x="266" y="124">FTS5 SEARCH</text>
+      <text class="diagram-card-copy" x="266" y="146">up to 12 terms</text>
+      <text class="diagram-card-copy" x="266" y="162">rank + recency</text>
+      <rect class="diagram-card blue" x="464" y="92" width="168" height="82"/>
+      <text class="diagram-card-title" x="482" y="124">SCOPE FILTER</text>
+      <text class="diagram-card-copy" x="482" y="146">global + current</text>
+      <text class="diagram-card-copy" x="482" y="162">workspace only</text>
+      <rect class="diagram-card acid" x="680" y="92" width="248" height="82"/>
+      <text class="diagram-card-title" x="698" y="124">TRANSIENT CONTEXT</text>
+      <text class="diagram-card-copy" x="698" y="146">max 8 / 4,096 chars</text>
+      <text class="diagram-card-copy" x="698" y="162">reference, not authority</text>
+      <path class="diagram-connector green" d="M200 133H248" marker-end="url(#memory-flow-g)"/>
+      <path class="diagram-connector blue" d="M416 133H464" marker-end="url(#memory-flow-b)"/>
+      <path class="diagram-connector green" d="M632 133H680" marker-end="url(#memory-flow-g)"/>
+      <rect class="diagram-zone" x="32" y="230" width="896" height="126"/>
+      <text class="diagram-zone-title" x="50" y="255">DURABLE LOCAL STATE</text>
+      <rect class="diagram-card blue" x="64" y="274" width="252" height="58"/>
+      <text class="diagram-card-title" x="82" y="299">MEMORY.SQLITE3</text>
+      <text class="diagram-card-copy" x="82" y="318">records + FTS index</text>
+      <rect class="diagram-card" x="354" y="274" width="252" height="58"/>
+      <text class="diagram-card-title" x="372" y="299">SESSION JSONL</text>
+      <text class="diagram-card-copy" x="372" y="318">not rewritten by recall</text>
+      <rect class="diagram-card" x="644" y="274" width="252" height="58"/>
+      <text class="diagram-card-title" x="662" y="299">NO DAEMON</text>
+      <text class="diagram-card-copy" x="662" y="318">same Orcacode process</text>
+      <path class="diagram-connector blue" d="M332 174V204H190V274" marker-end="url(#memory-flow-b)"/>
+    </svg>
+    <figcaption id="memory-flow-caption"><span>MEMORY RECALL</span> Scope filtering happens inside the SQL query before records reach the model. Recall changes only the current provider request, not the stored transcript.</figcaption>
+  </figure>
+  <p>The search query is derived from at most 12 distinct terms in the latest user message. Common short words are ignored when better terms exist. SQLite FTS5 ranks matches, updated records break ties, and retrieval is capped at eight records and 4,096 characters of injected context.</p>
+</section>
+
+<section class="section" id="memory-scope">
+  <h2>Choose the scope on every save</h2>
+  <table class="command-table">
+    <thead><tr><th><code>is_global</code></th><th>Visibility</th><th>Use it for</th></tr></thead>
+    <tbody>
+      <tr><td><code>false</code></td><td>Only sessions opened from the same canonical workspace.</td><td>Repository commands, architecture decisions, local conventions, and workspace-specific preferences.</td></tr>
+      <tr><td><code>true</code></td><td>Every workspace using this Orcacode configuration directory.</td><td>Stable personal preferences or workflows that genuinely apply everywhere.</td></tr>
+    </tbody>
+  </table>
+  <p>Orcacode derives the workspace identity from the canonical workspace root and supplies it to the memory tools. A model cannot choose an arbitrary workspace ID. Workspace records are filtered by that identity; global records have no workspace ID but retain their originating workspace root as metadata.</p>
+  <div class="callout warn"><span class="callout-label">GLOBAL MEANS CROSS-WORKSPACE</span><p>A global record can be recalled, updated, or forgotten from any workspace that uses the same local database. Prefer workspace scope unless the information is intentionally universal.</p></div>
+</section>
+
+<section class="section" id="memory-tools">
+  <h2>Inspect and manage records</h2>
+  <table class="command-table">
+    <thead><tr><th>Tool</th><th>Behavior</th><th>Safety</th></tr></thead>
+    <tbody>
+      <tr><td><code>memory_search</code></td><td>Search accessible records, or omit <code>query</code> to list recent records. Returns 1-20 items; the default is 8.</td><td>Read-only and allowed in plan mode.</td></tr>
+      <tr><td><code>memory_manage</code></td><td>Save, update, or forget one record. Saves require <code>is_global</code>; updates and deletes require an opaque ID.</td><td>Gated in normal mode and denied in plan mode.</td></tr>
+    </tbody>
+  </table>
+  <div class="terminal"><pre><span class="prompt">&gt;</span> Remember for this workspace that release checks use cargo test --workspace.
+<span class="prompt">&gt;</span> Remember globally that I prefer concise status updates.
+<span class="prompt">&gt;</span> Show my recent memories.
+<span class="prompt">&gt;</span> Forget the release-check memory.</pre></div>
+  <p>In an interactive normal-mode session, a <code>memory_manage</code> call appears as an approval request before SQLite changes. Headless runs deny it unless <code>--auto-approve</code> is set; yolo mode bypasses the approval gate. After a mutation, the model is instructed to report what changed and whether it is workspace or global.</p>
+  <p>The elapsed time shown for an interactive mutation can include the time spent waiting for approval. The memory Criterion suite measures raw SQLite forget and <code>memory_manage/forget_no_approval</code> separately so database and tool overhead are not confused with human response time.</p>
+  <p>Each record has one of four kinds: <code>preference</code>, <code>fact</code>, <code>workflow</code>, or <code>decision</code>. Public identifiers use the form <code>mem_</code> followed by 32 lowercase hexadecimal characters. The random 128-bit ID is the only identifier accepted by update and forget; SQLite row numbers remain private.</p>
+</section>
+
+<section class="section" id="memory-storage">
+  <h2>One local database</h2>
+  <table class="command-table">
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Unix default</td><td><code>~/.config/orcacode/memory.sqlite3</code>, or <code>$XDG_CONFIG_HOME/orcacode/memory.sqlite3</code> when set.</td></tr>
+      <tr><td>Windows default</td><td><code>%APPDATA%\orcacode\memory.sqlite3</code></td></tr>
+      <tr><td>Override</td><td><code>$ORCA_CONFIG_DIR/memory.sqlite3</code> on every platform.</td></tr>
+      <tr><td>Engine</td><td>Embedded SQLite with FTS5 and WAL journaling.</td></tr>
+      <tr><td>Permissions</td><td>On Unix, the database, WAL, and shared-memory files are mode <code>0600</code>; a newly created parent directory is mode <code>0700</code>.</td></tr>
+      <tr><td>Runtime</td><td>Read and written directly by Orcacode; no service, subprocess, Markdown ledger, or network is involved.</td></tr>
+    </tbody>
+  </table>
+  <p>Memory remains available across sessions and workspaces because those sessions open the same configuration-level database. Deleting or moving that database removes or relocates the memory ledger independently of session JSONL files.</p>
+</section>
+
+<section class="section" id="memory-extension">
+  <h2>Why it is not in <code>/extensions</code></h2>
+  <p>Memory is built into Orcacode as a model wrapper plus the <code>memory_search</code> and <code>memory_manage</code> tools. The <code>/extensions</code> picker manages the host's toggleable lifecycle extensions, such as truncation and retry. Memory is always composed into interactive and headless agents, so it is not a toggle in that picker.</p>
+</section>

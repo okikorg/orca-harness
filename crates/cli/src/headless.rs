@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
-use orca_harness_extensions::{EventStream, HarnessEvent, Truncation, UsageMeter};
+use orca_harness_extensions::{
+    EventStream, HarnessEvent, MemoryExtension, MemoryManageTool, MemoryModel, MemoryScope,
+    MemorySearchTool, MemoryStore, Truncation, UsageMeter,
+};
 use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
@@ -35,6 +38,8 @@ pub async fn run<M: Model + Clone + 'static>(
     mode: &ModeHandle,
     todos: &TodoList,
     plan_area: &crate::plan::PlanArea,
+    memory: &MemoryStore,
+    memory_scope: &MemoryScope,
 ) -> i32 {
     // Connect before constructing the model adapter so selection made by an
     // MCP tool is reflected in the immediately following provider request.
@@ -46,6 +51,10 @@ pub async fn run<M: Model + Clone + 'static>(
     let model_for_subagents = model.clone();
     let model: Arc<dyn Model> =
         Arc::new(crate::skills::SkillMentionModel::new(model, skills.clone()));
+    let model: Arc<dyn Model> = Arc::new(MemoryModel::new(
+        model,
+        MemoryExtension::new(memory.clone(), memory_scope.clone()),
+    ));
     let json = cfg.json;
     let saw_delta = Arc::new(AtomicBool::new(false));
     let saw = saw_delta.clone();
@@ -119,6 +128,14 @@ pub async fn run<M: Model + Clone + 'static>(
     }
     agent = agent
         .tool_arc(Arc::new(TodoWriteTool::new(todos.clone())))
+        .tool_arc(Arc::new(MemorySearchTool::new(
+            memory.clone(),
+            memory_scope.clone(),
+        )))
+        .tool_arc(Arc::new(MemoryManageTool::new(
+            memory.clone(),
+            memory_scope.clone(),
+        )))
         .tool_arc(Arc::new(WebFetchTool::new(UrlPolicy::strict())));
     if let Some(key) = &cfg.firecrawl_key {
         let firecrawl = Arc::new(Firecrawl::new(key.clone()));

@@ -95,6 +95,7 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "glob",
     "file_info",
     "read_tool_result",
+    "memory_search",
     "web_fetch",
     "web_search",
     "web_crawl",
@@ -280,6 +281,7 @@ mod tests {
             "write_file",
             "edit_file",
             "subagent",
+            "memory_manage",
             "delete_file",
         ] {
             assert!(
@@ -319,6 +321,7 @@ mod tests {
             "pykernel",
             "bun_repl",
             "subagent",
+            "memory_manage",
             "mcp__x__y",
             "some_future_tool",
         ] {

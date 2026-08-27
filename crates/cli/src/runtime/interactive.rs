@@ -8,8 +8,9 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Agent, Context, Model};
 use orca_harness_extensions::{
-    ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, Truncation,
-    TruncationStore,
+    workspace_key, ContextCapacity, EventStream, LongSession, MemoryExtension, MemoryManageTool,
+    MemoryModel, MemoryScope, MemorySearchTool, MemoryStore, ReadToolResultTool, SessionHandler,
+    Truncation, TruncationStore,
 };
 use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::web::{
@@ -61,6 +62,18 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         mode: mode.clone(),
         area: plan_area.clone(),
     };
+    let memory = match crate::config::memory_path()
+        .ok_or_else(|| "no home directory for memory storage".to_string())
+        .and_then(|path| MemoryStore::open(path).map_err(|error| error.to_string()))
+    {
+        Ok(memory) => memory,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let memory_root = workspace_scope(&ws);
+    let memory_scope = MemoryScope::new(workspace_key(&memory_root), memory_root);
 
     let session = if cfg.no_session {
         None
@@ -94,6 +107,8 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
             &mode,
             &todos,
             &plan_area,
+            &memory,
+            &memory_scope,
         )
         .await;
         return ExitCode::from(code as u8);
@@ -173,6 +188,8 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let todos = todos.clone();
         let files = files.clone();
         let plan_area = plan_area.clone();
+        let memory = memory.clone();
+        let memory_scope = memory_scope.clone();
         move |endpoint: &Endpoint| {
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
@@ -194,6 +211,8 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 &todos,
                 &files,
                 &plan_area,
+                &memory,
+                &memory_scope,
             )
         }
     };
@@ -277,6 +296,8 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     todos: &TodoList,
     files: &FileGuard,
     plan_area: &PlanArea,
+    memory: &MemoryStore,
+    memory_scope: &MemoryScope,
 ) -> Agent<Arc<dyn Model>> {
     // MCP visibility is a host-side model concern: core keeps its sacred,
     // immutable schema snapshot while this adapter filters it on each
@@ -284,6 +305,10 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
     let model_for_subagents = model.clone();
     let model: Arc<dyn Model> = Arc::new(skills::SkillMentionModel::new(model, skills.clone()));
+    let model: Arc<dyn Model> = Arc::new(MemoryModel::new(
+        model,
+        MemoryExtension::new(memory.clone(), memory_scope.clone()),
+    ));
     let events = EventStream::from_fn({
         let ui = ui.clone();
         move |event| {
@@ -325,6 +350,14 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     agent = agent
         .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store.clone())))
         .tool_arc(std::sync::Arc::new(TodoWriteTool::new(todos.clone())))
+        .tool_arc(std::sync::Arc::new(MemorySearchTool::new(
+            memory.clone(),
+            memory_scope.clone(),
+        )))
+        .tool_arc(std::sync::Arc::new(MemoryManageTool::new(
+            memory.clone(),
+            memory_scope.clone(),
+        )))
         .tool_arc(std::sync::Arc::new(AskTool::new({
             let ui = ui.clone();
             move |request| match ui.send(UiMsg::Ask(request)) {

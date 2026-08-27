@@ -1,0 +1,1231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Source-grounded comparison of memory architectures in fx, Brain Dump, OpenAI Codex, Pi, and a recommended direction for OrcaCode.">
+  <title>Memory Systems: fx, Brain Dump, Codex, Pi, and OrcaCode</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #142733;
+      --ink-soft: #445962;
+      --paper: #f5f0e5;
+      --paper-strong: #fffdf6;
+      --line: #c8c0ae;
+      --rust: #c84f2c;
+      --amber: #e5a02d;
+      --teal: #167f83;
+      --blue: #245d7b;
+      --green: #3f7355;
+      --shadow: 0 24px 60px rgb(20 39 51 / 11%);
+      --radius: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 0%, rgb(229 160 45 / 18%), transparent 30rem),
+        radial-gradient(circle at 92% 18%, rgb(22 127 131 / 13%), transparent 32rem),
+        linear-gradient(rgb(20 39 51 / 4%) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(20 39 51 / 4%) 1px, transparent 1px),
+        var(--paper);
+      background-size: auto, auto, 32px 32px, 32px 32px, auto;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.18em;
+    }
+
+    a:hover {
+      color: var(--rust);
+    }
+
+    code,
+    .eyebrow,
+    .tag,
+    .verdict,
+    th,
+    .source-id,
+    .diagram-node strong {
+      font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.1em 0.35em;
+      border: 1px solid rgb(20 39 51 / 12%);
+      border-radius: 5px;
+      background: rgb(255 253 246 / 72%);
+      font-size: 0.88em;
+    }
+
+    .shell {
+      width: min(1480px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      min-height: 76vh;
+      display: grid;
+      align-content: center;
+      padding: 92px 0 72px;
+    }
+
+    .eyebrow {
+      margin: 0 0 20px;
+      color: var(--rust);
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 1100px;
+      margin-bottom: 28px;
+      font-size: clamp(3.3rem, 8vw, 7.7rem);
+      font-weight: 600;
+      letter-spacing: -0.065em;
+      line-height: 0.9;
+    }
+
+    h1 em {
+      color: var(--rust);
+      font-weight: 400;
+    }
+
+    .lede {
+      max-width: 840px;
+      margin-bottom: 40px;
+      color: var(--ink-soft);
+      font-size: clamp(1.2rem, 2vw, 1.65rem);
+      line-height: 1.38;
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgb(255 253 246 / 64%);
+      color: var(--ink-soft);
+      font-size: 0.72rem;
+      font-weight: 650;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: rgb(245 240 229 / 90%);
+      backdrop-filter: blur(14px);
+    }
+
+    nav .shell {
+      display: flex;
+      gap: 22px;
+      overflow-x: auto;
+      padding-block: 13px;
+      scrollbar-width: none;
+    }
+
+    nav a {
+      flex: none;
+      color: var(--ink-soft);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-decoration: none;
+      text-transform: uppercase;
+    }
+
+    main {
+      padding: 78px 0 110px;
+    }
+
+    section {
+      scroll-margin-top: 80px;
+      margin-bottom: 108px;
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.7fr) minmax(300px, 1.3fr);
+      gap: 60px;
+      align-items: end;
+      margin-bottom: 34px;
+      padding-bottom: 24px;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    h2 {
+      margin-bottom: 0;
+      font-size: clamp(2.2rem, 5vw, 4.5rem);
+      font-weight: 600;
+      letter-spacing: -0.045em;
+      line-height: 0.98;
+    }
+
+    .section-head p {
+      margin-bottom: 0;
+      color: var(--ink-soft);
+      font-size: 1.08rem;
+    }
+
+    .thesis-grid,
+    .system-grid,
+    .risk-grid,
+    .phase-grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .thesis-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .thesis-card,
+    .system-card,
+    .risk-card,
+    .phase-card,
+    .callout,
+    .sources {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgb(255 253 246 / 84%);
+      box-shadow: 0 12px 32px rgb(20 39 51 / 6%);
+    }
+
+    .thesis-card {
+      min-height: 250px;
+      padding: 24px;
+      border-top: 7px solid var(--accent, var(--ink));
+    }
+
+    .thesis-card h3,
+    .system-card h3,
+    .phase-card h3 {
+      margin-bottom: 14px;
+      font-size: 1.55rem;
+      letter-spacing: -0.025em;
+    }
+
+    .thesis-card p,
+    .system-card p,
+    .risk-card p,
+    .phase-card p {
+      color: var(--ink-soft);
+    }
+
+    .verdict {
+      display: block;
+      margin-bottom: 18px;
+      color: var(--accent, var(--rust));
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .fx { --accent: var(--amber); }
+    .brain { --accent: var(--teal); }
+    .codex { --accent: var(--rust); }
+    .pi { --accent: var(--blue); }
+
+    .matrix-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper-strong);
+      box-shadow: var(--shadow);
+    }
+
+    table {
+      width: 100%;
+      min-width: 1040px;
+      border-collapse: collapse;
+      font-size: 0.94rem;
+    }
+
+    th,
+    td {
+      padding: 17px 18px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    th:last-child,
+    td:last-child {
+      border-right: 0;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      color: var(--paper-strong);
+      background: var(--ink);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    tbody th {
+      width: 190px;
+      color: var(--ink);
+      background: #eee7d8;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .status {
+      display: inline-block;
+      margin-bottom: 4px;
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 0.71rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .yes { color: var(--green); }
+    .partial { color: #9a6112; }
+    .no { color: #9d3325; }
+
+    .system-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .system-card {
+      padding: 30px;
+      border-top: 6px solid var(--accent, var(--ink));
+    }
+
+    .system-card ul,
+    .phase-card ul,
+    .callout ul {
+      margin: 18px 0 0;
+      padding-left: 1.15rem;
+    }
+
+    .system-card li,
+    .phase-card li,
+    .callout li {
+      margin-bottom: 8px;
+    }
+
+    .diagram {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 18px;
+      align-items: stretch;
+      margin: 28px 0 6px;
+    }
+
+    .diagram-node {
+      position: relative;
+      min-height: 144px;
+      padding: 19px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--paper-strong);
+    }
+
+    .diagram-node:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: calc(100% + 1px);
+      width: 18px;
+      height: 1px;
+      background: var(--rust);
+    }
+
+    .diagram-node strong {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--rust);
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .diagram-node span {
+      color: var(--ink-soft);
+      font-size: 0.93rem;
+    }
+
+    .risk-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .risk-card {
+      padding: 24px;
+    }
+
+    .risk-card .risk-label {
+      margin-bottom: 11px;
+      color: var(--rust);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 0.69rem;
+      font-weight: 800;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .risk-card h3 {
+      margin-bottom: 10px;
+      font-size: 1.25rem;
+    }
+
+    .callout {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(28px, 5vw, 58px);
+      background: var(--ink);
+      color: var(--paper-strong);
+      box-shadow: var(--shadow);
+    }
+
+    .callout::after {
+      content: "EXTENSION";
+      position: absolute;
+      right: -18px;
+      bottom: -28px;
+      color: rgb(255 253 246 / 5%);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: clamp(4rem, 11vw, 9rem);
+      font-weight: 900;
+      letter-spacing: -0.08em;
+    }
+
+    .callout > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .callout h3 {
+      max-width: 920px;
+      margin-bottom: 18px;
+      color: var(--paper-strong);
+      font-size: clamp(2rem, 4vw, 3.8rem);
+      font-weight: 500;
+      letter-spacing: -0.045em;
+      line-height: 1.02;
+    }
+
+    .callout p,
+    .callout li {
+      max-width: 900px;
+      color: #d4dedb;
+    }
+
+    .phase-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 20px;
+    }
+
+    .workspace-contract {
+      display: grid;
+      grid-template-columns: minmax(240px, 0.65fr) minmax(0, 1.35fr);
+      gap: 32px;
+      margin-top: 20px;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-left: 7px solid var(--teal);
+      border-radius: var(--radius);
+      background: rgb(255 253 246 / 88%);
+      box-shadow: 0 12px 32px rgb(20 39 51 / 6%);
+    }
+
+    .workspace-contract h3 {
+      margin-bottom: 10px;
+      font-size: 1.55rem;
+      letter-spacing: -0.025em;
+    }
+
+    .workspace-contract p {
+      margin-bottom: 0;
+      color: var(--ink-soft);
+    }
+
+    .field-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 0;
+    }
+
+    .field-list div {
+      padding: 13px;
+      border: 1px solid rgb(20 39 51 / 12%);
+      border-radius: 10px;
+      background: rgb(245 240 229 / 66%);
+    }
+
+    .field-list dt {
+      margin-bottom: 5px;
+      color: var(--teal);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 0.73rem;
+      font-weight: 800;
+    }
+
+    .field-list dd {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.9rem;
+    }
+
+    .phase-card {
+      padding: 25px;
+    }
+
+    .phase-number {
+      display: inline-grid;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 18px;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--paper-strong);
+      background: var(--rust);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 0.76rem;
+      font-weight: 800;
+    }
+
+    .sequence-frame {
+      overflow-x: auto;
+      padding: 20px;
+      border: 1px solid #2f4754;
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at 20% 0%, rgb(200 79 44 / 15%), transparent 34rem),
+        radial-gradient(circle at 85% 100%, rgb(22 127 131 / 14%), transparent 32rem),
+        var(--ink);
+      box-shadow: var(--shadow);
+    }
+
+    .sequence-frame svg {
+      display: block;
+      width: 100%;
+      min-width: 1080px;
+      height: auto;
+    }
+
+    .sequence-caption {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .sequence-caption p {
+      margin: 0;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgb(255 253 246 / 76%);
+      color: var(--ink-soft);
+      font-size: 0.92rem;
+    }
+
+    .sequence-caption strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--rust);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .sources {
+      padding: 12px 28px;
+    }
+
+    .source-row {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 18px;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .source-row:last-child {
+      border-bottom: 0;
+    }
+
+    .source-id {
+      color: var(--rust);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .source-row p {
+      margin-bottom: 6px;
+    }
+
+    .source-row small {
+      color: var(--ink-soft);
+    }
+
+    footer {
+      padding: 30px 0 54px;
+      border-top: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-size: 0.84rem;
+    }
+
+    @media (max-width: 980px) {
+      .thesis-grid,
+      .risk-grid,
+      .phase-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .diagram {
+        grid-template-columns: 1fr;
+      }
+
+      .diagram-node {
+        min-height: auto;
+      }
+
+      .diagram-node:not(:last-child)::after {
+        top: 100%;
+        left: 50%;
+        width: 1px;
+        height: 18px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        width: min(100% - 24px, 1480px);
+      }
+
+      .hero {
+        min-height: auto;
+        padding: 70px 0 52px;
+      }
+
+      h1 {
+        font-size: clamp(3.1rem, 16vw, 5rem);
+      }
+
+      main {
+        padding-top: 54px;
+      }
+
+      section {
+        margin-bottom: 78px;
+      }
+
+      .section-head,
+      .system-grid,
+      .thesis-grid,
+      .risk-grid,
+      .phase-grid,
+      .sequence-caption,
+      .workspace-contract,
+      .field-list,
+      .source-row {
+        grid-template-columns: 1fr;
+      }
+
+      .section-head {
+        gap: 20px;
+      }
+
+      .source-row {
+        gap: 5px;
+      }
+    }
+
+    @media print {
+      nav {
+        display: none;
+      }
+
+      body {
+        background: white;
+      }
+
+      .hero {
+        min-height: auto;
+        padding-top: 40px;
+      }
+
+      .thesis-card,
+      .system-card,
+      .risk-card,
+      .phase-card,
+      .matrix-wrap,
+      .callout,
+      .sources {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero shell">
+    <p class="eyebrow">Internal architecture study / 27 August 2026</p>
+    <h1>Memory is <em>not</em> one thing.</h1>
+    <p class="lede">Four products use the word for four different contracts: explicit preferences, live personalization, background learning, and resumable conversation state. This report separates them and documents the resulting OrcaCode memory extension.</p>
+    <div class="hero-meta" aria-label="Report scope">
+      <span class="tag">Source grounded</span>
+      <span class="tag">Pinned revisions</span>
+      <span class="tag">No runtime inference</span>
+      <span class="tag">Orca extension boundary</span>
+    </div>
+  </header>
+
+  <nav aria-label="Report sections">
+    <div class="shell">
+      <a href="#thesis">Thesis</a>
+      <a href="#matrix">Matrix</a>
+      <a href="#systems">Systems</a>
+      <a href="#risks">Risks</a>
+      <a href="#orca">OrcaCode</a>
+      <a href="#orca-sequence">Sequence</a>
+      <a href="#sources">Sources</a>
+    </div>
+  </nav>
+
+  <main class="shell">
+    <section id="thesis">
+      <div class="section-head">
+        <h2>Four contracts</h2>
+        <p>The most important design choice is not the database. It is what &ldquo;remember&rdquo; means, who authorizes the write, and when stored knowledge gains influence over a future model turn.</p>
+      </div>
+      <div class="thesis-grid">
+        <article class="thesis-card fx">
+          <span class="verdict">fx / explicit register</span>
+          <h3>User-controlled preferences</h3>
+          <p>A deliberately small global JSON list. The model may save, list, or clear only when the user explicitly asks. Nothing is inferred, ranked, or automatically injected.</p>
+        </article>
+        <article class="thesis-card brain">
+          <span class="verdict">Brain Dump / live profile</span>
+          <h3>Online personalization</h3>
+          <p>Structured per-user records are automatically retrieved on every normal chat and may be inferred during that chat. Relevance and confidence directly shape the next prompt.</p>
+        </article>
+        <article class="thesis-card codex">
+          <span class="verdict">Codex / learned handbook</span>
+          <h3>Background operational learning</h3>
+          <p>Past rollouts are asynchronously extracted, selected, and consolidated into a progressive-disclosure file workspace that future agents are instructed to search.</p>
+        </article>
+        <article class="thesis-card pi">
+          <span class="verdict">Pi / durable continuity</span>
+          <h3>Session state, not semantic memory</h3>
+          <p>Append-only branching JSONL, compaction summaries, and context files preserve continuity. A semantic memory system can be built as an extension, but is not built in.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="matrix">
+      <div class="section-head">
+        <h2>Capability matrix</h2>
+        <p>&ldquo;Partial&rdquo; means the mechanism exists but serves a different contract or requires optional configuration. Session history is intentionally not counted as automatic durable user memory.</p>
+      </div>
+      <div class="matrix-wrap" role="region" aria-label="Memory capability comparison" tabindex="0">
+        <table>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>fx</th>
+              <th>Brain Dump</th>
+              <th>OpenAI Codex</th>
+              <th>Pi</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Primary contract</th>
+              <td>Durable preferences explicitly requested by one user.</td>
+              <td>Continuously applied personal profile for an authenticated user.</td>
+              <td>Reusable operating knowledge distilled from prior coding rollouts.</td>
+              <td>Resume and branch the exact conversation; compact it when context fills.</td>
+            </tr>
+            <tr>
+              <th>Automatic extraction</th>
+              <td><span class="status no">No</span><br>Writes require a model tool call prompted by an explicit user request.</td>
+              <td><span class="status yes">Yes</span><br>Up to two inferred memories may be saved during each request.</td>
+              <td><span class="status yes">Yes, when enabled</span><br>Eligible idle rollouts are model-extracted in a background phase when the memory feature and generation setting are active.</td>
+              <td><span class="status no">No</span><br>Compaction summarizes a session for continuity, not cross-session learning.</td>
+            </tr>
+            <tr>
+              <th>Explicit write path</th>
+              <td><span class="status yes">Yes</span><br><code>memory(save|list|clear)</code>.</td>
+              <td><span class="status yes">Yes</span><br>Save, update, delete, and merge model tools plus REST CRUD.</td>
+              <td><span class="status partial">Partial</span><br>Read-path guidance accepts explicit ad-hoc update notes; dedicated memory tools are optional and disabled in effective defaults.</td>
+              <td><span class="status partial">Extension</span><br><code>appendEntry</code>, custom tools, and per-turn context injection provide primitives.</td>
+            </tr>
+            <tr>
+              <th>Retrieval</th>
+              <td>Pull-only. The model must call <code>list</code>; no startup injection.</td>
+              <td>Up to 10 cached core memories plus 8 query-relevant records before each enabled chat.</td>
+              <td>A bounded <code>memory_summary.md</code> is injected; the agent is instructed to grep <code>MEMORY.md</code>, skills, and rollout summaries as needed.</td>
+              <td>Rebuilds the active session branch from JSONL. Context files are loaded globally and from directory ancestors.</td>
+            </tr>
+            <tr>
+              <th>Selection / ranking</th>
+              <td>None; exact-string deduplication only.</td>
+              <td>PostgreSQL full-text candidates plus recency, usage, lexical clusters, and confidence scoring.</td>
+              <td>Stage-two candidates rank by usage and recency; final lookup is prompt-directed progressive disclosure, not vector search.</td>
+              <td>Tree lineage and compaction cut points, not semantic relevance.</td>
+            </tr>
+            <tr>
+              <th>Persistence</th>
+              <td><code>~/.fx/memories.json</code>, atomic rewrite, 1 MiB read cap.</td>
+              <td>PostgreSQL through a server-side Supabase client.</td>
+              <td>SQLite stage-one/job state plus a git-baselined <code>~/.codex/memories/</code> file workspace.</td>
+              <td>Per-working-directory JSONL under <code>~/.pi/agent/sessions/</code>; context files live in the filesystem.</td>
+            </tr>
+            <tr>
+              <th>Scope model</th>
+              <td>One global list per OS user.</td>
+              <td>Per authenticated user; no first-class project scope.</td>
+              <td>One global memory workspace with cwd-aware organization inside artifacts. The read prompt injects the global summary rather than filtering it by cwd.</td>
+              <td>Sessions are organized by cwd. Instructions compose global plus ancestor-directory files.</td>
+            </tr>
+            <tr>
+              <th>Provenance</th>
+              <td><span class="status no">Weak</span><br>Stored strings have no timestamp, source turn, category, or confidence.</td>
+              <td><span class="status partial">Medium</span><br>Raw input, explicit/inferred source, confidence, and timestamps, but no session/turn foreign key.</td>
+              <td><span class="status yes">Strong</span><br>Rollout summaries, thread identifiers, usage telemetry, and response citations connect guidance to prior runs.</td>
+              <td><span class="status yes">Strong for sessions</span><br>Every entry has lineage and timestamps; this is transcript provenance rather than fact provenance.</td>
+            </tr>
+            <tr>
+              <th>User control</th>
+              <td>Explicit by contract, but only clear-all deletion.</td>
+              <td>Memory management UI and per-record removal, but normal clients hard-code memory enabled.</td>
+              <td>Generation/use settings, per-thread memory mode, reset API, and explicit ad-hoc updates; automation remains feature-gated.</td>
+              <td><code>--no-session</code>, session deletion, <code>--no-context-files</code>, and editable context files.</td>
+            </tr>
+            <tr>
+              <th>Best fit</th>
+              <td>Small, legible, privacy-first preference persistence.</td>
+              <td>Consumer personalization with frequent live retrieval.</td>
+              <td>Agent improvement across repeated repository workflows.</td>
+              <td>Long, inspectable coding sessions and programmable custom workflows.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="systems">
+      <div class="section-head">
+        <h2>How each works</h2>
+        <p>Each implementation is useful because it optimizes a different point in the trust, complexity, and recall-quality space.</p>
+      </div>
+      <div class="system-grid">
+        <article class="system-card fx">
+          <span class="verdict">01 / fx</span>
+          <h3>One tool, one file, explicit intent</h3>
+          <p>The built-in tool accepts <code>save</code>, <code>list</code>, or <code>clear</code>. It reads an array of strings, deduplicates by exact equality, and atomically rewrites the JSON file. The product description forbids task notes, secrets, project facts, temporary context, and unsolicited persistence.</p>
+          <ul>
+            <li>Excellent auditability and minimal prompt influence.</li>
+            <li>No automatic relevance, project scoping, record-level deletion, or provenance.</li>
+            <li>Malformed or oversized stores fail closed instead of being overwritten.</li>
+          </ul>
+        </article>
+
+        <article class="system-card brain">
+          <span class="verdict">02 / Brain Dump</span>
+          <h3>Structured records in the live chat loop</h3>
+          <p>Every normal client request enables memory. The server injects high-confidence core facts and lexically relevant records into the system prompt, then gives the model tools to query and mutate the store. Automatic inference is capped at two saves per request and performs exact and topic-level duplicate checks.</p>
+          <ul>
+            <li>Fast personalization with explicit confidence, access, and staleness fields.</li>
+            <li>Relevance is full-text plus hand-built lexical clusters, not embeddings.</li>
+            <li>The server service role bypasses RLS, so application-level <code>userId</code> filters are the real tenant boundary.</li>
+          </ul>
+        </article>
+
+        <article class="system-card codex">
+          <span class="verdict">03 / OpenAI Codex</span>
+          <h3>Two-phase asynchronous consolidation</h3>
+          <p>On eligible root-session startup, phase one claims recent idle rollouts, filters them, asks a model for raw memory and a compact summary, redacts generated secrets, and writes stage-one records. Phase two selects a bounded usage-ranked set, synchronizes files, and runs a sandboxed consolidation agent against a git-style workspace diff.</p>
+          <ul>
+            <li><code>memory_summary.md</code> is prompt-loaded but bounded; richer artifacts are searched only when relevant.</li>
+            <li><code>MEMORY.md</code>, rollout summaries, and reusable skills form a progressive-disclosure hierarchy.</li>
+            <li>Global consolidation improves repeated work but introduces latency, model cost, and cross-project contamination risk.</li>
+          </ul>
+        </article>
+
+        <article class="system-card pi">
+          <span class="verdict">04 / Pi</span>
+          <h3>A durable session substrate</h3>
+          <p>Pi appends typed entries to versioned JSONL. <code>id</code>/<code>parentId</code> form an in-file tree, so users can branch without discarding history. When context approaches its window, Pi summarizes older messages, appends a compaction entry, and rebuilds model context from the summary plus recent messages.</p>
+          <ul>
+            <li>Global and ancestor-directory <code>AGENTS.md</code>/<code>CLAUDE.md</code> files provide durable authored guidance.</li>
+            <li>Extension custom entries survive reload but stay out of model context unless deliberately injected.</li>
+            <li>The extension lifecycle can support semantic memory without forcing one storage or retrieval policy into core.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="flow-title">
+      <div class="section-head">
+        <h2 id="flow-title">Codex pipeline</h2>
+        <p>Codex separates expensive learning from the interactive turn. Brain Dump performs retrieval and possible inference inside the chat request; this pipeline runs later and consolidates globally.</p>
+      </div>
+      <div class="diagram" aria-label="Codex memory pipeline">
+        <div class="diagram-node">
+          <strong>Eligible rollout</strong>
+          <span>Interactive root session, old enough, idle, non-ephemeral, memory-enabled.</span>
+        </div>
+        <div class="diagram-node">
+          <strong>Phase one</strong>
+          <span>Filter response items, model-extract raw memory and summary, redact generated secrets.</span>
+        </div>
+        <div class="diagram-node">
+          <strong>SQLite state</strong>
+          <span>Lease jobs, store stage-one output, retry with backoff, track usage and selection.</span>
+        </div>
+        <div class="diagram-node">
+          <strong>Phase two</strong>
+          <span>Select bounded inputs, sync artifacts, run a no-network consolidation sub-agent.</span>
+        </div>
+        <div class="diagram-node">
+          <strong>Future turn</strong>
+          <span>Inject bounded summary, then grep the registry and evidence only when the query needs it.</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="risks">
+      <div class="section-head">
+        <h2>Failure modes</h2>
+        <p>Memory becomes durable prompt influence. Failures are therefore more serious than ordinary cache misses: the system can repeatedly act on stale, cross-scoped, or incorrectly inferred guidance.</p>
+      </div>
+      <div class="risk-grid">
+        <article class="risk-card">
+          <p class="risk-label">Brain Dump / consent</p>
+          <h3>Enabled is not the same as opted in</h3>
+          <p>Both normal chat clients set <code>memoryEnabled = true</code>. The server describes this as an opted-in state, but no matching user setting was found.</p>
+        </article>
+        <article class="risk-card">
+          <p class="risk-label">Brain Dump / consistency</p>
+          <h3>Tool mutations bypass cache invalidation</h3>
+          <p>REST update and delete invalidate the five-minute core-memory cache. Chat save, update, merge, and delete tools mutate the store directly, so stale core facts may remain prompt-visible until expiry.</p>
+        </article>
+        <article class="risk-card">
+          <p class="risk-label">Brain Dump / concurrency</p>
+          <h3>Limits and deduplication are not atomic</h3>
+          <p>Per-request reservations prevent more than two auto-saves inside one request, but concurrent requests can both pass count and duplicate checks before inserting.</p>
+        </article>
+        <article class="risk-card">
+          <p class="risk-label">Codex / scope</p>
+          <h3>Global summary crosses repository boundaries</h3>
+          <p>Consolidation organizes knowledge by cwd, but the read path loads the global <code>memory_summary.md</code> wholesale, subject to a token cap rather than cwd filtering.</p>
+        </article>
+        <article class="risk-card">
+          <p class="risk-label">Codex / complexity</p>
+          <h3>Learning is eventually consistent</h3>
+          <p>Eligibility windows, idle thresholds, stage claims, model extraction, selection, and consolidation mean a useful lesson is not immediately available to the next session.</p>
+        </article>
+        <article class="risk-card">
+          <p class="risk-label">Pi + fx / recall</p>
+          <h3>Safety trades against discovery</h3>
+          <p>Explicit lists and session-local continuity minimize unintended influence, but durable facts are easy to miss unless the user or model remembers to retrieve or author them.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="orca">
+      <div class="section-head">
+        <h2>OrcaCode direction</h2>
+        <p>The kernel states that model-visible context is not durable memory and that memory belongs in an extension or host. The implementation keeps that boundary and composes with existing JSONL sessions instead of turning them into a fact database.</p>
+      </div>
+
+      <div class="callout">
+        <p class="eyebrow">Recommended synthesis</p>
+        <h3>Use one embedded SQLite FTS5 database as the only source of truth.</h3>
+        <p><code>MemoryExtension</code>, <code>memory_search</code>, and <code>memory_manage</code> share <code>~/.config/orcacode/memory.sqlite3</code>. SQLite runs in the OrcaCode process and owns transactions, locking, scope filtering, and text ranking.</p>
+        <ul>
+          <li>Never put persistence, ranking, or consent policy in <code>harness-core</code>.</li>
+          <li>Keep session resume, compaction, and durable semantic memory as separate stores and lifecycles.</li>
+          <li>No daemon, subprocess, generated manifest, Markdown mirror, or duplicated source ledger.</li>
+          <li>Do not grant remembered text the same authority as developer policy; add it only as clearly delimited user-owned context on a transient request clone.</li>
+        </ul>
+      </div>
+
+      <div class="workspace-contract">
+        <div>
+          <p class="eyebrow">Workspace identity contract</p>
+          <h3>Persist identity and provenance with every memory.</h3>
+          <p>Resolve workspace identity from the trusted runtime root. The <code>is_global</code> boolean plus nullable <code>workspace_id</code> form a checked database invariant; never accept a model-supplied workspace ID.</p>
+        </div>
+        <dl class="field-list">
+          <div>
+            <dt>id</dt>
+            <dd>Opaque <code>mem_</code> identifier backed by 128 random bits. SQLite's integer rowid stays private to indexing and FTS joins.</dd>
+          </div>
+          <div>
+            <dt>is_global</dt>
+            <dd>Boolean scope flag. <code>true</code> applies across workspaces and is reserved for information that clearly applies everywhere.</dd>
+          </div>
+          <div>
+            <dt>workspace_id</dt>
+            <dd>Opaque stable identifier derived from the canonical runtime workspace root. Required when <code>is_global = false</code>.</dd>
+          </div>
+          <div>
+            <dt>workspace_root</dt>
+            <dd>Canonical runtime root retained as readable workspace metadata.</dd>
+          </div>
+          <div>
+            <dt>source_call_id</dt>
+            <dd>The exact memory-management tool call that created the record.</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="phase-grid">
+        <article class="phase-card">
+          <span class="phase-number">1</span>
+          <h3>One authoritative database</h3>
+          <p>Ship <code>save</code>, <code>search</code>, <code>list</code>, <code>update</code>, and <code>forget</code> behind an extension.</p>
+          <ul>
+            <li><code>memories</code> holds an opaque public ID, content, kind, scope, workspace metadata, source call, and timestamps.</li>
+            <li><code>memories_fts</code> is an external-content FTS5 table synchronized by database triggers.</li>
+            <li>A schema check enforces global XOR workspace scope.</li>
+            <li>SQLite WAL provides local transactions and concurrent-process locking.</li>
+          </ul>
+        </article>
+        <article class="phase-card">
+          <span class="phase-number">2</span>
+          <h3>Scoped FTS retrieval</h3>
+          <p>Run one FTS5 query where <code>is_global = true OR workspace_id = current_workspace_id</code>, order by FTS5 <code>rank</code>, and add a character-capped fragment to a transient user-authority request clone.</p>
+          <ul>
+            <li>Use deterministic FTS5 before adding semantic machinery.</li>
+            <li>Read at most eight matching records by default.</li>
+            <li>Return provenance with every recalled item.</li>
+            <li>Let the model propose stable, directly stated, future-useful memories; reject low-value, duplicate, secret, transient, or inferred content.</li>
+          </ul>
+          <p><strong>Measured benchmark:</strong> across 100 Criterion samples over 50,000 records, exact raw SQL measured 93.35 &micro;s, <code>MemoryStore::search</code> 95.53 &micro;s, and safe transient <code>MemoryExtension::prepare_context</code> 95.98 &micro;s. A worst-case broad query matching every row measured 34.38 ms end to end. With opaque public IDs, a scoped raw <code>DELETE</code> measured 65.46 &micro;s and the complete <code>memory_manage(forget)</code> call with no approval layer measured 64.25 &micro;s; their overlapping intervals put tool overhead below measurement noise. Reproduce with <code>cargo bench -p orca-harness-extensions --bench memory</code>.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="orca-sequence">
+      <div class="section-head">
+        <h2>OrcaCode sequence</h2>
+        <p>The implemented read and model-selected write turn. A user request or stable future-useful information can trigger a proposed mutation. The host supplies trusted workspace identity, and normal approval remains the user's final decision.</p>
+      </div>
+
+      <div class="sequence-frame" role="img" aria-labelledby="sequence-title sequence-description">
+        <svg viewBox="0 0 1320 1180" xmlns="http://www.w3.org/2000/svg">
+          <title id="sequence-title">OrcaCode SQLite memory read and model-selected write sequence</title>
+          <desc id="sequence-description">The user sends a prompt. OrcaCode resolves the workspace, asks the memory model for a scoped FTS5 search, adds a bounded user-authority fragment to a transient request clone, then handles a user-requested or model-selected transactional memory save with trusted workspace provenance and normal approval.</desc>
+          <defs>
+            <marker id="arrow-solid" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#e5a02d"/>
+            </marker>
+            <marker id="arrow-return" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#75bfc1"/>
+            </marker>
+            <style>
+              .participant { fill: #fffdf6; stroke: #c8c0ae; stroke-width: 1.5; }
+              .participant-label { fill: #142733; font: 700 16px SFMono-Regular, Cascadia Code, monospace; text-anchor: middle; }
+              .lifeline { stroke: #8da0a8; stroke-width: 1.2; stroke-dasharray: 6 7; }
+              .activation { fill: #23404e; stroke: #75bfc1; stroke-width: 1; }
+              .message { stroke: #e5a02d; stroke-width: 2; marker-end: url(#arrow-solid); }
+              .return { stroke: #75bfc1; stroke-width: 1.8; stroke-dasharray: 7 5; marker-end: url(#arrow-return); }
+              .message-label { fill: #fffdf6; font: 14px SFMono-Regular, Cascadia Code, monospace; text-anchor: middle; }
+              .small-label { fill: #b9c8cc; font: 12px SFMono-Regular, Cascadia Code, monospace; text-anchor: middle; }
+              .phase-box { fill: #1c3440; stroke: #445d68; stroke-width: 1; }
+              .phase-label { fill: #e5a02d; font: 800 12px SFMono-Regular, Cascadia Code, monospace; letter-spacing: 1.3px; }
+              .note { fill: #f5f0e5; stroke: #c84f2c; stroke-width: 1.5; }
+              .note-text { fill: #142733; font: 13px SFMono-Regular, Cascadia Code, monospace; text-anchor: middle; }
+            </style>
+          </defs>
+
+          <rect class="participant" x="35" y="28" width="190" height="58" rx="10"/>
+          <rect class="participant" x="288" y="28" width="210" height="58" rx="10"/>
+          <rect class="participant" x="550" y="28" width="220" height="58" rx="10"/>
+          <rect class="participant" x="830" y="28" width="190" height="58" rx="10"/>
+          <rect class="participant" x="1080" y="28" width="190" height="58" rx="10"/>
+          <text class="participant-label" x="130" y="63">User</text>
+          <text class="participant-label" x="393" y="63">OrcaCode Host</text>
+          <text class="participant-label" x="660" y="63">MemoryModel</text>
+          <text class="participant-label" x="925" y="63">SQLite FTS5</text>
+          <text class="participant-label" x="1175" y="63">Model</text>
+
+          <line class="lifeline" x1="130" y1="86" x2="130" y2="1135"/>
+          <line class="lifeline" x1="393" y1="86" x2="393" y2="1135"/>
+          <line class="lifeline" x1="660" y1="86" x2="660" y2="1135"/>
+          <line class="lifeline" x1="925" y1="86" x2="925" y2="1135"/>
+          <line class="lifeline" x1="1175" y1="86" x2="1175" y2="1135"/>
+
+          <rect class="phase-box" x="35" y="116" width="1235" height="34" rx="7"/>
+          <text class="phase-label" x="54" y="138">READ PATH / EVERY TURN</text>
+
+          <line class="message" x1="130" y1="185" x2="393" y2="185"/>
+          <text class="message-label" x="261" y="176">prompt</text>
+
+          <rect class="activation" x="385" y="177" width="16" height="380" rx="3"/>
+          <path class="message" d="M401 230 H470 V262 H405" fill="none"/>
+          <text class="message-label" x="468" y="220">resolve trusted workspace</text>
+          <text class="small-label" x="481" y="246">workspace_id + canonical root</text>
+
+          <line class="message" x1="401" y1="300" x2="660" y2="300"/>
+          <text class="message-label" x="530" y="290">prepare_context(workspace_id)</text>
+
+          <rect class="activation" x="652" y="292" width="16" height="210" rx="3"/>
+          <line class="message" x1="668" y1="345" x2="925" y2="345"/>
+          <text class="message-label" x="796" y="334">scoped FTS MATCH query</text>
+          <text class="small-label" x="796" y="363">global OR current workspace</text>
+
+          <line class="return" x1="925" y1="405" x2="668" y2="405"/>
+          <text class="message-label" x="796" y="395">records + provenance</text>
+
+          <rect class="note" x="566" y="432" width="188" height="54" rx="8"/>
+          <text class="note-text" x="660" y="454">order by FTS5 rank,</text>
+          <text class="note-text" x="660" y="473">apply character budget</text>
+
+          <line class="return" x1="652" y1="520" x2="401" y2="520"/>
+          <text class="message-label" x="526" y="510">bounded memory fragment</text>
+
+          <line class="message" x1="401" y1="575" x2="1175" y2="575"/>
+          <text class="message-label" x="788" y="565">policy + prompt + transient user memory clone</text>
+
+          <rect class="phase-box" x="35" y="620" width="1235" height="34" rx="7"/>
+          <text class="phase-label" x="54" y="642">USER-REQUESTED OR MODEL-SELECTED WRITE / NORMAL APPROVAL APPLIES</text>
+
+          <line class="return" x1="1175" y1="695" x2="401" y2="695"/>
+          <text class="message-label" x="788" y="685">memory_manage(save, is_global = false)</text>
+
+          <line class="message" x1="401" y1="750" x2="660" y2="750"/>
+          <text class="message-label" x="530" y="740">execute with trusted workspace metadata</text>
+
+          <rect class="activation" x="652" y="742" width="16" height="230" rx="3"/>
+          <rect class="note" x="555" y="778" width="210" height="72" rx="8"/>
+          <text class="note-text" x="660" y="800">validate action,</text>
+          <text class="note-text" x="660" y="819">scope boolean, content,</text>
+          <text class="note-text" x="660" y="838">and provenance</text>
+
+          <line class="message" x1="668" y1="885" x2="925" y2="885"/>
+          <text class="message-label" x="796" y="875">transactional INSERT</text>
+          <text class="small-label" x="796" y="903">CHECK global XOR workspace scope</text>
+
+          <line class="return" x1="925" y1="942" x2="668" y2="942"/>
+          <text class="message-label" x="796" y="932">opaque memory id</text>
+
+          <path class="message" d="M652 982 H570 V1012 H648" fill="none"/>
+          <text class="message-label" x="544" y="975">FTS trigger synchronizes</text>
+
+          <line class="return" x1="652" y1="1038" x2="401" y2="1038"/>
+          <text class="message-label" x="526" y="1028">saved(opaque_id, scope)</text>
+
+          <line class="message" x1="401" y1="1082" x2="1175" y2="1082"/>
+          <text class="message-label" x="788" y="1072">tool result with stored scope</text>
+          <line class="return" x1="1175" y1="1120" x2="393" y2="1120"/>
+          <line class="return" x1="393" y1="1150" x2="130" y2="1150"/>
+          <text class="message-label" x="261" y="1140">confirm what was remembered and where</text>
+        </svg>
+      </div>
+
+      <div class="sequence-caption">
+        <p><strong>Read boundary</strong>Only global and current-workspace records can be returned or enter model context; FTS5 corpus statistics remain database-wide.</p>
+        <p><strong>Write boundary</strong>The model requests a scope, the host supplies the effective workspace ID, and SQLite enforces the global XOR workspace invariant.</p>
+        <p><strong>Authority boundary</strong>Remembered text is delimited user-authority context on a transient request clone, not developer policy and not permission to act.</p>
+      </div>
+    </section>
+
+    <section id="sources">
+      <div class="section-head">
+        <h2>Source ledger</h2>
+        <p>All claims were checked against local source or official repository snapshots. Commit-pinned links make the comparison reproducible even as upstream implementations change.</p>
+      </div>
+      <div class="sources">
+        <div class="source-row">
+          <div class="source-id">fx</div>
+          <div>
+            <p><a href="https://github.com/vercel-labs/fx/blob/139a77a1f4ace3b319be5397692c542d05535283/src/tools/memory/memory.zig">Memory tool and JSON store</a> &middot; <a href="https://github.com/vercel-labs/fx/blob/139a77a1f4ace3b319be5397692c542d05535283/src/builtins/tools.zig#L78-L79">Product contract</a></p>
+            <small>Local checkout <code>/Users/akashswamy/Workspace/fx</code>, revision <code>139a77a1</code>.</small>
+          </div>
+        </div>
+        <div class="source-row">
+          <div class="source-id">Brain Dump</div>
+          <div>
+            <p><a href="https://github.com/okikorg/brain-dump/blob/10a31a395c145188b77a50c130bf3cefb7645c35/server/db/schema.ts#L71-L93">Memory schema</a> &middot; <a href="https://github.com/okikorg/brain-dump/blob/10a31a395c145188b77a50c130bf3cefb7645c35/server/routes/chat.ts#L214-L227">Prompt and core cache</a> &middot; <a href="https://github.com/okikorg/brain-dump/blob/10a31a395c145188b77a50c130bf3cefb7645c35/server/lib/relevance.ts#L1-L181">Relevance ranking</a> &middot; <a href="https://github.com/okikorg/brain-dump/blob/10a31a395c145188b77a50c130bf3cefb7645c35/server/tools/index.ts#L1468-L1496">Tool surface</a></p>
+            <small>Local checkout <code>/Users/akashswamy/Workspace/fun-projects/brain-dump</code>, revision <code>10a31a39</code>.</small>
+          </div>
+        </div>
+        <div class="source-row">
+          <div class="source-id">OpenAI Codex</div>
+          <div>
+            <p><a href="https://github.com/openai/codex/blob/b592a0bfed439386fadc69327bd49eccb074cdc6/codex-rs/memories/README.md#L29-L157">Two-phase pipeline</a> &middot; <a href="https://github.com/openai/codex/blob/b592a0bfed439386fadc69327bd49eccb074cdc6/codex-rs/ext/memories/templates/memories/read_path.md#L1-L130">Read-path contract</a> &middot; <a href="https://github.com/openai/codex/blob/b592a0bfed439386fadc69327bd49eccb074cdc6/codex-rs/ext/memories/src/prompts.rs#L23-L50">Summary injection</a> &middot; <a href="https://github.com/openai/codex/blob/b592a0bfed439386fadc69327bd49eccb074cdc6/codex-rs/config/src/types.rs#L288-L367">Configuration</a></p>
+            <small>Official <code>main</code> snapshot, revision <code>b592a0bf</code>, committed 27 August 2026.</small>
+          </div>
+        </div>
+        <div class="source-row">
+          <div class="source-id">Pi</div>
+          <div>
+            <p><a href="https://github.com/earendil-works/pi/blob/e86823096c5bad39e1ca282ec24bc5eb9bec745b/packages/coding-agent/docs/sessions.md#L1-L145">Sessions and branching</a> &middot; <a href="https://github.com/earendil-works/pi/blob/e86823096c5bad39e1ca282ec24bc5eb9bec745b/packages/coding-agent/docs/compaction.md#L14-L79">Compaction flow</a> &middot; <a href="https://github.com/earendil-works/pi/blob/e86823096c5bad39e1ca282ec24bc5eb9bec745b/packages/coding-agent/src/core/session-manager.ts#L30-L153">Session entry model</a> &middot; <a href="https://github.com/earendil-works/pi/blob/e86823096c5bad39e1ca282ec24bc5eb9bec745b/packages/coding-agent/docs/extensions.md#L1398-L1468">Extension persistence and context injection</a></p>
+            <small>Official repository snapshot, revision <code>e8682309</code>, committed 26 August 2026. The former <code>badlogic/pi-mono</code> repository redirects to <code>earendil-works/pi</code>.</small>
+          </div>
+        </div>
+        <div class="source-row">
+          <div class="source-id">OrcaCode</div>
+          <div>
+            <p><a href="https://github.com/okikorg/orca-harness/blob/d76fb251eef0b78fb36dea169dd5e9c8000225f6/crates/harness-core/src/context.rs#L1-L2">Memory extension boundary</a> &middot; <a href="https://github.com/okikorg/orca-harness/blob/d76fb251eef0b78fb36dea169dd5e9c8000225f6/README.md#L284-L310">Current session persistence</a> &middot; <a href="https://github.com/okikorg/orca-harness/blob/d76fb251eef0b78fb36dea169dd5e9c8000225f6/README.md#L648-L656">Kernel scope</a></p>
+            <small>Baseline <code>d76fb251</code> documents the extension boundary; the current worktree implements the SQLite memory extension described above.</small>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">Internal engineering note. Source inspection only; no services were started and no live product behavior was inferred beyond the cited implementations.</div>
+  </footer>
+</body>
+</html>

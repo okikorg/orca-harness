@@ -390,7 +390,9 @@ fn is_enabled(name: &str) -> bool {
 mod tests {
     use super::*;
     use orca_harness_core::testing::ScriptedModel;
-    use orca_harness_core::{Message, ModelResponse};
+    use orca_harness_core::{Message, ModelResponse, ToolCall, ToolResult};
+    use orca_harness_extensions::{MemoryExtension, MemoryModel, MemoryScope, MemoryStore};
+    use serde_json::json;
     use std::fs;
 
     struct Temp(PathBuf);
@@ -522,5 +524,51 @@ mod tests {
             &context.messages()[0],
             Message::User { content, .. } if content == "$review inspect this"
         ));
+    }
+
+    #[tokio::test]
+    async fn memory_queries_real_skill_prompt_and_preserves_tool_continuation() {
+        let temp = Temp::new("memory-skill-composition");
+        let skills = temp.skills();
+        temp.write("repo/.orca/skills/review/SKILL.md", &skill_md("review"));
+        skills.reload();
+        let store = MemoryStore::open(temp.0.join("memory.sqlite3")).unwrap();
+        let scope = MemoryScope::new("workspace-a", temp.0.display().to_string());
+        store
+            .save(
+                &scope,
+                "zebra_target requires focused verification",
+                "workflow",
+                false,
+                "c1",
+            )
+            .unwrap();
+        let inner = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("done")]));
+        let skill_model = SkillMentionModel::new(inner.clone(), skills);
+        let model = MemoryModel::new(skill_model, MemoryExtension::new(store, scope));
+        let mut context = Context::new();
+        context.push_user("$review inspect zebra_target");
+        let call = ToolCall {
+            id: "call-1".into(),
+            name: "read_file".into(),
+            arguments: json!({"path": "Cargo.toml"}),
+        };
+        context.push_assistant_tool_calls(None, vec![call.clone()]);
+        context.append_tool_results(vec![ToolResult::ok(&call, json!({"content": "workspace"}))]);
+
+        model.generate(&context, &[]).await.unwrap();
+
+        let observed = inner.observed_contexts();
+        assert!(matches!(
+            observed[0].messages().last(),
+            Some(Message::Tool { .. })
+        ));
+        assert!(observed[0].messages().iter().any(|message| {
+            matches!(message, Message::User { content, .. } if content.contains("zebra_target requires focused verification"))
+        }));
+        assert!(observed[0].messages().iter().any(|message| {
+            matches!(message, Message::User { content, .. } if content.starts_with("The user explicitly invoked these skills: review"))
+        }));
+        assert_eq!(context.messages().len(), 3);
     }
 }

@@ -38,6 +38,7 @@ audited together.
 - Approvals, plan mode, and yolo mode
 - Providers, models, and persistent configuration
 - Workspace tools, background processes, and output retrieval
+- Durable memory, automatic scoped recall, explicit management, and local storage
 - Sessions, task lists, and transcript controls
 - Complete current tool and extension reference, including mode and availability rules
 - Benchmark methodology, checked-in results, regression budgets, MCP retrieval accuracy, and subagent stress evidence

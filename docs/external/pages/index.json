@@ -50,6 +50,13 @@
   },
   {
     "group": "USE THE AGENT",
+    "id": "memory",
+    "label": "Memory",
+    "title": "Remember deliberately",
+    "lede": "Orcacode keeps deliberate user-owned memory in one local SQLite database, recalls matching global and workspace records automatically, and asks before changing them."
+  },
+  {
+    "group": "USE THE AGENT",
     "id": "sessions",
     "label": "Sessions & controls",
     "title": "Keep the thread. Branch safely.",

@@ -61,9 +61,10 @@ orca-harness/
 │   │   ├── examples/
 │   │   ├── benches/
 │   │   └── tests/
-│   ├── extensions/            # events, policy, compaction, truncation, retry, usage, sessions
+│   ├── extensions/            # events, policy, memory, compaction, truncation, retry, usage, sessions
 │   │   ├── src/
 │   │   ├── examples/
+│   │   ├── benches/
 │   │   └── tests/
 │   └── cli/                   # `orcacode` terminal host
 │       └── src/
@@ -158,10 +159,10 @@ directly. The status line carries `· plan mode` for as long as plan
 mode is on.
 
 It is an **allowlist**, not a denylist. Only `read_file`, `list_dir`,
-`grep`, `glob`, `file_info`, `read_tool_result`, `web_fetch`,
+`grep`, `glob`, `file_info`, `read_tool_result`, `memory_search`, `web_fetch`,
 `web_search`, `web_crawl`, `skill`, `todo_write`, and `ask` run; everything else
 — `shell`, `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `subagent`,
-and every MCP tool — is denied with a reason that points the model at the
+`memory_manage`, and every MCP tool — is denied with a reason that points the model at the
 plan directory instead. A denylist would have to know every tool the
 session might load, and MCP servers and skills add tools the CLI has
 never heard of, so unknown means denied.
@@ -308,6 +309,27 @@ where it was and recording moves to a new one carrying the whole context
 so far, with the old session recorded as its `parent`. Rewinding and then
 forking keeps the original line intact while the new one goes somewhere
 else.
+
+**Memory** — deliberately stored durable memory lives in one owner-only embedded SQLite
+FTS5 database at `~/.config/orcacode/memory.sqlite3` (`$ORCA_CONFIG_DIR`
+overrides the directory). There is no daemon, subprocess, Markdown mirror, or
+background extraction. `memory_search` reads global plus current-workspace
+records and is allowed in plan mode. `memory_manage` saves, updates, or forgets
+records and follows the normal write approval gate; every save requires an
+`is_global` boolean, while OrcaCode supplies the trusted workspace identity.
+Tools expose only opaque 128-bit `mem_` identifiers; integer rowids remain
+private to SQLite and its FTS joins.
+The model is told that recall is automatic and may propose a write either when
+the user asks or when directly stated, stable information is likely to help in
+future sessions. It must avoid ordinary conversation, one-off task state,
+duplicates, secrets, and unverified inferences. Workspace scope is the default;
+clearly cross-workspace information may be proposed as global, and the normal
+approval gate remains the user's final decision.
+Before each model turn, `MemoryModel` uses `MemoryExtension` to retrieve a
+bounded matching set and adds it at user authority to a transient request
+clone, never to durable context or as policy or permission.
+`cargo bench -p orca-harness-extensions --bench memory` compares direct SQL,
+the scoped store API, and complete context hydration over 50,000 records.
 
 **Endpoint selection** — `ORCA_MODEL`, `ORCA_BASE_URL`, and
 `OPENAI_API_KEY` (or `--model`, `--base-url`, `--api-key`) choose the
@@ -457,6 +479,10 @@ registering an unused one costs nothing on the hot path:
   inside subagents, so every level of the agent tree retries.
 - **UsageMeter** — accumulate self-reported token usage across a run,
   readable via a shared handle after it returns.
+- **MemoryExtension** — query one embedded SQLite FTS5 store for global and
+  current-workspace records. `MemoryModel` adds the bounded provenance-bearing
+  fragment to a transient request clone; `MemorySearchTool` and
+  `MemoryManageTool` share the same store and scope.
 
 ## Quick start
 

@@ -16,8 +16,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 orca-harness-model-providers = { path = "../model-providers" }
 orca-harness-tools = { path = "../tools" }
 tokio = { version = "1", features = ["full"] }
+
+[[bench]]
+name = "memory"
+harness = false

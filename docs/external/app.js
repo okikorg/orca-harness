@@ -57,7 +57,7 @@ async function render(pageId = location.hash.slice(1).split('/')[0] || 'start') 
 
   document.title = `${page.label} — Orcacode`;
   renderNav(page);
-  article.innerHTML = `<p class="kicker">${page.group}</p><h1 class="title">${page.title}</h1><p class="lede">${page.lede}</p><div class="meta"><span>EXTERNAL USER DOCUMENTATION</span><span>Updated from source · 2026-08-26</span><button class="markdown-copy" type="button">Copy Markdown</button></div>${body}`;
+  article.innerHTML = `<p class="kicker">${page.group}</p><h1 class="title">${page.title}</h1><p class="lede">${page.lede}</p><div class="meta"><span>EXTERNAL USER DOCUMENTATION</span><span>Updated from source · 2026-08-27</span><button class="markdown-copy" type="button">Copy Markdown</button></div>${body}`;
   const markdownButton = article.querySelector('.markdown-copy');
   markdownButton.addEventListener('click', async () => {
     await navigator.clipboard.writeText(pageToMarkdown(page, body));

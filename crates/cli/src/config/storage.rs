@@ -60,6 +60,11 @@ pub fn sessions_dir() -> Option<PathBuf> {
     Some(config_path()?.parent()?.join("sessions"))
 }
 
+/// The single local SQLite database used for deliberate durable memory.
+pub fn memory_path() -> Option<PathBuf> {
+    Some(config_path()?.parent()?.join("memory.sqlite3"))
+}
+
 /// The saved API key for a provider label, ignoring blank values.
 pub fn stored_key(provider: &str) -> Option<String> {
     stored_str(Some("api_keys"), provider)

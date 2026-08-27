@@ -5,6 +5,7 @@ mod main_tests {
     use tokio::sync::mpsc;
 
     use orca_harness_core::{Context, Message, ToolResult};
+    use orca_harness_extensions::MEMORY_GUIDANCE;
     use orca_harness_tools::{SubagentSpawn, Workspace};
 
     use crate::instructions;
@@ -93,7 +94,32 @@ mod main_tests {
     fn system_prompt_advertises_the_task_list() {
         let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
         assert!(prompt.contains("todo_write"));
+        assert!(prompt.contains("complex, ambiguous, or multi-phase"));
+        assert!(prompt.contains("explicitly asks for a todo plan"));
+        assert!(prompt.contains("never for routine follow-ups"));
+        assert!(prompt.contains("simple requests, or single-step work"));
         assert!(prompt.contains("in_progress"));
+    }
+
+    #[test]
+    fn system_prompt_advertises_scoped_memory_tools() {
+        let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
+        assert!(prompt.contains("memory_search"));
+        assert!(prompt.contains("global and current-workspace memory"));
+        assert!(prompt.contains("memory_manage"));
+        assert!(prompt.contains("save, update, or forget durable memory"));
+        assert!(prompt.contains(MEMORY_GUIDANCE));
+        assert!(prompt.contains("Memory recall is automatic"));
+        assert!(prompt.contains("Do not call memory_search merely to repeat"));
+        assert!(prompt.contains("or when you identify stable, directly stated user information"));
+        assert!(prompt.contains("likely to help in future sessions"));
+        assert!(prompt.contains("do not store ordinary conversation, one-off task details"));
+        assert!(prompt.contains("duplicates of recalled memory"));
+        assert!(prompt.contains("workspace scope (is_global=false)"));
+        assert!(prompt.contains("Choose global scope (is_global=true)"));
+        assert!(prompt.contains("When approval is enabled"));
+        assert!(prompt.contains("approval gate is the user's final decision"));
+        assert!(!prompt.contains("only when the user explicitly asks"));
     }
 
     /// `system_prompt` is a fixed string with tests asserting what is and
