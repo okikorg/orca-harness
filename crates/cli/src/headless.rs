@@ -148,21 +148,20 @@ pub async fn run<M: Model + Clone + 'static>(
     agent = agent.tool_arc(Arc::new(BunReplTool::new().working_dir(root)));
     let subagent_settings = SubagentDepth::new(cfg.subagent_depth);
     let extension_settings = subagent_settings.clone();
-    agent = agent.tool_arc(Arc::new(
-        SubagentTool::new(model_for_subagents, ws)
-            .inherited_identity(cfg.provider.label(), &cfg.model)
-            .models(subagent_models.into_iter().map(|choice| SubagentModel {
-                model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
-                ..choice
-            }))
-            .max_depth(subagent_settings)
-            .spawn_extensions(Arc::new(move |_| {
-                vec![
-                    Arc::new(Truncation::new(extension_settings.output_chars() as usize))
-                        as Arc<dyn orca_harness_core::Extension>,
-                ]
-            })),
-    ));
+    let subagent = SubagentTool::new(model_for_subagents, ws)
+        .inherited_identity(cfg.provider.label(), &cfg.model)
+        .max_depth(subagent_settings.clone())
+        .models(subagent_models.into_iter().map(|choice| SubagentModel {
+            model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
+            ..choice
+        }));
+    crate::config::load_subagent_settings(&subagent_settings);
+    agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
+        vec![
+            Arc::new(Truncation::new(extension_settings.output_chars() as usize))
+                as Arc<dyn orca_harness_core::Extension>,
+        ]
+    }))));
     // Configured MCP servers joined before model construction; register the
     // stable interfaces and hidden remote dispatch targets here.
     for tool in mcp.tools() {

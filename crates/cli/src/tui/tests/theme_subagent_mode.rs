@@ -119,7 +119,13 @@ mod subagents_command_tests {
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
         assert_eq!(settings.max_steps(), 36);
-        assert!(app.overlay.is_none());
+        assert!(
+            matches!(app.overlay, Some(Overlay::Subagents { .. })),
+            "selection returns to settings so more values can be changed"
+        );
+        assert!(app.overlay_stack.is_empty());
+        handle_overlay_key(&mut app, key(KeyCode::Esc), &worker);
+        assert!(app.overlay.is_none(), "escape closes the settings picker");
     }
 
     #[tokio::test]

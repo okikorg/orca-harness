@@ -128,6 +128,81 @@ pub fn save_transcript_spacing(slug: &str) -> io::Result<PathBuf> {
     save_str(None, "transcript_spacing", slug)
 }
 
+/// Persist the complete live subagent preference set. Keeping this as one
+/// object prevents a partially-updated picker choice from leaving related
+/// routing fields out of sync.
+pub fn save_subagent_settings(settings: &orca_harness_tools::SubagentDepth) -> io::Result<PathBuf> {
+    let preferred = ["local", "flash", "mid", "frontier"]
+        .into_iter()
+        .filter_map(|tier| {
+            settings
+                .preferred_model(tier)
+                .map(|model| (tier.to_string(), json!(model)))
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    let value = json!({
+        "route": settings.model_route(),
+        "preferred": preferred,
+        "depth": settings.get(),
+        "max_steps": settings.max_steps(),
+        "timeout_secs": settings.timeout_secs(),
+        "output_chars": settings.output_chars(),
+        "tool_attempts": settings.tool_attempts(),
+        "retry_backoff_ms": settings.retry_backoff_ms(),
+    });
+    mutate_root(move |root| {
+        root.insert("subagents".into(), value);
+    })
+}
+
+/// Apply saved subagent preferences to a handle whose model catalog has
+/// already been attached. Invalid or stale routes are ignored by the handle,
+/// while independent governance values still load.
+pub fn load_subagent_settings(settings: &orca_harness_tools::SubagentDepth) {
+    let Some(saved) = load_root().and_then(|root| root.get("subagents").cloned()) else {
+        return;
+    };
+    if let Some(value) = saved["depth"].as_u64().and_then(|v| u32::try_from(v).ok()) {
+        settings.set(value);
+    }
+    for (field, set) in [
+        (
+            "max_steps",
+            orca_harness_tools::SubagentDepth::set_max_steps
+                as fn(&orca_harness_tools::SubagentDepth, u32) -> u32,
+        ),
+        (
+            "timeout_secs",
+            orca_harness_tools::SubagentDepth::set_timeout_secs,
+        ),
+        (
+            "output_chars",
+            orca_harness_tools::SubagentDepth::set_output_chars,
+        ),
+        (
+            "tool_attempts",
+            orca_harness_tools::SubagentDepth::set_tool_attempts,
+        ),
+        (
+            "retry_backoff_ms",
+            orca_harness_tools::SubagentDepth::set_retry_backoff_ms,
+        ),
+    ] {
+        if let Some(value) = saved[field].as_u64().and_then(|v| u32::try_from(v).ok()) {
+            set(settings, value);
+        }
+    }
+    if let Some(preferred) = saved["preferred"].as_object() {
+        for (tier, model) in preferred {
+            if let Some(model) = model.as_str() {
+                settings.set_preferred_model(tier, model.to_string());
+            }
+        }
+    }
+    let route = saved["route"].as_str().map(str::to_string);
+    settings.set_model_route(route);
+}
+
 /// The saved on/off override for a user-toggleable extension. `None`
 /// means nothing was saved and the extension's default applies.
 pub fn stored_extension(name: &str) -> Option<bool> {

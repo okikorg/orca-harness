@@ -408,6 +408,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let ui_events = ui.clone();
     let mut subagent = SubagentTool::new(model_for_subagents, ws)
         .inherited_identity(inherited_provider, inherited_model)
+        .max_depth(subagent_depth.clone())
         .models(
             subagent_models
                 .into_iter()
@@ -416,8 +417,8 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
                     ..choice
                 }),
         )
-        .max_depth(subagent_depth.clone())
         .stats(stats.clone());
+    crate::config::load_subagent_settings(subagent_depth);
     if extensions::enabled("retry") {
         // Install defaults once; subsequent rebuilds preserve `/subagents`
         // choices while attaching the same data-failure classifier.

@@ -90,10 +90,15 @@ pub(crate) fn slash_command(
             match arg.trim().parse::<u32>() {
                 Ok(depth) => {
                     let set = app.cfg.subagent_depth.set(depth);
-                    app.push_line(Line::from(Span::styled(
-                        format!("subagent nesting depth set to {set} (applies to the next spawn)"),
-                        dim,
-                    )));
+                    let message = match crate::config::save_subagent_settings(&app.cfg.subagent_depth) {
+                        Ok(_) => format!(
+                            "subagent nesting depth set to {set} (saved; applies to the next spawn)"
+                        ),
+                        Err(err) => format!(
+                            "subagent nesting depth set to {set} for this session (save failed: {err})"
+                        ),
+                    };
+                    app.push_line(Line::from(Span::styled(message, dim)));
                 }
                 Err(_) => {
                     push_error(app, "usage: /subagents [1-5]");

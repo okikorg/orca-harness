@@ -87,6 +87,10 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
             finish_picker_flow(app);
             push_notice(app, note);
         }
+        After::PopWithNote(note) => {
+            app.overlay = app.overlay_stack.pop();
+            push_notice(app, note);
+        }
         After::Note(note) => {
             push_notice(app, note);
         }

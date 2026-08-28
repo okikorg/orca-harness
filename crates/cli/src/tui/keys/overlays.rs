@@ -240,11 +240,19 @@ pub(crate) fn handle_overlay_key(
             PickerEvent::Activated(index) => {
                 let value = values[index].clone();
                 apply_subagent_value(&app.cfg.subagent_depth, *setting, &value);
-                After::CloseWithNote(format!(
-                    "subagent {} set to {} (applies to the next spawn)",
-                    subagent_setting_label(*setting),
-                    value
-                ))
+                let note = match crate::config::save_subagent_settings(&app.cfg.subagent_depth) {
+                    Ok(_) => format!(
+                        "subagent {} set to {} (saved; applies to the next spawn)",
+                        subagent_setting_label(*setting),
+                        value
+                    ),
+                    Err(err) => format!(
+                        "subagent {} set to {} for this session (save failed: {err})",
+                        subagent_setting_label(*setting),
+                        value
+                    ),
+                };
+                After::PopWithNote(note)
             }
             _ => After::Nothing,
         },

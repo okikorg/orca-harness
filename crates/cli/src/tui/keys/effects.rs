@@ -27,6 +27,8 @@ pub(super) enum After {
     CloseAndSetInspector(InspectorMode),
     /// Close and drop a dim status line into the history.
     CloseWithNote(String),
+    /// Return to the parent picker and drop a dim status line.
+    PopWithNote(String),
     /// Keep the overlay open and drop a dim status line (row
     /// actions that mutate the list in place).
     Note(String),

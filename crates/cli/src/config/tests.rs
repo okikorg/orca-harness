@@ -13,6 +13,29 @@ mod tests {
     }
 
     #[test]
+    fn subagent_preferences_round_trip_and_preserve_other_config() {
+        let saved = orca_harness_tools::SubagentDepth::new(3);
+        saved.set_max_steps(36);
+        saved.set_timeout_secs(600);
+        saved.set_output_chars(16_000);
+        saved.set_tool_attempts(5);
+        saved.set_retry_backoff_ms(500);
+        save_key("openai", "sk-1").unwrap();
+        save_subagent_settings(&saved).unwrap();
+
+        let loaded = orca_harness_tools::SubagentDepth::new(1);
+        load_subagent_settings(&loaded);
+
+        assert_eq!(loaded.get(), 3);
+        assert_eq!(loaded.max_steps(), 36);
+        assert_eq!(loaded.timeout_secs(), 600);
+        assert_eq!(loaded.output_chars(), 16_000);
+        assert_eq!(loaded.tool_attempts(), 5);
+        assert_eq!(loaded.retry_backoff_ms(), 500);
+        assert_eq!(stored_key("openai").as_deref(), Some("sk-1"));
+    }
+
+    #[test]
     fn save_then_load_round_trips_per_provider() {
         assert_eq!(stored_key("openrouter"), None);
         save_key("openrouter", "sk-or-123").unwrap();
