@@ -422,8 +422,37 @@
         press(&mut app, &tx, KeyCode::Enter);
 
         assert!(app.overlay.is_none());
-        assert_eq!(app.composer, "/clear");
+        assert_eq!(app.composer, "/hotkeys");
         assert_eq!(app.cursor, app.composer.chars().count());
+    }
+
+    #[test]
+    fn hotkeys_lists_registered_shortcuts_without_starting_a_turn() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        let transcript_before = flat_lines(&app.transcript);
+
+        slash_command(&mut app, "hotkeys", &tx, 120);
+        let shown = flat_lines(&app.pending_history);
+
+        assert!(app.overlay.is_none(), "hotkeys writes to the transcript");
+        for expected in [
+            "hotkeys",
+            "Shift+Tab",
+            "cycle normal, plan, and yolo modes",
+            "Ctrl+O",
+            "expand the latest work or tool output",
+            "Ctrl+Y",
+            "Backspace / Delete",
+            "Tab / Shift+Tab",
+            "d / t",
+            "n / N / Esc / Ctrl+C",
+        ] {
+            assert!(shown.contains(expected), "missing {expected:?}: {shown}");
+        }
+        assert_eq!(flat_lines(&app.transcript), transcript_before);
+        assert!(!app.pending_history.is_empty());
+        assert_eq!(app.turn_count, 0, "local hotkeys is not a model turn");
     }
 
     #[test]

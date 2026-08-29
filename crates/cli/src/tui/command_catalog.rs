@@ -10,10 +10,197 @@ pub struct CommandSpec {
     pub takes_args: bool,
 }
 
+/// One user-facing keyboard shortcut. Keeping the labels in one catalog
+/// gives `/hotkeys` a single inventory to render as bindings evolve.
+pub struct HotkeySpec {
+    pub keys: &'static str,
+    pub description: &'static str,
+    pub category: &'static str,
+}
+
+pub const HOTKEYS: &[HotkeySpec] = &[
+    HotkeySpec {
+        keys: "Enter",
+        description: "send a prompt, or queue it while the agent is running",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Tab",
+        description: "complete the selected slash command",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Shift+Tab",
+        description: "cycle normal, plan, and yolo modes",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Ctrl+A / Ctrl+E",
+        description: "move to the start / end of the prompt",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Ctrl+U",
+        description: "clear the prompt",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Ctrl+V",
+        description: "paste a clipboard image",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Backspace / Delete",
+        description: "delete before / after the prompt cursor",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Left / Right",
+        description: "move the prompt cursor",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Home / End",
+        description: "move to the start / end of the prompt",
+        category: "Composer",
+    },
+    HotkeySpec {
+        keys: "Up / Down",
+        description: "browse prompt history, or move in the command palette",
+        category: "Navigation",
+    },
+    HotkeySpec {
+        keys: "Shift+Up / Down",
+        description: "scroll the transcript one line",
+        category: "Navigation",
+    },
+    HotkeySpec {
+        keys: "PgUp / PgDn",
+        description: "scroll the transcript or page through the active list",
+        category: "Navigation",
+    },
+    HotkeySpec {
+        keys: "Ctrl+O",
+        description: "expand the latest work or tool output",
+        category: "Actions",
+    },
+    HotkeySpec {
+        keys: "Ctrl+Y",
+        description: "copy the last answer",
+        category: "Actions",
+    },
+    HotkeySpec {
+        keys: "Esc",
+        description: "close the active UI, clear the prompt, or interrupt a run",
+        category: "Actions",
+    },
+    HotkeySpec {
+        keys: "Ctrl+C",
+        description: "interrupt, clear the prompt, or quit when idle",
+        category: "Actions",
+    },
+    HotkeySpec {
+        keys: "Ctrl+D",
+        description: "quit when the prompt is empty",
+        category: "Actions",
+    },
+    HotkeySpec {
+        keys: "Enter / Right / Tab",
+        description: "use the selected picker item (Tab in mention pickers)",
+        category: "Pickers",
+    },
+    HotkeySpec {
+        keys: "Left",
+        description: "return to the previous picker",
+        category: "Pickers",
+    },
+    HotkeySpec {
+        keys: "Space",
+        description: "toggle where supported, or reveal the selected row's actions",
+        category: "Pickers",
+    },
+    HotkeySpec {
+        keys: "Type / Backspace",
+        description: "narrow / widen a filterable picker",
+        category: "Pickers",
+    },
+    HotkeySpec {
+        keys: "d / t",
+        description: "delete / toggle when shown in a picker's action strip",
+        category: "Pickers",
+    },
+    HotkeySpec {
+        keys: "Esc / Ctrl+C",
+        description: "close or cancel the active overlay",
+        category: "Pickers",
+    },
+    HotkeySpec {
+        keys: "Enter / q",
+        description: "close the session usage overlay",
+        category: "Usage",
+    },
+    HotkeySpec {
+        keys: "Type / Backspace / Enter",
+        description: "edit / erase / confirm an API key",
+        category: "API key",
+    },
+    HotkeySpec {
+        keys: "Tab / Shift+Tab",
+        description: "move to the next / previous clarification topic",
+        category: "Ask form",
+    },
+    HotkeySpec {
+        keys: "Up / Down",
+        description: "move between clarification questions",
+        category: "Ask form",
+    },
+    HotkeySpec {
+        keys: "Left / Right",
+        description: "move between clarification options",
+        category: "Ask form",
+    },
+    HotkeySpec {
+        keys: "Space / Enter",
+        description: "choose an option / submit clarification",
+        category: "Ask form",
+    },
+    HotkeySpec {
+        keys: "Type / Backspace",
+        description: "edit the focused clarification answer",
+        category: "Ask form",
+    },
+    HotkeySpec {
+        keys: "Esc / Ctrl+C",
+        description: "cancel clarification",
+        category: "Ask form",
+    },
+    HotkeySpec {
+        keys: "y / Y",
+        description: "approve a tool call once",
+        category: "Approval",
+    },
+    HotkeySpec {
+        keys: "a / A",
+        description: "approve for the session / save for this workspace",
+        category: "Approval",
+    },
+    HotkeySpec {
+        keys: "n / N / Esc / Ctrl+C",
+        description: "deny a tool call",
+        category: "Approval",
+    },
+];
+
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "help",
-        description: "show available slash commands and keys",
+        description: "show available slash commands",
+        category: "General",
+        takes_args: false,
+    },
+    CommandSpec {
+        name: "hotkeys",
+        description: "show all registered keyboard shortcuts",
         category: "General",
         takes_args: false,
     },
@@ -197,6 +384,7 @@ mod tests {
                 "expand",
                 "extensions",
                 "help",
+                "hotkeys",
                 "clear",
                 "rewind",
                 "queue",

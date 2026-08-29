@@ -337,6 +337,9 @@ pub(crate) fn slash_command(
                 picker: ListPicker::new(SETTINGS_ROWS),
             });
         }
+        "hotkeys" => {
+            hotkeys_command(app, width);
+        }
         "help" | "" => {
             app.overlay = Some(Overlay::Help {
                 filter: String::new(),
@@ -420,6 +423,29 @@ pub(crate) fn rewind_command(app: &mut App, arg: &str, worker: &mpsc::UnboundedS
     if worker.send(WorkerCmd::Rewind { turns }).is_err() {
         push_error(app, "worker is gone; restart orcacode");
     }
+}
+
+/// `/hotkeys` — a scrollable inventory of the keyboard bindings handled by
+/// the TUI. The catalog is shared data so additions are visible and testable.
+pub(crate) fn hotkeys_command(app: &mut App, width: usize) {
+    let t = theme();
+    let key_width = crate::tui::command_catalog::HOTKEYS
+        .iter()
+        .map(|hotkey| hotkey.keys.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut lines = vec![Line::from(Span::styled("  hotkeys", t.strong))];
+    for hotkey in crate::tui::command_catalog::HOTKEYS {
+        let text = format!(
+            "  {:key_width$}  {}  {}",
+            hotkey.keys, hotkey.description, hotkey.category
+        );
+        lines.push(Line::from(Span::styled(
+            view::truncate_line(&text, width),
+            t.dim,
+        )));
+    }
+    app.push_transcript_block(lines, BlockSpacing::Tight);
 }
 
 /// `/todo` — the agent's current task list, as `todo_write` last left it.
