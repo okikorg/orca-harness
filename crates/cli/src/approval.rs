@@ -91,6 +91,7 @@ impl Extension for Approval {
         let request = ApprovalRequest {
             tool_name: call.name.clone(),
             detail: presentation::tool_call_line(&call.name, &call.arguments),
+            yes_no: false,
             respond,
         };
         let deny = || ToolDecision::Deny {

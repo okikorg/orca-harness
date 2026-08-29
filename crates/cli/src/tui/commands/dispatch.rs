@@ -189,6 +189,12 @@ pub(crate) fn slash_command(
             return;
         }
     }
+    if let Some(rest) = command.strip_prefix("refine") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            super::refine_command(app, rest.trim(), worker);
+            return;
+        }
+    }
     if let Some(rest) = command.strip_prefix("skills") {
         if rest.is_empty() || rest.starts_with(' ') {
             skills_command(app, rest.trim(), worker);

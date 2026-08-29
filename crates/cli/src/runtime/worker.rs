@@ -28,6 +28,17 @@ async fn run_interactive_context(
     }
 }
 
+/// A path shown to the user: relative to the working directory when it
+/// is inside it, absolute otherwise. Transcript notices stay short.
+fn workspace_relative(path: &std::path::Path) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(cwd).ok())
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
 /// Prepare a cleared conversation without destroying the recorded one.
 /// Rotation happens before the caller replaces any in-memory state, so a
 /// filesystem error leaves both the active context and old JSONL untouched.
@@ -70,6 +81,8 @@ pub(crate) async fn worker<F>(
 {
     let mut user_shell_call_id = 0_u64;
     let mut login_attempt = 0_u64;
+    // Skills /refine applied, newest last; RefineUndo pops and deletes.
+    let mut refine_applied: Vec<crate::refine::Applied> = Vec::new();
     let mut login_task: Option<tokio::task::JoinHandle<()>> = None;
     spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
     while let Some(command) = commands.recv().await {
@@ -186,6 +199,102 @@ pub(crate) async fn worker<F>(
                 if ui.send(UiMsg::Compacted(result)).is_err() {
                     return;
                 }
+            }
+            WorkerCmd::Refine => {
+                // A one-shot proposer pass over a scratch context: the
+                // user's conversation is read, never written. The model
+                // is built fresh from the live endpoint so provider and
+                // model switches are always respected.
+                let model = endpoint.build_model_for_ui(Some(ui.clone()));
+                let existing: Vec<(String, String)> = skills
+                    .catalog()
+                    .into_iter()
+                    .map(|entry| (entry.name, entry.description))
+                    .collect();
+                let result =
+                    crate::refine::run_proposer(model.as_ref(), context.messages(), &existing)
+                        .await;
+                let result = match result {
+                    // Declining is success, not silence: say why and stop.
+                    Ok(crate::refine::Refined::Nothing(reason)) => {
+                        let reason = match reason.is_empty() {
+                            true => String::new(),
+                            false => format!(": {reason}"),
+                        };
+                        let _ = ui.send(UiMsg::Notice(format!(
+                            "refine: no skill proposed — nothing in this trajectory is worth \
+                             packaging{reason}"
+                        )));
+                        continue;
+                    }
+                    Ok(crate::refine::Refined::Skill(outcome)) => Ok(outcome),
+                    Err(err) => Err(err),
+                };
+                let proposal = result.as_ref().ok().map(|outcome| outcome.proposal.clone());
+                if ui.send(UiMsg::RefineDone(Box::new(result))).is_err() {
+                    return;
+                }
+                let Some(proposal) = proposal else { continue };
+                // Accept/reject rides the standard tool-approval gate
+                // (y/n/a/A) rather than a bespoke prompt.
+                let (respond, decision) = tokio::sync::oneshot::channel();
+                let request = crate::msg::ApprovalRequest {
+                    tool_name: "refine".into(),
+                    detail: format!("apply skill {}", proposal.name),
+                    yes_no: true,
+                    respond,
+                };
+                if ui.send(UiMsg::Approval(request)).is_err() {
+                    return;
+                }
+                use crate::msg::ApprovalResponse as R;
+                let approved = matches!(
+                    decision.await,
+                    Ok(R::AllowOnce | R::AllowAlways | R::AllowAlwaysSave)
+                );
+                if !approved {
+                    let _ = ui.send(UiMsg::Notice(format!(
+                        "refine: proposal {} discarded",
+                        proposal.name
+                    )));
+                    continue;
+                }
+                let applied = skills
+                    .project_root()
+                    .map(std::path::Path::to_path_buf)
+                    .ok_or_else(|| "no project skills folder to apply into".to_string())
+                    .and_then(|root| crate::refine::apply(&root, &proposal));
+                let notice = match applied {
+                    Ok(applied) => {
+                        skills.reload();
+                        let notice = format!(
+                            "applied skill {} → {} · /refine undo reverts it",
+                            proposal.name,
+                            workspace_relative(&applied.dir)
+                        );
+                        refine_applied.push(applied);
+                        notice
+                    }
+                    Err(err) => format!("refine apply failed: {err}"),
+                };
+                let _ = ui.send(UiMsg::Notice(notice));
+            }
+            WorkerCmd::RefineUndo => {
+                let notice = match refine_applied.pop() {
+                    None => "nothing to undo: /refine has applied no skills".to_string(),
+                    Some(applied) => match crate::refine::undo(&applied) {
+                        Ok(()) => {
+                            skills.reload();
+                            format!("removed {}", workspace_relative(&applied.dir))
+                        }
+                        Err(err) => {
+                            let notice = format!("undo failed: {err}");
+                            refine_applied.push(applied);
+                            notice
+                        }
+                    },
+                };
+                let _ = ui.send(UiMsg::Notice(notice));
             }
             WorkerCmd::Rewind { turns } => {
                 let Some((cut, dropped_turns)) = rewind_cut(context.messages(), turns) else {
@@ -402,9 +511,22 @@ pub(crate) async fn worker<F>(
             WorkerCmd::ReloadSkills => {
                 // Rescan (cheap) and rebuild, so a skill created or
                 // toggled while the session is open reaches the model's
-                // catalog. Silent when nothing about the scan changed.
-                for line in skills.reload() {
-                    let _ = ui.send(UiMsg::Notice(line));
+                // catalog. The user asked, so always answer: a scan that
+                // found nothing new must not look like a scan that never
+                // ran (script edits don't change the catalog at all).
+                let lines = skills.reload();
+                match lines.is_empty() {
+                    true => {
+                        let count = skills.catalog().len();
+                        let _ = ui.send(UiMsg::Notice(format!(
+                            "skills rescanned · {count} loaded · no changes"
+                        )));
+                    }
+                    false => {
+                        for line in lines {
+                            let _ = ui.send(UiMsg::Notice(line));
+                        }
+                    }
                 }
                 agent = build(&endpoint);
             }

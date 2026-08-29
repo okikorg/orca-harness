@@ -94,10 +94,10 @@ mod main_tests {
     fn system_prompt_advertises_the_task_list() {
         let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
         assert!(prompt.contains("todo_write"));
-        assert!(prompt.contains("complex, ambiguous, or multi-phase"));
+        assert!(prompt.contains("Do not use todo_write by default"));
         assert!(prompt.contains("explicitly asks for a todo plan"));
-        assert!(prompt.contains("never for routine follow-ups"));
-        assert!(prompt.contains("simple requests, or single-step work"));
+        assert!(prompt.contains("5+ distinct steps"));
+        assert!(prompt.contains("single-step or few-step work"));
         assert!(prompt.contains("in_progress"));
     }
 

@@ -320,6 +320,7 @@
         app.approval = Some(crate::msg::ApprovalRequest {
             tool_name: "shell".into(),
             detail: "shell $ ls".into(),
+            yes_no: false,
             respond,
         });
         handle_approval_key(

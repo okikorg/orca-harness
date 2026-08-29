@@ -38,12 +38,14 @@ pub(crate) fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
 /// A compact transcript notification: the dot keeps system status scannable
 /// without giving it the visual weight of transcript content.
 pub(crate) fn handle_approval_key(app: &mut App, key: KeyEvent) {
+    let yes_no = app.approval.as_ref().is_some_and(|request| request.yes_no);
     let response = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalResponse::AllowOnce),
-        KeyCode::Char('a') => Some(ApprovalResponse::AllowAlways),
+        // Yes/no prompts have no "always": the decision is one-off.
+        KeyCode::Char('a') if !yes_no => Some(ApprovalResponse::AllowAlways),
         // Deliberately a distinct key: persisting trust across sessions
         // must never happen from a habitual lowercase 'a'.
-        KeyCode::Char('A') => Some(ApprovalResponse::AllowAlwaysSave),
+        KeyCode::Char('A') if !yes_no => Some(ApprovalResponse::AllowAlwaysSave),
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalResponse::Deny),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(ApprovalResponse::Deny)

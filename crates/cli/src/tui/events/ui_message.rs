@@ -91,6 +91,65 @@ pub(crate) fn handle_ui_msg(
                 app.context_window = window;
             }
         }
+        UiMsg::RefineDone(result) => {
+            match *result {
+                Ok(outcome) => {
+                    let t = theme();
+                    // The same block shape as /todo and /hotkeys: a strong
+                    // header, dim tree rows, one strong action row.
+                    let mut lines = vec![Line::from(vec![
+                        Span::styled("  refine", t.strong),
+                        Span::styled(
+                            format!(" · proposed skill {}", outcome.proposal.name),
+                            t.dim,
+                        ),
+                    ])];
+                    let mut rows: Vec<String> = vec![outcome.proposal.description.clone()];
+                    match outcome.proposal.scripts.is_empty() {
+                        true => rows.push("packages no scripts (judgment-only lesson)".into()),
+                        false => {
+                            for script in &outcome.proposal.scripts {
+                                rows.push(format!("packages {}", script.path));
+                            }
+                        }
+                    }
+                    rows.push(format!(
+                        "evidence: {}",
+                        outcome.proposal.citations.join(", ")
+                    ));
+                    // Every rendered proposal already passed validation, so
+                    // one summary row carries the news; the itemized list
+                    // only ever mattered when something failed, and failures
+                    // arrive as an error instead.
+                    rows.push(format!(
+                        "✓ {} check{} passed{}",
+                        outcome.checks.len(),
+                        if outcome.checks.len() == 1 { "" } else { "s" },
+                        match outcome.repaired {
+                            true => " · after one repair retry",
+                            false => "",
+                        }
+                    ));
+                    let last = rows.len() - 1;
+                    for (index, row) in rows.iter().enumerate() {
+                        let branch = if index == last { "└" } else { "├" };
+                        lines.push(Line::from(Span::styled(
+                            crate::view::truncate_line(&format!("  {branch} {row}"), width),
+                            t.dim,
+                        )));
+                    }
+                    app.push_transcript_block(lines, BlockSpacing::Tight);
+                }
+                Err(err) => {
+                    app.push_line(
+                        crate::tui::components::notification::Notification::error(format!(
+                            "refine: {err}"
+                        ))
+                        .line(),
+                    );
+                }
+            }
+        }
         UiMsg::Compacted(result) => match result {
             Ok(report) => {
                 // Until the next model step reports real usage, the

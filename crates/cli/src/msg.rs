@@ -129,6 +129,10 @@ pub struct ApprovalRequest {
     pub tool_name: String,
     /// Pre-rendered call line, e.g. `shell $ cargo test`.
     pub detail: String,
+    /// Restrict the prompt to a plain yes/no: `a`/`A` are ignored and
+    /// never offered. For one-off decisions (e.g. /refine) where
+    /// "always allow" is meaningless.
+    pub yes_no: bool,
     pub respond: oneshot::Sender<ApprovalResponse>,
 }
 
@@ -155,6 +159,9 @@ pub enum UiMsg {
     },
     /// The worker compacted the conversation (or could not).
     Compacted(Result<CompactReport, String>),
+    /// /refine finished: a validated single-skill proposal awaiting the
+    /// user's accept/reject, or why no proposal survived.
+    RefineDone(Box<Result<crate::refine::RefineOutcome, String>>),
     /// A one-line status notice for the transcript (session warnings,
     /// load failures).
     Notice(String),
@@ -227,6 +234,12 @@ pub enum WorkerCmd {
     Clear,
     /// Deterministically compact the conversation in place.
     Compact,
+    /// Review the trajectory and propose one skill (see crate::refine).
+    /// The worker then asks for approval through the standard gate and
+    /// applies the skill itself on a yes.
+    Refine,
+    /// Delete the most recently applied /refine skill.
+    RefineUndo,
     /// Drop the last `turns` user turns from the conversation and from
     /// the recorded session, so the conversation continues from an
     /// earlier point.

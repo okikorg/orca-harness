@@ -124,11 +124,15 @@ impl Tool for TodoWriteTool {
         ToolSchema {
             name: "todo_write".into(),
             description: "Record the task list for the work in progress, replacing the previous \
-                one. Send the complete list every time: marking an item done, adding a step you \
-                discovered, or dropping one that turned out to be unnecessary are all just \
-                another write. Use it only for complex, ambiguous, or multi-phase work, or when \
-                the user explicitly asks for a todo plan; never for routine follow-ups, simple \
-                requests, or single-step work. Keep exactly one item in_progress while working."
+                one. The default is to NOT use this tool. Use it only when the user explicitly \
+                asks for a todo plan, or for complex, ambiguous, or multi-phase work that will \
+                take 5+ distinct steps you could lose track of. Never for routine follow-ups, \
+                simple requests, or single-step work — if you can hold the plan in your head or \
+                finish inside a couple of tool batches, skip this tool and just do the work; \
+                writing a todo list for a small task costs more than it saves. Send the complete \
+                list every time: marking an item done, adding a discovered step, or dropping an \
+                unnecessary one are all just another write. Keep exactly one item in_progress \
+                while working."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -264,9 +268,10 @@ mod tests {
     #[test]
     fn schema_limits_when_the_tool_should_be_used() {
         let description = tool().schema().description;
-        assert!(description.contains("complex, ambiguous, or multi-phase"));
+        assert!(description.contains("default is to NOT use this tool"));
         assert!(description.contains("explicitly asks for a todo plan"));
-        assert!(description.contains("never for routine follow-ups"));
+        assert!(description.contains("5+ distinct steps"));
+        assert!(description.contains("Never for routine follow-ups"));
         assert!(description.contains("simple requests, or single-step work"));
     }
 

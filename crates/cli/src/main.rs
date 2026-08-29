@@ -15,6 +15,7 @@ mod msg;
 mod plan;
 mod presentation;
 mod prompt;
+mod refine;
 mod skills;
 mod subagent_models;
 mod tui;
@@ -360,10 +361,12 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          Plan before every tool call. Ask what you already know, what you still need, \
          and what the smallest set of calls is that gets it. Never fire a call whose \
          result you have no plan to use, and never re-derive something a previous \
-         call already told you. Use todo_write only for complex, ambiguous, or multi-phase \
-         work, or when the user explicitly asks for a todo plan; never for routine follow-ups, \
-         simple requests, or single-step work. Keep it current — one step in_progress, \
-         finished steps marked completed as you go.\n\
+         call already told you. Do not use todo_write by default: reach for it only if \
+         the user explicitly asks for a todo plan, or when the work spans 5+ distinct \
+         steps you could genuinely lose track of. For anything smaller — routine \
+         follow-ups, simple requests, single-step or few-step work — skip the list and \
+         just do the work. When you do keep a list, keep it current: one step \
+         in_progress, finished steps marked completed as you go.\n\
          \n\
          Delegate to subagents deliberately: they can run for many model steps. Give each \
          subagent one bounded, self-contained task, the exact result or deliverable expected, \

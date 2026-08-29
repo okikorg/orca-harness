@@ -371,6 +371,7 @@ fn capital_a_saves_the_approval_and_settings_can_revoke_it() {
     app.approval = Some(crate::msg::ApprovalRequest {
         tool_name: "shell".into(),
         detail: "shell $ ls".into(),
+        yes_no: false,
         respond,
     });
     handle_approval_key(
@@ -388,6 +389,7 @@ fn capital_a_saves_the_approval_and_settings_can_revoke_it() {
     app.approval = Some(crate::msg::ApprovalRequest {
         tool_name: "write_file".into(),
         detail: "write_file x".into(),
+        yes_no: false,
         respond,
     });
     handle_approval_key(

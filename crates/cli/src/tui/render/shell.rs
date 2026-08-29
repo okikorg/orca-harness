@@ -413,7 +413,13 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 view::truncate_line(&request.detail, width.saturating_sub(6))
             ))),
             Line::from(Span::styled(
-                "    [y] allow once   [a] always (this session)   [A] always (save for workspace)   [n] deny",
+                match request.yes_no {
+                    true => "    [y] yes   [n] no",
+                    false => {
+                        "    [y] allow once   [a] always (this session)   \
+                         [A] always (save for workspace)   [n] deny"
+                    }
+                },
                 t.dim,
             )),
         ];

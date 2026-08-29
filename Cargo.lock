@@ -1213,6 +1213,7 @@ dependencies = [
  "orca-harness-tools",
  "ratatui",
  "reqwest",
+ "serde",
  "serde_json",
  "syntect-tui",
  "textwrap",

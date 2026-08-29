@@ -19,6 +19,7 @@ orca-harness-tool-extensions = { path = "../tool-extensions" }
 orca-harness-extensions = { path = "../extensions" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 futures-util = { workspace = true }

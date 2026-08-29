@@ -230,6 +230,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
+        name: "refine",
+        description: "propose one skill from this session; approve with y/n, revert with undo",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
         name: "queue",
         description: "show the prompt queue, or clear waiting prompts",
         category: "Session",
@@ -387,6 +393,7 @@ mod tests {
                 "hotkeys",
                 "clear",
                 "rewind",
+                "refine",
                 "queue",
                 "models",
                 "provider",
