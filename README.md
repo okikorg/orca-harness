@@ -402,6 +402,29 @@ carry one.
 Remote HTTP/SSE servers are reachable through a stdio bridge:
 `/mcp add docs npx -y mcp-remote https://mcp.example.com/mcp`.
 
+**Agent Plugins** — Orcacode is an Agent Plugins 1.0 client for portable
+MCP-over-stdio packages. Scaffold either supported project, install its
+dependencies yourself, then validate and exercise it before registration:
+
+```sh
+orcacode plugin init rl-python --py
+orcacode plugin init rl-typescript --ts
+orcacode plugin validate ./rl-python
+orcacode plugin test ./rl-python
+orcacode plugin install ./rl-python
+orcacode plugin enable rl-python
+```
+
+Installation links the canonical local directory rather than copying it and
+starts disabled; enable, disable, and uninstall changes apply to the next
+Orcacode process. Orcacode does not install dependencies, and uninstall keeps
+both source and `$ORCA_CONFIG_DIR/plugin-data/<name>/`. Plugin children receive
+a sanitized environment, but they are ordinary user processes, not a sandbox:
+keep secrets out of visible manifests and review code before enabling it.
+`/mcp` continues to manage standalone MCP entries only. See the
+[Agent Plugins guide](docs/external/pages/plugins.html) for package layout,
+runtime boundaries, and long-running tool design.
+
 ## Core tools
 
 `orca-harness-tools` gives an agent the ability to act on a machine and hand
