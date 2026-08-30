@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::plugins::*;
 
     fn raw() -> String {
         TEST_FILE
@@ -241,6 +242,7 @@ mod tests {
                 "missing-root": {"enabled": true},
                 "bad-root": {"root": 7, "enabled": false},
                 "bad-enabled": {"root": "/plugins/bad", "enabled": "yes"},
+                "relative-root": {"root": "plugins/relative", "enabled": false},
                 "../escape": {"root": "/plugins/escape", "enabled": true},
                 "valid": {"root": "/plugins/valid", "enabled": false}
             }}"#,
@@ -255,6 +257,23 @@ mod tests {
         assert!(remove_plugin("valid").unwrap());
         assert!(!remove_plugin("valid").unwrap());
         assert!(stored_plugins().is_empty());
+    }
+
+    #[test]
+    fn enabling_a_plugin_atomically_canonicalizes_root_and_preserves_unknown_fields() {
+        seed(
+            r#"{"future":true,"plugins":{"valid":{
+                "root":"/plugins/old/../valid","enabled":false,"futureEntry":"kept"
+            }}}"#,
+        );
+
+        assert!(enable_plugin("valid", Path::new("/plugins/valid")).unwrap());
+
+        let saved: Value = serde_json::from_str(&raw()).unwrap();
+        assert_eq!(saved["future"], true);
+        assert_eq!(saved["plugins"]["valid"]["root"], "/plugins/valid");
+        assert_eq!(saved["plugins"]["valid"]["enabled"], true);
+        assert_eq!(saved["plugins"]["valid"]["futureEntry"], "kept");
     }
 
     #[test]

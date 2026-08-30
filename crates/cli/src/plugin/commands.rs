@@ -137,7 +137,7 @@ fn enable(name: &str) -> Result<(), String> {
         ));
     }
     print_warnings(&plugin);
-    crate::config::set_plugin_enabled(name, true)
+    crate::config::enable_plugin(name, &plugin.root)
         .map_err(|error| format!("cannot enable plugin: {error}"))?;
     println!("enabled plugin {name}; applies on next launch");
     Ok(())

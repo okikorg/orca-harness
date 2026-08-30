@@ -106,9 +106,28 @@ fn install_list_inspect_toggle_and_uninstall_preserve_owned_data() {
     let inspect = fixture.run(&fixture.root, &["plugin", "inspect", "alpha-plugin"]);
     assert_success(&inspect);
     assert!(stdout(&inspect).contains(alpha.canonicalize().unwrap().to_str().unwrap()));
+    let config_path = fixture.config.join("config.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    let non_canonical = alpha.join("..").join("alpha-plugin");
+    saved["plugins"]["alpha-plugin"]["root"] = serde_json::json!(non_canonical.to_str().unwrap());
+    saved["plugins"]["alpha-plugin"]["futureEntry"] = serde_json::json!("kept");
+    fs::write(&config_path, serde_json::to_vec_pretty(&saved).unwrap()).unwrap();
+
     assert_success(&fixture.run(&fixture.root, &["plugin", "enable", "alpha-plugin"]));
+    let enabled: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(enabled["plugins"]["alpha-plugin"]["enabled"], true);
+    assert_eq!(
+        enabled["plugins"]["alpha-plugin"]["root"],
+        alpha.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert_eq!(enabled["plugins"]["alpha-plugin"]["futureEntry"], "kept");
     assert!(!fixture.config.join("plugin-data/alpha-plugin").exists());
     assert_success(&fixture.run(&fixture.root, &["plugin", "disable", "alpha-plugin"]));
+    let disabled: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(disabled["plugins"]["alpha-plugin"]["enabled"], false);
     assert_success(&fixture.run(
         &fixture.root,
         &["plugin", "install", alpha.to_str().unwrap()],
@@ -298,6 +317,24 @@ fn python_and_typescript_scaffolds_have_expected_layout_and_do_not_overwrite() {
                 .is_some(),
             "lock is missing {dependency}"
         );
+    }
+    assert_eq!(package["engines"]["node"], ">=20");
+    for (path, engine) in [
+        ("node_modules/@modelcontextprotocol/sdk", ">=18"),
+        ("node_modules/vitest", "^18.0.0 || >=20.0.0"),
+        (
+            "node_modules/vitest/node_modules/vite",
+            "^18.0.0 || >=20.0.0",
+        ),
+        ("node_modules/vite-node", "^18.0.0 || >=20.0.0"),
+        (
+            "node_modules/vite-node/node_modules/vite",
+            "^18.0.0 || >=20.0.0",
+        ),
+        ("node_modules/esbuild", ">=18"),
+        ("node_modules/typescript", ">=14.17"),
+    ] {
+        assert_eq!(lock["packages"][path]["engines"]["node"], engine, "{path}");
     }
 
     let no_build = fixture.run(&fixture.root, &["plugin", "test", ts.to_str().unwrap()]);
