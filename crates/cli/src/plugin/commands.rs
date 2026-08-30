@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 
 use orca_harness_core::Tool;
@@ -52,7 +51,7 @@ async fn test(path: &Path) -> Result<(), String> {
     let plugin = load_agent_plugin(&initial.root, &data).map_err(|error| error.to_string())?;
     print_warnings(&plugin);
     if !plugin.mcp_servers.is_empty() {
-        fs::create_dir_all(&data)
+        crate::config::create_plugin_data_dir(&data)
             .map_err(|error| format!("cannot create plugin data directory: {error}"))?;
     }
     let mut failures = Vec::new();

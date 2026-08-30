@@ -199,14 +199,45 @@ fn validate_is_static_but_test_handshakes_and_lists_tools() {
     assert_success(&validate);
     assert!(stdout(&validate).contains("warning:"));
     assert!(!marker.exists(), "static validation executed plugin code");
-    assert!(!fixture.config.join("plugin-data/probe-plugin").exists());
+    let data = fixture.config.join("plugin-data/probe-plugin");
+    assert!(!data.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir_all(&data).unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     let probe = fixture.run(&fixture.root, &["plugin", "test", plugin.to_str().unwrap()]);
     assert_success(&probe);
     assert!(marker.exists());
     assert!(stdout(&probe).contains("mcp__plugin__probe_plugin__echo__echo"));
     assert!(stdout(&probe).contains("mcp__plugin__probe_plugin__second__echo"));
-    assert!(fixture.config.join("plugin-data/probe-plugin").is_dir());
+    assert!(data.is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            fs::metadata(&data).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+}
+
+#[test]
+fn plugin_test_without_stdio_servers_creates_no_plugin_data() {
+    let fixture = Fixture::new("no-stdio");
+    let plugin = fixture.plugin("metadata-only-plugin");
+
+    let probe = fixture.run(&fixture.root, &["plugin", "test", plugin.to_str().unwrap()]);
+
+    assert_success(&probe);
+    assert!(!fixture
+        .config
+        .join("plugin-data/metadata-only-plugin")
+        .exists());
 }
 
 #[test]
@@ -251,9 +282,19 @@ fn python_and_typescript_scaffolds_have_expected_layout_and_do_not_overwrite() {
         serde_json::from_slice(&fs::read(py.join("mcp.json")).unwrap()).unwrap();
     assert_eq!(py_mcp["mcpServers"]["echo"]["type"], "stdio");
     assert_eq!(py_mcp["mcpServers"]["echo"]["command"], "uv");
-    assert!(fs::read_to_string(py.join("README.md"))
-        .unwrap()
-        .contains("Orcacode does not install dependencies"));
+    let python_readme = fs::read_to_string(py.join("README.md")).unwrap();
+    for guidance in [
+        "Orcacode does not itself run dependency installers",
+        "generated `uv` child may resolve dependencies into `${PLUGIN_DATA}`",
+        "first `orcacode plugin test` or enabled start",
+        "For offline use",
+        "before enabling",
+    ] {
+        assert!(
+            python_readme.contains(guidance),
+            "missing guidance: {guidance}"
+        );
+    }
 
     let ts = fixture.run(
         &fixture.root,
