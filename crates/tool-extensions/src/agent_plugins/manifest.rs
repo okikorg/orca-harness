@@ -102,7 +102,7 @@ fn optional_string<'a>(
     }
 }
 
-fn validate_name(name: &str) -> Result<(), PluginError> {
+pub(super) fn validate_name(name: &str) -> Result<(), PluginError> {
     let bytes = name.as_bytes();
     let valid = (1..=64).contains(&bytes.len())
         && bytes.first().is_some_and(u8::is_ascii_alphanumeric)

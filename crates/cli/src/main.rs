@@ -13,6 +13,7 @@ mod mcp;
 mod mode;
 mod msg;
 mod plan;
+mod plugin;
 mod presentation;
 mod prompt;
 mod refine;
@@ -74,6 +75,7 @@ orcacode — terminal host for Orca Harness
 USAGE:
   orcacode [OPTIONS]                interactive session
   orcacode [OPTIONS] -p \"prompt\"    headless single run (streams to stdout)
+  orcacode plugin <COMMAND>         manage Agent Plugin packages
 
 OPTIONS:
   --model NAME       model id (env ORCA_MODEL; default qwen3.5:9b,
@@ -157,6 +159,11 @@ pub struct Config {
     pub yolo: bool,
 }
 
+pub(crate) enum Invocation {
+    Run(Config),
+    Plugin(plugin::PluginCommand),
+}
+
 impl Config {
     pub fn limits(&self) -> Limits {
         Limits {
@@ -181,7 +188,15 @@ impl Config {
     }
 }
 
-fn parse_args() -> Result<Config, String> {
+fn parse_invocation() -> Result<Invocation, String> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(tail) = plugin::invocation_tail(&args) {
+        return plugin::parse(tail).map(Invocation::Plugin);
+    }
+    parse_run_args(args).map(Invocation::Run)
+}
+
+fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut model = std::env::var("ORCA_MODEL").ok();
     let mut base_url = std::env::var("ORCA_BASE_URL").ok();
     let mut api_key: Option<String> = None;
@@ -204,7 +219,7 @@ fn parse_args() -> Result<Config, String> {
     let mut yolo = false;
     let mut theme = std::env::var("ORCA_THEME").ok();
 
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
             args.next()

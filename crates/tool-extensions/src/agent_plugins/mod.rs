@@ -103,6 +103,11 @@ pub fn load_agent_plugin(root: &Path, plugin_data: &Path) -> Result<AgentPlugin,
     })
 }
 
+/// Validate a package name with the same rules used by `plugin.json`.
+pub fn validate_agent_plugin_name(name: &str) -> Result<(), PluginError> {
+    manifest::validate_name(name)
+}
+
 /// Convert plugin and server names into the host-reserved MCP namespace.
 pub fn normalize_plugin_server_id(plugin_name: &str, server_name: &str) -> String {
     format!(

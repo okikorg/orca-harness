@@ -207,6 +207,70 @@ mod tests {
     }
 
     #[test]
+    fn plugins_round_trip_in_name_order_and_preserve_unrelated_config() {
+        seed(r#"{"future": {"kept": true}}"#);
+        save_plugin("zeta", "/plugins/zeta", false).unwrap();
+        save_plugin("alpha", "/plugins/alpha", true).unwrap();
+
+        let plugins = stored_plugins();
+        assert_eq!(
+            plugins,
+            [
+                RegisteredPlugin {
+                    name: "alpha".into(),
+                    root: PathBuf::from("/plugins/alpha"),
+                    enabled: true,
+                },
+                RegisteredPlugin {
+                    name: "zeta".into(),
+                    root: PathBuf::from("/plugins/zeta"),
+                    enabled: false,
+                },
+            ]
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&raw()).unwrap()["future"]["kept"],
+            true
+        );
+    }
+
+    #[test]
+    fn malformed_plugin_entries_are_skipped_and_valid_entries_can_change_state() {
+        seed(
+            r#"{"plugins": {
+                "missing-root": {"enabled": true},
+                "bad-root": {"root": 7, "enabled": false},
+                "bad-enabled": {"root": "/plugins/bad", "enabled": "yes"},
+                "../escape": {"root": "/plugins/escape", "enabled": true},
+                "valid": {"root": "/plugins/valid", "enabled": false}
+            }}"#,
+        );
+        assert_eq!(stored_plugins().len(), 1);
+        assert_eq!(stored_plugin("valid").unwrap().name, "valid");
+        assert!(stored_plugin("missing-root").is_none());
+
+        assert!(set_plugin_enabled("valid", true).unwrap());
+        assert!(stored_plugin("valid").unwrap().enabled);
+        assert!(!set_plugin_enabled("unknown", true).unwrap());
+        assert!(remove_plugin("valid").unwrap());
+        assert!(!remove_plugin("valid").unwrap());
+        assert!(stored_plugins().is_empty());
+    }
+
+    #[test]
+    fn plugin_data_path_is_beside_config_under_the_plugin_name() {
+        let path = plugin_data_path("rl-tools").unwrap();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("rl-tools")
+        );
+        assert_eq!(
+            path.parent().and_then(Path::file_name).and_then(|name| name.to_str()),
+            Some("plugin-data")
+        );
+    }
+
+    #[test]
     fn toggling_preserves_the_command_and_promotes_the_string_shape() {
         // The bare-string shape written before toggles existed reads as
         // enabled and survives a disable.
