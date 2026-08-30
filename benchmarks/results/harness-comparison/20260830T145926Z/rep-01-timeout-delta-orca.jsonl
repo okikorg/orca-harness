@@ -1,0 +1,68 @@
+{"record": "run_start", "timestamp": "2026-08-30T14:59:39.135945+00:00", "run_number": 4, "repetition": 1, "task": "timeout-delta", "category": "cross-file-comparison", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-timeout-delta-zb32drdz/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.287, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.339, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 553.044, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user is asking me to compare production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 735.376, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and local request timeouts. I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 736.113, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to find\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 736.169, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 736.581, "text": "{\"type\":\"reasoning_delta\",\"text\":\" that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 736.607, "text": "{\"type\":\"reasoning_delta\",\"text\":\" contain timeout configurations for\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 737.72, "text": "{\"type\":\"reasoning_delta\",\"text\":\" production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 737.926, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and local environments\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 738.094, "text": "{\"type\":\"reasoning_delta\",\"text\":\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 986.067, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 986.176, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me search for files that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 986.876, "text": "{\"type\":\"reasoning_delta\",\"text\":\" might contain timeout settings. I should look\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 987.483, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for common\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 989.447, "text": "{\"type\":\"reasoning_delta\",\"text\":\" patterns like:\\n- Configuration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 989.475, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files\\n- Constants\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 993.343, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files\\n- Config\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 994.08, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files with\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1135.362, "text": "{\"type\":\"reasoning_delta\",\"text\":\" production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1136.377, "text": "{\"type\":\"reasoning_delta\",\"text\":\"/local settings\\n- timeout\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1137.224, "text": "{\"type\":\"reasoning_delta\",\"text\":\" settings\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1138.183, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1138.782, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start by searching for common keywords\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1139.055, "text": "{\"type\":\"reasoning_delta\",\"text\":\" like\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1139.934, "text": "{\"type\":\"reasoning_delta\",\"text\":\" \\\"timeout\\\", \\\"prod\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1140.936, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\\",\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1339.975, "text": "{\"type\":\"reasoning_delta\",\"text\":\" \\\"local\\\"\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1340.031, "text": "{\"type\":\"reasoning_delta\",\"text\":\" to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1342.42, "text": "{\"type\":\"reasoning_delta\",\"text\":\" find the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1343.159, "text": "{\"type\":\"reasoning_delta\",\"text\":\" relevant files.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1493.083, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"timeout\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1493.369, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1593.973, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"TIMEOUT\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1605.256, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1613.014, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1218,\"outputTokens\":189,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1613.14, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01Kv9GkgUwq87ciyiQhRQtb7\",\"tool_name\":\"grep\",\"input\":{\"query\":\"timeout\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1613.217, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01LB38NLvW7HbSuAu3LHnEzg\",\"tool_name\":\"grep\",\"input\":{\"query\":\"TIMEOUT\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1618.385, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01LB38NLvW7HbSuAu3LHnEzg\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1618.487, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01Kv9GkgUwq87ciyiQhRQtb7\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1618.539, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01Kv9GkgUwq87ciyiQhRQtb7\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":7,\"path\":\"README.md\",\"text\":\"Production request timeout is 45 seconds; local development uses 12 seconds.\"},{\"line\":3,\"path\":\"docs/workers.md\",\"text\":\"Workers send a heartbeat every 30 seconds. The production timeout is 75 seconds\"},{\"line\":5,\"path\":\"config/local.yaml\",\"text\":\"  request_timeout_seconds: 12\"},{\"line\":5,\"path\":\"config/worker.yaml\",\"text\":\"  timeout_seconds: 20\"},{\"line\":5,\"path\":\"config/runtime.yaml\",\"text\":\"  request_timeout_seconds: 45\"}],\"query\":\"timeout\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1618.618, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01LB38NLvW7HbSuAu3LHnEzg\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"TIMEOUT\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2224.164, "text": "{\"type\":\"assistant_delta\",\"text\":\"Based\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2384.889, "text": "{\"type\":\"assistant_delta\",\"text\":\" on the grep\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2387.016, "text": "{\"type\":\"assistant_delta\",\"text\":\" results, I can see:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2389.864, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2390.401, "text": "{\"type\":\"assistant_delta\",\"text\":\" Production request timeout: 45\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2390.453, "text": "{\"type\":\"assistant_delta\",\"text\":\" seconds (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2391.075, "text": "{\"type\":\"assistant_delta\",\"text\":\"from\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2391.906, "text": "{\"type\":\"assistant_delta\",\"text\":\" config\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2392.658, "text": "{\"type\":\"assistant_delta\",\"text\":\"/runtime\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2584.905, "text": "{\"type\":\"assistant_delta\",\"text\":\".yaml)\\n- Local request\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2585.425, "text": "{\"type\":\"assistant_delta\",\"text\":\" timeout: 12 seconds (from\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2585.857, "text": "{\"type\":\"assistant_delta\",\"text\":\" config/local.yaml)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2586.758, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- Delta\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2587.085, "text": "{\"type\":\"assistant_delta\",\"text\":\": 45\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2587.504, "text": "{\"type\":\"assistant_delta\",\"text\":\" - 12 = 33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2588.621, "text": "{\"type\":\"assistant_delta\",\"text\":\" seconds\\n\\nprod\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2588.817, "text": "{\"type\":\"assistant_delta\",\"text\":\"_timeout=45\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2642.808, "text": "{\"type\":\"assistant_delta\",\"text\":\"; local_timeout=12; delta\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2642.84, "text": "{\"type\":\"assistant_delta\",\"text\":\"=33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2663.495, "text": "{\"type\":\"assistant\",\"message\":\"Based on the grep results, I can see:\\n- Production request timeout: 45 seconds (from config/runtime.yaml)\\n- Local request timeout: 12 seconds (from config/local.yaml)\\n- Delta: 45 - 12 = 33 seconds\\n\\nprod_timeout=45; local_timeout=12; delta=33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2663.547, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1501,\"outputTokens\":81,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2663.564, "text": "{\"type\":\"result\",\"message\":\"Based on the grep results, I can see:\\n- Production request timeout: 45 seconds (from config/runtime.yaml)\\n- Local request timeout: 12 seconds (from config/local.yaml)\\n- Delta: 45 - 12 = 33 seconds\\n\\nprod_timeout=45; local_timeout=12; delta=33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2663.579, "text": "{\"durationMs\":2657,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":2,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2719,\"outputTokens\":270}}"}
+{"record": "run_end", "timestamp": "2026-08-30T14:59:41.799693+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 2665.508}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

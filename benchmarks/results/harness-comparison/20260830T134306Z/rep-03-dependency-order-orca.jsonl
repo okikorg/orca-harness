@@ -1,0 +1,102 @@
+{"record": "run_start", "timestamp": "2026-08-30T13:52:55.993321+00:00", "run_number": 81, "repetition": 3, "task": "dependency-order", "category": "graph-reasoning", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-dependency-order-lx85i6qk/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.991, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":false,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.051, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 699.298, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to analyze\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 822.052, "text": "{\"type\":\"reasoning_delta\",\"text\":\" project\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 823.116, "text": "{\"type\":\"reasoning_delta\",\"text\":\".toml and determine\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 824.391, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependency\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 825.532, "text": "{\"type\":\"reasoning_delta\",\"text\":\"-first ready-node waves. This\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 826.703, "text": "{\"type\":\"reasoning_delta\",\"text\":\" involves:\\n\\n1. Reading project.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 827.342, "text": "{\"type\":\"reasoning_delta\",\"text\":\"toml to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 828.954, "text": "{\"type\":\"reasoning_delta\",\"text\":\" understand the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 829.546, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependencies\\n2. Building\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1023.371, "text": "{\"type\":\"reasoning_delta\",\"text\":\" a\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1024.865, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependency graph\\n3. Creating\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1031.065, "text": "{\"type\":\"reasoning_delta\",\"text\":\" waves of\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1034.295, "text": "{\"type\":\"reasoning_delta\",\"text\":\" components\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1034.891, "text": "{\"type\":\"reasoning_delta\",\"text\":\" that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1034.914, "text": "{\"type\":\"reasoning_delta\",\"text\":\" can\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1036.041, "text": "{\"type\":\"reasoning_delta\",\"text\":\" be processed\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1036.534, "text": "{\"type\":\"reasoning_delta\",\"text\":\",\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1219.079, "text": "{\"type\":\"reasoning_delta\",\"text\":\" where\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1228.659, "text": "{\"type\":\"reasoning_delta\",\"text\":\" each wave contains\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1229.618, "text": "{\"type\":\"reasoning_delta\",\"text\":\" components that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1231.039, "text": "{\"type\":\"reasoning_delta\",\"text\":\" have\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1232.227, "text": "{\"type\":\"reasoning_delta\",\"text\":\" no\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1233.994, "text": "{\"type\":\"reasoning_delta\",\"text\":\" remaining\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1235.717, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependencies\\n4. Ordering each\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1237.184, "text": "{\"type\":\"reasoning_delta\",\"text\":\" wave by component declaration order\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1419.29, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n5. Output\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1421.131, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ting in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1422.111, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1424.115, "text": "{\"type\":\"reasoning_delta\",\"text\":\" format\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1427.449, "text": "{\"type\":\"reasoning_delta\",\"text\":\": order=<a->b->\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1429.226, "text": "{\"type\":\"reasoning_delta\",\"text\":\"c>\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1431.104, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start by reading the project.to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1432.474, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ml file.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1689.14, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"project.toml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1700.28, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1714.902, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1225,\"outputTokens\":171,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1714.945, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01965NX55i628nEiaWqGAnkd\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"project.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1714.995, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01965NX55i628nEiaWqGAnkd\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1715.009, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01965NX55i628nEiaWqGAnkd\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":338,\"content\":\"[project]\\nname = \\\"northstar\\\"\\nversion = \\\"2.4.0\\\"\\n\\n[components.gateway]\\ndepends_on = [\\\"identity\\\", \\\"ledger\\\"]\\nweight = 8\\n\\n[components.identity]\\ndepends_on = [\\\"storage\\\"]\\nweight = 5\\n\\n[components.ledger]\\ndepends_on = [\\\"storage\\\", \\\"queue\\\"]\\nweight = 13\\n\\n[components.storage]\\ndepends_on = []\\nweight = 3\\n\\n[components.queue]\\ndepends_on = []\\nweight = 2\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2355.986, "text": "{\"type\":\"assistant_delta\",\"text\":\"Now\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2505.173, "text": "{\"type\":\"assistant_delta\",\"text\":\" I'll analyze\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2505.907, "text": "{\"type\":\"assistant_delta\",\"text\":\" the dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2508.551, "text": "{\"type\":\"assistant_delta\",\"text\":\" to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2508.611, "text": "{\"type\":\"assistant_delta\",\"text\":\" create\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2508.951, "text": "{\"type\":\"assistant_delta\",\"text\":\" waves\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2515.504, "text": "{\"type\":\"assistant_delta\",\"text\":\" where\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2518.309, "text": "{\"type\":\"assistant_delta\",\"text\":\" each node\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2519.692, "text": "{\"type\":\"assistant_delta\",\"text\":\" is ready\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2704.038, "text": "{\"type\":\"assistant_delta\",\"text\":\" (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2704.695, "text": "{\"type\":\"assistant_delta\",\"text\":\"all\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2705.333, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies satisfied\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2706.637, "text": "{\"type\":\"assistant_delta\",\"text\":\") and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2707.45, "text": "{\"type\":\"assistant_delta\",\"text\":\" order nodes\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2708.336, "text": "{\"type\":\"assistant_delta\",\"text\":\" within\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2708.753, "text": "{\"type\":\"assistant_delta\",\"text\":\" each wave by their\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2709.736, "text": "{\"type\":\"assistant_delta\",\"text\":\" declaration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2903.356, "text": "{\"type\":\"assistant_delta\",\"text\":\" order.\\n\\n**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2904.251, "text": "{\"type\":\"assistant_delta\",\"text\":\"Wave 1:** Nodes\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2906.043, "text": "{\"type\":\"assistant_delta\",\"text\":\" with\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2906.904, "text": "{\"type\":\"assistant_delta\",\"text\":\" no\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2907.743, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies\\n- storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2908.676, "text": "{\"type\":\"assistant_delta\",\"text\":\" (declared\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2909.517, "text": "{\"type\":\"assistant_delta\",\"text\":\" \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2910.3, "text": "{\"type\":\"assistant_delta\",\"text\":\"4\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3104.769, "text": "{\"type\":\"assistant_delta\",\"text\":\"th\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3106.195, "text": "{\"type\":\"assistant_delta\",\"text\":\")\\n- queue (declared 5\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3114.196, "text": "{\"type\":\"assistant_delta\",\"text\":\"th)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3115.846, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\nOrder\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3117.309, "text": "{\"type\":\"assistant_delta\",\"text\":\" by\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3119.826, "text": "{\"type\":\"assistant_delta\",\"text\":\" declaration:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3121.233, "text": "{\"type\":\"assistant_delta\",\"text\":\" storage ->\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3122.171, "text": "{\"type\":\"assistant_delta\",\"text\":\" queue\\n\\n**Wave 2:**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3303.704, "text": "{\"type\":\"assistant_delta\",\"text\":\" Nodes whose\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3304.25, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies are all\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3305.134, "text": "{\"type\":\"assistant_delta\",\"text\":\" in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3306.403, "text": "{\"type\":\"assistant_delta\",\"text\":\" Wave\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3307.321, "text": "{\"type\":\"assistant_delta\",\"text\":\" 1\\n- identity (depends\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3309.119, "text": "{\"type\":\"assistant_delta\",\"text\":\" on storage)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3309.173, "text": "{\"type\":\"assistant_delta\",\"text\":\" ✓\\n- ledger (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3309.966, "text": "{\"type\":\"assistant_delta\",\"text\":\"depends on storage, queue) \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3455.051, "text": "{\"type\":\"assistant_delta\",\"text\":\"✓\\nOrder by declaration: identity ->\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3455.909, "text": "{\"type\":\"assistant_delta\",\"text\":\" ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3457.147, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**Wave 3:** Nodes whose\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3458.342, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies are all in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3458.754, "text": "{\"type\":\"assistant_delta\",\"text\":\" Waves 1-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3460.364, "text": "{\"type\":\"assistant_delta\",\"text\":\"2\\n- gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3460.995, "text": "{\"type\":\"assistant_delta\",\"text\":\" (depends on identity, ledger)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3462.491, "text": "{\"type\":\"assistant_delta\",\"text\":\" ✓\\nOrder\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3588.869, "text": "{\"type\":\"assistant_delta\",\"text\":\" by declaration: gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3590.737, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\norder\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3593.492, "text": "{\"type\":\"assistant_delta\",\"text\":\"=storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3594.415, "text": "{\"type\":\"assistant_delta\",\"text\":\"->queue->identity->ledger->\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3595.578, "text": "{\"type\":\"assistant_delta\",\"text\":\"gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3628.964, "text": "{\"type\":\"assistant\",\"message\":\"Now I'll analyze the dependencies to create waves where each node is ready (all dependencies satisfied) and order nodes within each wave by their declaration order.\\n\\n**Wave 1:** Nodes with no dependencies\\n- storage (declared 4th)\\n- queue (declared 5th)\\nOrder by declaration: storage -> queue\\n\\n**Wave 2:** Nodes whose dependencies are all in Wave 1\\n- identity (depends on storage) ✓\\n- ledger (depends on storage, queue) ✓\\nOrder by declaration: identity -> ledger\\n\\n**Wave 3:** Nodes whose dependencies are all in Waves 1-2\\n- gateway (depends on identity, ledger) ✓\\nOrder by declaration: gateway\\n\\norder=storage->queue->identity->ledger->gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3629.027, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1428,\"outputTokens\":172,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3629.039, "text": "{\"type\":\"result\",\"message\":\"Now I'll analyze the dependencies to create waves where each node is ready (all dependencies satisfied) and order nodes within each wave by their declaration order.\\n\\n**Wave 1:** Nodes with no dependencies\\n- storage (declared 4th)\\n- queue (declared 5th)\\nOrder by declaration: storage -> queue\\n\\n**Wave 2:** Nodes whose dependencies are all in Wave 1\\n- identity (depends on storage) ✓\\n- ledger (depends on storage, queue) ✓\\nOrder by declaration: identity -> ledger\\n\\n**Wave 3:** Nodes whose dependencies are all in Waves 1-2\\n- gateway (depends on identity, ledger) ✓\\nOrder by declaration: gateway\\n\\norder=storage->queue->identity->ledger->gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3629.052, "text": "{\"durationMs\":3622,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":1,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2653,\"outputTokens\":343}}"}
+{"record": "run_end", "timestamp": "2026-08-30T13:52:59.621691+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 3630.149}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

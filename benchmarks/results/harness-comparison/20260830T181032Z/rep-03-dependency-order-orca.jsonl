@@ -1,0 +1,141 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:35:56.387925+00:00", "run_number": 163, "repetition": 3, "task": "dependency-order", "category": "graph-reasoning", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-dependency-order-8i1hrg_f/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.556, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.619, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 741.644, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to analyze\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 962.233, "text": "{\"type\":\"reasoning_delta\",\"text\":\" a project.toml file to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 965.774, "text": "{\"type\":\"reasoning_delta\",\"text\":\" determine\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 971.157, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependency\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 978.048, "text": "{\"type\":\"reasoning_delta\",\"text\":\" order\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 978.096, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 978.125, "text": "{\"type\":\"reasoning_delta\",\"text\":\" produce \\\"\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 978.722, "text": "{\"type\":\"reasoning_delta\",\"text\":\"dependency-first ready-node waves\\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 978.784, "text": "{\"type\":\"reasoning_delta\",\"text\":\" The\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1113.909, "text": "{\"type\":\"reasoning_delta\",\"text\":\" output\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1115.598, "text": "{\"type\":\"reasoning_delta\",\"text\":\" should be\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1117.829, "text": "{\"type\":\"reasoning_delta\",\"text\":\" formatted\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1119.641, "text": "{\"type\":\"reasoning_delta\",\"text\":\" as\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1121.265, "text": "{\"type\":\"reasoning_delta\",\"text\":\" `\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1122.664, "text": "{\"type\":\"reasoning_delta\",\"text\":\"order=<a->b->c\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1124.688, "text": "{\"type\":\"reasoning_delta\",\"text\":\">` showing\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1126.027, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1368.201, "text": "{\"type\":\"reasoning_delta\",\"text\":\" in top\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1368.768, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ological order,\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1370.467, "text": "{\"type\":\"reasoning_delta\",\"text\":\" with waves\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1371.691, "text": "{\"type\":\"reasoning_delta\",\"text\":\" organized\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1372.884, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by component declaration order.\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1374.04, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1375.221, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by finding\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1376.855, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1511.709, "text": "{\"type\":\"reasoning_delta\",\"text\":\" reading\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1512.382, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the project.toml file.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1522.529, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"*\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1587.992, "text": "{\"type\":\"tool_input_delta\",\"text\":\"*/\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1589.435, "text": "{\"type\":\"tool_input_delta\",\"text\":\"project.toml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1596.419, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1612.928, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1225,\"outputTokens\":138,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1613.03, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01BuAoXpuqYvRfCFTGrKqQgi\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/project.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1614.745, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01BuAoXpuqYvRfCFTGrKqQgi\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1614.849, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01BuAoXpuqYvRfCFTGrKqQgi\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"project.toml\"],\"pattern\":\"**/project.toml\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2417.201, "text": "{\"type\":\"assistant_delta\",\"text\":\"I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2604.141, "text": "{\"type\":\"assistant_delta\",\"text\":\"'ll\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2604.211, "text": "{\"type\":\"assistant_delta\",\"text\":\" read\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2605.605, "text": "{\"type\":\"assistant_delta\",\"text\":\" the project.toml file to analyze\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2606.13, "text": "{\"type\":\"assistant_delta\",\"text\":\" the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2608.147, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2608.181, "text": "{\"type\":\"assistant_delta\",\"text\":\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2744.425, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"project.toml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2747.363, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2758.77, "text": "{\"type\":\"assistant\",\"message\":\"I'll read the project.toml file to analyze the dependencies.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2758.875, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1287,\"outputTokens\":71,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2758.908, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01UAsojqaJeNwZJsGasxxfgS\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"project.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2758.962, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01UAsojqaJeNwZJsGasxxfgS\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2758.995, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01UAsojqaJeNwZJsGasxxfgS\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":338,\"content\":\"[project]\\nname = \\\"northstar\\\"\\nversion = \\\"2.4.0\\\"\\n\\n[components.gateway]\\ndepends_on = [\\\"identity\\\", \\\"ledger\\\"]\\nweight = 8\\n\\n[components.identity]\\ndepends_on = [\\\"storage\\\"]\\nweight = 5\\n\\n[components.ledger]\\ndepends_on = [\\\"storage\\\", \\\"queue\\\"]\\nweight = 13\\n\\n[components.storage]\\ndepends_on = []\\nweight = 3\\n\\n[components.queue]\\ndepends_on = []\\nweight = 2\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3565.49, "text": "{\"type\":\"assistant_delta\",\"text\":\"Now\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3647.245, "text": "{\"type\":\"assistant_delta\",\"text\":\" I'll analyze the dependencies to create\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3649.085, "text": "{\"type\":\"assistant_delta\",\"text\":\" waves\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3649.14, "text": "{\"type\":\"assistant_delta\",\"text\":\" of ready\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3649.238, "text": "{\"type\":\"assistant_delta\",\"text\":\" nodes\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3650.355, "text": "{\"type\":\"assistant_delta\",\"text\":\" (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3651.276, "text": "{\"type\":\"assistant_delta\",\"text\":\"components with\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3651.718, "text": "{\"type\":\"assistant_delta\",\"text\":\" no\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3652.424, "text": "{\"type\":\"assistant_delta\",\"text\":\" uns\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3855.96, "text": "{\"type\":\"assistant_delta\",\"text\":\"atisfied dependencies),\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3856.808, "text": "{\"type\":\"assistant_delta\",\"text\":\" ordering by declaration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3858.94, "text": "{\"type\":\"assistant_delta\",\"text\":\" order in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3861.499, "text": "{\"type\":\"assistant_delta\",\"text\":\" each wave.\\n\\nComponent\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3861.525, "text": "{\"type\":\"assistant_delta\",\"text\":\" declarations in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3862.341, "text": "{\"type\":\"assistant_delta\",\"text\":\" order:\\n1. gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3863.117, "text": "{\"type\":\"assistant_delta\",\"text\":\" (depends\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3864.619, "text": "{\"type\":\"assistant_delta\",\"text\":\" on:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.674, "text": "{\"type\":\"assistant_delta\",\"text\":\" identity, ledger)\\n2.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.751, "text": "{\"type\":\"assistant_delta\",\"text\":\" identity (depends on: storage)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.769, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n3. ledger (depends on:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.778, "text": "{\"type\":\"assistant_delta\",\"text\":\" storage, queue)\\n4. storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.79, "text": "{\"type\":\"assistant_delta\",\"text\":\" (depends on: none\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.797, "text": "{\"type\":\"assistant_delta\",\"text\":\")\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.804, "text": "{\"type\":\"assistant_delta\",\"text\":\" \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4189.811, "text": "{\"type\":\"assistant_delta\",\"text\":\"✓ ready\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4256.334, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n5. queue (depends on:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4258.338, "text": "{\"type\":\"assistant_delta\",\"text\":\" none) ✓ ready\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4259.786, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\nBuilding\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4259.824, "text": "{\"type\":\"assistant_delta\",\"text\":\" waves\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4261.153, "text": "{\"type\":\"assistant_delta\",\"text\":\":\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4261.492, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4263.926, "text": "{\"type\":\"assistant_delta\",\"text\":\"Wave 1**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4263.957, "text": "{\"type\":\"assistant_delta\",\"text\":\" (no\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4453.893, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4454.584, "text": "{\"type\":\"assistant_delta\",\"text\":\"):\\n- storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.205, "text": "{\"type\":\"assistant_delta\",\"text\":\" (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.957, "text": "{\"type\":\"assistant_delta\",\"text\":\"declared\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4460.614, "text": "{\"type\":\"assistant_delta\",\"text\":\" \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4460.671, "text": "{\"type\":\"assistant_delta\",\"text\":\"4\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4461.059, "text": "{\"type\":\"assistant_delta\",\"text\":\"th\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4461.741, "text": "{\"type\":\"assistant_delta\",\"text\":\")\\n- queue (declared 5\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4646.202, "text": "{\"type\":\"assistant_delta\",\"text\":\"th)\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4647.931, "text": "{\"type\":\"assistant_delta\",\"text\":\" Ordered by declaration:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4648.785, "text": "{\"type\":\"assistant_delta\",\"text\":\" storage, queue\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4649.551, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**Wave 2** (after\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4651.148, "text": "{\"type\":\"assistant_delta\",\"text\":\" Wave\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4651.716, "text": "{\"type\":\"assistant_delta\",\"text\":\" 1 satisfied\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4652.787, "text": "{\"type\":\"assistant_delta\",\"text\":\"):\\n- identity (depends\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4658.584, "text": "{\"type\":\"assistant_delta\",\"text\":\" on storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5888.457, "text": "{\"type\":\"assistant_delta\",\"text\":\" \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5889.604, "text": "{\"type\":\"assistant_delta\",\"text\":\"✓)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5890.728, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5891.73, "text": "{\"type\":\"assistant_delta\",\"text\":\" Ordered by declaration: identity\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5892.354, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**Wave 3** (after Wave\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5893.349, "text": "{\"type\":\"assistant_delta\",\"text\":\" 1\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5895.02, "text": "{\"type\":\"assistant_delta\",\"text\":\" &\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5901.753, "text": "{\"type\":\"assistant_delta\",\"text\":\" \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5962.212, "text": "{\"type\":\"assistant_delta\",\"text\":\"2 satisfied):\\n- ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5965.673, "text": "{\"type\":\"assistant_delta\",\"text\":\" (depends on storage ✓,\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5966.343, "text": "{\"type\":\"assistant_delta\",\"text\":\" queue ✓)\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5970.38, "text": "{\"type\":\"assistant_delta\",\"text\":\" Ordered by declaration: ledger\\n\\n**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5977.939, "text": "{\"type\":\"assistant_delta\",\"text\":\"Wave 4** (after all\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5979.877, "text": "{\"type\":\"assistant_delta\",\"text\":\" previous\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5984.663, "text": "{\"type\":\"assistant_delta\",\"text\":\" satisfied\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5985.609, "text": "{\"type\":\"assistant_delta\",\"text\":\"):\\n- gateway (depends on identity\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6042.006, "text": "{\"type\":\"assistant_delta\",\"text\":\" ✓, ledger \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6046.588, "text": "{\"type\":\"assistant_delta\",\"text\":\"✓)\\n- Ordered by declaration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6047.375, "text": "{\"type\":\"assistant_delta\",\"text\":\": gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6050.401, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\nOrdering the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6055.021, "text": "{\"type\":\"assistant_delta\",\"text\":\" final\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6056.324, "text": "{\"type\":\"assistant_delta\",\"text\":\" sequence\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6056.959, "text": "{\"type\":\"assistant_delta\",\"text\":\" by\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6062.184, "text": "{\"type\":\"assistant_delta\",\"text\":\" waves\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6085.043, "text": "{\"type\":\"assistant_delta\",\"text\":\" then\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6085.787, "text": "{\"type\":\"assistant_delta\",\"text\":\" declaration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6089.726, "text": "{\"type\":\"assistant_delta\",\"text\":\" order:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6092.217, "text": "{\"type\":\"assistant_delta\",\"text\":\" storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6092.25, "text": "{\"type\":\"assistant_delta\",\"text\":\" ->\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6092.262, "text": "{\"type\":\"assistant_delta\",\"text\":\" queue -> identity -> ledger -> gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6093.731, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\norder\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6095.051, "text": "{\"type\":\"assistant_delta\",\"text\":\"=storage\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6097.617, "text": "{\"type\":\"assistant_delta\",\"text\":\"->queue->identity->ledger->\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6099.985, "text": "{\"type\":\"assistant_delta\",\"text\":\"gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6128.063, "text": "{\"type\":\"assistant\",\"message\":\"Now I'll analyze the dependencies to create waves of ready nodes (components with no unsatisfied dependencies), ordering by declaration order in each wave.\\n\\nComponent declarations in order:\\n1. gateway (depends on: identity, ledger)\\n2. identity (depends on: storage)\\n3. ledger (depends on: storage, queue)\\n4. storage (depends on: none) ✓ ready\\n5. queue (depends on: none) ✓ ready\\n\\nBuilding waves:\\n\\n**Wave 1** (no dependencies):\\n- storage (declared 4th)\\n- queue (declared 5th)\\n- Ordered by declaration: storage, queue\\n\\n**Wave 2** (after Wave 1 satisfied):\\n- identity (depends on storage ✓)\\n- Ordered by declaration: identity\\n\\n**Wave 3** (after Wave 1 & 2 satisfied):\\n- ledger (depends on storage ✓, queue ✓)\\n- Ordered by declaration: ledger\\n\\n**Wave 4** (after all previous satisfied):\\n- gateway (depends on identity ✓, ledger ✓)\\n- Ordered by declaration: gateway\\n\\nOrdering the final sequence by waves then declaration order: storage -> queue -> identity -> ledger -> gateway\\n\\norder=storage->queue->identity->ledger->gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6128.142, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1534,\"outputTokens\":295,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6128.155, "text": "{\"type\":\"result\",\"message\":\"Now I'll analyze the dependencies to create waves of ready nodes (components with no unsatisfied dependencies), ordering by declaration order in each wave.\\n\\nComponent declarations in order:\\n1. gateway (depends on: identity, ledger)\\n2. identity (depends on: storage)\\n3. ledger (depends on: storage, queue)\\n4. storage (depends on: none) ✓ ready\\n5. queue (depends on: none) ✓ ready\\n\\nBuilding waves:\\n\\n**Wave 1** (no dependencies):\\n- storage (declared 4th)\\n- queue (declared 5th)\\n- Ordered by declaration: storage, queue\\n\\n**Wave 2** (after Wave 1 satisfied):\\n- identity (depends on storage ✓)\\n- Ordered by declaration: identity\\n\\n**Wave 3** (after Wave 1 & 2 satisfied):\\n- ledger (depends on storage ✓, queue ✓)\\n- Ordered by declaration: ledger\\n\\n**Wave 4** (after all previous satisfied):\\n- gateway (depends on identity ✓, ledger ✓)\\n- Ordered by declaration: gateway\\n\\nOrdering the final sequence by waves then declaration order: storage -> queue -> identity -> ledger -> gateway\\n\\norder=storage->queue->identity->ledger->gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6128.169, "text": "{\"durationMs\":6122,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":3,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":2,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":4046,\"outputTokens\":504}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:36:02.515425+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 6129.336}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

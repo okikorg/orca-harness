@@ -1,0 +1,52 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:20:55.443091+00:00", "run_number": 68, "repetition": 2, "task": "component-weights", "category": "targeted-retrieval", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-component-weights-dmyrcg4i/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.659, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.692, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 709.573, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to:\\n1\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 874.807, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Read project.toml\\n2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 876.751, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Sum every component weight\\n3.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 879.088, "text": "{\"type\":\"reasoning_delta\",\"text\":\" Identify the heaviest component\\n4\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 880.632, "text": "{\"type\":\"reasoning_delta\",\"text\":\". End with exactly: total_weight\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 882.362, "text": "{\"type\":\"reasoning_delta\",\"text\":\"=<sum>; heaviest=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 884.343, "text": "{\"type\":\"reasoning_delta\",\"text\":\"<name>\\n5. No\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 886.943, "text": "{\"type\":\"reasoning_delta\",\"text\":\" editing\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 889.618, "text": "{\"type\":\"reasoning_delta\",\"text\":\", writing, creating, deleting,\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1020.731, "text": "{\"type\":\"reasoning_delta\",\"text\":\" or renaming\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1022.668, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n6. No shell,\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1024.26, "text": "{\"type\":\"reasoning_delta\",\"text\":\" code execution, or servers\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1028.198, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n7. Only\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1032.343, "text": "{\"type\":\"reasoning_delta\",\"text\":\" use registered workspace tools\\n8. Final\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1036.949, "text": "{\"type\":\"reasoning_delta\",\"text\":\" response must be\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1039.17, "text": "{\"type\":\"reasoning_delta\",\"text\":\" ONLY the requested terminal line\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1042.308, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start by reading the project.to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1229.466, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ml file.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1323.373, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"project.toml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1335.313, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1350.287, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1219,\"outputTokens\":176,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1350.463, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01CBXTGq84oZXN1PL4LvK7my\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"project.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1350.957, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01CBXTGq84oZXN1PL4LvK7my\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1351.127, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01CBXTGq84oZXN1PL4LvK7my\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":338,\"content\":\"[project]\\nname = \\\"northstar\\\"\\nversion = \\\"2.4.0\\\"\\n\\n[components.gateway]\\ndepends_on = [\\\"identity\\\", \\\"ledger\\\"]\\nweight = 8\\n\\n[components.identity]\\ndepends_on = [\\\"storage\\\"]\\nweight = 5\\n\\n[components.ledger]\\ndepends_on = [\\\"storage\\\", \\\"queue\\\"]\\nweight = 13\\n\\n[components.storage]\\ndepends_on = []\\nweight = 3\\n\\n[components.queue]\\ndepends_on = []\\nweight = 2\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1951.642, "text": "{\"type\":\"assistant_delta\",\"text\":\"Let\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2121.114, "text": "{\"type\":\"assistant_delta\",\"text\":\" me calculate the sum\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2124.312, "text": "{\"type\":\"assistant_delta\",\"text\":\" and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2126.503, "text": "{\"type\":\"assistant_delta\",\"text\":\" find the heaviest component:\\n\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2131.88, "text": "{\"type\":\"assistant_delta\",\"text\":\" gateway\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2132.663, "text": "{\"type\":\"assistant_delta\",\"text\":\":\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2134.695, "text": "{\"type\":\"assistant_delta\",\"text\":\" 8\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2137.913, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- identity: 5\\n- led\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2140.577, "text": "{\"type\":\"assistant_delta\",\"text\":\"ger: 13\\n- storage:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2374.42, "text": "{\"type\":\"assistant_delta\",\"text\":\" 3\\n- queue: 2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2375.919, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\nTotal: 8 + \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2385.409, "text": "{\"type\":\"assistant_delta\",\"text\":\"5 + 13 + \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2388.604, "text": "{\"type\":\"assistant_delta\",\"text\":\"3 + 2 = \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2390.687, "text": "{\"type\":\"assistant_delta\",\"text\":\"31\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2396.374, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\nHeaviest:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2399.628, "text": "{\"type\":\"assistant_delta\",\"text\":\" ledger (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2401.698, "text": "{\"type\":\"assistant_delta\",\"text\":\"13)\\n\\ntotal\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2421.616, "text": "{\"type\":\"assistant_delta\",\"text\":\"_weight=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2424.066, "text": "{\"type\":\"assistant_delta\",\"text\":\"31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2451.224, "text": "{\"type\":\"assistant\",\"message\":\"Let me calculate the sum and find the heaviest component:\\n\\n- gateway: 8\\n- identity: 5\\n- ledger: 13\\n- storage: 3\\n- queue: 2\\n\\nTotal: 8 + 5 + 13 + 3 + 2 = 31\\nHeaviest: ledger (13)\\n\\ntotal_weight=31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2451.49, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1422,\"outputTokens\":93,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2451.769, "text": "{\"type\":\"result\",\"message\":\"Let me calculate the sum and find the heaviest component:\\n\\n- gateway: 8\\n- identity: 5\\n- ledger: 13\\n- storage: 3\\n- queue: 2\\n\\nTotal: 8 + 5 + 13 + 3 + 2 = 31\\nHeaviest: ledger (13)\\n\\ntotal_weight=31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2451.886, "text": "{\"durationMs\":2444,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":1,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2641,\"outputTokens\":269}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:20:57.896973+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 2455.783}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

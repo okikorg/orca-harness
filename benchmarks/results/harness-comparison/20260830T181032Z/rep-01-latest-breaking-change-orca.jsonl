@@ -1,0 +1,47 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:15:45.805183+00:00", "run_number": 30, "repetition": 1, "task": "latest-breaking-change", "category": "temporal-reasoning", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-latest-breaking-change-d6hjovpf/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.435, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.479, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 886.316, "text": "{\"type\":\"reasoning_delta\",\"text\":\"I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1083.885, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to find the newest breaking change in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1086.608, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the changelog.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1091.868, "text": "{\"type\":\"reasoning_delta\",\"text\":\" Let\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1099.74, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1099.925, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by exploring\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1101.169, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the workspace to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1101.375, "text": "{\"type\":\"reasoning_delta\",\"text\":\" find\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1102.296, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1447.509, "text": "{\"type\":\"reasoning_delta\",\"text\":\" changelog file.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1447.837, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n\\nFirst\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1447.979, "text": "{\"type\":\"reasoning_delta\",\"text\":\", I'll list\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1448.291, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1448.413, "text": "{\"type\":\"reasoning_delta\",\"text\":\" directory\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1448.503, "text": "{\"type\":\"reasoning_delta\",\"text\":\" to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1448.587, "text": "{\"type\":\"reasoning_delta\",\"text\":\" see what\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1448.662, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1448.738, "text": "{\"type\":\"reasoning_delta\",\"text\":\" are available.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1539.567, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1552.165, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1562.6, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1216,\"outputTokens\":100,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1562.784, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01DfGzGc961pg7fWnj7kkmJv\",\"tool_name\":\"list_dir\",\"input\":{\"path\":\".\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1563.303, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01DfGzGc961pg7fWnj7kkmJv\",\"tool_name\":\"list_dir\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1563.52, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01DfGzGc961pg7fWnj7kkmJv\",\"tool_name\":\"list_dir\",\"output\":{\"entries\":[{\"isDir\":false,\"name\":\"AGENTS.md\"},{\"isDir\":false,\"name\":\"CHANGELOG.md\"},{\"isDir\":false,\"name\":\"CLAUDE.md\"},{\"isDir\":false,\"name\":\"README.md\"},{\"isDir\":true,\"name\":\"api\"},{\"isDir\":true,\"name\":\"config\"},{\"isDir\":true,\"name\":\"data\"},{\"isDir\":true,\"name\":\"docs\"},{\"isDir\":true,\"name\":\"logs\"},{\"isDir\":false,\"name\":\"project.toml\"},{\"isDir\":true,\"name\":\"src\"}],\"path\":\".\"},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2471.181, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"CHANGELOG.md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2471.385, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2471.457, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1384,\"outputTokens\":56,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2471.51, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01WMJY7S6DGZQFSbN2g2NeoL\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"CHANGELOG.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2471.741, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01WMJY7S6DGZQFSbN2g2NeoL\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2471.848, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01WMJY7S6DGZQFSbN2g2NeoL\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":284,\"content\":\"# Changelog\\n\\n## 2.4.0 - 2026-08-15\\n\\n- Added asynchronous receipt preparation behind async_receipts.\\n- Breaking: invoice cache keys now end in :v2.\\n\\n## 2.3.1 - 2026-07-28\\n\\n- Reduced negative-cache TTL from 60 to 30 seconds.\\n\\n## 2.3.0 - 2026-07-10\\n\\n- Added the audit export permission.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3090.213, "text": "{\"type\":\"assistant_delta\",\"text\":\"version\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3190.357, "text": "{\"type\":\"assistant_delta\",\"text\":\"=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3191.19, "text": "{\"type\":\"assistant_delta\",\"text\":\"2.4.0;\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3191.44, "text": "{\"type\":\"assistant_delta\",\"text\":\" date=2026-08-15\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3191.689, "text": "{\"type\":\"assistant_delta\",\"text\":\"; breaking\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3192.74, "text": "{\"type\":\"assistant_delta\",\"text\":\"=invoice\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3193.282, "text": "{\"type\":\"assistant_delta\",\"text\":\" cache keys now end in :v2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3195.894, "text": "{\"type\":\"assistant_delta\",\"text\":\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3210.645, "text": "{\"type\":\"assistant\",\"message\":\"version=2.4.0; date=2026-08-15; breaking=invoice cache keys now end in :v2.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3210.883, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1590,\"outputTokens\":32,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3210.999, "text": "{\"type\":\"result\",\"message\":\"version=2.4.0; date=2026-08-15; breaking=invoice cache keys now end in :v2.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3211.081, "text": "{\"durationMs\":3204,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":3,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":2,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":4190,\"outputTokens\":188}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:15:49.018174+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 3215.18}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

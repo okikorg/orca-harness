@@ -1,0 +1,146 @@
+{"record": "run_start", "timestamp": "2026-08-30T15:01:44.170729+00:00", "run_number": 28, "repetition": 1, "task": "feature-precedence", "category": "configuration-precedence", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-feature-precedence-wwfhdxl8/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.789, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.834, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 697.416, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to find\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 869.071, "text": "{\"type\":\"reasoning_delta\",\"text\":\" documentation\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 872.314, "text": "{\"type\":\"reasoning_delta\",\"text\":\" about\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 874.914, "text": "{\"type\":\"reasoning_delta\",\"text\":\" defaults, production runtime, and EU-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 877.842, "text": "{\"type\":\"reasoning_delta\",\"text\":\"region feature precedence, then determine\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 877.866, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 879.201, "text": "{\"type\":\"reasoning_delta\",\"text\":\" values\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 880.675, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for three\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 882.194, "text": "{\"type\":\"reasoning_delta\",\"text\":\" features\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1073.505, "text": "{\"type\":\"reasoning_delta\",\"text\":\":\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1074.695, "text": "{\"type\":\"reasoning_delta\",\"text\":\" async_receipts\\n- invoice_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1075.686, "text": "{\"type\":\"reasoning_delta\",\"text\":\"pdf\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1077.395, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n- tax_shadow\\n\\nI\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1078.779, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to search\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1079.421, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1080.505, "text": "{\"type\":\"reasoning_delta\",\"text\":\" workspace\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1081.54, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for documentation\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1267.976, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1269.466, "text": "{\"type\":\"reasoning_delta\",\"text\":\" configuration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1270.513, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1274.49, "text": "{\"type\":\"reasoning_delta\",\"text\":\" describe\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1274.525, "text": "{\"type\":\"reasoning_delta\",\"text\":\" these feature\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1274.539, "text": "{\"type\":\"reasoning_delta\",\"text\":\" flags\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1274.77, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and their preced\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1275.297, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ence rules.\\n\\nLet me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1421.077, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by exploring\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1427.298, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the workspace structure\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1427.33, "text": "{\"type\":\"reasoning_delta\",\"text\":\" to understand\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1427.452, "text": "{\"type\":\"reasoning_delta\",\"text\":\" what we\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1427.698, "text": "{\"type\":\"reasoning_delta\",\"text\":\"'re working with.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1626.195, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1816.842, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1823.347, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1824.964, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/*.md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1825.738, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1828.786, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.json\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1983.169, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1990.429, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2000.037, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2014.699, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1241,\"outputTokens\":253,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2014.753, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01DC97jhFMc9SqBuU7NbNv3Q\",\"tool_name\":\"list_dir\",\"input\":{\"path\":\".\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2014.771, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01DygMUf737YuMnXoRtQETC2\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2014.786, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01FcwKe7kegf45m8qTWeFMUz\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.json\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2014.8, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01YGTiyukEnq1ojSMASEZ3jy\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.027, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01DC97jhFMc9SqBuU7NbNv3Q\",\"tool_name\":\"list_dir\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.431, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01YGTiyukEnq1ojSMASEZ3jy\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.473, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01DygMUf737YuMnXoRtQETC2\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.528, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01FcwKe7kegf45m8qTWeFMUz\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.548, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01DC97jhFMc9SqBuU7NbNv3Q\",\"tool_name\":\"list_dir\",\"output\":{\"entries\":[{\"isDir\":false,\"name\":\"AGENTS.md\"},{\"isDir\":false,\"name\":\"CHANGELOG.md\"},{\"isDir\":false,\"name\":\"CLAUDE.md\"},{\"isDir\":false,\"name\":\"README.md\"},{\"isDir\":true,\"name\":\"api\"},{\"isDir\":true,\"name\":\"config\"},{\"isDir\":true,\"name\":\"data\"},{\"isDir\":true,\"name\":\"docs\"},{\"isDir\":true,\"name\":\"logs\"},{\"isDir\":false,\"name\":\"project.toml\"},{\"isDir\":true,\"name\":\"src\"}],\"path\":\".\"},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.578, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01DygMUf737YuMnXoRtQETC2\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"AGENTS.md\",\"CHANGELOG.md\",\"CLAUDE.md\",\"README.md\",\"docs/feature-flags.md\",\"docs/runbook.md\",\"docs/workers.md\"],\"pattern\":\"**/*.md\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.596, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01FcwKe7kegf45m8qTWeFMUz\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"api/v1.json\",\"api/v2.json\",\"src/permissions.json\"],\"pattern\":\"**/*.json\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.614, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01YGTiyukEnq1ojSMASEZ3jy\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"config/features.yaml\",\"config/local.yaml\",\"config/region-eu.yaml\",\"config/runtime.yaml\",\"config/worker.yaml\"],\"pattern\":\"**/*.yaml\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2604.411, "text": "{\"type\":\"assistant_delta\",\"text\":\"Let me read\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2898.737, "text": "{\"type\":\"assistant_delta\",\"text\":\" the key\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2898.824, "text": "{\"type\":\"assistant_delta\",\"text\":\" configuration\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2898.843, "text": "{\"type\":\"assistant_delta\",\"text\":\" files and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2898.857, "text": "{\"type\":\"assistant_delta\",\"text\":\" documentation\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2898.87, "text": "{\"type\":\"assistant_delta\",\"text\":\":\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3040.132, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"docs\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3042.69, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/feature-flags.md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3042.716, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3240.714, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3241.468, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/features.yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3242.48, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3247.906, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config/runtime\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3248.627, "text": "{\"type\":\"tool_input_delta\",\"text\":\".yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3416.17, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3419.969, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config/region-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3420.941, "text": "{\"type\":\"tool_input_delta\",\"text\":\"eu.yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3430.24, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.307, "text": "{\"type\":\"assistant\",\"message\":\"Let me read the key configuration files and documentation:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.329, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1749,\"outputTokens\":192,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.345, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01HHywmGSCc1hBMPo2Wk2tHQ\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"docs/feature-flags.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.36, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_018D9wsUfhFriBsDNw7bEqcY\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/features.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.374, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01Gxj7ij2jXZfNLdtuAqMNZY\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/runtime.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.387, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_014rJFWMsoJiicf3o7CUARQN\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/region-eu.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.566, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_014rJFWMsoJiicf3o7CUARQN\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.643, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_018D9wsUfhFriBsDNw7bEqcY\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.667, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01HHywmGSCc1hBMPo2Wk2tHQ\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.683, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01Gxj7ij2jXZfNLdtuAqMNZY\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.698, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01HHywmGSCc1hBMPo2Wk2tHQ\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":335,\"content\":\"# Feature flag precedence\\n\\nResolve feature flags from lowest to highest precedence:\\n\\n1. `config/features.yaml` defaults\\n2. the active environment file, such as `config/runtime.yaml` in production\\n3. the active region file, such as `config/region-eu.yaml`\\n\\nValues absent from a higher-precedence file retain the lower-precedence value.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.731, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_018D9wsUfhFriBsDNw7bEqcY\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":73,\"content\":\"defaults:\\n  async_receipts: true\\n  invoice_pdf: true\\n  tax_shadow: false\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.754, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01Gxj7ij2jXZfNLdtuAqMNZY\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":221,\"content\":\"environment: production\\nhttp:\\n  gateway_port: 7412\\n  admin_port: 7413\\n  request_timeout_seconds: 45\\nretries:\\n  retry_budget: 7\\n  base_delay_ms: 125\\n  max_delay_ms: 2000\\nfeatures:\\n  ledger_v2: true\\n  async_receipts: false\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3437.773, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_014rJFWMsoJiicf3o7CUARQN\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":61,\"content\":\"region: eu\\nfeatures:\\n  invoice_pdf: false\\n  tax_shadow: true\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4041.056, "text": "{\"type\":\"assistant_delta\",\"text\":\"Based\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4176.617, "text": "{\"type\":\"assistant_delta\",\"text\":\" on the documented\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4178.604, "text": "{\"type\":\"assistant_delta\",\"text\":\" feature\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4178.668, "text": "{\"type\":\"assistant_delta\",\"text\":\" flag\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4178.697, "text": "{\"type\":\"assistant_delta\",\"text\":\" precedence (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4179.364, "text": "{\"type\":\"assistant_delta\",\"text\":\"defaults\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4179.469, "text": "{\"type\":\"assistant_delta\",\"text\":\" →\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4179.553, "text": "{\"type\":\"assistant_delta\",\"text\":\" runtime\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4180.163, "text": "{\"type\":\"assistant_delta\",\"text\":\" → region\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4365.446, "text": "{\"type\":\"assistant_delta\",\"text\":\"), I need\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4366.834, "text": "{\"type\":\"assistant_delta\",\"text\":\" to apply\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4367.423, "text": "{\"type\":\"assistant_delta\",\"text\":\" the values\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4368.694, "text": "{\"type\":\"assistant_delta\",\"text\":\" in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4369.541, "text": "{\"type\":\"assistant_delta\",\"text\":\" order\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4370.445, "text": "{\"type\":\"assistant_delta\",\"text\":\":\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4371.465, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4373.211, "text": "{\"type\":\"assistant_delta\",\"text\":\"Step\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4566.681, "text": "{\"type\":\"assistant_delta\",\"text\":\" 1:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4567.477, "text": "{\"type\":\"assistant_delta\",\"text\":\" Defaults (config\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4568.098, "text": "{\"type\":\"assistant_delta\",\"text\":\"/features.yaml)**\\n- async\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4568.811, "text": "{\"type\":\"assistant_delta\",\"text\":\"_receipts: true\\n- invoice\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4569.791, "text": "{\"type\":\"assistant_delta\",\"text\":\"_pdf: true\\n- tax_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4570.869, "text": "{\"type\":\"assistant_delta\",\"text\":\"shadow: false\\n\\n**Step 2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4571.748, "text": "{\"type\":\"assistant_delta\",\"text\":\": Production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4571.795, "text": "{\"type\":\"assistant_delta\",\"text\":\" Runtime\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4767.754, "text": "{\"type\":\"assistant_delta\",\"text\":\" (config/runtime.yaml)**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4768.673, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- async_receipts: false (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4770.023, "text": "{\"type\":\"assistant_delta\",\"text\":\"overrides\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4773.555, "text": "{\"type\":\"assistant_delta\",\"text\":\")\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4773.587, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- invoice_pdf: true (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4774.48, "text": "{\"type\":\"assistant_delta\",\"text\":\"not\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4775.174, "text": "{\"type\":\"assistant_delta\",\"text\":\" specified\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4775.951, "text": "{\"type\":\"assistant_delta\",\"text\":\",\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4967.199, "text": "{\"type\":\"assistant_delta\",\"text\":\" keeps\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4969.949, "text": "{\"type\":\"assistant_delta\",\"text\":\" default)\\n- tax_shadow:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4970.755, "text": "{\"type\":\"assistant_delta\",\"text\":\" false (not\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4971.516, "text": "{\"type\":\"assistant_delta\",\"text\":\" specified, keeps default)\\n\\n**Step\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4972.361, "text": "{\"type\":\"assistant_delta\",\"text\":\" 3: EU\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4973.055, "text": "{\"type\":\"assistant_delta\",\"text\":\" Region (config/region-eu.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4973.627, "text": "{\"type\":\"assistant_delta\",\"text\":\"yaml)**\\n- async_receipts\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4974.849, "text": "{\"type\":\"assistant_delta\",\"text\":\": false (not\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5115.981, "text": "{\"type\":\"assistant_delta\",\"text\":\" specified, keeps runtime\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5116.825, "text": "{\"type\":\"assistant_delta\",\"text\":\" value\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5118.925, "text": "{\"type\":\"assistant_delta\",\"text\":\")\\n- invoice_pdf: false\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5118.948, "text": "{\"type\":\"assistant_delta\",\"text\":\" (over\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5119.162, "text": "{\"type\":\"assistant_delta\",\"text\":\"rides)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5121.207, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- tax_shadow: true (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5121.811, "text": "{\"type\":\"assistant_delta\",\"text\":\"over\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5122.793, "text": "{\"type\":\"assistant_delta\",\"text\":\"rides)\\n\\nasync\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5228.552, "text": "{\"type\":\"assistant_delta\",\"text\":\"_receipts=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5229.35, "text": "{\"type\":\"assistant_delta\",\"text\":\"false;\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5231.87, "text": "{\"type\":\"assistant_delta\",\"text\":\" invoice_pdf=false; tax_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5232.743, "text": "{\"type\":\"assistant_delta\",\"text\":\"shadow=true\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5252.155, "text": "{\"type\":\"assistant\",\"message\":\"Based on the documented feature flag precedence (defaults → runtime → region), I need to apply the values in order:\\n\\n**Step 1: Defaults (config/features.yaml)**\\n- async_receipts: true\\n- invoice_pdf: true\\n- tax_shadow: false\\n\\n**Step 2: Production Runtime (config/runtime.yaml)**\\n- async_receipts: false (overrides)\\n- invoice_pdf: true (not specified, keeps default)\\n- tax_shadow: false (not specified, keeps default)\\n\\n**Step 3: EU Region (config/region-eu.yaml)**\\n- async_receipts: false (not specified, keeps runtime value)\\n- invoice_pdf: false (overrides)\\n- tax_shadow: true (overrides)\\n\\nasync_receipts=false; invoice_pdf=false; tax_shadow=true\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5252.205, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2349,\"outputTokens\":193,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5252.224, "text": "{\"type\":\"result\",\"message\":\"Based on the documented feature flag precedence (defaults → runtime → region), I need to apply the values in order:\\n\\n**Step 1: Defaults (config/features.yaml)**\\n- async_receipts: true\\n- invoice_pdf: true\\n- tax_shadow: false\\n\\n**Step 2: Production Runtime (config/runtime.yaml)**\\n- async_receipts: false (overrides)\\n- invoice_pdf: true (not specified, keeps default)\\n- tax_shadow: false (not specified, keeps default)\\n\\n**Step 3: EU Region (config/region-eu.yaml)**\\n- async_receipts: false (not specified, keeps runtime value)\\n- invoice_pdf: false (overrides)\\n- tax_shadow: true (overrides)\\n\\nasync_receipts=false; invoice_pdf=false; tax_shadow=true\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5252.278, "text": "{\"durationMs\":5245,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":3,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":8,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":5339,\"outputTokens\":638}}"}
+{"record": "run_end", "timestamp": "2026-08-30T15:01:49.423504+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 5254.64}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

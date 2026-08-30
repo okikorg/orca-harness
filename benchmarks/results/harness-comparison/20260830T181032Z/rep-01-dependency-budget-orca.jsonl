@@ -1,0 +1,82 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:18:36.488329+00:00", "run_number": 49, "repetition": 1, "task": "dependency-budget", "category": "cost-aggregation", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-dependency-budget-dog6t29g/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.191, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.239, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1005.858, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1350.162, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n1. Analyze data/dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1351.014, "text": "{\"type\":\"reasoning_delta\",\"text\":\".csv\\n2. Sum size and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1351.955, "text": "{\"type\":\"reasoning_delta\",\"text\":\" cold-load time for critical dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1352.359, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n3. Find the largest non-build\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1353.333, "text": "{\"type\":\"reasoning_delta\",\"text\":\" dependency by size\\n4. End with\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1354.016, "text": "{\"type\":\"reasoning_delta\",\"text\":\" a\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1354.441, "text": "{\"type\":\"reasoning_delta\",\"text\":\" specific format:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1355.718, "text": "{\"type\":\"reasoning_delta\",\"text\":\" critical_size_kb=<n\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1357.35, "text": "{\"type\":\"reasoning_delta\",\"text\":\">; critical_cold_ms=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1358.094, "text": "{\"type\":\"reasoning_delta\",\"text\":\"<n>; largest_runtime=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1358.306, "text": "{\"type\":\"reasoning_delta\",\"text\":\"<name>; largest_runtime_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1358.87, "text": "{\"type\":\"reasoning_delta\",\"text\":\"kb=<n>\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1359.641, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start by reading\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1363.515, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the CSV\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1363.597, "text": "{\"type\":\"reasoning_delta\",\"text\":\" file to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1363.626, "text": "{\"type\":\"reasoning_delta\",\"text\":\" understand its structure.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1484.118, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"data/dependencies.csv\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1493.648, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1501.031, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1253,\"outputTokens\":166,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1501.137, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01F1aks6fxrXCeLr9pFSjTvn\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"data/dependencies.csv\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1501.275, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01F1aks6fxrXCeLr9pFSjTvn\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1501.332, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01F1aks6fxrXCeLr9pFSjTvn\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":143,\"content\":\"name,tier,size_kb,cold_load_ms\\nserde,critical,300,8\\ntokio,critical,650,15\\nratatui,interactive,900,25\\nreqwest,critical,1100,32\\nsyn,build,2400,0\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2199.942, "text": "{\"type\":\"assistant_delta\",\"text\":\"Now\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2430.988, "text": "{\"type\":\"assistant_delta\",\"text\":\" I'll analyze the CSV\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2431.365, "text": "{\"type\":\"assistant_delta\",\"text\":\" data:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2432.41, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2432.785, "text": "{\"type\":\"assistant_delta\",\"text\":\"Critical\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2434.029, "text": "{\"type\":\"assistant_delta\",\"text\":\" dependencies\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2435.774, "text": "{\"type\":\"assistant_delta\",\"text\":\":**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2435.934, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- serde: size\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2438.025, "text": "{\"type\":\"assistant_delta\",\"text\":\"=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2580.503, "text": "{\"type\":\"assistant_delta\",\"text\":\"300, cold_load=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2581.235, "text": "{\"type\":\"assistant_delta\",\"text\":\"8\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2581.437, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- tokio: size\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2583.261, "text": "{\"type\":\"assistant_delta\",\"text\":\"=650, cold_load=15\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2583.884, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- req\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2584.541, "text": "{\"type\":\"assistant_delta\",\"text\":\"west: size=1100, cold\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2584.678, "text": "{\"type\":\"assistant_delta\",\"text\":\"_load=32\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2586.013, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\n**Tot\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2784.125, "text": "{\"type\":\"assistant_delta\",\"text\":\"als for\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2784.886, "text": "{\"type\":\"assistant_delta\",\"text\":\" critical:**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2785.531, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- Size\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2785.986, "text": "{\"type\":\"assistant_delta\",\"text\":\": 300 + 650 \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2787.181, "text": "{\"type\":\"assistant_delta\",\"text\":\"+ 1100 = 2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2787.259, "text": "{\"type\":\"assistant_delta\",\"text\":\"050 kb\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2787.303, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- Cold load: 8 \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2787.327, "text": "{\"type\":\"assistant_delta\",\"text\":\"+ 15 + 32 \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3031.534, "text": "{\"type\":\"assistant_delta\",\"text\":\"= 55 ms\\n\\n**Non\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3032.496, "text": "{\"type\":\"assistant_delta\",\"text\":\"-build dependencies (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3032.791, "text": "{\"type\":\"assistant_delta\",\"text\":\"excluding\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3033.344, "text": "{\"type\":\"assistant_delta\",\"text\":\" \\\"\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3033.544, "text": "{\"type\":\"assistant_delta\",\"text\":\"syn\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3035.282, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\\" which is build\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3035.339, "text": "{\"type\":\"assistant_delta\",\"text\":\" tier\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3035.945, "text": "{\"type\":\"assistant_delta\",\"text\":\"):**\\n- serde (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3185.237, "text": "{\"type\":\"assistant_delta\",\"text\":\"critical\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3185.702, "text": "{\"type\":\"assistant_delta\",\"text\":\"): \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3186.609, "text": "{\"type\":\"assistant_delta\",\"text\":\"300 kb\\n- tokio (\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3187.927, "text": "{\"type\":\"assistant_delta\",\"text\":\"critical): 650 kb\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3188.568, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- r\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3189.551, "text": "{\"type\":\"assistant_delta\",\"text\":\"atatui (interactive): 900 \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3190.696, "text": "{\"type\":\"assistant_delta\",\"text\":\"kb\\n- reqwest (critical):\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3191.025, "text": "{\"type\":\"assistant_delta\",\"text\":\" 1100 kb\\n\\n**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3334.346, "text": "{\"type\":\"assistant_delta\",\"text\":\"Largest non-build dependency by size:**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3335.773, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- req\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3339.599, "text": "{\"type\":\"assistant_delta\",\"text\":\"west: 1100 kb\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3340.685, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\ncritical\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3341.639, "text": "{\"type\":\"assistant_delta\",\"text\":\"_size_kb=2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3341.852, "text": "{\"type\":\"assistant_delta\",\"text\":\"050; critical_cold_ms=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3349.724, "text": "{\"type\":\"assistant_delta\",\"text\":\"55; largest_runtime=reqwest\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3349.874, "text": "{\"type\":\"assistant_delta\",\"text\":\"; largest_runtime_kb=1\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3350.666, "text": "{\"type\":\"assistant_delta\",\"text\":\"100\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3370.118, "text": "{\"type\":\"assistant\",\"message\":\"Now I'll analyze the CSV data:\\n\\n**Critical dependencies:**\\n- serde: size=300, cold_load=8\\n- tokio: size=650, cold_load=15\\n- reqwest: size=1100, cold_load=32\\n\\n**Totals for critical:**\\n- Size: 300 + 650 + 1100 = 2050 kb\\n- Cold load: 8 + 15 + 32 = 55 ms\\n\\n**Non-build dependencies (excluding \\\"syn\\\" which is build tier):**\\n- serde (critical): 300 kb\\n- tokio (critical): 650 kb\\n- ratatui (interactive): 900 kb\\n- reqwest (critical): 1100 kb\\n\\n**Largest non-build dependency by size:**\\n- reqwest: 1100 kb\\n\\ncritical_size_kb=2050; critical_cold_ms=55; largest_runtime=reqwest; largest_runtime_kb=1100\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3370.428, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1372,\"outputTokens\":227,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3370.598, "text": "{\"type\":\"result\",\"message\":\"Now I'll analyze the CSV data:\\n\\n**Critical dependencies:**\\n- serde: size=300, cold_load=8\\n- tokio: size=650, cold_load=15\\n- reqwest: size=1100, cold_load=32\\n\\n**Totals for critical:**\\n- Size: 300 + 650 + 1100 = 2050 kb\\n- Cold load: 8 + 15 + 32 = 55 ms\\n\\n**Non-build dependencies (excluding \\\"syn\\\" which is build tier):**\\n- serde (critical): 300 kb\\n- tokio (critical): 650 kb\\n- ratatui (interactive): 900 kb\\n- reqwest (critical): 1100 kb\\n\\n**Largest non-build dependency by size:**\\n- reqwest: 1100 kb\\n\\ncritical_size_kb=2050; critical_cold_ms=55; largest_runtime=reqwest; largest_runtime_kb=1100\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3370.711, "text": "{\"durationMs\":3363,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":1,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2625,\"outputTokens\":393}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:18:39.860833+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 3374.564}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

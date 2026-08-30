@@ -1,0 +1,126 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:34:22.559933+00:00", "run_number": 153, "repetition": 3, "task": "cache-contract", "category": "source-doc-consistency", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-cache-contract-5rku5oq1/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.642, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6.699, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 771.52, "text": "{\"type\":\"reasoning_delta\",\"text\":\"I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 772.279, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 774.413, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n1. Find\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 776.551, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the invoice cache-key format in the\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 777.765, "text": "{\"type\":\"reasoning_delta\",\"text\":\" source code\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 779.803, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n2. Find the invoice cache-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 781.58, "text": "{\"type\":\"reasoning_delta\",\"text\":\"key format in the documentation\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 782.359, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n3. Compare them to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 783.735, "text": "{\"type\":\"reasoning_delta\",\"text\":\" determine if\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1011.258, "text": "{\"type\":\"reasoning_delta\",\"text\":\" they match\\n4. Find\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1011.695, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the success\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1011.827, "text": "{\"type\":\"reasoning_delta\",\"text\":\" TT\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1011.917, "text": "{\"type\":\"reasoning_delta\",\"text\":\"L and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1012.005, "text": "{\"type\":\"reasoning_delta\",\"text\":\" miss TTL values\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1012.08, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n5. Report in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1012.345, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the exact format requested\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1012.485, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n\\nLet me search\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1212.536, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for cache\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1213.248, "text": "{\"type\":\"reasoning_delta\",\"text\":\"-key related information\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1214.854, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1218.998, "text": "{\"type\":\"reasoning_delta\",\"text\":\" invo\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1220.114, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ices.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1420.0, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"invoice\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1420.514, "text": "{\"type\":\"tool_input_delta\",\"text\":\" cache-key\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1619.715, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1638.626, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1638.838, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"invoice\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1638.912, "text": "{\"type\":\"tool_input_delta\",\"text\":\".*\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1638.963, "text": "{\"type\":\"tool_input_delta\",\"text\":\"cache.*\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1806.984, "text": "{\"type\":\"tool_input_delta\",\"text\":\"key\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1807.834, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1808.497, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1811.501, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1960.641, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/*.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1962.494, "text": "{\"type\":\"tool_input_delta\",\"text\":\"md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1962.885, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1967.783, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.py\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2015.236, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2037.498, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1238,\"outputTokens\":281,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2037.743, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01Q7WEwdoudUVXzXyrcC1DDb\",\"tool_name\":\"grep\",\"input\":{\"path\":\".\",\"query\":\"invoice cache-key\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2037.912, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_017gEvyMPRKmacVyrK69SYqW\",\"tool_name\":\"grep\",\"input\":{\"path\":\".\",\"query\":\"invoice.*cache.*key\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2038.005, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01AtsKNcppZdAYRJBYUkDh5q\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2038.093, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01ND3Eu5tX7tgJS5PUVFzhsy\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.py\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2039.916, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01ND3Eu5tX7tgJS5PUVFzhsy\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2040.05, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01AtsKNcppZdAYRJBYUkDh5q\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2045.781, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01Q7WEwdoudUVXzXyrcC1DDb\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2045.925, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_017gEvyMPRKmacVyrK69SYqW\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2046.022, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01Q7WEwdoudUVXzXyrcC1DDb\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"invoice cache-key\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2046.124, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_017gEvyMPRKmacVyrK69SYqW\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"invoice.*cache.*key\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2046.183, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01AtsKNcppZdAYRJBYUkDh5q\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"AGENTS.md\",\"CHANGELOG.md\",\"CLAUDE.md\",\"README.md\",\"docs/feature-flags.md\",\"docs/runbook.md\",\"docs/workers.md\"],\"pattern\":\"**/*.md\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2046.292, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01ND3Eu5tX7tgJS5PUVFzhsy\",\"tool_name\":\"glob\",\"output\":{\"matches\":[],\"pattern\":\"**/*.py\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2908.636, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2912.685, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"query\\\": \\\"cache\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2912.871, "text": "{\"type\":\"tool_input_delta\",\"text\":\".*\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2912.992, "text": "{\"type\":\"tool_input_delta\",\"text\":\"TT\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2913.081, "text": "{\"type\":\"tool_input_delta\",\"text\":\"L\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3053.815, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3058.647, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3058.762, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"query\\\": \\\"TT\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3061.559, "text": "{\"type\":\"tool_input_delta\",\"text\":\"L\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3205.051, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3208.679, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3215.669, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3228.554, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1613,\"outputTokens\":156,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3228.769, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01Lpz4tDYzXxBSctGp5SacJ9\",\"tool_name\":\"grep\",\"input\":{\"path\":\".\",\"query\":\"cache.*TTL\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3228.891, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01BFZNAwVZqotA38zfg8Zne6\",\"tool_name\":\"grep\",\"input\":{\"path\":\".\",\"query\":\"TTL\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3228.991, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01UyNky1pDU2V8ybpHuYvuey\",\"tool_name\":\"list_dir\",\"input\":{\"path\":\".\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3229.348, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01UyNky1pDU2V8ybpHuYvuey\",\"tool_name\":\"list_dir\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3239.039, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01Lpz4tDYzXxBSctGp5SacJ9\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3239.195, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01BFZNAwVZqotA38zfg8Zne6\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3239.314, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01Lpz4tDYzXxBSctGp5SacJ9\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"cache.*TTL\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3239.385, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01BFZNAwVZqotA38zfg8Zne6\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":5,\"path\":\"src/cache.rs\",\"text\":\"pub const CACHE_TTL_SECONDS: u64 = 900;\"},{\"line\":6,\"path\":\"src/cache.rs\",\"text\":\"pub const NEGATIVE_CACHE_TTL_SECONDS: u64 = 30;\"},{\"line\":8,\"path\":\"docs/runbook.md\",\"text\":\"Cache TTL is 900 seconds for successful invoice lookups and 30 seconds for misses.\"},{\"line\":10,\"path\":\"CHANGELOG.md\",\"text\":\"- Reduced negative-cache TTL from 60 to 30 seconds.\"}],\"query\":\"TTL\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3239.458, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01UyNky1pDU2V8ybpHuYvuey\",\"tool_name\":\"list_dir\",\"output\":{\"entries\":[{\"isDir\":false,\"name\":\"AGENTS.md\"},{\"isDir\":false,\"name\":\"CHANGELOG.md\"},{\"isDir\":false,\"name\":\"CLAUDE.md\"},{\"isDir\":false,\"name\":\"README.md\"},{\"isDir\":true,\"name\":\"api\"},{\"isDir\":true,\"name\":\"config\"},{\"isDir\":true,\"name\":\"data\"},{\"isDir\":true,\"name\":\"docs\"},{\"isDir\":true,\"name\":\"logs\"},{\"isDir\":false,\"name\":\"project.toml\"},{\"isDir\":true,\"name\":\"src\"}],\"path\":\".\"},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4148.956, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"src/cache.rs\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4150.636, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4159.439, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"docs/runbook.md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4300.568, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4303.796, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4304.825, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"query\\\": \\\"cache\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4436.135, "text": "{\"type\":\"tool_input_delta\",\"text\":\"-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4436.963, "text": "{\"type\":\"tool_input_delta\",\"text\":\"key\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4442.133, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.33, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2160,\"outputTokens\":150,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.508, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01LVo7nQwomnPzoPxJFMQ8RS\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"src/cache.rs\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.606, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_018SCvftSA841TYS4GwTW2Db\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"docs/runbook.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.679, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01CkpuS1hCtuYagd2oEVgiKj\",\"tool_name\":\"grep\",\"input\":{\"path\":\".\",\"query\":\"cache-key\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4455.929, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01LVo7nQwomnPzoPxJFMQ8RS\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4456.06, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_018SCvftSA841TYS4GwTW2Db\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4461.595, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01CkpuS1hCtuYagd2oEVgiKj\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4461.676, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01LVo7nQwomnPzoPxJFMQ8RS\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":210,\"content\":\"pub fn invoice_cache_key(tenant: &str, invoice_id: &str) -> String {\\n    format!(\\\"northstar:{tenant}:{invoice_id}:v2\\\")\\n}\\n\\npub const CACHE_TTL_SECONDS: u64 = 900;\\npub const NEGATIVE_CACHE_TTL_SECONDS: u64 = 30;\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4461.72, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_018SCvftSA841TYS4GwTW2Db\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":390,\"content\":\"# Operations runbook\\n\\nThe production gateway listens on port 7412 and its admin endpoint on 7413.\\nPage the ledger owner if invoice p95 exceeds 225 ms for ten minutes.\\nPage the identity owner if authentication errors exceed 2 percent.\\n\\nRetry policy: seven attempts, starting at 125 ms and capped at 2000 ms.\\nCache TTL is 900 seconds for successful invoice lookups and 30 seconds for misses.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4461.757, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01CkpuS1hCtuYagd2oEVgiKj\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"cache-key\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5369.484, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"docs\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5373.55, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"query\\\": \\\"north\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5375.551, "text": "{\"type\":\"tool_input_delta\",\"text\":\"star\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5375.838, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5466.803, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"README\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5467.338, "text": "{\"type\":\"tool_input_delta\",\"text\":\".md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5480.639, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5489.658, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2638,\"outputTokens\":107,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5489.761, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_014fW6EuJo6tRUGoJD1jDWET\",\"tool_name\":\"grep\",\"input\":{\"path\":\"docs\",\"query\":\"northstar\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5489.829, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01WjN59NxQfHoDrEywvwaArJ\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5490.16, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01WjN59NxQfHoDrEywvwaArJ\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5490.915, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_014fW6EuJo6tRUGoJD1jDWET\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5491.026, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_014fW6EuJo6tRUGoJD1jDWET\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"northstar\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5491.088, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01WjN59NxQfHoDrEywvwaArJ\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":370,\"content\":\"# Northstar\\n\\nNorthstar is a synthetic billing platform used for harness benchmarks.\\n\\nThe request path is gateway -> identity -> ledger -> storage.\\nThe public invoice route is served on the gateway's configured HTTP port.\\nProduction request timeout is 45 seconds; local development uses 12 seconds.\\n\\nCache entries use the stable shape northstar:{tenant}:{invoice_id}:v2.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6128.927, "text": "{\"type\":\"assistant_delta\",\"text\":\"format\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8593.134, "text": "{\"type\":\"assistant_delta\",\"text\":\"_match\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8593.532, "text": "{\"type\":\"assistant_delta\",\"text\":\"=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8598.321, "text": "{\"type\":\"assistant_delta\",\"text\":\"yes\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8599.302, "text": "{\"type\":\"assistant_delta\",\"text\":\";\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8599.845, "text": "{\"type\":\"assistant_delta\",\"text\":\" tt\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8600.405, "text": "{\"type\":\"assistant_delta\",\"text\":\"l_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8602.095, "text": "{\"type\":\"assistant_delta\",\"text\":\"success\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8602.249, "text": "{\"type\":\"assistant_delta\",\"text\":\"=900\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8604.149, "text": "{\"type\":\"assistant_delta\",\"text\":\"; ttl_miss\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8604.477, "text": "{\"type\":\"assistant_delta\",\"text\":\"=30\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8610.02, "text": "{\"type\":\"assistant\",\"message\":\"format_match=yes; ttl_success=900; ttl_miss=30\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8610.176, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2929,\"outputTokens\":22,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8610.281, "text": "{\"type\":\"result\",\"message\":\"format_match=yes; ttl_success=900; ttl_miss=30\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 8610.48, "text": "{\"durationMs\":8603,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":5,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":12,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":10578,\"outputTokens\":716}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:34:31.172445+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 8614.875}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

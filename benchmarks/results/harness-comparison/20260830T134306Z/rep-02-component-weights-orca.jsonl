@@ -1,0 +1,36 @@
+{"record": "run_start", "timestamp": "2026-08-30T13:47:02.213383+00:00", "run_number": 34, "repetition": 2, "task": "component-weights", "category": "targeted-retrieval", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-component-weights-ql8qy__o/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4.957, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":false,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.08, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 629.209, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to:\\n1\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 761.791, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Read project\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 762.643, "text": "{\"type\":\"reasoning_delta\",\"text\":\".toml\\n2. Sum every\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 763.736, "text": "{\"type\":\"reasoning_delta\",\"text\":\" component weight\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 764.008, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n3. Identify the heaviest component\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 764.305, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n4. End with exactly: total\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 768.199, "text": "{\"type\":\"reasoning_delta\",\"text\":\"_weight=<sum>; heav\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 768.803, "text": "{\"type\":\"reasoning_delta\",\"text\":\"iest=<name>\\n5.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 768.856, "text": "{\"type\":\"reasoning_delta\",\"text\":\" No\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 956.314, "text": "{\"type\":\"reasoning_delta\",\"text\":\" explanation\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 956.412, "text": "{\"type\":\"reasoning_delta\",\"text\":\", just\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 957.144, "text": "{\"type\":\"reasoning_delta\",\"text\":\" that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 957.893, "text": "{\"type\":\"reasoning_delta\",\"text\":\" line\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 958.444, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 958.645, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by reading the project.toml file\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 959.54, "text": "{\"type\":\"reasoning_delta\",\"text\":\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1160.649, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"project.toml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1243.729, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1255.411, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1220,\"outputTokens\":137,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1255.495, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01B3JSbN1ppxTrkWKktYUieR\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"project.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1255.602, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01B3JSbN1ppxTrkWKktYUieR\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1255.657, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01B3JSbN1ppxTrkWKktYUieR\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":338,\"content\":\"[project]\\nname = \\\"northstar\\\"\\nversion = \\\"2.4.0\\\"\\n\\n[components.gateway]\\ndepends_on = [\\\"identity\\\", \\\"ledger\\\"]\\nweight = 8\\n\\n[components.identity]\\ndepends_on = [\\\"storage\\\"]\\nweight = 5\\n\\n[components.ledger]\\ndepends_on = [\\\"storage\\\", \\\"queue\\\"]\\nweight = 13\\n\\n[components.storage]\\ndepends_on = []\\nweight = 3\\n\\n[components.queue]\\ndepends_on = []\\nweight = 2\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1856.1, "text": "{\"type\":\"assistant_delta\",\"text\":\"total\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1885.445, "text": "{\"type\":\"assistant_delta\",\"text\":\"_weight=31\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1894.693, "text": "{\"type\":\"assistant_delta\",\"text\":\";\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1894.736, "text": "{\"type\":\"assistant_delta\",\"text\":\" heaviest=led\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1894.746, "text": "{\"type\":\"assistant_delta\",\"text\":\"ger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1913.625, "text": "{\"type\":\"assistant\",\"message\":\"total_weight=31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1913.648, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1423,\"outputTokens\":14,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1913.656, "text": "{\"type\":\"result\",\"message\":\"total_weight=31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1913.662, "text": "{\"durationMs\":1908,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":1,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2643,\"outputTokens\":151}}"}
+{"record": "run_end", "timestamp": "2026-08-30T13:47:04.126506+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 1914.716}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

@@ -1,0 +1,94 @@
+{"record": "run_start", "timestamp": "2026-08-30T13:51:11.088297+00:00", "run_number": 69, "repetition": 3, "task": "retry-budgets", "category": "repository-search", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-retry-budgets-32j7_hay/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 7.329, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":false,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 7.384, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 747.447, "text": "{\"type\":\"reasoning_delta\",\"text\":\"I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 897.02, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to find the production and local retry\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 899.933, "text": "{\"type\":\"reasoning_delta\",\"text\":\" budgets and calculate their difference. Let\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 899.977, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me search\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 902.689, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for files\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 903.533, "text": "{\"type\":\"reasoning_delta\",\"text\":\" that might contain these\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 905.664, "text": "{\"type\":\"reasoning_delta\",\"text\":\" budgets.\\n\\nFirst\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 916.383, "text": "{\"type\":\"reasoning_delta\",\"text\":\", I'll search for files that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 917.213, "text": "{\"type\":\"reasoning_delta\",\"text\":\" might contain \\\"retry\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1095.415, "text": "{\"type\":\"reasoning_delta\",\"text\":\" budget\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1116.927, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\\" or related\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1120.265, "text": "{\"type\":\"reasoning_delta\",\"text\":\" terms.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1292.735, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"retry budget\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1294.126, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1306.215, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1497.497, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\", \\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1499.391, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1700.316, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1700.441, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/*.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1700.728, "text": "{\"type\":\"tool_input_delta\",\"text\":\"md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1704.354, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1706.318, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.json\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1743.496, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1754.896, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1218,\"outputTokens\":229,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1754.943, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_013GyF2VeR9zbgufRRDkuw6C\",\"tool_name\":\"grep\",\"input\":{\"query\":\"retry budget\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1754.961, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01KFtYzJDZHKYpSSe5LzM3ie\",\"tool_name\":\"grep\",\"input\":{\"path\":\".\",\"query\":\"production\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1754.987, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01SxNWUCHUwrukczyMBJDmdu\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1755.0, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01YKFz99cvuYEJCKii2VA3BR\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.json\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1756.055, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01SxNWUCHUwrukczyMBJDmdu\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1756.118, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01YKFz99cvuYEJCKii2VA3BR\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1758.634, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01KFtYzJDZHKYpSSe5LzM3ie\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1758.692, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_013GyF2VeR9zbgufRRDkuw6C\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1758.711, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_013GyF2VeR9zbgufRRDkuw6C\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"retry budget\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1758.734, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01KFtYzJDZHKYpSSe5LzM3ie\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":3,\"path\":\"docs/runbook.md\",\"text\":\"The production gateway listens on port 7412 and its admin endpoint on 7413.\"},{\"line\":3,\"path\":\"docs/workers.md\",\"text\":\"Workers send a heartbeat every 30 seconds. The production timeout is 75 seconds\"},{\"line\":6,\"path\":\"docs/feature-flags.md\",\"text\":\"2. the active environment file, such as `config/runtime.yaml` in production\"},{\"line\":1,\"path\":\"config/runtime.yaml\",\"text\":\"environment: production\"}],\"query\":\"production\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1758.754, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01SxNWUCHUwrukczyMBJDmdu\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"AGENTS.md\",\"CHANGELOG.md\",\"CLAUDE.md\",\"README.md\",\"docs/feature-flags.md\",\"docs/runbook.md\",\"docs/workers.md\"],\"pattern\":\"**/*.md\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1758.774, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01YKFz99cvuYEJCKii2VA3BR\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"api/v1.json\",\"api/v2.json\",\"src/permissions.json\"],\"pattern\":\"**/*.json\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2488.401, "text": "{\"type\":\"assistant_delta\",\"text\":\"Let me search more\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2566.694, "text": "{\"type\":\"assistant_delta\",\"text\":\" specifically for retry\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2567.144, "text": "{\"type\":\"assistant_delta\",\"text\":\" budget information:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2569.294, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"budget\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2896.25, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2896.353, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"README\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2896.38, "text": "{\"type\":\"tool_input_delta\",\"text\":\".md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3100.338, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3100.44, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"CLAUDE\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3100.461, "text": "{\"type\":\"tool_input_delta\",\"text\":\".md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3100.474, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3154.613, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3156.607, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/runtime.yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3174.05, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3181.814, "text": "{\"type\":\"assistant\",\"message\":\"Let me search more specifically for retry budget information:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3181.839, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1713,\"outputTokens\":179,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3181.855, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01QpxNMM61nMXkbzLdtAoDKZ\",\"tool_name\":\"grep\",\"input\":{\"query\":\"budget\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3181.87, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01348145MPaWPrz55wzmEwxU\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3181.886, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01UAPUpLRoh9GHBom44vfbMK\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"CLAUDE.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3181.9, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01VTWZL86faWHW9mUrDmWFr6\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/runtime.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3182.062, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01VTWZL86faWHW9mUrDmWFr6\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3182.095, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01UAPUpLRoh9GHBom44vfbMK\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3182.115, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01348145MPaWPrz55wzmEwxU\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3184.825, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01QpxNMM61nMXkbzLdtAoDKZ\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3184.89, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01QpxNMM61nMXkbzLdtAoDKZ\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":7,\"path\":\"config/local.yaml\",\"text\":\"  retry_budget: 2\"},{\"line\":7,\"path\":\"config/runtime.yaml\",\"text\":\"  retry_budget: 7\"}],\"query\":\"budget\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3184.918, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01348145MPaWPrz55wzmEwxU\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":370,\"content\":\"# Northstar\\n\\nNorthstar is a synthetic billing platform used for harness benchmarks.\\n\\nThe request path is gateway -> identity -> ledger -> storage.\\nThe public invoice route is served on the gateway's configured HTTP port.\\nProduction request timeout is 45 seconds; local development uses 12 seconds.\\n\\nCache entries use the stable shape northstar:{tenant}:{invoice_id}:v2.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3184.961, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01UAPUpLRoh9GHBom44vfbMK\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":354,\"content\":\"This is a synthetic benchmark workspace copied into a temporary directory.\\nFollow the task prompt's file permissions. Only edit when the prompt explicitly\\nallows it, and then edit only the named files.\\nNever execute shell commands or code and never start a server.\\nUse only the registered repository tools.\\nAnswer only what each benchmark task requests.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3184.978, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01VTWZL86faWHW9mUrDmWFr6\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":221,\"content\":\"environment: production\\nhttp:\\n  gateway_port: 7412\\n  admin_port: 7413\\n  request_timeout_seconds: 45\\nretries:\\n  retry_budget: 7\\n  base_delay_ms: 125\\n  max_delay_ms: 2000\\nfeatures:\\n  ledger_v2: true\\n  async_receipts: false\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3863.509, "text": "{\"type\":\"assistant_delta\",\"text\":\"Perfect\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4053.616, "text": "{\"type\":\"assistant_delta\",\"text\":\"! I found\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4053.859, "text": "{\"type\":\"assistant_delta\",\"text\":\" the retry\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4054.271, "text": "{\"type\":\"assistant_delta\",\"text\":\" bud\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4056.44, "text": "{\"type\":\"assistant_delta\",\"text\":\"gets:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4058.189, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n- Production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4058.223, "text": "{\"type\":\"assistant_delta\",\"text\":\": `\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4058.24, "text": "{\"type\":\"assistant_delta\",\"text\":\"retry_budget: 7`\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4058.253, "text": "{\"type\":\"assistant_delta\",\"text\":\" (from\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4250.008, "text": "{\"type\":\"assistant_delta\",\"text\":\" config/runtime.yaml)\\n-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4252.031, "text": "{\"type\":\"assistant_delta\",\"text\":\" Local:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4252.66, "text": "{\"type\":\"assistant_delta\",\"text\":\" `retry_budget: 2`\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4253.975, "text": "{\"type\":\"assistant_delta\",\"text\":\" (from config/local.yaml)\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4254.033, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\nDifference\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4254.576, "text": "{\"type\":\"assistant_delta\",\"text\":\": \"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4255.37, "text": "{\"type\":\"assistant_delta\",\"text\":\"7\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4255.423, "text": "{\"type\":\"assistant_delta\",\"text\":\" - 2 = 5\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4451.182, "text": "{\"type\":\"assistant_delta\",\"text\":\"\\n\\nproduction\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4451.935, "text": "{\"type\":\"assistant_delta\",\"text\":\"=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4452.595, "text": "{\"type\":\"assistant_delta\",\"text\":\"7;\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4453.41, "text": "{\"type\":\"assistant_delta\",\"text\":\" local=2; difference=5\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4478.906, "text": "{\"type\":\"assistant\",\"message\":\"Perfect! I found the retry budgets:\\n- Production: `retry_budget: 7` (from config/runtime.yaml)\\n- Local: `retry_budget: 2` (from config/local.yaml)\\n\\nDifference: 7 - 2 = 5\\n\\nproduction=7; local=2; difference=5\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4478.961, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2368,\"outputTokens\":78,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4478.983, "text": "{\"type\":\"result\",\"message\":\"Perfect! I found the retry budgets:\\n- Production: `retry_budget: 7` (from config/runtime.yaml)\\n- Local: `retry_budget: 2` (from config/local.yaml)\\n\\nDifference: 7 - 2 = 5\\n\\nproduction=7; local=2; difference=5\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4478.997, "text": "{\"durationMs\":4471,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":3,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":8,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":5299,\"outputTokens\":486}}"}
+{"record": "run_end", "timestamp": "2026-08-30T13:51:15.567082+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 4481.082}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

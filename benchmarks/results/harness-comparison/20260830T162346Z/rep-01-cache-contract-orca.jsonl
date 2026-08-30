@@ -1,0 +1,122 @@
+{"record": "run_start", "timestamp": "2026-08-30T16:27:16.755264+00:00", "run_number": 19, "repetition": 1, "task": "cache-contract", "category": "source-doc-consistency", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-cache-contract-ts8nxybr/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 7.068, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 7.128, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 715.293, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 902.62, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me to:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 905.552, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n1. Compare the invoice cache-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 907.52, "text": "{\"type\":\"reasoning_delta\",\"text\":\"key format in source and docs\\n2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 908.145, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Report success and miss TTLs\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 909.044, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n3. End with a\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 909.819, "text": "{\"type\":\"reasoning_delta\",\"text\":\" specific format:\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 911.367, "text": "{\"type\":\"reasoning_delta\",\"text\":\" format_match=<yes-or\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 914.375, "text": "{\"type\":\"reasoning_delta\",\"text\":\"-no>; ttl_success\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1107.568, "text": "{\"type\":\"reasoning_delta\",\"text\":\"=<n>; ttl_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1107.732, "text": "{\"type\":\"reasoning_delta\",\"text\":\"miss=<n>\\n4.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1109.451, "text": "{\"type\":\"reasoning_delta\",\"text\":\" Use\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1110.036, "text": "{\"type\":\"reasoning_delta\",\"text\":\" only registered tools\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1111.104, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n5. Final\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1111.382, "text": "{\"type\":\"reasoning_delta\",\"text\":\" response must be\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1113.143, "text": "{\"type\":\"reasoning_delta\",\"text\":\" ONLY that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1113.164, "text": "{\"type\":\"reasoning_delta\",\"text\":\" line,\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1365.026, "text": "{\"type\":\"reasoning_delta\",\"text\":\" nothing\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1365.306, "text": "{\"type\":\"reasoning_delta\",\"text\":\" else\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1365.72, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me search\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1367.392, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for cache-key information\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1368.011, "text": "{\"type\":\"reasoning_delta\",\"text\":\" related\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1369.391, "text": "{\"type\":\"reasoning_delta\",\"text\":\" to invo\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1370.574, "text": "{\"type\":\"reasoning_delta\",\"text\":\"ices in\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1371.186, "text": "{\"type\":\"reasoning_delta\",\"text\":\" both\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1499.338, "text": "{\"type\":\"reasoning_delta\",\"text\":\" source code\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1499.539, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and documentation.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1659.516, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"invoice cache\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1659.605, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1660.862, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"cache-\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1661.145, "text": "{\"type\":\"tool_input_delta\",\"text\":\"key\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1898.956, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1902.507, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"*.md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1905.915, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1952.238, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"*.ts\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1970.078, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.039, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1237,\"outputTokens\":275,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.088, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01A9ADjDiP8yCAJ9fuKQbTAh\",\"tool_name\":\"grep\",\"input\":{\"query\":\"invoice cache\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.114, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01QWAr4FDxQqVHpsWziPNT1Q\",\"tool_name\":\"grep\",\"input\":{\"query\":\"cache-key\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.129, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_013FZVq2DJ34eaDRa14UAFMd\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"*.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.143, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01EPaHrDJYoPDq93QuTVPahD\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"*.ts\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.926, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01EPaHrDJYoPDq93QuTVPahD\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1985.953, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_013FZVq2DJ34eaDRa14UAFMd\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1987.957, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01A9ADjDiP8yCAJ9fuKQbTAh\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1988.029, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01QWAr4FDxQqVHpsWziPNT1Q\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1988.046, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01A9ADjDiP8yCAJ9fuKQbTAh\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":6,\"path\":\"CHANGELOG.md\",\"text\":\"- Breaking: invoice cache keys now end in :v2.\"}],\"query\":\"invoice cache\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1988.065, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01QWAr4FDxQqVHpsWziPNT1Q\",\"tool_name\":\"grep\",\"output\":{\"matches\":[],\"query\":\"cache-key\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1988.101, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_013FZVq2DJ34eaDRa14UAFMd\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"AGENTS.md\",\"CHANGELOG.md\",\"CLAUDE.md\",\"README.md\",\"docs/feature-flags.md\",\"docs/runbook.md\",\"docs/workers.md\"],\"pattern\":\"*.md\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1988.125, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01EPaHrDJYoPDq93QuTVPahD\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"src/routes.ts\"],\"pattern\":\"*.ts\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2837.875, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"src\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2838.04, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/routes.ts\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2838.636, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3076.825, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"README\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3077.682, "text": "{\"type\":\"tool_input_delta\",\"text\":\".md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3077.889, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3081.434, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"CHANGELOG.md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3086.123, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3092.899, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1603,\"outputTokens\":134,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3092.943, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_017mnvV5Mq8D2rtDPZE91fLD\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"src/routes.ts\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3092.957, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_012WN2jj4frADSm5uTy1p9fc\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3092.968, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01KkLb8JfspVn629869x34ho\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"CHANGELOG.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3093.056, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01KkLb8JfspVn629869x34ho\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3093.07, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_012WN2jj4frADSm5uTy1p9fc\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3093.106, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_017mnvV5Mq8D2rtDPZE91fLD\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3093.119, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_017mnvV5Mq8D2rtDPZE91fLD\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":287,\"content\":\"export const routes = [\\n  { method: \\\"GET\\\", path: \\\"/health\\\", service: \\\"gateway\\\" },\\n  { method: \\\"GET\\\", path: \\\"/v2/invoices/:id\\\", service: \\\"gateway\\\" },\\n  { method: \\\"POST\\\", path: \\\"/v2/invoices\\\", service: \\\"ledger\\\" },\\n  { method: \\\"POST\\\", path: \\\"/v2/receipts\\\", service: \\\"ledger\\\" },\\n] as const;\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3093.132, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_012WN2jj4frADSm5uTy1p9fc\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":370,\"content\":\"# Northstar\\n\\nNorthstar is a synthetic billing platform used for harness benchmarks.\\n\\nThe request path is gateway -> identity -> ledger -> storage.\\nThe public invoice route is served on the gateway's configured HTTP port.\\nProduction request timeout is 45 seconds; local development uses 12 seconds.\\n\\nCache entries use the stable shape northstar:{tenant}:{invoice_id}:v2.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3093.154, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01KkLb8JfspVn629869x34ho\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":284,\"content\":\"# Changelog\\n\\n## 2.4.0 - 2026-08-15\\n\\n- Added asynchronous receipt preparation behind async_receipts.\\n- Breaking: invoice cache keys now end in :v2.\\n\\n## 2.3.1 - 2026-07-28\\n\\n- Reduced negative-cache TTL from 60 to 30 seconds.\\n\\n## 2.3.0 - 2026-07-10\\n\\n- Added the audit export permission.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3979.965, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"TT\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3980.884, "text": "{\"type\":\"tool_input_delta\",\"text\":\"L\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4173.068, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4175.156, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"north\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4175.745, "text": "{\"type\":\"tool_input_delta\",\"text\":\"star\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4176.343, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4177.722, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"query\\\": \\\"negative\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4378.957, "text": "{\"type\":\"tool_input_delta\",\"text\":\"-cache\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4379.618, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4381.837, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"docs\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4382.256, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/run\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4384.58, "text": "{\"type\":\"tool_input_delta\",\"text\":\"book\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4471.698, "text": "{\"type\":\"tool_input_delta\",\"text\":\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4474.673, "text": "{\"type\":\"tool_input_delta\",\"text\":\"md\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4482.548, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4497.001, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2204,\"outputTokens\":164,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4497.021, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_015NFbAZayJFLYHmxH15tAuH\",\"tool_name\":\"grep\",\"input\":{\"query\":\"TTL\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4497.032, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01KFbQGsa7pkLK2js9Zu8kGX\",\"tool_name\":\"grep\",\"input\":{\"query\":\"northstar\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4497.041, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01BufN9Q6QBbEyC6E6mFbmD5\",\"tool_name\":\"grep\",\"input\":{\"query\":\"negative-cache\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4497.05, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01QAiwYMMg8H6vNTfTXJFBAe\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"docs/runbook.md\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4497.218, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01QAiwYMMg8H6vNTfTXJFBAe\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.532, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01BufN9Q6QBbEyC6E6mFbmD5\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.547, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_015NFbAZayJFLYHmxH15tAuH\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.556, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01KFbQGsa7pkLK2js9Zu8kGX\",\"tool_name\":\"grep\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.564, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_015NFbAZayJFLYHmxH15tAuH\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":5,\"path\":\"src/cache.rs\",\"text\":\"pub const CACHE_TTL_SECONDS: u64 = 900;\"},{\"line\":6,\"path\":\"src/cache.rs\",\"text\":\"pub const NEGATIVE_CACHE_TTL_SECONDS: u64 = 30;\"},{\"line\":8,\"path\":\"docs/runbook.md\",\"text\":\"Cache TTL is 900 seconds for successful invoice lookups and 30 seconds for misses.\"},{\"line\":10,\"path\":\"CHANGELOG.md\",\"text\":\"- Reduced negative-cache TTL from 60 to 30 seconds.\"}],\"query\":\"TTL\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.576, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01KFbQGsa7pkLK2js9Zu8kGX\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":2,\"path\":\"src/cache.rs\",\"text\":\"    format!(\\\"northstar:{tenant}:{invoice_id}:v2\\\")\"},{\"line\":2,\"path\":\"project.toml\",\"text\":\"name = \\\"northstar\\\"\"},{\"line\":9,\"path\":\"README.md\",\"text\":\"Cache entries use the stable shape northstar:{tenant}:{invoice_id}:v2.\"}],\"query\":\"northstar\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.588, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01BufN9Q6QBbEyC6E6mFbmD5\",\"tool_name\":\"grep\",\"output\":{\"matches\":[{\"line\":10,\"path\":\"CHANGELOG.md\",\"text\":\"- Reduced negative-cache TTL from 60 to 30 seconds.\"}],\"query\":\"negative-cache\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4499.598, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01QAiwYMMg8H6vNTfTXJFBAe\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":390,\"content\":\"# Operations runbook\\n\\nThe production gateway listens on port 7412 and its admin endpoint on 7413.\\nPage the ledger owner if invoice p95 exceeds 225 ms for ten minutes.\\nPage the identity owner if authentication errors exceed 2 percent.\\n\\nRetry policy: seven attempts, starting at 125 ms and capped at 2000 ms.\\nCache TTL is 900 seconds for successful invoice lookups and 30 seconds for misses.\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5307.034, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"src\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5307.532, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/cache.rs\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5318.163, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5327.727, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2912,\"outputTokens\":57,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5327.776, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01F6MH7UbDuDqMXauZHJZv3x\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"src/cache.rs\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5327.921, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01F6MH7UbDuDqMXauZHJZv3x\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5327.965, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01F6MH7UbDuDqMXauZHJZv3x\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":210,\"content\":\"pub fn invoice_cache_key(tenant: &str, invoice_id: &str) -> String {\\n    format!(\\\"northstar:{tenant}:{invoice_id}:v2\\\")\\n}\\n\\npub const CACHE_TTL_SECONDS: u64 = 900;\\npub const NEGATIVE_CACHE_TTL_SECONDS: u64 = 30;\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5946.495, "text": "{\"type\":\"assistant_delta\",\"text\":\"format\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6136.77, "text": "{\"type\":\"assistant_delta\",\"text\":\"_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6137.643, "text": "{\"type\":\"assistant_delta\",\"text\":\"match\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6138.532, "text": "{\"type\":\"assistant_delta\",\"text\":\"=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6139.914, "text": "{\"type\":\"assistant_delta\",\"text\":\"yes\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6139.952, "text": "{\"type\":\"assistant_delta\",\"text\":\";\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6140.621, "text": "{\"type\":\"assistant_delta\",\"text\":\" tt\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6141.245, "text": "{\"type\":\"assistant_delta\",\"text\":\"l_success\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6142.273, "text": "{\"type\":\"assistant_delta\",\"text\":\"=900\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6216.616, "text": "{\"type\":\"assistant_delta\",\"text\":\"; ttl_miss\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6217.762, "text": "{\"type\":\"assistant_delta\",\"text\":\"=30\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6236.232, "text": "{\"type\":\"assistant\",\"message\":\"format_match=yes; ttl_success=900; ttl_miss=30\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6236.275, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":3083,\"outputTokens\":22,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6236.294, "text": "{\"type\":\"result\",\"message\":\"format_match=yes; ttl_success=900; ttl_miss=30\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6236.308, "text": "{\"durationMs\":6229,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":5,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":12,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":11039,\"outputTokens\":652}}"}
+{"record": "run_end", "timestamp": "2026-08-30T16:27:22.991408+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 6238.205}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

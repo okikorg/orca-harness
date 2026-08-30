@@ -1,0 +1,89 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:11:20.629991+00:00", "run_number": 8, "repetition": 1, "task": "timeout-delta", "category": "cross-file-comparison", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-timeout-delta-977u4m49/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 7.252, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 7.31, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 795.455, "text": "{\"type\":\"reasoning_delta\",\"text\":\"I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2276.582, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to find\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2277.846, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the production\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2278.233, "text": "{\"type\":\"reasoning_delta\",\"text\":\" and local request timeouts and\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2280.559, "text": "{\"type\":\"reasoning_delta\",\"text\":\" calculate\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2284.259, "text": "{\"type\":\"reasoning_delta\",\"text\":\" their\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2286.1, "text": "{\"type\":\"reasoning_delta\",\"text\":\" delta\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2287.215, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Let\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2287.987, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me search\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2388.366, "text": "{\"type\":\"reasoning_delta\",\"text\":\" for these values in the workspace\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2393.413, "text": "{\"type\":\"reasoning_delta\",\"text\":\".\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2427.063, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2441.112, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by exploring\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2444.406, "text": "{\"type\":\"reasoning_delta\",\"text\":\" the workspace structure\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2450.746, "text": "{\"type\":\"reasoning_delta\",\"text\":\" to understand\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2455.569, "text": "{\"type\":\"reasoning_delta\",\"text\":\" what\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2457.659, "text": "{\"type\":\"reasoning_delta\",\"text\":\" we\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2487.39, "text": "{\"type\":\"reasoning_delta\",\"text\":\"'re working with.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2555.146, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2585.94, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2617.792, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1217,\"outputTokens\":103,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2617.851, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_016aoPKp17oZ3ychR564ELr1\",\"tool_name\":\"list_dir\",\"input\":{\"path\":\".\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2618.135, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_016aoPKp17oZ3ychR564ELr1\",\"tool_name\":\"list_dir\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2618.218, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_016aoPKp17oZ3ychR564ELr1\",\"tool_name\":\"list_dir\",\"output\":{\"entries\":[{\"isDir\":false,\"name\":\"AGENTS.md\"},{\"isDir\":false,\"name\":\"CHANGELOG.md\"},{\"isDir\":false,\"name\":\"CLAUDE.md\"},{\"isDir\":false,\"name\":\"README.md\"},{\"isDir\":true,\"name\":\"api\"},{\"isDir\":true,\"name\":\"config\"},{\"isDir\":true,\"name\":\"data\"},{\"isDir\":true,\"name\":\"docs\"},{\"isDir\":true,\"name\":\"logs\"},{\"isDir\":false,\"name\":\"project.toml\"},{\"isDir\":true,\"name\":\"src\"}],\"path\":\".\"},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3687.593, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3688.042, "text": "{\"type\":\"tool_input_delta\",\"text\":\"/*.yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3690.128, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3693.438, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3885.51, "text": "{\"type\":\"tool_input_delta\",\"text\":\"yml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3887.121, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3890.457, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.json\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 3890.862, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4088.046, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.conf\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4088.097, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4092.142, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"pattern\\\": \\\"**/*.to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4092.171, "text": "{\"type\":\"tool_input_delta\",\"text\":\"ml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4112.345, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4119.603, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1385,\"outputTokens\":198,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4119.633, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01DqGEY9WhkoMuQ9iKBSc96n\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4119.646, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_017fzzDPHpCHBWH3PbRKRDMU\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.yml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4119.654, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_011jEKykBZLyoHBoDjnWe4uK\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.json\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4119.664, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01EGP413ipaSVxV3TBHp7vWe\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.conf\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4119.672, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_017vKD7rU854ztzJ5PFM5dun\",\"tool_name\":\"glob\",\"input\":{\"pattern\":\"**/*.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.248, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_011jEKykBZLyoHBoDjnWe4uK\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.27, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_017vKD7rU854ztzJ5PFM5dun\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.291, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_017fzzDPHpCHBWH3PbRKRDMU\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.299, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01DqGEY9WhkoMuQ9iKBSc96n\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.322, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01EGP413ipaSVxV3TBHp7vWe\",\"tool_name\":\"glob\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.33, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01DqGEY9WhkoMuQ9iKBSc96n\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"config/features.yaml\",\"config/local.yaml\",\"config/region-eu.yaml\",\"config/runtime.yaml\",\"config/worker.yaml\"],\"pattern\":\"**/*.yaml\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.343, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_017fzzDPHpCHBWH3PbRKRDMU\",\"tool_name\":\"glob\",\"output\":{\"matches\":[],\"pattern\":\"**/*.yml\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.354, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_011jEKykBZLyoHBoDjnWe4uK\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"api/v1.json\",\"api/v2.json\",\"src/permissions.json\"],\"pattern\":\"**/*.json\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.362, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01EGP413ipaSVxV3TBHp7vWe\",\"tool_name\":\"glob\",\"output\":{\"matches\":[],\"pattern\":\"**/*.conf\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 4120.368, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_017vKD7rU854ztzJ5PFM5dun\",\"tool_name\":\"glob\",\"output\":{\"matches\":[\"project.toml\"],\"pattern\":\"**/*.toml\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5537.283, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config/local\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5537.577, "text": "{\"type\":\"tool_input_delta\",\"text\":\".yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5537.626, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5540.011, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config/runtime\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5541.568, "text": "{\"type\":\"tool_input_delta\",\"text\":\".yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5732.384, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5739.342, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"config/features\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5740.003, "text": "{\"type\":\"tool_input_delta\",\"text\":\".yaml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5740.59, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5746.659, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1844,\"outputTokens\":137,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5746.822, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01VzhTbBeUTPkhmZSuv6kpFf\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/local.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5746.94, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01ThuyyehnmuQ4SUpskA3tiy\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/runtime.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.086, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01UT8YeB4x5TZG3tgRKDRaj8\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"config/features.yaml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.4, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01UT8YeB4x5TZG3tgRKDRaj8\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.552, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01ThuyyehnmuQ4SUpskA3tiy\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.654, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01VzhTbBeUTPkhmZSuv6kpFf\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.728, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01VzhTbBeUTPkhmZSuv6kpFf\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":173,\"content\":\"environment: local\\nhttp:\\n  gateway_port: 8412\\n  admin_port: 8413\\n  request_timeout_seconds: 12\\nretries:\\n  retry_budget: 2\\nfeatures:\\n  ledger_v2: true\\n  async_receipts: true\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.806, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01ThuyyehnmuQ4SUpskA3tiy\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":221,\"content\":\"environment: production\\nhttp:\\n  gateway_port: 7412\\n  admin_port: 7413\\n  request_timeout_seconds: 45\\nretries:\\n  retry_budget: 7\\n  base_delay_ms: 125\\n  max_delay_ms: 2000\\nfeatures:\\n  ledger_v2: true\\n  async_receipts: false\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5747.878, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01UT8YeB4x5TZG3tgRKDRaj8\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":73,\"content\":\"defaults:\\n  async_receipts: true\\n  invoice_pdf: true\\n  tax_shadow: false\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6574.776, "text": "{\"type\":\"assistant_delta\",\"text\":\"prod\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6787.202, "text": "{\"type\":\"assistant_delta\",\"text\":\"_\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6787.386, "text": "{\"type\":\"assistant_delta\",\"text\":\"timeout\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6788.209, "text": "{\"type\":\"assistant_delta\",\"text\":\"=\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6788.744, "text": "{\"type\":\"assistant_delta\",\"text\":\"45;\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6789.652, "text": "{\"type\":\"assistant_delta\",\"text\":\" local\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6792.148, "text": "{\"type\":\"assistant_delta\",\"text\":\"_timeout=12; delta\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6793.303, "text": "{\"type\":\"assistant_delta\",\"text\":\"=33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6871.628, "text": "{\"type\":\"assistant\",\"message\":\"prod_timeout=45; local_timeout=12; delta=33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6871.866, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":2306,\"outputTokens\":18,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6871.981, "text": "{\"type\":\"result\",\"message\":\"prod_timeout=45; local_timeout=12; delta=33\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 6872.066, "text": "{\"durationMs\":6864,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":4,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":9,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":6752,\"outputTokens\":456}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:11:27.507342+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 6879.598}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

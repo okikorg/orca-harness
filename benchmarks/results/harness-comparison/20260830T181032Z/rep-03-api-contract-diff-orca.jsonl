@@ -1,0 +1,46 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:38:03.096969+00:00", "run_number": 176, "repetition": 3, "task": "api-contract-diff", "category": "schema-diff", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-api-contract-diff-2t4a7opf/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.736, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.801, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 661.055, "text": "{\"type\":\"reasoning_delta\",\"text\":\"I\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 830.844, "text": "{\"type\":\"reasoning_delta\",\"text\":\" need to compare api\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 830.942, "text": "{\"type\":\"reasoning_delta\",\"text\":\"/v1.json and api/\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 830.978, "text": "{\"type\":\"reasoning_delta\",\"text\":\"v2.json to\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 831.662, "text": "{\"type\":\"reasoning_delta\",\"text\":\" find:\\n1. The\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 831.772, "text": "{\"type\":\"reasoning_delta\",\"text\":\" added route\\n2.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 831.807, "text": "{\"type\":\"reasoning_delta\",\"text\":\" Newly required invoice field\\n3.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 831.829, "text": "{\"type\":\"reasoning_delta\",\"text\":\" Removed invoice field\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 833.091, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1018.361, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1021.234, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by reading\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1022.154, "text": "{\"type\":\"reasoning_delta\",\"text\":\" both\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1022.826, "text": "{\"type\":\"reasoning_delta\",\"text\":\" files.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1181.612, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"api/v1.json\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1181.714, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1185.685, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"api/v2.json\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1266.804, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1276.734, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1245,\"outputTokens\":157,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1276.863, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_01DAp7q6VccivUooR27jSzd6\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"api/v1.json\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1276.929, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_0174JS2RDi391P29UjGnWLqS\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"api/v2.json\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1277.151, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_0174JS2RDi391P29UjGnWLqS\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1277.268, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_01DAp7q6VccivUooR27jSzd6\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1277.316, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_01DAp7q6VccivUooR27jSzd6\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":206,\"content\":\"{\\n  \\\"routes\\\": [\\n    \\\"GET /v2/invoices/:id\\\",\\n    \\\"POST /v2/invoices\\\",\\n    \\\"POST /v2/receipts\\\"\\n  ],\\n  \\\"invoice\\\": {\\n    \\\"required\\\": [\\\"tenant_id\\\", \\\"amount_cents\\\"],\\n    \\\"optional\\\": [\\\"memo\\\", \\\"legacy_note\\\"]\\n  }\\n}\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1277.363, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_0174JS2RDi391P29UjGnWLqS\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":227,\"content\":\"{\\n  \\\"routes\\\": [\\n    \\\"GET /v2/invoices/:id\\\",\\n    \\\"POST /v2/invoices\\\",\\n    \\\"POST /v2/receipts\\\",\\n    \\\"POST /v2/refunds\\\"\\n  ],\\n  \\\"invoice\\\": {\\n    \\\"required\\\": [\\\"tenant_id\\\", \\\"amount_cents\\\", \\\"currency\\\"],\\n    \\\"optional\\\": [\\\"memo\\\"]\\n  }\\n}\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2006.417, "text": "{\"type\":\"assistant_delta\",\"text\":\"added\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2116.9, "text": "{\"type\":\"assistant_delta\",\"text\":\"_route\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2118.264, "text": "{\"type\":\"assistant_delta\",\"text\":\"=POST\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2119.06, "text": "{\"type\":\"assistant_delta\",\"text\":\" /v2/ref\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2119.316, "text": "{\"type\":\"assistant_delta\",\"text\":\"unds;\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2120.213, "text": "{\"type\":\"assistant_delta\",\"text\":\" new\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2120.245, "text": "{\"type\":\"assistant_delta\",\"text\":\"_required\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2122.197, "text": "{\"type\":\"assistant_delta\",\"text\":\"=currency\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2122.251, "text": "{\"type\":\"assistant_delta\",\"text\":\";\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2266.355, "text": "{\"type\":\"assistant_delta\",\"text\":\" removed\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2266.504, "text": "{\"type\":\"assistant_delta\",\"text\":\"_field\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2267.569, "text": "{\"type\":\"assistant_delta\",\"text\":\"=legacy\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2267.709, "text": "{\"type\":\"assistant_delta\",\"text\":\"_note\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2284.769, "text": "{\"type\":\"assistant\",\"message\":\"added_route=POST /v2/refunds; new_required=currency; removed_field=legacy_note\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2284.951, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1623,\"outputTokens\":28,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2285.019, "text": "{\"type\":\"result\",\"message\":\"added_route=POST /v2/refunds; new_required=currency; removed_field=legacy_note\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2285.064, "text": "{\"durationMs\":2278,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":2,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2868,\"outputTokens\":185}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:38:05.383153+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 2288.254}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}

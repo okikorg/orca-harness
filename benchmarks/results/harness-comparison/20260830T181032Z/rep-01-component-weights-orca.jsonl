@@ -1,0 +1,39 @@
+{"record": "run_start", "timestamp": "2026-08-30T18:10:33.509689+00:00", "run_number": 1, "repetition": 1, "task": "component-weights", "category": "targeted-retrieval", "mode": "read", "harness": "orca", "command": ["/Users/akashswamy/Workspace/orca-harness/target/release/orcacode", "--openrouter", "--model", "anthropic/claude-haiku-4.5", "--workspace", "/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/orca-harness-component-weights-jmpff5tp/workspace", "--no-session", "--json", "--bare", "--tools", "read_file,grep,glob,list_dir", "--effort", "low", "--max-output-tokens", "1536", "--max-steps", "24", "--prompt-cache", "-p", "<benchmark-prompt>"]}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.848, "text": "{\"bare\":true,\"effort\":\"low\",\"maxOutputTokens\":1536,\"model\":\"anthropic/claude-haiku-4.5\",\"promptCache\":true,\"provider\":\"openrouter\",\"tools\":[\"read_file\",\"grep\",\"glob\",\"list_dir\"],\"type\":\"metadata\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 5.896, "text": "{\"type\":\"agent_start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 893.417, "text": "{\"type\":\"reasoning_delta\",\"text\":\"The user wants me to:\\n1\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1236.877, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Read project.toml\\n2\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1240.637, "text": "{\"type\":\"reasoning_delta\",\"text\":\". Sum every component weight\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1244.021, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n3. Identify the heaviest component\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1247.399, "text": "{\"type\":\"reasoning_delta\",\"text\":\"\\n4. End with exactly: total\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1250.536, "text": "{\"type\":\"reasoning_delta\",\"text\":\"_weight=<sum>; heav\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1253.084, "text": "{\"type\":\"reasoning_delta\",\"text\":\"iest=<name>\\n5.\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1258.104, "text": "{\"type\":\"reasoning_delta\",\"text\":\" The\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1259.153, "text": "{\"type\":\"reasoning_delta\",\"text\":\" final\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1279.139, "text": "{\"type\":\"reasoning_delta\",\"text\":\" response\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1280.681, "text": "{\"type\":\"reasoning_delta\",\"text\":\" must\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1557.403, "text": "{\"type\":\"reasoning_delta\",\"text\":\" be\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1558.017, "text": "{\"type\":\"reasoning_delta\",\"text\":\" ONLY that\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1559.776, "text": "{\"type\":\"reasoning_delta\",\"text\":\" line\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1559.85, "text": "{\"type\":\"reasoning_delta\",\"text\":\" with no explanation, markdown, code fence\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1560.623, "text": "{\"type\":\"reasoning_delta\",\"text\":\", or trailing punctuation\\n\\nLet\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1560.953, "text": "{\"type\":\"reasoning_delta\",\"text\":\" me start\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1561.545, "text": "{\"type\":\"reasoning_delta\",\"text\":\" by reading the project.toml file\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1561.578, "text": "{\"type\":\"reasoning_delta\",\"text\":\".\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1596.962, "text": "{\"type\":\"tool_input_delta\",\"text\":\"{\\\"path\\\": \\\"project.toml\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1610.751, "text": "{\"type\":\"tool_input_delta\",\"text\":\"\\\"}\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1628.187, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1218,\"outputTokens\":153,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1628.303, "text": "{\"type\":\"tool_call\",\"tool_call_id\":\"toolu_bdrk_016dbT6zoyGj8c8Z3ppn4RJc\",\"tool_name\":\"read_file\",\"input\":{\"path\":\"project.toml\"}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1630.26, "text": "{\"type\":\"tool_finished\",\"tool_call_id\":\"toolu_bdrk_016dbT6zoyGj8c8Z3ppn4RJc\",\"tool_name\":\"read_file\",\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 1630.339, "text": "{\"type\":\"tool_result\",\"tool_call_id\":\"toolu_bdrk_016dbT6zoyGj8c8Z3ppn4RJc\",\"tool_name\":\"read_file\",\"output\":{\"bytes\":338,\"content\":\"[project]\\nname = \\\"northstar\\\"\\nversion = \\\"2.4.0\\\"\\n\\n[components.gateway]\\ndepends_on = [\\\"identity\\\", \\\"ledger\\\"]\\nweight = 8\\n\\n[components.identity]\\ndepends_on = [\\\"storage\\\"]\\nweight = 5\\n\\n[components.ledger]\\ndepends_on = [\\\"storage\\\", \\\"queue\\\"]\\nweight = 13\\n\\n[components.storage]\\ndepends_on = []\\nweight = 3\\n\\n[components.queue]\\ndepends_on = []\\nweight = 2\\n\",\"truncated\":false},\"is_error\":false}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2182.465, "text": "{\"type\":\"assistant_delta\",\"text\":\"total\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2234.814, "text": "{\"type\":\"assistant_delta\",\"text\":\"_weight=31\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2235.039, "text": "{\"type\":\"assistant_delta\",\"text\":\";\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2235.599, "text": "{\"type\":\"assistant_delta\",\"text\":\" heaviest=led\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2236.314, "text": "{\"type\":\"assistant_delta\",\"text\":\"ger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2262.297, "text": "{\"type\":\"assistant\",\"message\":\"total_weight=31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2262.406, "text": "{\"type\":\"usage\",\"usage\":{\"inputTokens\":1421,\"outputTokens\":14,\"cacheReadTokens\":0,\"cacheCreateTokens\":0}}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2262.43, "text": "{\"type\":\"result\",\"message\":\"total_weight=31; heaviest=ledger\"}"}
+{"record": "line", "stream": "stdout", "elapsed_ms": 2262.445, "text": "{\"durationMs\":2256,\"effort\":\"low\",\"model\":\"anthropic/claude-haiku-4.5\",\"modelRetries\":0,\"modelSteps\":2,\"provider\":\"openrouter\",\"status\":\"success\",\"toolCalls\":1,\"type\":\"summary\",\"usage\":{\"cacheCreateTokens\":0,\"cacheReadTokens\":0,\"inputTokens\":2639,\"outputTokens\":167}}"}
+{"record": "run_end", "timestamp": "2026-08-30T18:10:35.772457+00:00", "exit_code": 0, "timed_out": false, "wall_ms": 2264.281}
+{"record": "workspace_validation", "passed": true, "changed_paths": [], "errors": []}
