@@ -40,6 +40,11 @@ pub(super) enum After {
     /// overlay match because it needs `app` (the shared handle, the
     /// config, the transcript), which the match holds borrowed.
     RemoveSkill(String),
+    /// Apply a registered-plugin row action after the overlay borrow ends.
+    PluginAction {
+        plugin: crate::config::RegisteredPlugin,
+        action: char,
+    },
     /// Close and replace the active `@query` with a workspace path.
     InsertLocation {
         token_start: usize,

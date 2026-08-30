@@ -175,6 +175,40 @@ mod mcp_command_tests {
         crate::config::remove_mcp_server("beta").unwrap();
     }
 
+    #[test]
+    fn plugin_server_rows_are_visible_filterable_and_read_only() {
+        let mut app = mcp_app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        app.overlay = Some(Overlay::Mcp {
+            entries: vec![crate::tui::mcp_picker::Entry::Plugin(
+                crate::mcp::view::PluginMcpEntry {
+                    id: "plugin__release_tools__notes".into(),
+                    plugin: "release-tools".into(),
+                    server: "notes".into(),
+                },
+            )],
+            filter: String::new(),
+            picker: ListPicker::new(1),
+        });
+
+        let text = overlay_text(&app);
+        assert_eq!(
+            &picker_cells(&text, "release-tools/notes")[..3],
+            ["release-tools/notes", "plugin", "…"]
+        );
+        assert!(text.contains("plugin rows read-only"), "{text}");
+        assert!(text.contains("manage with /plugin"), "{text}");
+
+        press(&mut app, &worker, KeyCode::Char('r'));
+        assert!(overlay_text(&app).contains("filter: r"));
+        press(&mut app, &worker, KeyCode::Backspace);
+        press(&mut app, &worker, KeyCode::Enter);
+
+        assert!(app.overlay.is_none());
+        assert!(rx.try_recv().is_err(), "plugin row must not reload MCP");
+        assert!(printed(&app).contains("read-only here; manage it with /plugin"));
+    }
+
     /// Tool counts and connection errors come off the shared handle the
     /// worker reloads. The reason goes after the command so a long error
     /// never truncates the row before the command is visible.

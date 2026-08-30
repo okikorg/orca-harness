@@ -118,6 +118,9 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
                 }
             }
         }
+        After::PluginAction { plugin, action } => {
+            plugin_picker_action(app, worker, plugin, action);
+        }
         After::FetchModels => {
             if let Some(current) = app.overlay.take() {
                 app.overlay_stack.push(current);

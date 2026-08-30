@@ -8,8 +8,12 @@ use orca_harness_tool_extensions::agent_plugins::{
 use orca_harness_tool_extensions::mcp::ProcessEnvironment;
 use serde_json::{json, Value};
 
+#[path = "agent_plugin/hooks.rs"]
+mod hook_tests;
 #[path = "agent_plugin/review_regressions.rs"]
 mod review_regressions;
+#[path = "agent_plugin/skills.rs"]
+mod skill_tests;
 
 const PLUGIN_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MCP_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
@@ -38,6 +42,8 @@ impl TestTree {
     }
 
     fn write_json(&self, path: impl AsRef<Path>, value: Value) {
+        let path = path.as_ref();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
     }
 }
@@ -84,7 +90,9 @@ fn agent_plugin_loads_minimal_manifest_without_creating_plugin_data() {
     assert_eq!(plugin.name, "minimal-plugin");
     assert_eq!(plugin.version, None);
     assert_eq!(plugin.root, fs::canonicalize(&root).unwrap());
+    assert!(plugin.skills.skills.is_empty());
     assert!(plugin.mcp_servers.is_empty());
+    assert!(plugin.hooks.is_empty());
     assert!(plugin.warnings.is_empty());
     assert!(
         !data.exists(),
@@ -200,7 +208,7 @@ fn agent_plugin_enforces_names_and_standard_manifest_types() {
 }
 
 #[test]
-fn agent_plugin_warns_for_ignored_manifest_fields_skills_and_extensions() {
+fn agent_plugin_warns_for_ignored_manifest_fields_and_extensions() {
     let tree = TestTree::new("warnings");
     let root = tree.plugin();
     fs::create_dir(root.join("skills")).unwrap();
@@ -223,7 +231,7 @@ fn agent_plugin_warns_for_ignored_manifest_fields_skills_and_extensions() {
         warnings.contains("extensions.com.example.client"),
         "{warnings}"
     );
-    assert!(warnings.contains("skills"), "{warnings}");
+    assert!(!warnings.contains("skills"), "{warnings}");
 
     write_manifest(
         &tree,

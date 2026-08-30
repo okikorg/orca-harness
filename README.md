@@ -403,7 +403,9 @@ Remote HTTP/SSE servers are reachable through a stdio bridge:
 `/mcp add docs npx -y mcp-remote https://mcp.example.com/mcp`.
 
 **Agent Plugins** — Orcacode is an Agent Plugins 1.0 client for portable
-MCP-over-stdio packages. Scaffold either supported project, install its
+Agent Skills and MCP-over-stdio packages. It also implements optional lifecycle
+hooks as an Orcacode-specific client extension; hooks are not a portable Agent
+Plugins 1.0 component. Scaffold either supported project, install its
 dependencies yourself, then validate and exercise it before registration:
 
 ```sh
@@ -417,13 +419,60 @@ orcacode plugin enable rl-python
 
 Installation links the canonical local directory rather than copying it and
 starts disabled; enable, disable, and uninstall changes apply to the next
-Orcacode process. Orcacode does not install dependencies, and uninstall keeps
-both source and `$ORCA_CONFIG_DIR/plugin-data/<name>/`. Plugin children receive
+Orcacode process. Orcacode does not directly run a dependency installer;
+generated Python plugins may let their `uv` child resolve into `PLUGIN_DATA`
+on first execution. Uninstall keeps both source and
+`$ORCA_CONFIG_DIR/plugin-data/<name>/`. Plugin children receive
 a sanitized environment, but they are ordinary user processes, not a sandbox:
 keep secrets out of visible manifests and review code before enabling it.
-`/mcp` continues to manage standalone MCP entries only. See the
-[Agent Plugins guide](docs/external/pages/plugins.html) for package layout,
-runtime boundaries, and long-running tool design.
+`/plugin` opens the standard filterable picker. Its saved and live columns
+distinguish next-launch enablement from tools loaded in the current TUI;
+enter toggles, while space reveals inspect, validate, test, and uninstall
+actions. Every CLI subcommand is also available as a typed `/plugin ...`
+command. `/mcp` manages standalone MCP entries and also shows enabled plugin
+servers as read-only rows; use `/plugin` for plugin changes. See the
+[Agent Plugins guide](docs/external/index.html#plugins) for package layout,
+TUI usage, runtime boundaries, and long-running tool design.
+
+Each scaffold includes a tracked, empty `skills/` directory. Add a standard
+`skills/<name>/SKILL.md`, then validate the package. Enabled plugin skills join
+the ordinary `/skills` catalog and `skill` tool on the next launch. Their rows
+are read-only because `/plugin` owns package enablement; press enter on one to
+insert `$<name>` into the composer, then add your request and submit it.
+Workspace skills keep precedence when names collide.
+
+Orcacode hooks live at
+`io.github.okikorg.orcacode/hooks.json`, use direct structured process launches,
+and receive one JSON object on stdin. The supported events are
+`on_agent_start`, `before_model`, `after_model`, `before_tool`, `after_tool`,
+`on_error`, and `on_agent_end`. `before_tool` may return a `continue`, `deny`,
+or `rewrite` decision; `after_tool` may replace `output` and `is_error`. Hook
+commands run with the same sanitized environment and `PLUGIN_ROOT` / `PLUGIN_DATA`
+values as plugin MCP children, without a shell added by Orcacode, and are bounded
+to 5 seconds by default (30 seconds maximum):
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "before_tool": [
+      {
+        "command": "python",
+        "args": ["${PLUGIN_ROOT}/scripts/check_tool.py"],
+        "timeout_ms": 2000
+      }
+    ]
+  }
+}
+```
+
+Hook stdout is protocol-only: emit no output for observation hooks, or exactly
+one JSON response object for transforming hooks; diagnostics belong on stderr.
+Deterministic hook failures stop the current agent run instead of silently
+bypassing plugin policy. `on_error` and `on_agent_end` are best-effort because
+the native lifecycle does not propagate failures from those terminal observers.
+`plugin validate` only parses hooks; explicit `plugin test` executes each hook
+once with a representative payload in addition to probing MCP servers.
 
 ## Core tools
 

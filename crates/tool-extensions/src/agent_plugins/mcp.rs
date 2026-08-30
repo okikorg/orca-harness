@@ -143,7 +143,7 @@ fn parse_stdio(
     })
 }
 
-fn resolve_command(command: &str, root: &Path) -> Result<String, String> {
+pub(super) fn resolve_command(command: &str, root: &Path) -> Result<String, String> {
     if command.is_empty() || command.contains('\0') || command.chars().any(char::is_whitespace) {
         return Err("command must be one non-empty executable token".into());
     }
@@ -162,7 +162,7 @@ fn resolve_command(command: &str, root: &Path) -> Result<String, String> {
     Ok(command.to_owned())
 }
 
-fn parse_args(value: Option<&Value>) -> Result<Vec<String>, String> {
+pub(super) fn parse_args(value: Option<&Value>) -> Result<Vec<String>, String> {
     match value {
         None => Ok(Vec::new()),
         Some(Value::Array(values)) if values.iter().all(Value::is_string) => Ok(values
@@ -173,7 +173,7 @@ fn parse_args(value: Option<&Value>) -> Result<Vec<String>, String> {
     }
 }
 
-fn parse_env(value: Option<&Value>) -> Result<BTreeMap<String, String>, String> {
+pub(super) fn parse_env(value: Option<&Value>) -> Result<BTreeMap<String, String>, String> {
     parse_env_with_semantics(value, cfg!(windows))
 }
 
@@ -200,7 +200,11 @@ fn parse_env_with_semantics(
     Ok(env)
 }
 
-fn parse_cwd(value: Option<&Value>, root: &Path, plugin_data: &Path) -> Result<PathBuf, String> {
+pub(super) fn parse_cwd(
+    value: Option<&Value>,
+    root: &Path,
+    plugin_data: &Path,
+) -> Result<PathBuf, String> {
     let Some(value) = value else {
         return Ok(root.to_owned());
     };
@@ -229,7 +233,7 @@ fn is_placeholder_rooted(value: &str, placeholder: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-fn expand(value: &str, root: &str, plugin_data: &str) -> String {
+pub(super) fn expand(value: &str, root: &str, plugin_data: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut cursor = 0;
     while cursor < value.len() {
@@ -249,7 +253,7 @@ fn expand(value: &str, root: &str, plugin_data: &str) -> String {
     output
 }
 
-fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str, String> {
+pub(super) fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str, String> {
     path.to_str()
         .ok_or_else(|| format!("{label} must be valid UTF-8"))
 }
@@ -317,7 +321,10 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-fn reject_unknown_fields(object: &Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
+pub(super) fn reject_unknown_fields(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), String> {
     if let Some(field) = object
         .keys()
         .find(|field| !allowed.contains(&field.as_str()))

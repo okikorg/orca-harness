@@ -23,7 +23,7 @@ pub(crate) async fn entrypoint() -> ExitCode {
                 }
             };
         }
-        Invocation::Run(cfg) => cfg,
+        Invocation::Run(cfg) => *cfg,
     };
 
     match view::ThemeName::from_str(&cfg.theme) {

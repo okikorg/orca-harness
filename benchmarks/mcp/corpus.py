@@ -122,15 +122,9 @@ def term_match(term: str, field: list[str], normalize_plural: bool) -> int:
 def relevance(query: str, tool: Tool) -> int | None:
     terms = tokens(query)
     fields = [tokens(tool.name), tokens(tool.description), tokens(tool.server)]
-    score = 0
-    for term in terms:
-        best = max(
-            term_match(term, field, index == 0) * weight
-            for index, (field, weight) in enumerate(zip(fields, (8, 4, 2)))
-        )
-        if best == 0:
-            return None
-        score += best
+    matched, score = match_score(terms, fields)
+    if matched != len(terms):
+        return None
 
     normalized_terms = [singular(term) for term in terms]
     normalized_name = [singular(term) for term in fields[0]]
@@ -141,12 +135,47 @@ def relevance(query: str, tool: Tool) -> int | None:
     return score
 
 
+def partial_relevance(query: str, tool: Tool) -> int | None:
+    terms = tokens(query)
+    fields = [tokens(tool.name), tokens(tool.description), tokens(tool.server)]
+    matched, score = match_score(terms, fields)
+    if matched == 0:
+        return None
+    score += matched * 100 // len(terms)
+
+    normalized_terms = [singular(term) for term in terms]
+    normalized_name = [singular(term) for term in fields[0]]
+    if all(term in normalized_terms for term in normalized_name):
+        score += 20
+    return score
+
+
+def match_score(terms: list[str], fields: list[list[str]]) -> tuple[int, int]:
+    matched = 0
+    score = 0
+    for term in terms:
+        best = max(
+            term_match(term, field, index == 0) * weight
+            for index, (field, weight) in enumerate(zip(fields, (8, 4, 2)))
+        )
+        matched += best > 0
+        score += best
+    return matched, score
+
+
 def results(query: str) -> list[Tool]:
     ranked = []
+    fallback = []
     for order, tool in enumerate(TOOLS):
         score = relevance(query, tool)
         if score is not None:
             ranked.append((-score, len(tokens(tool.name)), order, tool))
+        else:
+            score = partial_relevance(query, tool)
+            if score is not None:
+                fallback.append((-score, len(tokens(tool.name)), order, tool))
+    if not ranked:
+        ranked = fallback
     ranked.sort(key=lambda item: item[:3])
     return [tool for _, _, _, tool in ranked]
 

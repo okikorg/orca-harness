@@ -3,28 +3,67 @@
 //! Loading only reads package metadata. It does not create plugin data,
 //! install dependencies, or execute plugin-provided code.
 
+mod hooks;
 mod manifest;
 mod mcp;
 mod paths;
+mod skills;
 
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::mcp::StdioLaunch;
+use crate::skills::Discovered;
 
 pub(crate) const PLUGIN_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 pub(crate) const MCP_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
+pub const ORCACODE_EXTENSION_NAMESPACE: &str = "io.github.okikorg.orcacode";
 
 #[derive(Debug)]
 pub struct AgentPlugin {
     pub name: String,
     pub version: Option<String>,
     pub root: PathBuf,
+    pub skills: Discovered,
     pub mcp_servers: Vec<PluginMcpServer>,
+    pub hooks: Vec<PluginHook>,
     pub warnings: Vec<PluginWarning>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginHookEvent {
+    OnAgentStart,
+    BeforeModel,
+    AfterModel,
+    BeforeTool,
+    AfterTool,
+    OnError,
+    OnAgentEnd,
+}
+
+impl PluginHookEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OnAgentStart => "on_agent_start",
+            Self::BeforeModel => "before_model",
+            Self::AfterModel => "after_model",
+            Self::BeforeTool => "before_tool",
+            Self::AfterTool => "after_tool",
+            Self::OnError => "on_error",
+            Self::OnAgentEnd => "on_agent_end",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginHook {
+    pub plugin_name: String,
+    pub event: PluginHookEvent,
+    pub index: usize,
+    pub launch: StdioLaunch,
+    pub timeout: std::time::Duration,
 }
 
 #[derive(Debug)]
@@ -84,7 +123,9 @@ pub fn load_agent_plugin(root: &Path, plugin_data: &Path) -> Result<AgentPlugin,
     let parsed = manifest::parse(&bytes)?;
     let mut warnings = parsed.warnings;
 
+    let skills = skills::load(&root, &parsed.name, &mut warnings);
     warn_for_unsupported_components(&root, &parsed.extension_names, &mut warnings);
+    let hooks = hooks::load(&root, &plugin_data, &parsed.name, &mut warnings);
     let mcp_servers = match paths::optional_file(&root, "mcp.json") {
         Ok(Some(path)) => mcp::load(&path, &root, &plugin_data, &parsed.name, &mut warnings),
         Ok(None) => Vec::new(),
@@ -98,7 +139,9 @@ pub fn load_agent_plugin(root: &Path, plugin_data: &Path) -> Result<AgentPlugin,
         name: parsed.name,
         version: parsed.version,
         root,
+        skills,
         mcp_servers,
+        hooks,
         warnings,
     })
 }
@@ -142,13 +185,6 @@ fn warn_for_unsupported_components(
     manifest_namespaces: &[String],
     warnings: &mut Vec<PluginWarning>,
 ) {
-    if path_is_present(&root.join("skills")) {
-        warnings.push(PluginWarning::new(
-            "skills",
-            "Orcacode v1 does not load Agent Skills",
-        ));
-    }
-
     let mut namespaces: BTreeSet<String> = manifest_namespaces.iter().cloned().collect();
     if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
@@ -168,19 +204,19 @@ fn warn_for_unsupported_components(
             }
         }
     }
-    warnings.extend(namespaces.into_iter().map(|namespace| {
-        PluginWarning::new(
-            format!("extensions.{namespace}"),
-            "Orcacode v1 does not load this client extension namespace",
-        )
-    }));
-}
-
-fn path_is_present(path: &Path) -> bool {
-    match fs::symlink_metadata(path) {
-        Ok(_) => true,
-        Err(error) => error.kind() != io::ErrorKind::NotFound,
-    }
+    warnings.extend(
+        namespaces
+            .into_iter()
+            .map(|namespace| {
+                PluginWarning::new(
+                    format!("extensions.{namespace}"),
+                    "Orcacode v1 does not load this client extension namespace",
+                )
+            })
+            .filter(|warning| {
+                warning.scope != format!("extensions.{ORCACODE_EXTENSION_NAMESPACE}")
+            }),
+    );
 }
 
 fn looks_like_extension_namespace(name: &str) -> bool {

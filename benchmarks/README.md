@@ -10,6 +10,7 @@ informational or deterministic evaluation suites:
 | startup    | `./benchmarks/startup/run.sh` | fixed cost the `orcacode` host pays before accepting input     |
 | MCP search | `benchmarks/mcp/`          | metadata-search cutoff distribution and labeled query accuracy  |
 | subagent   | `benchmarks/subagent/`     | fake-model in-flight concurrency, latency, and failure observations |
+| harness comparison | [`benchmarks/harness-comparison/`](harness-comparison/README.md) | informational live-model cost, cache, tool, turn, correctness, and wall-time comparison |
 
 Plus `./benchmarks/compare/run.sh`, which puts orcacode next to `fx` on the
 same host — see [Comparing against fx](#comparing-against-fx), and read it
@@ -233,6 +234,7 @@ benchmarks/
 ├── shared/                 fixtures, hyperfine summary, budgets, budget tests
 ├── mcp/                    deterministic MCP search corpus and reports
 ├── subagent/               fake-subagent stress runner, analysis, and tests
+├── harness-comparison/     live-harness method, expected answers, and synthetic fixture
 ├── kernel.sh               compatibility launcher → kernel/run.sh
 ├── startup.sh              compatibility launcher → startup/run.sh
 ├── compare.sh              compatibility launcher → compare/run.sh

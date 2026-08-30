@@ -131,20 +131,12 @@ impl McpClient {
     ) -> Result<McpConnection, McpError> {
         let mut command = Command::new(&launch.command);
         command
-            .args(&launch.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             // A server's diagnostics must not corrupt the host terminal.
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
-        if let Some(cwd) = &launch.cwd {
-            command.current_dir(cwd);
-        }
-        if launch.environment == ProcessEnvironment::Sanitized {
-            command.env_clear();
-            command.envs(sanitized_runtime_environment());
-        }
-        command.envs(&launch.env);
+        apply_stdio_launch(&mut command, launch);
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout piped"));
@@ -256,6 +248,18 @@ impl McpClient {
 /// executables, user/config directories, temporary storage, locales, platform
 /// runtime services, and trusted certificate bundles. Plugin variables are
 /// intentionally not reserved here; callers overlay them through `launch.env`.
+pub(crate) fn apply_stdio_launch(command: &mut Command, launch: &StdioLaunch) {
+    command.args(&launch.args);
+    if let Some(cwd) = &launch.cwd {
+        command.current_dir(cwd);
+    }
+    if launch.environment == ProcessEnvironment::Sanitized {
+        command.env_clear();
+        command.envs(sanitized_runtime_environment());
+    }
+    command.envs(&launch.env);
+}
+
 fn sanitized_runtime_environment() -> impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>
 {
     std::env::vars_os().filter(|(name, _)| {

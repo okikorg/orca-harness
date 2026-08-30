@@ -14,5 +14,6 @@ mod tests {
 include!("tests/theme_subagent_mode.rs");
 include!("tests/extensions.rs");
 include!("tests/mcp_stats_nested.rs");
+include!("tests/plugins.rs");
 include!("tests/skills.rs");
 include!("tests/refine.rs");

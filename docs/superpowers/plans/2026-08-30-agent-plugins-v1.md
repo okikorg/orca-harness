@@ -2,19 +2,19 @@
 
 ## Goal
 
-Implement Orcacode as an Agent Plugins 1.0 client for the portable MCP component over stdio. A plugin is a local directory with a canonical `plugin.json` and optional `mcp.json`; Orcacode registers the canonical path, installs it disabled, and starts enabled MCP servers through the existing MCP catalog and tool-policy path.
+Implement Orcacode as an Agent Plugins 1.0 client for portable Agent Skills and MCP over stdio. A plugin is a local directory with a canonical `plugin.json`, optional `skills/`, and optional `mcp.json`; Orcacode registers the canonical path, installs it disabled, loads enabled Skills through the existing skill catalog, and starts enabled MCP servers through the existing MCP catalog and tool-policy path.
 
 Authoritative contract: [Agent Plugins Specification 1.0.0](https://agent-plugins.org/specification). The specification and its canonical schemas govern any conflict in this plan.
 
 ## Global constraints
 
-- Do not change `harness-core`, the native Rust extension lifecycle, WASM support, the Rust SDK, Skills behavior, or the standalone `/mcp` UX.
+- Do not change `harness-core`, the native Rust extension lifecycle, WASM support, the Rust SDK, standalone Skills semantics, or the standalone `/mcp` UX.
 - Do not invent an Orcacode plugin manifest. Use root `plugin.json` and optional root `mcp.json` only.
 - V1 supports Agent Plugins MCP servers using `type: "stdio"` only. Report and skip `streamable-http` and `sse` entries without blocking valid siblings.
-- Do not install dependencies, run package setup scripts, fetch schemas at runtime, provide a marketplace, load plugin Skills, add hooks, add remote installation, or add live TUI management.
+- Do not install dependencies, run package setup scripts, fetch schemas at runtime, provide a marketplace, or add remote installation. Portable v1 remains Skills and MCP only; the later hook addendum below is an Orcacode client extension.
 - Plugin processes are child processes, not a security sandbox. They use a sanitized base environment but retain the OS permissions of the user.
 - Preserve existing standalone command-string MCP configuration and its inherited-environment behavior.
-- Plugin management commands apply to the next Orcacode process and must exit before provider, model, session, or TUI initialization.
+- CLI plugin management exits before provider, model, session, or TUI initialization. TUI plugin management saves the same next-process state without hot-loading plugin processes.
 - Preserve unrelated configuration fields and unrelated worktree changes. Keep changes cohesive and avoid drive-by cleanup.
 - Do not start the Orcacode TUI or a persistent server during verification.
 
@@ -29,6 +29,7 @@ pub struct AgentPlugin {
     pub name: String,
     pub version: Option<String>,
     pub root: PathBuf,
+    pub skills: Discovered,
     pub mcp_servers: Vec<PluginMcpServer>,
     pub warnings: Vec<PluginWarning>,
 }
@@ -50,7 +51,8 @@ Implement the locally shipped Agent Plugins 1.0.0 rules:
 - Require a filesystem-resolved plugin root and regular root `plugin.json` that remains inside it.
 - Require the canonical plugin schema URL and validate all standard field types. Unknown top-level fields and non-object `extensions` are warnings and are ignored; other manifest violations reject the plugin.
 - Enforce names of 1-64 lowercase `a-z`, digits, hyphens, and periods; alphanumeric at both ends; no `--` or `..`.
-- Detect `skills/` and client extension namespaces and warn that Orcacode v1 does not load them.
+- Discover only immediate children of `skills/` containing an exact regular `SKILL.md`. Validate Agent Skills names, descriptions, directory-name matching, and plugin-root containment; skip and report invalid siblings without blocking MCP. Missing or empty `skills/` is valid.
+- Detect client extension namespaces and warn that Orcacode v1 does not load them.
 - If present, require `mcp.json` to be a regular in-root file, with only canonical `$schema` and `mcpServers` top-level fields. An invalid MCP document disables MCP for that plugin but does not invalidate the manifest.
 - Validate each MCP server independently. A stdio server has closed fields `type`, `command`, optional string-array `args`, optional string-map `env`, and optional `cwd`.
 - `command` is one non-empty bare executable token or a plugin-relative path beginning `./`. Never expand placeholders in it. Resolve plugin-relative commands inside the canonical plugin root, including symlink containment.
@@ -143,6 +145,7 @@ Python structure:
 <name>/pyproject.toml
 <name>/README.md
 <name>/.gitignore
+<name>/skills/.gitkeep
 <name>/src/<normalized_package>/__init__.py
 <name>/src/<normalized_package>/server.py
 <name>/tests/test_server.py
@@ -160,19 +163,20 @@ TypeScript structure:
 <name>/tsconfig.json
 <name>/README.md
 <name>/.gitignore
+<name>/skills/.gitkeep
 <name>/src/index.ts
 <name>/test/server.test.ts
 ```
 
 Use Node 20+, stable `@modelcontextprotocol/sdk` 1.x, TypeScript, Vitest, and esbuild. Build `dist/server.mjs`; runtime and `plugin test` require the build. Generate a deterministic lockfile without installing dependencies.
 
-Both manifests use canonical Agent Plugins 1.0.0 schema URLs. Every MCP entry explicitly includes `"type": "stdio"`; command is a bare executable and args/cwd carry placeholders according to the standard.
+Both manifests use canonical Agent Plugins 1.0.0 schema URLs and create a tracked, intentionally empty `skills/` component. Every MCP entry explicitly includes `"type": "stdio"`; command is a bare executable and args/cwd carry placeholders according to the standard.
 
 Test aliases, layouts, no overwrite, and validation of generated manifests.
 
 ## Task 5: Runtime composition
 
-At interactive and headless startup, reconcile standalone MCP config and enabled plugins through the existing MCP manager/catalog:
+At interactive and headless startup, load enabled plugin Skills through the existing Skills catalog and reconcile standalone MCP config plus plugin servers through the existing MCP manager/catalog:
 
 1. Load standalone servers.
 2. Load registered enabled plugins sorted by plugin name.
@@ -181,7 +185,7 @@ At interactive and headless startup, reconcile standalone MCP config and enabled
 5. Connect each server independently, report scoped diagnostics, and keep healthy siblings.
 6. Register tools through the existing MCP catalog so pagination, selection, invalidation, cancellation, deadlines, `PlanGate`, approval gates, and subagent paths remain shared.
 
-`/mcp` continues to list and edit standalone servers only. Plugin management remains CLI-only. A disabled plugin contributes no tools. A missing/moved root or failed server does not block Orcacode or another plugin. Interactive and headless construction must use the same manager state.
+`/mcp` continues to edit standalone servers only and also lists enabled plugin servers as read-only rows with package provenance and live connection state. `/skills` likewise lists loaded plugin Skills as read-only rows; enter inserts `$<skill-name>` through the existing explicit invocation path, while package enablement remains in `/plugin`. `/plugin` uses the shared picker to list registrations, run the same management operations, and distinguish saved state from Skills and tools loaded in the current process; changes remain next-launch only. A disabled plugin contributes no Skills or tools. Workspace Skills retain precedence on name collisions. A missing/moved root, invalid Skill, or failed server does not block healthy siblings or another plugin. Interactive and headless construction must use the same shared state.
 
 Test enabled/disabled visibility, broken-plugin isolation, moved roots, normalized collisions, shared catalog search/select/call, and plan/approval behavior through existing gates where practical.
 
@@ -211,6 +215,10 @@ git diff --check
 ```
 
 Finish with a fresh read-only review of the final diff. Require an evidence-backed `PASS` for scope, Agent Plugins compatibility, environment/path security boundaries, existing MCP compatibility, and DRY/YAGNI adherence.
+
+## Orcacode hook extension addendum
+
+Agent Plugins 1.0 deliberately leaves hooks outside its two portable component types. Orcacode implements hooks through the file-only reverse-domain namespace `io.github.okikorg.orcacode`, discovered at `io.github.okikorg.orcacode/hooks.json`. The client-owned format is independently versioned and uses structured direct executable launches, the sanitized plugin environment, `PLUGIN_ROOT` and `PLUGIN_DATA`, bounded JSON stdin/stdout, and isolated static validation. Enabled hooks adapt onto the existing native `Extension` lifecycle without changing `harness-core`; they run in interactive, headless, and subagent construction. Scaffolded hook files are empty, so portable-only plugins incur no lifecycle subscriptions or subprocess work.
 
 ## Delivery rulings
 

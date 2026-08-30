@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
-use super::{PluginError, PluginWarning, PLUGIN_SCHEMA};
+use super::{PluginError, PluginWarning, ORCACODE_EXTENSION_NAMESPACE, PLUGIN_SCHEMA};
 
 const FIELDS: &[&str] = &[
     "$schema",
@@ -53,7 +53,10 @@ pub(super) fn parse(bytes: &[u8]) -> Result<ParsedManifest, PluginError> {
         })
         .collect::<Vec<_>>();
     let extension_names = match object.get("extensions") {
-        Some(Value::Object(extensions)) => extensions.keys().cloned().collect(),
+        Some(Value::Object(extensions)) => {
+            validate_orcacode_extension(extensions, &mut warnings);
+            extensions.keys().cloned().collect()
+        }
         Some(_) => {
             warnings.push(PluginWarning::new(
                 "plugin.json.extensions",
@@ -70,6 +73,26 @@ pub(super) fn parse(bytes: &[u8]) -> Result<ParsedManifest, PluginError> {
         extension_names,
         warnings,
     })
+}
+
+fn validate_orcacode_extension(extensions: &Map<String, Value>, warnings: &mut Vec<PluginWarning>) {
+    let Some(value) = extensions.get(ORCACODE_EXTENSION_NAMESPACE) else {
+        return;
+    };
+    match value.as_object() {
+        Some(object) => warnings.extend(object.keys().map(|field| {
+            PluginWarning::new(
+                format!(
+                    "plugin.json.extensions.{ORCACODE_EXTENSION_NAMESPACE}.{field}"
+                ),
+                "unknown Orcacode extension manifest field ignored; hooks use the namespaced hooks.json file",
+            )
+        })),
+        None => warnings.push(PluginWarning::new(
+            format!("plugin.json.extensions.{ORCACODE_EXTENSION_NAMESPACE}"),
+            "Orcacode extension manifest data must be an object and was ignored",
+        )),
+    }
 }
 
 fn require_schema(object: &Map<String, Value>) -> Result<(), PluginError> {

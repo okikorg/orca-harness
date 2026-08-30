@@ -1,29 +1,53 @@
 //! Standalone and Agent Plugin MCP tools behind one shared handle.
 //!
-//! `/mcp` still edits only standalone config. Agent Plugin registrations are
-//! snapshotted when this manager is constructed, so CLI plugin state applies
-//! to the next process while worker-triggered standalone reloads reconcile
+//! `/mcp` edits standalone config and displays plugin servers read-only.
+//! Plugin registrations are snapshotted when this manager is constructed, so
+//! saved plugin changes apply next process while standalone reloads reconcile
 //! against the same plugin state.
 //!
 //! Reloads are a diff, not a rebuild. Only added, removed, unhealthy, or
 //! identity-changed servers reconnect. Failed connections retain their error
 //! until desired state changes, and dropping a connection kills its process.
 
-use std::collections::{BTreeSet, HashMap};
-use std::io;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use orca_harness_core::Tool;
-use orca_harness_tool_extensions::agent_plugins::load_agent_plugin;
+use orca_harness_tool_extensions::agent_plugins::PluginHook;
 use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient, StdioLaunch};
 
-/// What the last connection attempt for a server produced. Rendered by
-/// the /mcp overlay next to each standalone row.
+mod hooks;
+mod plugins;
+pub(crate) mod view;
+
+/// What the last connection attempt for a server produced in `/mcp`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpState {
     Connected(usize),
     Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginRuntimeState {
+    NotLoaded,
+    Starting,
+    Loaded {
+        servers: usize,
+        tools: usize,
+    },
+    Degraded {
+        connected: usize,
+        servers: usize,
+        tools: usize,
+        warning: String,
+    },
+    Failed {
+        connected: usize,
+        servers: usize,
+        tools: usize,
+        error: String,
+    },
 }
 
 struct Connection {
@@ -73,89 +97,19 @@ struct PluginCollision {
     id: String,
 }
 
-/// Static plugin state for one Orcacode process. Loading validates files but
-/// does not create plugin-owned data or execute plugin code.
 #[derive(Clone, Default)]
 struct PluginSnapshot {
     servers: Vec<PluginServer>,
+    hooks: Vec<PluginHook>,
+    hook_counts: BTreeMap<String, usize>,
+    hook_data: BTreeMap<String, PathBuf>,
+    loaded: BTreeSet<String>,
+    errors: BTreeMap<String, String>,
+    mcp_warnings: BTreeMap<String, Vec<String>>,
     startup_lines: Arc<Mutex<Option<Vec<String>>>>,
 }
 
-impl PluginSnapshot {
-    fn load() -> Self {
-        Self::from_registrations(crate::config::stored_plugins(), |name| {
-            crate::config::plugin_data_path(name)
-        })
-    }
-
-    fn from_registrations(
-        mut registrations: Vec<crate::config::RegisteredPlugin>,
-        data_path: impl Fn(&str) -> io::Result<PathBuf>,
-    ) -> Self {
-        registrations.sort_by(|left, right| left.name.cmp(&right.name));
-        let mut servers = Vec::new();
-        let mut lines = Vec::new();
-        for registered in registrations.into_iter().filter(|plugin| plugin.enabled) {
-            let data = match data_path(&registered.name) {
-                Ok(data) => data,
-                Err(error) => {
-                    lines.push(format!("Plugin {} · {error}", registered.name));
-                    continue;
-                }
-            };
-            let plugin = match load_agent_plugin(&registered.root, &data) {
-                Ok(plugin) => plugin,
-                Err(error) => {
-                    lines.push(format!("Plugin {} · {error}", registered.name));
-                    continue;
-                }
-            };
-            if plugin.name != registered.name {
-                lines.push(format!(
-                    "Plugin {} · registered root now declares plugin {}",
-                    registered.name, plugin.name
-                ));
-                continue;
-            }
-            lines.extend(
-                plugin
-                    .warnings
-                    .iter()
-                    .map(|warning| format!("Plugin {} warning · {warning}", registered.name)),
-            );
-            let mut parsed = plugin.mcp_servers;
-            parsed.sort_by(|left, right| left.server_name.cmp(&right.server_name));
-            servers.extend(parsed.into_iter().map(|server| PluginServer {
-                name: server.id,
-                plugin: registered.name.clone(),
-                server: server.server_name,
-                data: data.clone(),
-                launch: server.launch,
-            }));
-        }
-        Self {
-            servers,
-            startup_lines: Arc::new(Mutex::new(Some(lines))),
-        }
-    }
-
-    #[cfg(test)]
-    fn empty() -> Self {
-        Self::default()
-    }
-
-    fn take_startup_lines(&self) -> Vec<String> {
-        self.startup_lines
-            .lock()
-            .expect("plugin startup lines lock")
-            .take()
-            .unwrap_or_default()
-    }
-}
-
-/// Cloneable handle captured by both agent-build paths. The worker reloads
-/// it, providers and subagents share its catalog, and `/mcp` asks state only
-/// for names from standalone config.
+/// Shared MCP handle used by builders, workers, providers, subagents, and pickers.
 #[derive(Clone)]
 pub struct McpServers {
     connections: Arc<RwLock<HashMap<String, Connection>>>,
@@ -214,6 +168,106 @@ impl McpServers {
             }
             None => McpState::Connected(connection.tools.len()),
         })
+    }
+
+    /// Aggregate one plugin's process snapshot for the `/plugin` picker.
+    /// Saved enablement is intentionally left to the caller so configuration
+    /// and what this already-running process loaded remain visibly distinct.
+    pub fn plugin_state(&self, name: &str) -> PluginRuntimeState {
+        if let Some(error) = self.plugins.errors.get(name) {
+            return PluginRuntimeState::Failed {
+                connected: 0,
+                servers: 0,
+                tools: 0,
+                error: error.clone(),
+            };
+        }
+        if !self.plugins.loaded.contains(name) {
+            return PluginRuntimeState::NotLoaded;
+        }
+        let plugin_servers = self
+            .plugins
+            .servers
+            .iter()
+            .filter(|server| server.plugin == name)
+            .collect::<Vec<_>>();
+        let mcp_warnings = self
+            .plugins
+            .mcp_warnings
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        if plugin_servers.is_empty() {
+            return if mcp_warnings.is_empty() {
+                PluginRuntimeState::Loaded {
+                    servers: 0,
+                    tools: 0,
+                }
+            } else {
+                PluginRuntimeState::Degraded {
+                    connected: 0,
+                    servers: 0,
+                    tools: 0,
+                    warning: mcp_warnings.join("; "),
+                }
+            };
+        }
+
+        let collisions = self
+            .plugin_collisions
+            .lock()
+            .expect("plugin collision lock");
+        let connections = self.connections.read().expect("mcp lock");
+        let mut connected = 0;
+        let mut tools = 0;
+        let mut pending = false;
+        let mut failures = Vec::new();
+        for server in &plugin_servers {
+            if collisions
+                .iter()
+                .any(|collision| collision.plugin == name && collision.server == server.server)
+            {
+                failures.push(format!("{}: server ID collision", server.server));
+                continue;
+            }
+            let Some(connection) = connections.get(&server.name) else {
+                pending = true;
+                continue;
+            };
+            match &connection.error {
+                Some(error) => failures.push(format!("{}: {error}", server.server)),
+                None if !self.catalog.healthy(&server.name) => {
+                    failures.push(format!("{}: connection interrupted", server.server))
+                }
+                None => {
+                    connected += 1;
+                    tools += connection.tools.len();
+                }
+            }
+        }
+        if !failures.is_empty() {
+            return PluginRuntimeState::Failed {
+                connected,
+                servers: plugin_servers.len(),
+                tools,
+                error: failures.join("; "),
+            };
+        }
+        if pending {
+            return PluginRuntimeState::Starting;
+        }
+        if !mcp_warnings.is_empty() {
+            return PluginRuntimeState::Degraded {
+                connected,
+                servers: plugin_servers.len(),
+                tools,
+                warning: mcp_warnings.join("; "),
+            };
+        }
+        PluginRuntimeState::Loaded {
+            servers: connected,
+            tools,
+        }
     }
 
     /// Reconcile standalone config and the process's fixed plugin snapshot.

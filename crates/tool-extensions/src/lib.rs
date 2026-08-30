@@ -7,5 +7,6 @@
 
 pub mod agent_plugins;
 pub mod mcp;
+pub mod plugin_hooks;
 pub mod skills;
 pub mod web;

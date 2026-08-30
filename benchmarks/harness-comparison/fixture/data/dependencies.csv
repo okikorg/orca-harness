@@ -1,0 +1,6 @@
+name,tier,size_kb,cold_load_ms
+serde,critical,300,8
+tokio,critical,650,15
+ratatui,interactive,900,25
+reqwest,critical,1100,32
+syn,build,2400,0

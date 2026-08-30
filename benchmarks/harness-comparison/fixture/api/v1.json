@@ -1,0 +1,11 @@
+{
+  "routes": [
+    "GET /v2/invoices/:id",
+    "POST /v2/invoices",
+    "POST /v2/receipts"
+  ],
+  "invoice": {
+    "required": ["tenant_id", "amount_cents"],
+    "optional": ["memo", "legacy_note"]
+  }
+}

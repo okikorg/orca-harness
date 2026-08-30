@@ -1,0 +1,4 @@
+region: eu
+features:
+  invoice_pdf: false
+  tax_shadow: true

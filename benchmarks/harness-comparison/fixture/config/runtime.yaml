@@ -1,0 +1,12 @@
+environment: production
+http:
+  gateway_port: 7412
+  admin_port: 7413
+  request_timeout_seconds: 45
+retries:
+  retry_budget: 7
+  base_delay_ms: 125
+  max_delay_ms: 2000
+features:
+  ledger_v2: true
+  async_receipts: false

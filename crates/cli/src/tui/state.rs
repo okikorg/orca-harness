@@ -1,7 +1,7 @@
 //! The interactive terminal's persistent state: configuration handed in
 //! from the runner, the full-screen [`App`] structure, and the modal
 //! selectors (model/location/provider/theme/view/spacing/usage/api-key/
-//! settings/approvals/extensions/mcp/skills/sessions) that overlays can
+//! settings/approvals/extensions/mcp/plugins/skills/sessions) that overlays can
 //! host. Rendering and key handling live in the sibling modules; this one
 //! only owns the data.
 
@@ -246,11 +246,16 @@ pub(crate) enum Overlay {
     },
     /// The harness extension catalog; enter toggles the selected one.
     Extensions { picker: ListPicker },
-    /// The configured MCP servers; space (or enter) toggles the
-    /// selected one on or off. Rows come from the config, so a toggle
-    /// redraws immediately while the reconnect runs behind it.
+    /// Standalone and plugin MCP servers. Standalone rows toggle on or
+    /// off; plugin rows are read-only and direct management to `/plugin`.
     Mcp {
-        servers: Vec<crate::config::McpServer>,
+        entries: Vec<crate::tui::mcp_picker::Entry>,
+        filter: String,
+        picker: ListPicker,
+    },
+    /// Registered Agent Plugins with saved and process-live state separated.
+    Plugins {
+        entries: Vec<crate::config::RegisteredPlugin>,
         filter: String,
         picker: ListPicker,
     },

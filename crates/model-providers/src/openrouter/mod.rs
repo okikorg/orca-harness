@@ -85,6 +85,19 @@ impl OpenRouterModel {
         self
     }
 
+    /// Enable Anthropic-compatible ephemeral prompt caching through
+    /// OpenRouter. The request field is intentionally absent by default.
+    pub fn prompt_cache(mut self, enabled: bool) -> Self {
+        self.inner = self.inner.prompt_cache(enabled);
+        self
+    }
+
+    /// Pin every step in a run to the provider route holding its warm cache.
+    pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.inner = self.inner.session_id(session_id);
+        self
+    }
+
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.inner = self.inner.nested_reasoning_effort(effort);
         self

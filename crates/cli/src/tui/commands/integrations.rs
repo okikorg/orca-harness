@@ -1,7 +1,271 @@
 use super::super::*;
-use crate::tui::components::picker::ListPicker;
+use crate::tui::components::picker::{ListPicker, PickerAction};
 use crate::tui::format::size;
+use crate::tui::render::matching_indices;
 use crate::tui::state::SKILL_ACTIONS;
+
+pub(crate) const PLUGIN_ACTIONS: &[PickerAction] = &[
+    PickerAction {
+        key: 't',
+        label: "toggle",
+    },
+    PickerAction {
+        key: 'i',
+        label: "inspect",
+    },
+    PickerAction {
+        key: 'v',
+        label: "validate",
+    },
+    PickerAction {
+        key: 'x',
+        label: "test",
+    },
+    PickerAction {
+        key: 'd',
+        label: "uninstall",
+    },
+];
+
+const PLUGIN_USAGE: &str = "usage: /plugin [list | init <name> --py|--ts | validate [path] | \
+test [path] | install [path] | inspect <name> | enable <name> | disable <name> | uninstall <name>]";
+
+pub(crate) fn plugin_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
+    let mut parts = args.split_whitespace();
+    match parts.next() {
+        None | Some("list") if parts.next().is_none() => open_plugin_picker(app),
+        Some("init") => {
+            let (Some(name), Some(flag), None) = (parts.next(), parts.next(), parts.next()) else {
+                push_error(app, PLUGIN_USAGE);
+                return;
+            };
+            let language = match flag {
+                "--python" | "--py" => crate::plugin::Language::Python,
+                "--typescript" | "--ts" => crate::plugin::Language::TypeScript,
+                _ => {
+                    push_error(app, PLUGIN_USAGE);
+                    return;
+                }
+            };
+            let root = std::path::Path::new(&app.cfg.workspace_root);
+            show_plugin_result(app, crate::plugin::init_in(root, name, language));
+        }
+        Some("validate") => {
+            let path = plugin_path(app, command_tail(args));
+            show_plugin_result(app, crate::plugin::validate(&path));
+        }
+        Some("test") => {
+            let path = plugin_path(app, command_tail(args));
+            if worker.send(WorkerCmd::TestPlugin { path }).is_err() {
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, "testing plugin executable components…");
+            }
+        }
+        Some("install") => {
+            let path = plugin_path(app, command_tail(args));
+            show_plugin_result(app, crate::plugin::install(&path));
+        }
+        Some("inspect") => {
+            let (Some(name), None) = (parts.next(), parts.next()) else {
+                push_error(app, PLUGIN_USAGE);
+                return;
+            };
+            let result = crate::plugin::inspect(name).map(|mut lines| {
+                lines.push(format!(
+                    "runtime: {}",
+                    plugin_runtime_note(&app.cfg.mcp, &app.cfg.skills, name)
+                ));
+                lines
+            });
+            show_plugin_result(app, result);
+        }
+        Some("enable") => named_plugin_action(app, parts, crate::plugin::enable),
+        Some("disable") => named_plugin_action(app, parts, crate::plugin::disable),
+        Some("uninstall") => {
+            let (Some(name), None) = (parts.next(), parts.next()) else {
+                push_error(app, PLUGIN_USAGE);
+                return;
+            };
+            let result = crate::plugin::uninstall(name);
+            let success = result.is_ok();
+            show_plugin_result(app, result);
+            if success {
+                push_notice(
+                    app,
+                    "any loaded plugin skills, tools, and hooks remain available until this TUI exits",
+                );
+            }
+        }
+        _ => push_error(app, PLUGIN_USAGE),
+    }
+}
+
+fn open_plugin_picker(app: &mut App) {
+    let entries = crate::config::stored_plugins();
+    if entries.is_empty() {
+        for line in [
+            "no plugins registered:",
+            "  /plugin install <path>       register a local Agent Plugin",
+            "  /plugin init <name> --py     scaffold Python in this workspace",
+            "  /plugin init <name> --ts     scaffold TypeScript in this workspace",
+        ] {
+            app.push_line(Line::from(Span::styled(line, theme().dim)));
+        }
+        return;
+    }
+    app.overlay = Some(Overlay::Plugins {
+        picker: ListPicker::new(entries.len()).actions(PLUGIN_ACTIONS),
+        filter: String::new(),
+        entries,
+    });
+}
+
+fn command_tail(args: &str) -> &str {
+    args.split_once(char::is_whitespace)
+        .map(|(_, tail)| tail.trim())
+        .unwrap_or("")
+}
+
+fn plugin_path(app: &App, path: &str) -> std::path::PathBuf {
+    let path = if path.is_empty() {
+        std::path::PathBuf::from(&app.cfg.workspace_root)
+    } else {
+        std::path::PathBuf::from(path)
+    };
+    if path.is_absolute() {
+        path
+    } else {
+        std::path::Path::new(&app.cfg.workspace_root).join(path)
+    }
+}
+
+fn named_plugin_action<'a>(
+    app: &mut App,
+    mut parts: impl Iterator<Item = &'a str>,
+    action: impl FnOnce(&str) -> Result<Vec<String>, String>,
+) {
+    let (Some(name), None) = (parts.next(), parts.next()) else {
+        push_error(app, PLUGIN_USAGE);
+        return;
+    };
+    show_plugin_result(app, action(name));
+}
+
+fn show_plugin_result(app: &mut App, result: Result<Vec<String>, String>) {
+    match result {
+        Ok(lines) => {
+            for line in lines {
+                push_notice(app, line);
+            }
+        }
+        Err(error) => push_error(app, error),
+    }
+}
+
+fn plugin_runtime_note(
+    mcp: &crate::mcp::McpServers,
+    skills: &crate::skills::Skills,
+    name: &str,
+) -> String {
+    let skill_count = skills.plugin_count(name);
+    let hook_count = mcp.plugin_hook_count(name);
+    let suffix = format!(" · {skill_count} skills available · {hook_count} hooks configured");
+    match mcp.plugin_state(name) {
+        crate::mcp::PluginRuntimeState::NotLoaded => "not loaded in this TUI".into(),
+        crate::mcp::PluginRuntimeState::Starting => format!("starting{suffix}"),
+        crate::mcp::PluginRuntimeState::Loaded { servers, tools } => {
+            format!("loaded · {servers} servers · {tools} tools available{suffix}")
+        }
+        crate::mcp::PluginRuntimeState::Degraded {
+            connected,
+            servers,
+            tools,
+            warning,
+        } => {
+            format!("degraded · {connected}/{servers} servers · {tools} tools{suffix} · {warning}")
+        }
+        crate::mcp::PluginRuntimeState::Failed {
+            connected,
+            servers,
+            tools,
+            error,
+        } => format!("failed · {connected}/{servers} servers · {tools} tools{suffix} · {error}"),
+    }
+}
+
+pub(crate) fn plugin_picker_action(
+    app: &mut App,
+    worker: &mpsc::UnboundedSender<WorkerCmd>,
+    registered: crate::config::RegisteredPlugin,
+    action: char,
+) {
+    let name = registered.name.clone();
+    match action {
+        't' => {
+            let result = if registered.enabled {
+                crate::plugin::disable(&name)
+            } else {
+                crate::plugin::enable(&name)
+            };
+            let success = result.is_ok();
+            show_plugin_result(app, result);
+            if success {
+                if let Some(Overlay::Plugins { entries, .. }) = &mut app.overlay {
+                    if let Some(entry) = entries.iter_mut().find(|entry| entry.name == name) {
+                        entry.enabled = !registered.enabled;
+                    }
+                }
+            }
+        }
+        'i' => {
+            let result = crate::plugin::inspect(&name).map(|mut lines| {
+                lines.push(format!(
+                    "runtime: {}",
+                    plugin_runtime_note(&app.cfg.mcp, &app.cfg.skills, &name)
+                ));
+                lines
+            });
+            show_plugin_result(app, result);
+        }
+        'v' => show_plugin_result(app, crate::plugin::validate(&registered.root)),
+        'x' => {
+            if worker
+                .send(WorkerCmd::TestPlugin {
+                    path: registered.root,
+                })
+                .is_err()
+            {
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, format!("testing plugin {name} executable components…"));
+            }
+        }
+        'd' => match crate::plugin::uninstall(&name) {
+            Ok(lines) => {
+                show_plugin_result(app, Ok(lines));
+                push_notice(
+                    app,
+                    "any loaded plugin skills, tools, and hooks remain available until this TUI exits",
+                );
+                if let Some(Overlay::Plugins {
+                    entries,
+                    filter,
+                    picker,
+                }) = &mut app.overlay
+                {
+                    entries.retain(|entry| entry.name != name);
+                    picker.set_len(matching_indices(entries, filter, |entry| &entry.name).len());
+                    if entries.is_empty() {
+                        app.overlay = None;
+                    }
+                }
+            }
+            Err(error) => push_error(app, error),
+        },
+        _ => {}
+    }
+}
 
 pub(crate) fn skills_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<WorkerCmd>) {
     let dim = theme().dim;

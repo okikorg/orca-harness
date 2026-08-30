@@ -17,6 +17,7 @@ mod plugin;
 mod presentation;
 mod prompt;
 mod refine;
+mod run_args;
 mod skills;
 mod subagent_models;
 mod tui;
@@ -24,6 +25,7 @@ mod view;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -38,6 +40,7 @@ use orca_harness_tools::Workspace;
 use crate::mode::{Mode, ModeHandle};
 use crate::msg::{Provider, UiMsg};
 use crate::plan::PlanArea;
+pub(crate) use crate::run_args::parse_run_args;
 
 const ORCACODE_USER_AGENT: &str = concat!("orcacode/", env!("CARGO_PKG_VERSION"));
 const ORCACODE_REFERER: &str = env!("CARGO_PKG_REPOSITORY");
@@ -91,6 +94,15 @@ OPTIONS:
   --list-models      print the endpoint's model catalog and exit
   --workspace DIR    tool workspace root (default: current directory)
   --max-steps N      model invocations per run (default 48)
+  --max-output-tokens N
+                     OpenAI-compatible/OpenRouter output-token cap
+  --effort LEVEL     reasoning effort (for example low, medium, high)
+  --prompt-cache     enable provider prompt-cache hints (default)
+  --no-prompt-cache  disable provider prompt-cache hints
+  --tools NAMES      headless: comma-separated tool allowlist
+  --bare             headless: skip user instructions, skills, memory,
+                     MCP, compute, subagents, and web tools; defaults
+                     --tools to read_file,list_dir,grep,glob
   --subagent-depth N subagent nesting levels, 1-5 (env ORCA_SUBAGENT_DEPTH;
                      default 1; /subagents adjusts it live in the TUI)
   --theme NAME       theme: default, mono, dracula,
@@ -143,6 +155,11 @@ pub struct Config {
     pub json: bool,
     pub auto_approve: bool,
     pub max_steps: u32,
+    pub max_output_tokens: Option<u64>,
+    pub reasoning_effort: Option<String>,
+    pub prompt_cache: bool,
+    pub tools: Option<Vec<String>>,
+    pub bare: bool,
     pub subagent_depth: u32,
     pub continue_latest: bool,
     pub resume_id: Option<String>,
@@ -160,7 +177,7 @@ pub struct Config {
 }
 
 pub(crate) enum Invocation {
-    Run(Config),
+    Run(Box<Config>),
     Plugin(plugin::PluginCommand),
 }
 
@@ -193,119 +210,7 @@ fn parse_invocation() -> Result<Invocation, String> {
     if let Some(tail) = plugin::invocation_tail(&args) {
         return plugin::parse(tail).map(Invocation::Plugin);
     }
-    parse_run_args(args).map(Invocation::Run)
-}
-
-fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
-    let mut model = std::env::var("ORCA_MODEL").ok();
-    let mut base_url = std::env::var("ORCA_BASE_URL").ok();
-    let mut api_key: Option<String> = None;
-    let mut firecrawl_key: Option<String> = None;
-    let mut openrouter = false;
-    let mut list_models = false;
-    let mut workspace = std::env::current_dir().map_err(|e| e.to_string())?;
-    let mut prompt = None;
-    let mut json = false;
-    let mut auto_approve = false;
-    let mut max_steps = 48;
-    let mut subagent_depth: u32 = std::env::var("ORCA_SUBAGENT_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    let mut continue_latest = false;
-    let mut resume_id: Option<String> = None;
-    let mut no_session = false;
-    let mut plan = false;
-    let mut yolo = false;
-    let mut theme = std::env::var("ORCA_THEME").ok();
-
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        let mut value = |name: &str| {
-            args.next()
-                .ok_or_else(|| format!("{name} requires a value"))
-        };
-        match arg.as_str() {
-            "--model" => model = Some(value("--model")?),
-            "--base-url" => base_url = Some(value("--base-url")?),
-            "--api-key" => api_key = Some(value("--api-key")?),
-            "--firecrawl-key" => firecrawl_key = Some(value("--firecrawl-key")?),
-            "--openrouter" => openrouter = true,
-            "--list-models" => list_models = true,
-            "--workspace" => workspace = PathBuf::from(value("--workspace")?),
-            "--max-steps" => {
-                max_steps = value("--max-steps")?
-                    .parse()
-                    .map_err(|_| "--max-steps expects a number".to_string())?
-            }
-            "--subagent-depth" => {
-                subagent_depth = value("--subagent-depth")?
-                    .parse()
-                    .map_err(|_| "--subagent-depth expects a number".to_string())?
-            }
-            "--theme" => theme = Some(value("--theme")?),
-            "--continue" => continue_latest = true,
-            "--resume" => resume_id = Some(value("--resume")?),
-            "--no-session" => no_session = true,
-            "--plan" => plan = true,
-            "--yolo" => yolo = true,
-            "--json" => json = true,
-            "--auto-approve" => auto_approve = true,
-            "-p" | "--prompt" => prompt = Some(value("-p")?),
-            "-h" | "--help" => {
-                print!("{USAGE}");
-                std::process::exit(0);
-            }
-            other => return Err(format!("unknown flag: {other}\n\n{USAGE}")),
-        }
-    }
-
-    // The provider saved by the last session applies only when nothing
-    // explicit picked one (--openrouter, --base-url, or ORCA_BASE_URL).
-    let stored_provider = if openrouter || base_url.is_some() {
-        None
-    } else {
-        config::stored_provider().and_then(|label| Provider::from_label(&label))
-    };
-    let openrouter = openrouter || stored_provider == Some(Provider::OpenRouter);
-    let provider = select_provider(openrouter, base_url.is_some(), stored_provider);
-
-    // An explicit --api-key wins; otherwise the endpoint's env var, then
-    // a key saved to the config file by a previous session.
-    let api_key = api_key.or_else(|| provider.resolve_key());
-    let firecrawl_key = firecrawl_key.or_else(|| std::env::var("FIRECRAWL_API_KEY").ok());
-    let base_url = base_url.unwrap_or_else(|| match provider {
-        Provider::OpenRouter => openrouter::OPENROUTER_BASE_URL.into(),
-        Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL.into(),
-        Provider::OpenAi if api_key.is_some() => "https://api.openai.com/v1".into(),
-        Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),
-    });
-    let model = model
-        .or_else(|| config::stored_model(provider.label()))
-        .unwrap_or_else(|| provider.default_model().into());
-    let theme = resolve_theme(theme);
-
-    Ok(Config {
-        provider,
-        model,
-        base_url,
-        api_key,
-        firecrawl_key,
-        openrouter,
-        list_models,
-        workspace,
-        prompt,
-        json,
-        auto_approve,
-        max_steps,
-        subagent_depth,
-        continue_latest,
-        resume_id,
-        no_session,
-        theme,
-        plan,
-        yolo,
-    })
+    parse_run_args(args).map(|config| Invocation::Run(Box::new(config)))
 }
 
 fn select_provider(
@@ -420,6 +325,10 @@ struct Endpoint {
     api_key: Option<String>,
     model: String,
     reasoning_effort: Option<String>,
+    max_output_tokens: Option<u64>,
+    prompt_cache: bool,
+    request_session_id: Option<String>,
+    model_retries: Arc<AtomicU64>,
 }
 
 impl Endpoint {
@@ -431,7 +340,13 @@ impl Endpoint {
             base_url: cfg.base_url.clone(),
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
-            reasoning_effort: None,
+            reasoning_effort: cfg.reasoning_effort.clone(),
+            max_output_tokens: cfg.max_output_tokens,
+            prompt_cache: cfg.prompt_cache,
+            request_session_id: cfg
+                .prompt_cache
+                .then(orca_harness_extensions::new_session_id),
+            model_retries: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -455,6 +370,10 @@ impl Endpoint {
         self.build_model_for_ui(None)
     }
 
+    fn model_retry_counter(&self) -> Arc<AtomicU64> {
+        self.model_retries.clone()
+    }
+
     fn build_model_for_ui(&self, ui: Option<mpsc::UnboundedSender<UiMsg>>) -> Arc<dyn Model> {
         let model: Arc<dyn Model> = match self.provider {
             Provider::OpenRouter => {
@@ -470,6 +389,15 @@ impl Endpoint {
                 if let Some(effort) = &self.reasoning_effort {
                     model = model.reasoning_effort(effort.clone());
                 }
+                if let Some(max_tokens) = self.max_output_tokens {
+                    model = model.max_tokens(max_tokens);
+                }
+                if self.prompt_cache {
+                    model = model.prompt_cache(true);
+                    if let Some(session_id) = &self.request_session_id {
+                        model = model.session_id(session_id.clone());
+                    }
+                }
                 Arc::new(model)
             }
             Provider::OpenAi | Provider::Local => {
@@ -482,6 +410,15 @@ impl Endpoint {
                 if let Some(effort) = &self.reasoning_effort {
                     model = model.reasoning_effort(effort.clone());
                 }
+                if let Some(max_tokens) = self.max_output_tokens {
+                    model = model.max_tokens(max_tokens);
+                }
+                if self.provider == Provider::OpenAi && self.api_key.is_some() && self.prompt_cache
+                {
+                    if let Some(session_id) = &self.request_session_id {
+                        model = model.prompt_cache_key(session_id.clone());
+                    }
+                }
                 Arc::new(model)
             }
             Provider::OpenAiCodex => {
@@ -492,6 +429,11 @@ impl Endpoint {
                 if let Some(effort) = &self.reasoning_effort {
                     model = model.reasoning_effort(effort.clone());
                 }
+                if self.prompt_cache {
+                    if let Some(session_id) = &self.request_session_id {
+                        model = model.prompt_cache_key(session_id.clone());
+                    }
+                }
                 Arc::new(model)
             }
         };
@@ -500,18 +442,21 @@ impl Endpoint {
         // connection, HTTP, and timeout failures. Keep this at the shared
         // endpoint boundary so OpenRouter, OpenAI, and local compatible
         // providers all receive the same policy.
-        let mut model = RetryModel::new(model, Self::MODEL_MAX_ATTEMPTS);
-        if let Some(ui) = ui {
-            model = model.on_retry(move |attempt, max_attempts, _error| {
+        let retries = self.model_retries.clone();
+        let model = RetryModel::new(model, Self::MODEL_MAX_ATTEMPTS).on_retry(
+            move |attempt, max_attempts, _error| {
+                retries.fetch_add(1, Ordering::Relaxed);
                 // One compact notification is enough. The final run error
                 // retains the provider detail if every attempt fails.
                 if attempt == 2 {
-                    let _ = ui.send(UiMsg::Notice(format!(
-                        "model request failed · retrying up to {max_attempts} attempts"
-                    )));
+                    if let Some(ui) = &ui {
+                        let _ = ui.send(UiMsg::Notice(format!(
+                            "model request failed · retrying up to {max_attempts} attempts"
+                        )));
+                    }
                 }
-            });
-        }
+            },
+        );
         Arc::new(model)
     }
 }

@@ -1,6 +1,10 @@
 mod commands;
 mod scaffold;
 
+pub(crate) use commands::{
+    disable, enable, init_in, inspect, install, test_report, uninstall, validate,
+};
+
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

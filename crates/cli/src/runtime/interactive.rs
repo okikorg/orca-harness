@@ -38,16 +38,35 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // Scanned before the prompt is built: whether the `skill` tool gets
     // advertised depends on whether any skill was found, and the scan is
     // a handful of read_dir calls.
-    let skills = skills::Skills::for_session(&cfg.workspace);
-    let skill_notices = skills.reload();
+    let skills = if cfg.bare {
+        skills::Skills::default()
+    } else {
+        skills::Skills::for_session(&cfg.workspace)
+    };
+    let skill_notices = if cfg.bare {
+        Vec::new()
+    } else {
+        skills.reload()
+    };
     // The base prompt is a fixed string with tests asserting its
     // contents; the user's standing instructions are appended here, at
     // the call site, so no AGENTS.md can ever change what that function
     // returns. `/clear` re-pushes this composed string, so instructions
     // survive a reset.
-    let instructions = instructions::Instructions::load(&cfg.workspace);
+    let instructions = if cfg.bare {
+        instructions::Instructions::default()
+    } else {
+        instructions::Instructions::load(&cfg.workspace)
+    };
     let instruction_notices = instructions.notices();
-    let mut system = system_prompt(&ws, cfg.firecrawl_key.is_some());
+    let mut system = if cfg.bare {
+        headless::bare_system_prompt(
+            &ws,
+            &headless::selected_tool_names(&cfg).unwrap_or_default(),
+        )
+    } else {
+        system_prompt(&ws, cfg.firecrawl_key.is_some())
+    };
     if let Some(block) = instructions.block() {
         system.push_str(&block);
     }
@@ -92,7 +111,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
             Some((handler, resumed)) => (Some(Arc::new(handler)), resumed),
             None => (None, None),
         };
-        for line in skill_notices.iter().chain(instruction_notices.iter()) {
+        for line in &instruction_notices {
             eprintln!("{line}");
         }
         let code = headless::run(
@@ -104,11 +123,13 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
             handler,
             resumed,
             &skills,
+            &skill_notices,
             &mode,
             &todos,
             &plan_area,
             &memory,
             &memory_scope,
+            endpoint.model_retry_counter(),
         )
         .await;
         return ExitCode::from(code as u8);
@@ -156,13 +177,16 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // tools are in the first agent; status lines land in the transcript
     // once the TUI starts draining the channel.
     let mcp = mcp::McpServers::new();
-    for line in mcp.reload().await {
+    let mut mcp_notices = mcp.reload().await;
+    let (plugin_hooks, hook_notices) = mcp.plugin_hook_extension();
+    mcp_notices.extend(hook_notices);
+    let hook_count = plugin_hooks.as_ref().map_or(0, |hooks| hooks.len());
+    for line in super::startup::notices(&mcp, &skills, hook_count, mcp_notices, &skill_notices) {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
-    // The skills scan and the instruction load already ran (the system
-    // prompt depended on both); replay what they had to say now that
-    // there is a transcript.
-    for line in skill_notices.into_iter().chain(instruction_notices) {
+    // The instruction load already ran before the system prompt was built;
+    // replay its diagnostics now that there is a transcript.
+    for line in instruction_notices {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
     // A session that starts in yolo says so once, up front. The status
@@ -183,6 +207,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let context_capacity = context_capacity.clone();
         let session = session.clone();
         let mcp = mcp.clone();
+        let plugin_hooks = plugin_hooks.clone();
         let skills = skills.clone();
         let mode = mode.clone();
         let todos = todos.clone();
@@ -206,6 +231,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 &context_capacity,
                 &session,
                 &mcp,
+                &plugin_hooks,
                 &skills,
                 &mode,
                 &todos,
@@ -291,6 +317,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     context_capacity: &ContextCapacity,
     session: &Option<Arc<SessionHandler>>,
     mcp: &mcp::McpServers,
+    plugin_hooks: &Option<Arc<orca_harness_tool_extensions::plugin_hooks::PluginHookExtension>>,
     skills: &skills::Skills,
     mode: &ModeHandle,
     todos: &TodoList,
@@ -322,12 +349,15 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
-        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
-        .extension(Approval::with_mode(
-            mode.clone(),
-            ui.clone(),
-            workspace_scope(ws),
-        ));
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()));
+    if let Some(plugin_hooks) = plugin_hooks {
+        agent = agent.extension_arc(plugin_hooks.clone());
+    }
+    agent = agent.extension(Approval::with_mode(
+        mode.clone(),
+        ui.clone(),
+        workspace_scope(ws),
+    ));
     if extensions::enabled("long-session") {
         let ui = ui.clone();
         agent = agent.extension(
@@ -428,6 +458,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let subagent_mode = mode.clone();
     let subagent_plan = plan_area.clone();
     let subagent_settings = subagent_depth.clone();
+    let subagent_plugin_hooks = plugin_hooks.clone();
     subagent = subagent.spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
         subagent_extensions(
             spawn,
@@ -435,6 +466,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             &subagent_mode,
             &subagent_plan,
             &subagent_settings,
+            subagent_plugin_hooks.as_ref(),
         )
     }));
     agent = agent.tool_arc(std::sync::Arc::new(subagent));

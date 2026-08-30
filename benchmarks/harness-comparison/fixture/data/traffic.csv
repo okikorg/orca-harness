@@ -1,0 +1,5 @@
+route,requests,error_count,p95_ms
+/health,1200,0,8
+/v2/invoices/:id,840,12,190
+/v2/invoices,360,9,240
+/v2/receipts,210,3,175

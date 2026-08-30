@@ -1,6 +1,10 @@
 # {{NAME}}
 
 Python 3.11+ Agent Plugin scaffold using the official MCP Python SDK.
+The tracked `skills/` directory is intentionally empty; add standard
+`skills/<name>/SKILL.md` packages when the plugin needs reusable guidance.
+The empty `io.github.okikorg.orcacode/hooks.json` is an optional Orcacode
+client extension; Agent Plugins 1.0 itself standardizes only Skills and MCP.
 
 Orcacode does not itself run dependency installers. Install and test the
 checkout explicitly for development:

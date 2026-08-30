@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Orcacode vs Pi — cache-enabled Claude Haiku 4.5 benchmark</title>
+  <style>
+    :root {
+      --page: #091011;
+      --panel: #0e1718;
+      --panel-2: #111d1f;
+      --line: #243537;
+      --line-soft: #192729;
+      --text: #edf4f1;
+      --muted: #91a5a1;
+      --orca: #51e2b3;
+      --orca-soft: #173d34;
+      --pi: #f0a95e;
+      --pi-soft: #46301d;
+      --warn: #ffcf70;
+      --bad: #f17575;
+      --max: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      background: var(--page);
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background-color: var(--page);
+      background-image:
+        linear-gradient(rgba(81, 226, 179, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(81, 226, 179, .035) 1px, transparent 1px);
+      background-size: 32px 32px;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--orca); text-underline-offset: 3px; }
+    a:hover { color: #9df4d8; }
+
+    .shell {
+      width: min(calc(100% - 40px), var(--max));
+      margin: 0 auto;
+    }
+
+    header {
+      padding: 72px 0 48px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .kicker,
+    .eyebrow {
+      margin: 0 0 16px;
+      color: var(--orca);
+      font: 700 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-size: clamp(38px, 7vw, 76px);
+      line-height: .98;
+      letter-spacing: -.055em;
+      text-wrap: balance;
+    }
+
+    .dek {
+      max-width: 780px;
+      margin: 26px 0 0;
+      color: #bed0cc;
+      font-size: clamp(17px, 2vw, 21px);
+      line-height: 1.5;
+    }
+
+    .run-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 22px;
+      margin-top: 28px;
+      color: var(--muted);
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    main { padding: 50px 0 72px; }
+
+    section { margin-top: 64px; }
+    section:first-child { margin-top: 0; }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: clamp(25px, 3.5vw, 38px);
+      line-height: 1.15;
+      letter-spacing: -.03em;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      letter-spacing: -.01em;
+    }
+
+    .section-intro {
+      max-width: 760px;
+      margin: 0 0 24px;
+      color: var(--muted);
+    }
+
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .score {
+      min-height: 158px;
+      padding: 20px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--orca);
+      border-radius: 4px;
+    }
+
+    .score .label {
+      color: var(--muted);
+      font: 700 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .score .value {
+      display: block;
+      margin-top: 12px;
+      font: 700 clamp(28px, 4vw, 42px)/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: -.055em;
+    }
+
+    .score .delta {
+      display: block;
+      margin-top: 12px;
+      color: var(--orca);
+      font-size: 13px;
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .comparison {
+      padding: 20px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .comparison-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .comparison-head strong {
+      color: var(--orca);
+      font: 700 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 78px 1fr 88px;
+      align-items: center;
+      gap: 10px;
+      margin: 9px 0;
+      font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .bar-row .number { text-align: right; color: #c9d7d4; }
+
+    .track {
+      height: 12px;
+      overflow: hidden;
+      background: #071011;
+      border: 1px solid var(--line-soft);
+      border-radius: 2px;
+    }
+
+    .fill { display: block; height: 100%; min-width: 2px; }
+    .fill.orca { background: var(--orca); }
+    .fill.pi { background: var(--pi); }
+    .orca-text { color: var(--orca); }
+    .pi-text { color: var(--pi); }
+
+    .table-wrap {
+      overflow-x: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      text-align: right;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      background: #0b1415;
+      font: 700 10px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    th:first-child,
+    td:first-child { text-align: left; }
+
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: rgba(81, 226, 179, .025); }
+    td.label-cell { color: #cbd9d6; font-weight: 650; }
+    td.task-cell { white-space: normal; min-width: 190px; }
+    td.good { color: var(--orca); }
+    td.warn { color: var(--warn); }
+    td.bad { color: var(--bad); }
+    td.muted { color: var(--muted); }
+
+    .task-name {
+      display: block;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .task-category {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .audit-grid,
+    .method-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .audit,
+    .method-card {
+      padding: 20px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .audit p,
+    .method-card p { margin: 8px 0 0; color: var(--muted); }
+
+    .audit strong {
+      display: block;
+      color: var(--text);
+      font: 700 26px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .audit.pass { border-top: 3px solid var(--orca); }
+    .audit.caution { border-top: 3px solid var(--warn); }
+    .audit.fail { border-top: 3px solid var(--bad); }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 22px;
+      margin-top: 12px;
+      padding: 22px;
+      background: #111916;
+      border: 1px solid #395140;
+      border-left: 4px solid var(--warn);
+      border-radius: 4px;
+    }
+
+    .callout .tag {
+      color: var(--warn);
+      font: 700 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .callout p { margin: 0; color: #c2cfcc; }
+
+    .economics {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 12px;
+    }
+
+    .economics-panel {
+      padding: 22px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .stacked {
+      display: flex;
+      height: 22px;
+      margin: 12px 0 6px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 2px;
+    }
+
+    .stacked span { display: block; height: 100%; }
+    .input { background: var(--orca); }
+    .output { background: #4a9f89; }
+    .read { background: var(--pi); }
+    .write { background: #9b6738; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      color: var(--muted);
+      font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .legend i {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 5px;
+      border-radius: 1px;
+    }
+
+    .big-stat {
+      margin: 10px 0 4px;
+      color: var(--orca);
+      font: 700 38px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: -.05em;
+    }
+
+    .fine-print,
+    footer {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .provenance {
+      margin: 24px 0 0;
+      padding: 18px 20px;
+      color: #adc0bc;
+      background: #091314;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+
+    footer {
+      padding: 26px 0 44px;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 900px) {
+      .score-grid { grid-template-columns: repeat(2, 1fr); }
+      .audit-grid, .method-grid { grid-template-columns: 1fr; }
+      .economics { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 650px) {
+      .shell { width: min(calc(100% - 24px), var(--max)); }
+      header { padding: 48px 0 36px; }
+      main { padding-top: 34px; }
+      section { margin-top: 48px; }
+      .score-grid, .comparison-grid { grid-template-columns: 1fr; }
+      .score { min-height: 0; }
+      .callout { grid-template-columns: 1fr; gap: 8px; }
+    }
+
+    @media print {
+      :root { --page: #fff; --panel: #fff; --panel-2: #fff; --line: #c8d0ce; --line-soft: #e1e5e4; --text: #111; --muted: #53615e; }
+      body { background: #fff; color: #111; font-size: 11px; }
+      .shell { width: 100%; }
+      header { padding: 24px 0; }
+      main { padding: 24px 0; }
+      section { margin-top: 32px; break-inside: avoid; }
+      .score, .comparison, .audit, .method-card, .economics-panel, .table-wrap, .provenance { background: #fff; }
+      .table-wrap { overflow: visible; }
+      th { background: #f3f5f4; }
+      a { color: #075e48; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell">
+      <p class="kicker">Cache-enabled rerun · 32 attempts · 30 August 2026</p>
+      <h1>Orcacode still wins with caching enabled.</h1>
+      <p class="dek">Across 16 repository workloads in one controlled rerun, Orcacode was faster, cheaper, and more token-efficient than Pi while completing one more task correctly.</p>
+      <div class="run-facts">
+        <span>MODEL anthropic/claude-haiku-4.5</span>
+        <span>EFFORT low</span>
+        <span>HARNESSES orcacode + pi</span>
+        <span>MODE headless</span>
+        <span>PROMPT CACHE on</span>
+        <span>WORKSPACES isolated tmp copies</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section aria-labelledby="headline-results">
+      <p class="eyebrow">Headline result</p>
+      <h2 id="headline-results">A clear aggregate lead</h2>
+      <p class="section-intro">Orcacode won 13 of 16 wall-time comparisons and all 16 TTFT and normalized-cost comparisons. Lower is better for the first three cards.</p>
+      <div class="score-grid">
+        <article class="score">
+          <span class="label">Median wall time</span>
+          <span class="value">3.81s</span>
+          <span class="delta">19.8% below Pi</span>
+        </article>
+        <article class="score">
+          <span class="label">End-to-end TTFT</span>
+          <span class="value">692ms</span>
+          <span class="delta">40.9% below Pi</span>
+        </article>
+        <article class="score">
+          <span class="label">Normalized cost</span>
+          <span class="value">$0.123</span>
+          <span class="delta">27.3% below Pi</span>
+        </article>
+        <article class="score">
+          <span class="label">Correct attempts</span>
+          <span class="value">15/16</span>
+          <span class="delta">Pi completed 14/16</span>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="relative-performance">
+      <p class="eyebrow">Relative performance</p>
+      <h2 id="relative-performance">Same model, less work around it</h2>
+      <p class="section-intro">Each bar is scaled against the slower or larger harness for that metric. The model and workload schedule were held constant.</p>
+      <div class="comparison-grid">
+        <article class="comparison">
+          <div class="comparison-head"><h3>Median wall time</h3><strong>−19.8%</strong></div>
+          <div class="bar-row"><span class="orca-text">Orcacode</span><span class="track"><span class="fill orca" style="width:80.2%"></span></span><span class="number">3.81s</span></div>
+          <div class="bar-row"><span class="pi-text">Pi</span><span class="track"><span class="fill pi" style="width:100%"></span></span><span class="number">4.75s</span></div>
+        </article>
+        <article class="comparison">
+          <div class="comparison-head"><h3>End-to-end TTFT</h3><strong>−40.9%</strong></div>
+          <div class="bar-row"><span class="orca-text">Orcacode</span><span class="track"><span class="fill orca" style="width:59.1%"></span></span><span class="number">692ms</span></div>
+          <div class="bar-row"><span class="pi-text">Pi</span><span class="track"><span class="fill pi" style="width:100%"></span></span><span class="number">1,171ms</span></div>
+        </article>
+        <article class="comparison">
+          <div class="comparison-head"><h3>Total tokens</h3><strong>−31.4%</strong></div>
+          <div class="bar-row"><span class="orca-text">Orcacode</span><span class="track"><span class="fill orca" style="width:68.6%"></span></span><span class="number">96,487</span></div>
+          <div class="bar-row"><span class="pi-text">Pi</span><span class="track"><span class="fill pi" style="width:100%"></span></span><span class="number">140,617</span></div>
+        </article>
+        <article class="comparison">
+          <div class="comparison-head"><h3>Normalized cost</h3><strong>−27.3%</strong></div>
+          <div class="bar-row"><span class="orca-text">Orcacode</span><span class="track"><span class="fill orca" style="width:72.7%"></span></span><span class="number">$0.123</span></div>
+          <div class="bar-row"><span class="pi-text">Pi</span><span class="track"><span class="fill pi" style="width:100%"></span></span><span class="number">$0.169</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="aggregate-metrics">
+      <p class="eyebrow">Full totals</p>
+      <h2 id="aggregate-metrics">Aggregate metrics</h2>
+      <p class="section-intro">Totals cover 16 attempts per harness. Medians are calculated across individual attempts; workload p95 is the slowest task time after ordering the 16 workloads.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Metric</th><th>Orcacode</th><th>Pi</th><th>Orcacode advantage</th></tr></thead>
+          <tbody>
+            <tr><td class="label-cell">Runs</td><td>16</td><td>16</td><td class="muted">same</td></tr>
+            <tr><td class="label-cell">Successful / answer-correct</td><td class="good">15 · 93.75%</td><td>14 · 87.50%</td><td class="good">+1 attempt</td></tr>
+            <tr><td class="label-cell">Workspace-correct</td><td class="good">16 · 100%</td><td class="good">16 · 100%</td><td class="muted">same</td></tr>
+            <tr><td class="label-cell">Timeouts</td><td class="good">0</td><td class="good">0</td><td class="muted">same</td></tr>
+            <tr><td class="label-cell">Total wall time</td><td class="good">69.784s</td><td>88.768s</td><td class="good">−21.4%</td></tr>
+            <tr><td class="label-cell">Median wall time</td><td class="good">3.806s</td><td>4.748s</td><td class="good">−19.8%</td></tr>
+            <tr><td class="label-cell">Workload p95</td><td class="good">8.323s</td><td>13.706s</td><td class="good">−39.3%</td></tr>
+            <tr><td class="label-cell">Startup median</td><td class="good">6.8ms</td><td>428.1ms</td><td class="good">−98.4%</td></tr>
+            <tr><td class="label-cell">End-to-end TTFT median</td><td class="good">691.8ms</td><td>1,171.3ms</td><td class="good">−40.9%</td></tr>
+            <tr><td class="label-cell">Model TTFT median</td><td class="good">685.2ms</td><td>743.9ms</td><td class="good">−7.9%</td></tr>
+            <tr><td class="label-cell">Time to first answer median</td><td class="good">2.464s</td><td>4.325s</td><td class="good">−43.0%</td></tr>
+            <tr><td class="label-cell">First tool call median</td><td class="good">1.783s</td><td>2.113s</td><td class="good">−15.6%</td></tr>
+            <tr><td class="label-cell">First tool result median</td><td class="good">1.783s</td><td>2.246s</td><td class="good">−20.6%</td></tr>
+            <tr><td class="label-cell">Input tokens</td><td class="good">89,925</td><td>133,579</td><td class="good">−32.7%</td></tr>
+            <tr><td class="label-cell">Output tokens</td><td class="good">6,562</td><td>7,038</td><td class="good">−6.8%</td></tr>
+            <tr><td class="label-cell">Cache read tokens</td><td>0</td><td>0</td><td class="muted">below model minimum</td></tr>
+            <tr><td class="label-cell">Cache write tokens</td><td>0</td><td>0</td><td class="muted">below model minimum</td></tr>
+            <tr><td class="label-cell">Total tokens</td><td class="good">96,487</td><td>140,617</td><td class="good">−31.4%</td></tr>
+            <tr><td class="label-cell">Tool calls</td><td class="good">72</td><td>73</td><td class="good">−1.4%</td></tr>
+            <tr><td class="label-cell">Turns</td><td class="good">52</td><td>55</td><td class="good">−5.5%</td></tr>
+            <tr><td class="label-cell">Normalized cost</td><td class="good">$0.122735</td><td>$0.168769</td><td class="good">−27.3%</td></tr>
+            <tr><td class="label-cell">Cost / successful attempt</td><td class="good">$0.008182</td><td>$0.012055</td><td class="good">−32.1%</td></tr>
+            <tr><td class="label-cell">Tokens / successful attempt</td><td class="good">6,432</td><td>10,044</td><td class="good">−36.0%</td></tr>
+            <tr><td class="label-cell">Tools / successful attempt</td><td class="good">4.80</td><td>5.21</td><td class="good">−8.0%</td></tr>
+            <tr><td class="label-cell">Turns / successful attempt</td><td class="good">3.47</td><td>3.93</td><td class="good">−11.8%</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="workload-list">
+      <p class="eyebrow">What was tested</p>
+      <h2 id="workload-list">Sixteen distinct repository tasks</h2>
+      <p class="section-intro">The broader workload mixes direct answers, repository search, multi-file correlation, structured aggregation, source-and-doc reasoning, and exact file edits.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Task</th><th>Category</th><th>Mode</th><th>What it measures</th></tr></thead>
+          <tbody>
+            <tr><td>01</td><td class="task-cell"><span class="task-name">api-contract-diff</span></td><td>schema diff</td><td>answer</td><td class="task-cell">Identify API contract changes from fixture schemas.</td></tr>
+            <tr><td>02</td><td class="task-cell"><span class="task-name">cache-contract</span></td><td>source + docs</td><td>answer</td><td class="task-cell">Reconcile cache behavior across implementation and documentation.</td></tr>
+            <tr><td>03</td><td class="task-cell"><span class="task-name">component-weights</span></td><td>targeted lookup</td><td>answer</td><td class="task-cell">Extract and calculate values from a known source target.</td></tr>
+            <tr><td>04</td><td class="task-cell"><span class="task-name">dependency-budget</span></td><td>cost aggregation</td><td>answer</td><td class="task-cell">Aggregate dependency costs against a stated budget.</td></tr>
+            <tr><td>05</td><td class="task-cell"><span class="task-name">dependency-order</span></td><td>graph reasoning</td><td>answer</td><td class="task-cell">Derive a valid execution order from dependency edges.</td></tr>
+            <tr><td>06</td><td class="task-cell"><span class="task-name">feature-precedence</span></td><td>config precedence</td><td>answer</td><td class="task-cell">Resolve layered feature configuration and overrides.</td></tr>
+            <tr><td>07</td><td class="task-cell"><span class="task-name">fix-retry-boundary</span></td><td>targeted edit</td><td>edit</td><td class="task-cell">Repair retry boundary behavior with exact validation.</td></tr>
+            <tr><td>08</td><td class="task-cell"><span class="task-name">fix-worker-heartbeat</span></td><td>targeted edit</td><td>edit</td><td class="task-cell">Repair worker heartbeat logic with exact validation.</td></tr>
+            <tr><td>09</td><td class="task-cell"><span class="task-name">incident-correlation</span></td><td>log correlation</td><td>answer</td><td class="task-cell">Correlate symptoms across multiple service logs.</td></tr>
+            <tr><td>10</td><td class="task-cell"><span class="task-name">invoice-endpoint</span></td><td>multi-file join</td><td>answer</td><td class="task-cell">Join route, handler, and data-layer evidence.</td></tr>
+            <tr><td>11</td><td class="task-cell"><span class="task-name">invoice-slo</span></td><td>threshold reasoning</td><td>answer</td><td class="task-cell">Compare invoice behavior with an SLO threshold.</td></tr>
+            <tr><td>12</td><td class="task-cell"><span class="task-name">latest-breaking-change</span></td><td>temporal reasoning</td><td>answer</td><td class="task-cell">Find the most recent relevant breaking change.</td></tr>
+            <tr><td>13</td><td class="task-cell"><span class="task-name">retry-budgets</span></td><td>repository search</td><td>answer</td><td class="task-cell">Locate and compare retry budgets across the repository.</td></tr>
+            <tr><td>14</td><td class="task-cell"><span class="task-name">role-permissions</span></td><td>structured extraction</td><td>answer</td><td class="task-cell">Count effective permissions for three roles.</td></tr>
+            <tr><td>15</td><td class="task-cell"><span class="task-name">timeout-delta</span></td><td>cross-file comparison</td><td>answer</td><td class="task-cell">Calculate timeout differences across files.</td></tr>
+            <tr><td>16</td><td class="task-cell"><span class="task-name">traffic-aggregate</span></td><td>structured aggregation</td><td>answer</td><td class="task-cell">Aggregate traffic data into the requested result.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="task-results">
+      <p class="eyebrow">Workload detail</p>
+      <h2 id="task-results">Per-task results</h2>
+      <p class="section-intro">Each value is the single measured attempt in this cache-enabled rerun. A negative wall delta means Orcacode was faster.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Task</th><th>Orca wall</th><th>Pi wall</th><th>Wall Δ</th><th>Orca success</th><th>Pi success</th><th>Orca TTFT</th><th>Pi TTFT</th><th>Orca cost</th><th>Pi cost</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="task-cell"><span class="task-name">api-contract-diff</span><span class="task-category">schema diff</span></td><td>2.772s</td><td>2.899s</td><td class="good">−0.127s</td><td class="good">100%</td><td class="good">100%</td><td>686ms</td><td>1,218ms</td><td>$0.004090</td><td>$0.005268</td></tr>
+            <tr><td class="task-cell"><span class="task-name">cache-contract</span><span class="task-category">source + docs</span></td><td>8.323s</td><td>13.706s</td><td class="good">−5.383s</td><td class="good">100%</td><td class="good">100%</td><td>673ms</td><td>1,286ms</td><td>$0.018502</td><td>$0.022808</td></tr>
+            <tr><td class="task-cell"><span class="task-name">component-weights</span><span class="task-category">targeted lookup</span></td><td>2.169s</td><td>2.656s</td><td class="good">−0.487s</td><td class="good">100%</td><td class="good">100%</td><td>913ms</td><td>1,103ms</td><td>$0.003548</td><td>$0.004989</td></tr>
+            <tr><td class="task-cell"><span class="task-name">dependency-budget</span><span class="task-category">cost aggregation</span></td><td>3.136s</td><td>2.628s</td><td class="warn">+0.508s</td><td class="good">100%</td><td class="bad">0%</td><td>873ms</td><td>1,311ms</td><td>$0.004537</td><td>$0.004940</td></tr>
+            <tr><td class="task-cell"><span class="task-name">dependency-order</span><span class="task-category">graph reasoning</span></td><td>4.378s</td><td>4.248s</td><td class="warn">+0.130s</td><td class="good">100%</td><td class="good">100%</td><td>641ms</td><td>1,110ms</td><td>$0.005163</td><td>$0.007411</td></tr>
+            <tr><td class="task-cell"><span class="task-name">feature-precedence</span><span class="task-category">config precedence</span></td><td>5.255s</td><td>8.380s</td><td class="good">−3.125s</td><td class="good">100%</td><td class="good">100%</td><td>697ms</td><td>1,090ms</td><td>$0.008529</td><td>$0.017449</td></tr>
+            <tr><td class="task-cell"><span class="task-name">fix-retry-boundary</span><span class="task-category">targeted edit</span></td><td>3.822s</td><td>4.747s</td><td class="good">−0.925s</td><td class="good">100%</td><td class="good">100%</td><td>846ms</td><td>1,255ms</td><td>$0.006487</td><td>$0.009633</td></tr>
+            <tr><td class="task-cell"><span class="task-name">fix-worker-heartbeat</span><span class="task-category">targeted edit</span></td><td>3.789s</td><td>5.125s</td><td class="good">−1.335s</td><td class="good">100%</td><td class="good">100%</td><td>707ms</td><td>1,162ms</td><td>$0.007034</td><td>$0.009923</td></tr>
+            <tr><td class="task-cell"><span class="task-name">incident-correlation</span><span class="task-category">log correlation</span></td><td>6.350s</td><td>4.749s</td><td class="warn">+1.600s</td><td class="good">100%</td><td class="good">100%</td><td>875ms</td><td>1,247ms</td><td>$0.008281</td><td>$0.008674</td></tr>
+            <tr><td class="task-cell"><span class="task-name">invoice-endpoint</span><span class="task-category">multi-file join</span></td><td>7.535s</td><td>9.769s</td><td class="good">−2.234s</td><td class="good">100%</td><td class="good">100%</td><td>563ms</td><td>1,181ms</td><td>$0.017401</td><td>$0.021025</td></tr>
+            <tr><td class="task-cell"><span class="task-name">invoice-slo</span><span class="task-category">threshold reasoning</span></td><td>6.080s</td><td>8.447s</td><td class="good">−2.366s</td><td class="good">100%</td><td class="good">100%</td><td>626ms</td><td>1,205ms</td><td>$0.013405</td><td>$0.016145</td></tr>
+            <tr><td class="task-cell"><span class="task-name">latest-breaking-change</span><span class="task-category">temporal reasoning</span></td><td>3.568s</td><td>3.971s</td><td class="good">−0.403s</td><td class="good">100%</td><td class="good">100%</td><td>600ms</td><td>1,124ms</td><td>$0.006124</td><td>$0.007461</td></tr>
+            <tr><td class="task-cell"><span class="task-name">retry-budgets</span><span class="task-category">repository search</span></td><td>4.603s</td><td>5.370s</td><td class="good">−0.766s</td><td class="good">100%</td><td class="good">100%</td><td>775ms</td><td>1,069ms</td><td>$0.008016</td><td>$0.010807</td></tr>
+            <tr><td class="task-cell"><span class="task-name">role-permissions</span><span class="task-category">structured extraction</span></td><td>2.527s</td><td>2.846s</td><td class="good">−0.319s</td><td class="bad">0%</td><td class="bad">0%</td><td>898ms</td><td>1,271ms</td><td>$0.003709</td><td>$0.005048</td></tr>
+            <tr><td class="task-cell"><span class="task-name">timeout-delta</span><span class="task-category">cross-file comparison</span></td><td>2.666s</td><td>6.309s</td><td class="good">−3.643s</td><td class="good">100%</td><td class="good">100%</td><td>553ms</td><td>1,099ms</td><td>$0.004069</td><td>$0.012206</td></tr>
+            <tr><td class="task-cell"><span class="task-name">traffic-aggregate</span><span class="task-category">structured aggregation</span></td><td>2.811s</td><td>2.920s</td><td class="good">−0.109s</td><td class="good">100%</td><td class="good">100%</td><td>637ms</td><td>1,093ms</td><td>$0.003840</td><td>$0.004982</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="correctness-audit">
+      <p class="eyebrow">Correctness and failure audit</p>
+      <h2 id="correctness-audit">The speed lead did not trade away validation</h2>
+      <p class="section-intro">Answer grading and workspace grading are reported independently so a correct-looking response cannot hide a bad edit.</p>
+      <div class="audit-grid">
+        <article class="audit pass"><strong>32/32</strong><h3>Workspace validations passed</h3><p>Every isolated workspace remained valid after its attempt.</p></article>
+        <article class="audit pass"><strong>4/4</strong><h3>Edit attempts passed exactly</h3><p>Both edit tasks passed on both harnesses.</p></article>
+        <article class="audit pass"><strong>0 vs 0</strong><h3>Timeouts: Orcacode vs Pi</h3><p>Every attempt completed within the benchmark timeout.</p></article>
+      </div>
+      <div class="callout">
+        <div class="tag">Shared model weakness</div>
+        <p><strong>role-permissions</strong> expected counts of admin 5, operator 3, and auditor 1. Both harnesses failed this attempt: Orcacode returned 4/3/1 and Pi returned 4/2/1. This remains a useful workload/model reasoning regression case, not evidence of an Orcacode-only failure.</p>
+      </div>
+      <div class="callout">
+        <div class="tag">Cache threshold</div>
+        <p>Prompt caching was enabled for Orcacode and confirmed by raw request metadata, but neither harness reported cache usage. The largest model steps were 3,326 input tokens for Orcacode and 3,752 for Pi, below Haiku 4.5’s 4,096-token <a href="https://openrouter.ai/docs/guides/best-practices/prompt-caching#minimum-token-requirements">minimum cacheable prefix</a>. This validates enablement, not cache economics.</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="token-economics">
+      <p class="eyebrow">Token economics</p>
+      <h2 id="token-economics">Orcacode spent less with caching enabled</h2>
+      <p class="section-intro">Costs are normalized from reported usage using one common public price schedule. They are comparative estimates, not provider invoices.</p>
+      <div class="economics">
+        <article class="economics-panel">
+          <h3>Orcacode · $0.122735</h3>
+          <div class="stacked" aria-label="Orcacode normalized cost composition">
+            <span class="input" style="width:73.27%" title="Input $0.089925"></span>
+            <span class="output" style="width:26.73%" title="Output $0.032810"></span>
+          </div>
+          <div class="legend"><span><i class="input"></i>input $0.089925</span><span><i class="output"></i>output $0.032810</span><span>cache read/write $0</span></div>
+          <h3 style="margin-top:24px">Pi · $0.168769</h3>
+          <div class="stacked" aria-label="Pi normalized cost composition">
+            <span class="input" style="width:79.15%" title="Input $0.133579"></span>
+            <span class="output" style="width:20.85%" title="Output $0.035190"></span>
+          </div>
+          <div class="legend"><span><i class="input"></i>input $0.133579</span><span><i class="output"></i>output $0.035190</span><span>cache read/write $0</span></div>
+        </article>
+        <article class="economics-panel">
+          <h3>Cost per successful attempt</h3>
+          <div class="big-stat">$0.00818</div>
+          <p class="fine-print">Orcacode, versus $0.01205 for Pi: a 32.1% reduction after accounting for correctness.</p>
+          <h3 style="margin-top:24px">Efficiency mechanism</h3>
+          <p class="fine-print">Orcacode used one fewer tool call, three fewer turns, and 44,130 fewer total tokens. No cache discount occurred because the requests stayed below the model’s minimum cacheable prefix.</p>
+        </article>
+      </div>
+      <p class="fine-print">Price schedule: $1.00/M input tokens, $5.00/M output tokens, $0.10/M cache-read tokens, and $1.25/M cache-write tokens for Claude Haiku 4.5. Model capability and pricing reference: <a href="https://openrouter.ai/anthropic/claude-haiku-4.5">OpenRouter model page</a>.</p>
+    </section>
+
+    <section aria-labelledby="methodology">
+      <p class="eyebrow">Reproduction method</p>
+      <h2 id="methodology">How the benchmark was run</h2>
+      <p class="section-intro">The runner was written before execution so scheduling, isolation, capture, and scoring remained identical across both harnesses.</p>
+      <div class="method-grid">
+        <article class="method-card"><h3>1 · Schedule</h3><p>Sixteen task fixtures, two harnesses, one repetition: 32 total attempts. The schedule alternated harness order by task to reduce warm-up and time-of-run bias.</p></article>
+        <article class="method-card"><h3>2 · Isolation</h3><p>Each attempt received a fresh temporary workspace copied from its fixture. Harnesses ran headlessly and could modify only that disposable copy.</p></article>
+        <article class="method-card"><h3>3 · Capture</h3><p>Raw JSONL events preserved wall time, startup, end-to-end and model TTFT, first-answer and first-tool timings, token classes, tool calls, turns, exit status, and timeout state.</p></article>
+        <article class="method-card"><h3>4 · Validation</h3><p>Deterministic validators checked requested answers and workspace state. Edit tasks used exact fixture validation; answer and workspace correctness remained separate.</p></article>
+        <article class="method-card"><h3>5 · Aggregation</h3><p>Per-task values are the single measured attempts in this rerun. Aggregate totals sum all attempts; aggregate medians span the 16 attempts. Cost applies one normalized price schedule to reported usage.</p></article>
+        <article class="method-card"><h3>6 · Audit trail</h3><p>The run directory retains the manifest, summary JSON and Markdown, normalized CSV/JSON rows, and all 32 raw event streams for independent inspection.</p></article>
+      </div>
+      <div class="provenance">
+        run: 20260830T145926Z<br>
+        model: anthropic/claude-haiku-4.5 · effort: low · repetitions: 1 · prompt cache: enabled<br>
+        source revision: 1b157b424e3fc86862f3e8a0c835468d68f188f6 · worktree dirty: true<br>
+        orcacode binary sha256: f6facf57ae146d3fb5361a5dd3141316f505a70cca9d9b9a2fa07669e25b1fa5 · version unavailable<br>
+        pi binary sha256: 840d1e8e689ed9e4937bcb00b9a810e02a8567d9afb10a47097f11ca93ea1521 · version 0.84.2<br>
+        artifacts: <a href="harness-comparison/20260830T145926Z/summary.md">human summary</a> · <a href="harness-comparison/20260830T145926Z/summary.json">machine summary</a> · <a href="harness-comparison/20260830T145926Z/runs.csv">normalized runs</a> · <a href="../harness-comparison/README.md">benchmark runbook</a><br>
+        historical baseline: <a href="harness-comparison/20260830T134306Z/summary.md">three-repetition pre-cache summary</a>
+      </div>
+    </section>
+
+    <section aria-labelledby="boundary">
+      <p class="eyebrow">Interpretation boundary</p>
+      <h2 id="boundary">What this result does and does not show</h2>
+      <div class="callout">
+        <div class="tag">Comparative evidence</div>
+        <p>This single-repetition rerun provides directional evidence that the captured Orcacode build outperformed Pi 0.84.2 on this 16-task fixture suite, using Claude Haiku 4.5 at low effort in the recorded environment. It does not establish universal harness superiority, production billing, or performance on other models, repositories, prompts, machines, concurrency levels, or interactive workflows. Prompt caching was enabled for Orcacode, but neither harness crossed the 4,096-token cacheable-prefix threshold. A matched cache-economics test needs a controlled repeated prefix above that minimum.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">Generated from retained benchmark artifacts. No live service is required to open this report.</div>
+  </footer>
+</body>
+</html>

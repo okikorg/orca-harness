@@ -162,6 +162,7 @@ fn validate_is_static_but_test_handshakes_and_lists_tools() {
     let fixture = Fixture::new("probe");
     let plugin = fixture.plugin("probe-plugin");
     let marker = plugin.join("executed");
+    let hook_marker = plugin.join("hook-executed");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(plugin.join("plugin.json")).unwrap()).unwrap();
     manifest["futureField"] = serde_json::json!(true);
@@ -171,6 +172,12 @@ fn validate_is_static_but_test_handshakes_and_lists_tools() {
     )
     .unwrap();
     let script = plugin.join("server.sh");
+    fs::create_dir_all(plugin.join("skills/probe-workflow")).unwrap();
+    fs::write(
+        plugin.join("skills/probe-workflow/SKILL.md"),
+        "---\nname: probe-workflow\ndescription: Verify plugin skill discovery\n---\n\nUse the probe workflow.\n",
+    )
+    .unwrap();
     fs::write(
         &script,
         format!(
@@ -191,6 +198,20 @@ fn validate_is_static_but_test_handshakes_and_lists_tools() {
 "#,
     )
     .unwrap();
+    fs::create_dir_all(plugin.join("io.github.okikorg.orcacode")).unwrap();
+    fs::write(
+        plugin.join("hook.sh"),
+        format!(
+            "#!/bin/sh\ntouch '{}'\nread input\nprintf '%s' '{{}}'\n",
+            hook_marker.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        plugin.join("io.github.okikorg.orcacode/hooks.json"),
+        r#"{"version":1,"hooks":{"before_model":[{"command":"sh","args":["${PLUGIN_ROOT}/hook.sh"]}]}}"#,
+    )
+    .unwrap();
 
     let validate = fixture.run(
         &fixture.root,
@@ -198,7 +219,12 @@ fn validate_is_static_but_test_handshakes_and_lists_tools() {
     );
     assert_success(&validate);
     assert!(stdout(&validate).contains("warning:"));
+    assert!(stdout(&validate).contains("skill: probe-workflow"));
     assert!(!marker.exists(), "static validation executed plugin code");
+    assert!(
+        !hook_marker.exists(),
+        "static validation executed hook code"
+    );
     let data = fixture.config.join("plugin-data/probe-plugin");
     assert!(!data.exists());
     #[cfg(unix)]
@@ -212,6 +238,9 @@ fn validate_is_static_but_test_handshakes_and_lists_tools() {
     let probe = fixture.run(&fixture.root, &["plugin", "test", plugin.to_str().unwrap()]);
     assert_success(&probe);
     assert!(marker.exists());
+    assert!(hook_marker.exists());
+    assert!(stdout(&probe).contains("hook before_model #1: valid"));
+    assert!(stdout(&probe).contains("skill probe-workflow: valid"));
     assert!(stdout(&probe).contains("mcp__plugin__probe_plugin__echo__echo"));
     assert!(stdout(&probe).contains("mcp__plugin__probe_plugin__second__echo"));
     assert!(data.is_dir());
@@ -271,6 +300,8 @@ fn python_and_typescript_scaffolds_have_expected_layout_and_do_not_overwrite() {
         "pyproject.toml",
         "README.md",
         ".gitignore",
+        "skills/.gitkeep",
+        "io.github.okikorg.orcacode/hooks.json",
         "src/my_python_plugin/__init__.py",
         "src/my_python_plugin/server.py",
         "tests/test_server.py",
@@ -310,6 +341,8 @@ fn python_and_typescript_scaffolds_have_expected_layout_and_do_not_overwrite() {
         "tsconfig.json",
         "README.md",
         ".gitignore",
+        "skills/.gitkeep",
+        "io.github.okikorg.orcacode/hooks.json",
         "src/index.ts",
         "test/server.test.ts",
     ] {

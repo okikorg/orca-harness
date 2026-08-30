@@ -11,6 +11,11 @@ use serde_json::json;
 
 use super::*;
 
+#[path = "tests/hooks.rs"]
+mod hook_tests;
+#[path = "tests/ordering.rs"]
+mod ordering_tests;
+
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
 const SERVER: &str = r#"#!/bin/sh
@@ -97,6 +102,31 @@ impl Fixture {
         plugin
     }
 
+    fn add_deny_hook(&self, plugin: &crate::config::RegisteredPlugin) {
+        let extension = plugin.root.join("io.github.okikorg.orcacode");
+        fs::create_dir_all(&extension).unwrap();
+        fs::write(
+            plugin.root.join("hook.sh"),
+            "read input\nprintf '%s' '{\"decision\":\"deny\",\"reason\":\"plugin policy\"}'\n",
+        )
+        .unwrap();
+        fs::write(
+            extension.join("hooks.json"),
+            r#"{"version":1,"hooks":{"before_tool":[{"command":"sh","args":["${PLUGIN_ROOT}/hook.sh"]}]}}"#,
+        )
+        .unwrap();
+    }
+
+    fn replace_mcp(&self, plugin: &crate::config::RegisteredPlugin, servers: &str) {
+        fs::write(
+            plugin.root.join("mcp.json"),
+            format!(
+                r#"{{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{{{servers}}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
     fn snapshot(&self, plugins: Vec<crate::config::RegisteredPlugin>) -> PluginSnapshot {
         PluginSnapshot::from_registrations(plugins, |name| Ok(self.data_root.join(name)))
     }
@@ -181,6 +211,14 @@ async fn enabled_plugin_joins_existing_catalog_and_disabled_plugin_is_absent() {
     let enabled_data = fixture.data_root.join("enabled-plugin");
     let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![disabled, enabled]));
 
+    assert_eq!(
+        servers.plugin_state("enabled-plugin"),
+        PluginRuntimeState::Starting
+    );
+    assert_eq!(
+        servers.plugin_state("disabled-plugin"),
+        PluginRuntimeState::NotLoaded
+    );
     assert!(!enabled_data.exists(), "static load created plugin data");
     let lines = servers.reload().await;
     assert!(
@@ -192,6 +230,18 @@ async fn enabled_plugin_joins_existing_catalog_and_disabled_plugin_is_absent() {
     assert!(!lines.iter().any(|line| line.contains("disabled-plugin")));
     assert!(enabled_data.join("launch marker").is_file());
     assert!(!disabled_data.exists());
+    assert_eq!(
+        servers.plugin_state("enabled-plugin"),
+        PluginRuntimeState::Loaded {
+            servers: 1,
+            tools: 1,
+        }
+    );
+    let inventory = servers.startup_inventory();
+    assert_eq!(inventory.plugins, 1);
+    assert_eq!(inventory.servers, 1);
+    assert_eq!(inventory.tools, 1);
+    assert_eq!(inventory.connected_notices.len(), 1);
 
     let remote = "mcp__plugin__enabled_plugin__echo__echo";
     let names = tool_names(&servers);
@@ -215,6 +265,14 @@ async fn enabled_plugin_joins_existing_catalog_and_disabled_plugin_is_absent() {
         .await
         .unwrap();
     assert_eq!(found["tools"][0]["name"], remote);
+    let fallback = search
+        .call(
+            json!({"query": "use structured echo plugin please"}),
+            &context("mcp_search_tools"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fallback["tools"][0]["name"], remote);
     let select = tools
         .iter()
         .find(|tool| tool.schema().name == "mcp_select_tool")
@@ -244,6 +302,10 @@ async fn missing_plugin_does_not_block_a_healthy_sibling() {
     };
     let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![missing, healthy]));
 
+    assert!(matches!(
+        servers.plugin_state("moved-plugin"),
+        PluginRuntimeState::Failed { error, .. } if error.contains("plugin root")
+    ));
     let lines = servers.reload().await;
     assert!(
         lines
@@ -258,7 +320,7 @@ async fn missing_plugin_does_not_block_a_healthy_sibling() {
 }
 
 #[tokio::test]
-async fn enabled_plugin_without_stdio_never_creates_data() {
+async fn enabled_plugin_without_stdio_is_loaded_and_never_creates_data() {
     let fixture = Fixture::new("no-stdio");
     let plugin = fixture.plugin_without_mcp("metadata-only");
     fs::create_dir_all(plugin.root.join("skills")).unwrap();
@@ -266,14 +328,98 @@ async fn enabled_plugin_without_stdio_never_creates_data() {
     let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![plugin]));
 
     let lines = servers.reload().await;
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("Plugin metadata-only warning · skills:")),
-        "lines: {lines:?}"
-    );
+    assert!(lines.is_empty(), "lines: {lines:?}");
     assert!(!data.exists());
     assert_eq!(tool_names(&servers).len(), 3);
+    assert!(matches!(
+        servers.plugin_state("metadata-only"),
+        PluginRuntimeState::Loaded {
+            servers: 0,
+            tools: 0
+        }
+    ));
+}
+
+#[tokio::test]
+async fn invalid_only_plugin_reports_degraded_mcp_component() {
+    let fixture = Fixture::new("invalid-only");
+    let plugin = fixture.plugin("invalid-only", &[]);
+    fixture.replace_mcp(&plugin, r#""broken":{"type":"stdio","command":""}"#);
+    let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![plugin]));
+
+    assert!(matches!(
+        servers.plugin_state("invalid-only"),
+        PluginRuntimeState::Degraded { servers: 0, warning, .. }
+            if warning.contains("mcpServers.broken") && warning.contains("non-empty")
+    ));
+    assert!(servers
+        .reload()
+        .await
+        .iter()
+        .any(|line| line.contains("Plugin invalid-only warning · mcpServers.broken")));
+}
+
+#[tokio::test]
+async fn unsupported_only_plugin_reports_degraded_mcp_component() {
+    let fixture = Fixture::new("unsupported-only");
+    let plugin = fixture.plugin("unsupported-only", &[]);
+    fixture.replace_mcp(
+        &plugin,
+        r#""remote":{"type":"streamable-http","url":"https://example.com/mcp"}"#,
+    );
+    let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![plugin]));
+
+    assert!(matches!(
+        servers.plugin_state("unsupported-only"),
+        PluginRuntimeState::Degraded { servers: 0, warning, .. }
+            if warning.contains("unsupported by Orcacode v1")
+    ));
+    assert!(servers
+        .reload()
+        .await
+        .iter()
+        .any(|line| { line.contains("Plugin unsupported-only warning · mcpServers.remote") }));
+}
+
+#[tokio::test]
+async fn valid_server_with_invalid_sibling_reports_degraded_live_state() {
+    let fixture = Fixture::new("mixed-mcp");
+    let plugin = fixture.plugin("mixed-mcp", &["echo"]);
+    fixture.replace_mcp(
+        &plugin,
+        r#""echo":{"type":"stdio","command":"sh","args":["${PLUGIN_ROOT}/server.sh","${PLUGIN_DATA}/launch marker"],"env":{"LAUNCH_VALUE":"structured value"},"cwd":"${PLUGIN_ROOT}"},"broken":{"type":"stdio","command":""}"#,
+    );
+    let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![plugin]));
+
+    servers.reload().await;
+    assert!(matches!(
+        servers.plugin_state("mixed-mcp"),
+        PluginRuntimeState::Degraded {
+            connected: 1,
+            servers: 1,
+            tools: 1,
+            warning,
+        } if warning.contains("mcpServers.broken")
+    ));
+}
+
+#[tokio::test]
+async fn plugin_mcp_inventory_exposes_provenance_and_live_server_state() {
+    let fixture = Fixture::new("mcp-inventory");
+    let plugin = fixture.plugin("release-tools", &["notes"]);
+    let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![plugin]));
+
+    let entries = servers.plugin_mcp_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].label(), "release-tools/notes");
+    assert_eq!(entries[0].id, "plugin__release_tools__notes");
+    assert_eq!(servers.plugin_mcp_state(&entries[0]), None);
+
+    servers.reload().await;
+    assert_eq!(
+        servers.plugin_mcp_state(&entries[0]),
+        Some(McpState::Connected(1))
+    );
 }
 
 #[tokio::test]
@@ -297,6 +443,15 @@ async fn plugin_data_creation_failure_is_scoped_and_retained() {
     assert!(matches!(
         servers.state("plugin__data_failure__echo"),
         Some(McpState::Failed(error)) if error.starts_with("cannot create plugin data directory:")
+    ));
+    assert!(matches!(
+        servers.plugin_state("data-failure"),
+        PluginRuntimeState::Failed {
+            connected: 0,
+            servers: 1,
+            tools: 0,
+            error,
+        } if error.starts_with("echo: cannot create plugin data directory:")
     ));
 }
 
@@ -330,6 +485,16 @@ async fn desired_id_collisions_exclude_all_affected_plugins_only() {
     assert!(!fixture.data_root.join("alpha.plugin").exists());
     assert!(fixture.data_root.join("alpha-plugin").is_dir());
     assert!(!fixture.data_root.join("standalone-victim").exists());
+    let collided = servers
+        .plugin_mcp_entries()
+        .into_iter()
+        .filter(|entry| entry.server == "echo")
+        .collect::<Vec<_>>();
+    assert_eq!(collided.len(), 3);
+    assert!(collided.iter().all(|entry| matches!(
+        servers.plugin_mcp_state(entry),
+        Some(McpState::Failed(error)) if error == "server ID collision"
+    )));
 }
 
 #[tokio::test]
@@ -405,34 +570,4 @@ fn structured_launch_identity_includes_args_env_cwd_and_environment_policy() {
     ] {
         assert_ne!(identity, LaunchIdentity::Structured(changed));
     }
-}
-
-#[test]
-fn desired_order_is_standalone_then_sorted_plugins_and_servers() {
-    let fixture = Fixture::new("desired-order");
-    let zeta = fixture.plugin("zeta-plugin", &["z-last"]);
-    let alpha = fixture.plugin("alpha-plugin", &["z-server", "a-server"]);
-    let snapshot = fixture.snapshot(vec![zeta, alpha]);
-    let servers = McpServers::with_plugin_snapshot(snapshot);
-    let standalone = vec![crate::config::McpServer {
-        name: "standalone".into(),
-        command: "missing".into(),
-        enabled: true,
-    }];
-
-    let (desired, collisions) = servers.desired_servers(&standalone);
-
-    assert!(collisions.is_empty());
-    assert_eq!(
-        desired
-            .into_iter()
-            .map(|server| server.name)
-            .collect::<Vec<_>>(),
-        [
-            "standalone",
-            "plugin__alpha_plugin__a_server",
-            "plugin__alpha_plugin__z_server",
-            "plugin__zeta_plugin__z_last",
-        ]
-    );
 }

@@ -290,15 +290,11 @@ pub(crate) fn handle_overlay_key(
             _ => After::Nothing,
         },
         Overlay::Mcp {
-            servers,
+            entries,
             filter,
             picker,
         } => {
-            let indices = matching_indices(servers, filter, |server| &server.name);
-            // Space toggles rather than arming an action strip: this
-            // picker has exactly one action, so the strip would be a
-            // keystroke of ceremony. Enter does the same, matching
-            // /extensions.
+            let indices = crate::tui::mcp_picker::matching_indices(entries, filter);
             let row = match key.code {
                 KeyCode::Char(' ') | KeyCode::Enter if !indices.is_empty() => {
                     Some(indices[picker.index()])
@@ -314,7 +310,7 @@ pub(crate) fn handle_overlay_key(
                             _ => {}
                         }
                         picker.set_len(
-                            matching_indices(servers, filter, |server| &server.name).len(),
+                            crate::tui::mcp_picker::matching_indices(entries, filter).len(),
                         );
                         return;
                     }
@@ -322,32 +318,67 @@ pub(crate) fn handle_overlay_key(
                 },
             };
             match row {
-                Some(index) => {
-                    let server = &mut servers[index];
-                    let enabled = !server.enabled;
-                    match crate::config::set_mcp_enabled(&server.name, enabled) {
-                        // Stay open so several servers can be toggled;
-                        // the row redraws from this copy at once while
-                        // the reconnect runs behind the overlay.
-                        Ok(_) => {
-                            server.enabled = enabled;
-                            After::Send(WorkerCmd::ReloadMcp)
-                        }
-                        Err(err) => {
-                            After::CloseWithNote(format!("could not update the config: {err}"))
+                Some(index) => match &mut entries[index] {
+                    crate::tui::mcp_picker::Entry::Standalone(server) => {
+                        let enabled = !server.enabled;
+                        match crate::config::set_mcp_enabled(&server.name, enabled) {
+                            // Stay open so several servers can be toggled;
+                            // the row redraws from this copy at once while
+                            // the reconnect runs behind the overlay.
+                            Ok(_) => {
+                                server.enabled = enabled;
+                                After::Send(WorkerCmd::ReloadMcp)
+                            }
+                            Err(err) => {
+                                After::CloseWithNote(format!("could not update the config: {err}"))
+                            }
                         }
                     }
-                }
+                    crate::tui::mcp_picker::Entry::Plugin(server) => After::CloseWithNote(format!(
+                        "plugin MCP {}/{} is read-only here; manage it with /plugin",
+                        server.plugin, server.server
+                    )),
+                },
                 None => After::Nothing,
             }
         }
+        Overlay::Plugins {
+            entries,
+            filter,
+            picker,
+        } => match picker.on_key(key.code) {
+            event @ (PickerEvent::Activated(_) | PickerEvent::Action { .. }) => {
+                let (row, action) = match event {
+                    PickerEvent::Activated(row) => (row, 't'),
+                    PickerEvent::Action { key, row } => (row, key),
+                    _ => unreachable!(),
+                };
+                let indices = matching_indices(entries, filter, |entry| &entry.name);
+                After::PluginAction {
+                    plugin: entries[indices[row]].clone(),
+                    action,
+                }
+            }
+            PickerEvent::Ignored => {
+                match key.code {
+                    KeyCode::Char(c) if c != ' ' => filter.push(c),
+                    KeyCode::Backspace => {
+                        filter.pop();
+                    }
+                    _ => {}
+                }
+                picker.set_len(matching_indices(entries, filter, |entry| &entry.name).len());
+                After::Nothing
+            }
+            _ => After::Nothing,
+        },
         Overlay::Skills {
             entries,
             filter,
             picker,
         } => match picker.on_key(key.code) {
-            // Space reveals the action strip; enter keeps the toggle one
-            // key away, since that is what the list is mostly for.
+            // Space reveals the action strip; enter toggles a standalone
+            // row or inserts a read-only plugin Skill mention.
             // Deleting sits behind the strip on purpose: it is the only
             // action here that touches the filesystem. It also needs
             // `app` — the shared handle, the config, the transcript —
@@ -355,17 +386,27 @@ pub(crate) fn handle_overlay_key(
             // apply step below.
             PickerEvent::Action { key: 'd', row } => {
                 let indices = matching_indices(entries, filter, |entry| &entry.name);
-                After::RemoveSkill(entries[indices[row]].name.clone())
+                let entry = &entries[indices[row]];
+                match crate::tui::skills_picker::plugin_name(entry) {
+                    Some(plugin) => After::CloseWithNote(format!(
+                        "plugin Skill ${} from {plugin} is read-only here; manage it with /plugin",
+                        entry.name
+                    )),
+                    None => After::RemoveSkill(entry.name.clone()),
+                }
             }
             event => {
                 let row = match event {
-                    PickerEvent::Activated(index)
-                    | PickerEvent::Action {
+                    PickerEvent::Activated(index) => {
+                        let indices = matching_indices(entries, filter, |entry| &entry.name);
+                        Some((indices[index], true))
+                    }
+                    PickerEvent::Action {
                         key: 't',
                         row: index,
                     } => {
                         let indices = matching_indices(entries, filter, |entry| &entry.name);
-                        Some(indices[index])
+                        Some((indices[index], false))
                     }
                     PickerEvent::Ignored => {
                         match key.code {
@@ -382,7 +423,7 @@ pub(crate) fn handle_overlay_key(
                     _ => None,
                 };
                 match row {
-                    Some(index) => {
+                    Some((index, activated)) => {
                         let entry = &mut entries[index];
                         match &entry.state {
                             // A row that never loaded has nothing to
@@ -399,19 +440,31 @@ pub(crate) fn handle_overlay_key(
                                 ))
                             }
                             crate::skills::SkillState::Loaded { .. } => {
-                                let enabled = !entry.enabled;
-                                match crate::config::save_skill_enabled(&entry.name, enabled) {
-                                    // Stay open so several can be
-                                    // toggled; the row redraws from this
-                                    // copy at once while the rescan runs
-                                    // behind it.
-                                    Ok(_) => {
-                                        entry.enabled = enabled;
-                                        After::Send(WorkerCmd::ReloadSkills)
+                                if let Some(plugin) = crate::tui::skills_picker::plugin_name(entry)
+                                {
+                                    if activated {
+                                        After::CloseAndCompose(format!("${} ", entry.name))
+                                    } else {
+                                        After::CloseWithNote(format!(
+                                                "plugin Skill ${} from {plugin} is read-only here; manage it with /plugin",
+                                                entry.name
+                                            ))
                                     }
-                                    Err(err) => After::CloseWithNote(format!(
-                                        "could not update the config: {err}"
-                                    )),
+                                } else {
+                                    let enabled = !entry.enabled;
+                                    match crate::config::save_skill_enabled(&entry.name, enabled) {
+                                        // Stay open so several can be
+                                        // toggled; the row redraws from this
+                                        // copy at once while the rescan runs
+                                        // behind it.
+                                        Ok(_) => {
+                                            entry.enabled = enabled;
+                                            After::Send(WorkerCmd::ReloadSkills)
+                                        }
+                                        Err(err) => After::CloseWithNote(format!(
+                                            "could not update the config: {err}"
+                                        )),
+                                    }
                                 }
                             }
                         }

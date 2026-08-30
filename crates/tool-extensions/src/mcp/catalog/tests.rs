@@ -39,6 +39,30 @@ fn search_ranks_exact_name_terms_above_description_and_plural_fallbacks() {
 }
 
 #[test]
+fn search_falls_back_to_partial_matches_for_natural_language_queries() {
+    let terms = tokens("read source code project files");
+    let read_file = SearchFields {
+        name: tokens("read_project_file"),
+        description: tokens("Read a UTF-8 project file within the configured project root"),
+        server: tokens("plugin__explore_project__explore_project"),
+        parameters: tokens("path max_chars"),
+    };
+    let tree = SearchFields {
+        name: tokens("project_tree"),
+        description: tokens("List project files and directories"),
+        server: tokens("plugin__explore_project__explore_project"),
+        parameters: tokens("path depth"),
+    };
+
+    assert_eq!(relevance(&terms, &read_file), None);
+    assert!(partial_relevance(&terms, &read_file) > partial_relevance(&terms, &tree));
+    assert_eq!(
+        partial_relevance(&tokens("unrelated network request"), &read_file),
+        None
+    );
+}
+
+#[test]
 fn interface_inputs_reject_invalid_optional_values_and_irrelevant_fields() {
     assert!(optional_u64(&json!({ "limit": 10 }), "limit", 1, 100).is_ok());
     for value in [json!(0), json!(101), json!(1.5), json!("10")] {

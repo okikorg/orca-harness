@@ -1,6 +1,7 @@
 import unittest
 
 import accuracy
+from corpus import results
 
 
 class McpSearchAccuracyTest(unittest.TestCase):
@@ -33,6 +34,11 @@ class McpSearchAccuracyTest(unittest.TestCase):
         self.assertAlmostEqual(score.precision, 0.7466905901116427)
         self.assertAlmostEqual(score.average_results, 2.0)
         self.assertAlmostEqual(score.ambiguity, 14 / 38)
+
+    def test_verbose_query_falls_back_when_no_tool_matches_every_word(self):
+        found = results("read repository source code please")
+        self.assertTrue(found)
+        self.assertEqual(found[0].key, "gh_repositories")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@
 //! for is *reporting*: an unchanged, healthy rescan must say nothing,
 //! or every toggle would repeat the same lines into the transcript.
 
+mod plugins;
+
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -61,6 +63,10 @@ pub struct SkillEntry {
 #[derive(Clone, Default)]
 pub struct Skills {
     roots: Arc<Vec<SkillRoot>>,
+    /// Enabled Agent Plugin skills are fixed for the life of this process,
+    /// matching plugin MCP enablement. Ordinary `/skills reload` still
+    /// rescans the workspace and user roots around this snapshot.
+    plugin_found: Arc<Discovered>,
     /// Where `/skills add` puts things: beside `config.json`, so a
     /// downloaded skill never lands in the user's repository uninvited.
     managed: Option<Arc<PathBuf>>,
@@ -149,6 +155,7 @@ impl Skills {
                 config_dir.as_deref(),
                 home.as_deref(),
             )),
+            plugin_found: Arc::default(),
             managed: config_dir.map(|dir| Arc::new(dir.join("skills"))),
             project: Some(Arc::new(workspace.join(".orca/skills"))),
             found: Arc::default(),
@@ -182,7 +189,11 @@ impl Skills {
         let config_dir = crate::config::config_path()
             .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        Self::new(workspace, config_dir, home)
+        let mut skills = Self::new(workspace, config_dir, home);
+        skills.plugin_found = Arc::new(plugins::load(crate::config::stored_plugins(), |name| {
+            crate::config::plugin_data_path(name)
+        }));
+        skills
     }
 
     /// The `skill` tool over every enabled skill, or `None` when there
@@ -193,7 +204,7 @@ impl Skills {
         let enabled: Vec<Skill> = found
             .skills
             .iter()
-            .filter(|skill| is_enabled(&skill.name))
+            .filter(|skill| plugins::enabled(skill))
             .cloned()
             .collect();
         (!enabled.is_empty()).then(|| Arc::new(SkillTool::new(enabled)) as Arc<dyn Tool>)
@@ -206,7 +217,7 @@ impl Skills {
         let loaded = found.skills.iter().map(|skill| SkillEntry {
             name: skill.name.clone(),
             description: skill.description.clone(),
-            enabled: is_enabled(&skill.name),
+            enabled: plugins::enabled(skill),
             state: SkillState::Loaded {
                 root: skill.root.clone(),
                 bytes: skill.bytes,
@@ -251,14 +262,25 @@ impl Skills {
     }
 
     pub fn is_invokable(&self, name: &str) -> bool {
-        is_enabled(name)
-            && self
-                .found
-                .read()
-                .expect("skills lock")
-                .skills
-                .iter()
-                .any(|skill| skill.name == name)
+        self.found
+            .read()
+            .expect("skills lock")
+            .skills
+            .iter()
+            .any(|skill| skill.name == name && plugins::enabled(skill))
+    }
+
+    /// Successfully loaded, enabled skills contributed by one Agent Plugin.
+    /// Used by `/plugin` to show package-level live state alongside MCP tools.
+    pub fn plugin_count(&self, plugin_name: &str) -> usize {
+        let root = format!("plugin:{plugin_name}");
+        self.found
+            .read()
+            .expect("skills lock")
+            .skills
+            .iter()
+            .filter(|skill| skill.root == root)
+            .count()
     }
 
     /// Write a starter `SKILL.md`. Authoring goes to the project folder
@@ -356,7 +378,8 @@ impl Skills {
     /// set, then one line per broken skill. A repeat scan of a healthy,
     /// unchanged tree reports nothing.
     pub fn reload(&self) -> Vec<String> {
-        let scanned = discover(&self.roots);
+        let mut scanned = discover(&self.roots);
+        plugins::merge(&mut scanned, self.plugin_found.as_ref().clone());
         let mut found = self.found.write().expect("skills lock");
         if *found == scanned {
             return Vec::new();

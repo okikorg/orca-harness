@@ -2,8 +2,10 @@ mod agent;
 mod app;
 mod context;
 mod interactive;
+mod plugin;
 mod session;
 mod signals;
+pub(crate) mod startup;
 mod worker;
 
 #[cfg(test)]

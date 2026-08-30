@@ -11,10 +11,13 @@ struct File<'a> {
 }
 
 pub(super) fn create(name: &str, language: Language) -> Result<PathBuf, String> {
+    let base = std::env::current_dir().map_err(|error| error.to_string())?;
+    create_in(&base, name, language)
+}
+
+pub(super) fn create_in(base: &Path, name: &str, language: Language) -> Result<PathBuf, String> {
     validate_agent_plugin_name(name).map_err(|error| error.to_string())?;
-    let target = std::env::current_dir()
-        .map_err(|error| error.to_string())?
-        .join(name);
+    let target = base.join(name);
     reject_non_empty(&target)?;
     fs::create_dir_all(&target).map_err(|error| format!("cannot create scaffold: {error}"))?;
     let package = python_package(name);
@@ -113,6 +116,14 @@ fn python_files() -> Vec<File<'static>> {
             body: include_str!("templates/python.gitignore"),
         },
         File {
+            path: "skills/.gitkeep".into(),
+            body: "",
+        },
+        File {
+            path: "io.github.okikorg.orcacode/hooks.json".into(),
+            body: include_str!("templates/hooks.json"),
+        },
+        File {
             path: "src/{{PACKAGE}}/__init__.py".into(),
             body: "",
         },
@@ -156,6 +167,14 @@ fn typescript_files() -> Vec<File<'static>> {
         File {
             path: ".gitignore".into(),
             body: include_str!("templates/typescript.gitignore"),
+        },
+        File {
+            path: "skills/.gitkeep".into(),
+            body: "",
+        },
+        File {
+            path: "io.github.okikorg.orcacode/hooks.json".into(),
+            body: include_str!("templates/hooks.json"),
         },
         File {
             path: "src/index.ts".into(),

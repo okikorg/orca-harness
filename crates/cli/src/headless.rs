@@ -2,9 +2,11 @@
 //! to stdout as it is generated; tool activity goes to stderr. With
 //! `--json`, every harness event is serialized to stdout as NDJSON.
 
+use std::collections::HashSet;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{
@@ -25,6 +27,31 @@ use crate::mode::{ModeHandle, PlanGate};
 use crate::presentation;
 use crate::Config;
 
+const BARE_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
+
+pub(crate) fn bare_system_prompt(ws: &Workspace, tools: &[String]) -> String {
+    format!(
+        "You are Orca Code, a coding agent operating in the workspace at {} on {}. \
+         Use only the registered tools: {}. File paths are workspace-relative. \
+         Investigate with tools instead of guessing. When the request names files, read \
+         them directly; otherwise prefer targeted grep over broad directory or glob \
+         exploration. Batch independent reads and stop once you have enough evidence. \
+         Your final response is machine parsed. If the user specifies an exact final \
+         line, the entire response must be only that line: no analysis, prose, markdown, \
+         code fence, or added punctuation.",
+        ws.root().display(),
+        std::env::consts::OS,
+        tools.join(", ")
+    )
+}
+
+pub(crate) fn selected_tool_names(cfg: &Config) -> Option<Vec<String>> {
+    cfg.tools.clone().or_else(|| {
+        cfg.bare
+            .then(|| BARE_TOOLS.iter().map(|name| (*name).to_string()).collect())
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run<M: Model + Clone + 'static>(
     cfg: &Config,
@@ -35,30 +62,64 @@ pub async fn run<M: Model + Clone + 'static>(
     session: Option<Arc<orca_harness_extensions::SessionHandler>>,
     resumed: Option<Context>,
     skills: &crate::skills::Skills,
+    skill_notices: &[String],
     mode: &ModeHandle,
     todos: &TodoList,
     plan_area: &crate::plan::PlanArea,
     memory: &MemoryStore,
     memory_scope: &MemoryScope,
+    model_retries: Arc<AtomicU64>,
 ) -> i32 {
     // Connect before constructing the model adapter so selection made by an
     // MCP tool is reflected in the immediately following provider request.
     let mcp = crate::mcp::McpServers::new();
-    for line in mcp.reload().await {
-        eprintln!("{line}");
+    let mut plugin_hooks = None;
+    if !cfg.bare {
+        let mut mcp_notices = mcp.reload().await;
+        let (hooks, hook_notices) = mcp.plugin_hook_extension();
+        mcp_notices.extend(hook_notices);
+        let hook_count = hooks.as_ref().map_or(0, |hooks| hooks.len());
+        plugin_hooks = hooks;
+        for line in
+            crate::runtime::startup::notices(&mcp, skills, hook_count, mcp_notices, skill_notices)
+        {
+            eprintln!("{line}");
+        }
     }
-    let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
+    let model: Arc<dyn Model> = Arc::new(model);
+    let model: Arc<dyn Model> = if cfg.bare {
+        model
+    } else {
+        Arc::new(McpModel::new(model, mcp.catalog()))
+    };
     let model_for_subagents = model.clone();
-    let model: Arc<dyn Model> =
-        Arc::new(crate::skills::SkillMentionModel::new(model, skills.clone()));
-    let model: Arc<dyn Model> = Arc::new(MemoryModel::new(
-        model,
-        MemoryExtension::new(memory.clone(), memory_scope.clone()),
-    ));
+    let model: Arc<dyn Model> = if cfg.bare {
+        model
+    } else {
+        Arc::new(crate::skills::SkillMentionModel::new(model, skills.clone()))
+    };
+    let model: Arc<dyn Model> = if cfg.bare {
+        model
+    } else {
+        Arc::new(MemoryModel::new(
+            model,
+            MemoryExtension::new(memory.clone(), memory_scope.clone()),
+        ))
+    };
     let json = cfg.json;
+    let selected_names = selected_tool_names(cfg);
+    let selected = selected_names
+        .as_ref()
+        .map(|names| names.iter().map(String::as_str).collect::<HashSet<_>>());
+    let enabled = |name: &str| selected.as_ref().is_none_or(|names| names.contains(name));
+    let tool_calls = Arc::new(AtomicU64::new(0));
+    let counted_tool_calls = tool_calls.clone();
     let saw_delta = Arc::new(AtomicBool::new(false));
     let saw = saw_delta.clone();
     let events = EventStream::from_fn(move |ev: HarnessEvent| {
+        if matches!(ev, HarnessEvent::ToolCall { .. }) {
+            counted_tool_calls.fetch_add(1, Ordering::Relaxed);
+        }
         if json {
             if let Ok(line) = serde_json::to_string(&ev) {
                 println!("{line}");
@@ -108,6 +169,9 @@ pub async fn run<M: Model + Clone + 'static>(
         .extension(events)
         .extension(meter)
         .extension(PlanGate::new(mode.clone(), plan_area.clone()));
+    if let Some(plugin_hooks) = &plugin_hooks {
+        agent = agent.extension_arc(plugin_hooks.clone());
+    }
     if crate::extensions::enabled("truncation") {
         agent = agent.extension(Truncation::new(16_000));
     }
@@ -124,53 +188,86 @@ pub async fn run<M: Model + Clone + 'static>(
         agent = agent.extension_arc(session.clone());
     }
     for tool in core_tools(ws) {
-        agent = agent.tool_arc(tool);
+        if enabled(&tool.schema().name) {
+            agent = agent.tool_arc(tool);
+        }
     }
-    agent = agent
-        .tool_arc(Arc::new(TodoWriteTool::new(todos.clone())))
-        .tool_arc(Arc::new(MemorySearchTool::new(
+    if !cfg.bare && enabled("todo_write") {
+        agent = agent.tool_arc(Arc::new(TodoWriteTool::new(todos.clone())));
+    }
+    if !cfg.bare && enabled("memory_search") {
+        agent = agent.tool_arc(Arc::new(MemorySearchTool::new(
             memory.clone(),
             memory_scope.clone(),
-        )))
-        .tool_arc(Arc::new(MemoryManageTool::new(
+        )));
+    }
+    if !cfg.bare && enabled("memory_manage") {
+        agent = agent.tool_arc(Arc::new(MemoryManageTool::new(
             memory.clone(),
             memory_scope.clone(),
-        )))
-        .tool_arc(Arc::new(WebFetchTool::new(UrlPolicy::strict())));
-    if let Some(key) = &cfg.firecrawl_key {
-        let firecrawl = Arc::new(Firecrawl::new(key.clone()));
-        agent = agent
-            .tool_arc(Arc::new(WebSearchTool::new(firecrawl.clone())))
-            .tool_arc(Arc::new(WebCrawlTool::new(firecrawl)));
+        )));
     }
-    let root = ws.root().to_string_lossy().into_owned();
-    agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root.clone())));
-    agent = agent.tool_arc(Arc::new(BunReplTool::new().working_dir(root)));
-    let subagent_settings = SubagentDepth::new(cfg.subagent_depth);
-    let extension_settings = subagent_settings.clone();
-    let subagent = SubagentTool::new(model_for_subagents, ws)
-        .inherited_identity(cfg.provider.label(), &cfg.model)
-        .max_depth(subagent_settings.clone())
-        .models(subagent_models.into_iter().map(|choice| SubagentModel {
-            model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
-            ..choice
-        }));
-    crate::config::load_subagent_settings(&subagent_settings);
-    agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
-        vec![
-            Arc::new(Truncation::new(extension_settings.output_chars() as usize))
-                as Arc<dyn orca_harness_core::Extension>,
-        ]
-    }))));
+    if !cfg.bare && enabled("web_fetch") {
+        agent = agent.tool_arc(Arc::new(WebFetchTool::new(UrlPolicy::strict())));
+    }
+    if !cfg.bare {
+        if let Some(key) = &cfg.firecrawl_key {
+            let firecrawl = Arc::new(Firecrawl::new(key.clone()));
+            if enabled("web_search") {
+                agent = agent.tool_arc(Arc::new(WebSearchTool::new(firecrawl.clone())));
+            }
+            if enabled("web_crawl") {
+                agent = agent.tool_arc(Arc::new(WebCrawlTool::new(firecrawl)));
+            }
+        }
+    }
+    if !cfg.bare {
+        let root = ws.root().to_string_lossy().into_owned();
+        if enabled("pykernel") {
+            agent = agent.tool_arc(Arc::new(PyKernelTool::new().working_dir(root.clone())));
+        }
+        if enabled("bun_repl") {
+            agent = agent.tool_arc(Arc::new(BunReplTool::new().working_dir(root)));
+        }
+        if enabled("subagent") {
+            let subagent_settings = SubagentDepth::new(cfg.subagent_depth);
+            let extension_settings = subagent_settings.clone();
+            let subagent = SubagentTool::new(model_for_subagents, ws)
+                .inherited_identity(cfg.provider.label(), &cfg.model)
+                .max_depth(subagent_settings.clone())
+                .models(subagent_models.into_iter().map(|choice| SubagentModel {
+                    model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
+                    ..choice
+                }));
+            crate::config::load_subagent_settings(&subagent_settings);
+            let subagent_plugin_hooks = plugin_hooks.clone();
+            agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
+                let mut extensions = Vec::new();
+                if let Some(plugin_hooks) = &subagent_plugin_hooks {
+                    extensions.push(plugin_hooks.clone() as Arc<dyn orca_harness_core::Extension>);
+                }
+                extensions.push(Arc::new(
+                    Truncation::new(extension_settings.output_chars() as usize),
+                ) as Arc<dyn orca_harness_core::Extension>);
+                extensions
+            }))));
+        }
+    }
     // Configured MCP servers joined before model construction; register the
     // stable interfaces and hidden remote dispatch targets here.
-    for tool in mcp.tools() {
-        agent = agent.tool_arc(tool);
+    if !cfg.bare {
+        for tool in mcp.tools() {
+            if enabled(&tool.schema().name) {
+                agent = agent.tool_arc(tool);
+            }
+        }
     }
     // Skills join headless runs on the same terms: the caller scanned
     // before building the system prompt and reported anything broken.
-    if let Some(tool) = skills.tool() {
-        agent = agent.tool_arc(tool);
+    if !cfg.bare && enabled("skill") {
+        if let Some(tool) = skills.tool() {
+            agent = agent.tool_arc(tool);
+        }
     }
 
     let cancel = CancellationToken::new();
@@ -207,13 +304,47 @@ pub async fn run<M: Model + Clone + 'static>(
     }
     context.push_user(crate::prompt::strip_location_mentions(prompt));
 
+    let started = Instant::now();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "metadata",
+                "provider": cfg.provider.label(),
+                "model": cfg.model,
+                "effort": cfg.reasoning_effort,
+                "promptCache": cfg.prompt_cache,
+                "maxOutputTokens": cfg.max_output_tokens,
+                "bare": cfg.bare,
+                "tools": selected_names,
+            })
+        );
+    }
     let result = agent.run_context(&mut context, cancel).await;
+    let totals = usage.total();
     if !json {
         println!();
-        let totals = usage.total();
         eprintln!(
             "tokens: {} in, {} out",
             totals.input_tokens, totals.output_tokens
+        );
+    }
+    let status = if result.is_ok() { "success" } else { "error" };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "summary",
+                "status": status,
+                "provider": cfg.provider.label(),
+                "model": cfg.model,
+                "effort": cfg.reasoning_effort,
+                "durationMs": started.elapsed().as_millis(),
+                "usage": totals,
+                "modelSteps": usage.metered_steps(),
+                "toolCalls": tool_calls.load(Ordering::Relaxed),
+                "modelRetries": model_retries.load(Ordering::Relaxed),
+            })
         );
     }
     match result {

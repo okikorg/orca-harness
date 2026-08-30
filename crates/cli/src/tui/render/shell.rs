@@ -24,6 +24,7 @@ use super::super::{
 };
 use super::overlays::*;
 use super::pickers::*;
+use super::plugins::*;
 use super::transcript::*;
 
 /// Breathing room between inspector content and the terminal edge. The
@@ -454,15 +455,27 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Approvals { tools, picker } => approvals_lines(tools, picker, width),
             Overlay::Extensions { picker } => extensions_picker_lines(picker, width),
             Overlay::Mcp {
-                servers,
+                entries,
                 filter,
                 picker,
-            } => mcp_picker_lines(servers, &app.cfg.mcp, filter, picker, width),
+            } => crate::tui::mcp_picker::lines(entries, &app.cfg.mcp, filter, picker, width),
+            Overlay::Plugins {
+                entries,
+                filter,
+                picker,
+            } => plugin_picker_lines(
+                entries,
+                &app.cfg.mcp,
+                &app.cfg.skills,
+                filter,
+                picker,
+                width,
+            ),
             Overlay::Skills {
                 entries,
                 filter,
                 picker,
-            } => skills_picker_lines(entries, filter, picker, width),
+            } => crate::tui::skills_picker::lines(entries, filter, picker, width),
             Overlay::Sessions { sessions, picker } => {
                 sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
