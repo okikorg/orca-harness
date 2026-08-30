@@ -235,10 +235,10 @@ fn expand(value: &str, root: &str, plugin_data: &str) -> String {
     while cursor < value.len() {
         let remaining = &value[cursor..];
         if remaining.starts_with("${PLUGIN_ROOT}") {
-            output.push_str(&root);
+            output.push_str(root);
             cursor += "${PLUGIN_ROOT}".len();
         } else if remaining.starts_with("${PLUGIN_DATA}") {
-            output.push_str(&plugin_data);
+            output.push_str(plugin_data);
             cursor += "${PLUGIN_DATA}".len();
         } else {
             let character = remaining.chars().next().expect("cursor within string");
