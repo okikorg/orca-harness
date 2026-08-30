@@ -1,63 +1,200 @@
-//! The configured MCP servers' tools, behind a shared handle. `/mcp`
-//! edits the config file and the worker reconnects and rebuilds, so
-//! changes apply to the next run — the same shape as extension toggles.
-//! Connections live as long as their tools: when a rebuild replaces the
-//! agent, dropped tools kill the old server processes.
+//! Standalone and Agent Plugin MCP tools behind one shared handle.
 //!
-//! Reloads are a diff, not a rebuild. Reconnecting is seconds per
-//! server (`npx` launchers especially), so toggling one server in the
-//! overlay must not respawn the other six: only names that were added,
-//! removed, or had their command changed are touched, and only those
-//! report a status line. A server that failed to connect keeps its
-//! error until something about it changes — toggling it off and on
-//! retries.
+//! `/mcp` still edits only standalone config. Agent Plugin registrations are
+//! snapshotted when this manager is constructed, so CLI plugin state applies
+//! to the next process while worker-triggered standalone reloads reconcile
+//! against the same plugin state.
+//!
+//! Reloads are a diff, not a rebuild. Only added, removed, unhealthy, or
+//! identity-changed servers reconnect. Failed connections retain their error
+//! until desired state changes, and dropping a connection kills its process.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::collections::{BTreeSet, HashMap};
+use std::io;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 
 use orca_harness_core::Tool;
-use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient};
+use orca_harness_tool_extensions::agent_plugins::load_agent_plugin;
+use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient, StdioLaunch};
 
 /// What the last connection attempt for a server produced. Rendered by
-/// the /mcp overlay next to each row.
+/// the /mcp overlay next to each standalone row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpState {
     Connected(usize),
     Failed(String),
 }
 
-/// One live (or failed) connection. `command` is what it was connected
-/// with, so a config edit is detectable without reconnecting.
 struct Connection {
-    command: String,
+    desired: DesiredServer,
     tools: Vec<Arc<dyn Tool>>,
     error: Option<String>,
 }
 
-/// Cloneable handle captured by the agent-build closure (like
-/// `TruncationStore`): the worker reloads it, `build_agent` reads it,
-/// and the TUI reads per-server state for the /mcp overlay.
+/// Complete process identity used by the reload diff. Legacy command strings
+/// retain their original launch and inherited-environment behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LaunchIdentity {
+    Legacy(String),
+    Structured(StdioLaunch),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DesiredSource {
+    Standalone,
+    Plugin {
+        plugin: String,
+        server: String,
+        data: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesiredServer {
+    name: String,
+    launch: LaunchIdentity,
+    source: DesiredSource,
+}
+
+#[derive(Debug, Clone)]
+struct PluginServer {
+    name: String,
+    plugin: String,
+    server: String,
+    data: PathBuf,
+    launch: StdioLaunch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PluginCollision {
+    plugin: String,
+    server: String,
+    id: String,
+}
+
+/// Static plugin state for one Orcacode process. Loading validates files but
+/// does not create plugin-owned data or execute plugin code.
 #[derive(Clone, Default)]
+struct PluginSnapshot {
+    servers: Vec<PluginServer>,
+    startup_lines: Arc<Mutex<Option<Vec<String>>>>,
+}
+
+impl PluginSnapshot {
+    fn load() -> Self {
+        Self::from_registrations(crate::config::stored_plugins(), |name| {
+            crate::config::plugin_data_path(name)
+        })
+    }
+
+    fn from_registrations(
+        mut registrations: Vec<crate::config::RegisteredPlugin>,
+        data_path: impl Fn(&str) -> io::Result<PathBuf>,
+    ) -> Self {
+        registrations.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut servers = Vec::new();
+        let mut lines = Vec::new();
+        for registered in registrations.into_iter().filter(|plugin| plugin.enabled) {
+            let data = match data_path(&registered.name) {
+                Ok(data) => data,
+                Err(error) => {
+                    lines.push(format!("Plugin {} · {error}", registered.name));
+                    continue;
+                }
+            };
+            let plugin = match load_agent_plugin(&registered.root, &data) {
+                Ok(plugin) => plugin,
+                Err(error) => {
+                    lines.push(format!("Plugin {} · {error}", registered.name));
+                    continue;
+                }
+            };
+            if plugin.name != registered.name {
+                lines.push(format!(
+                    "Plugin {} · registered root now declares plugin {}",
+                    registered.name, plugin.name
+                ));
+                continue;
+            }
+            lines.extend(
+                plugin
+                    .warnings
+                    .iter()
+                    .map(|warning| format!("Plugin {} warning · {warning}", registered.name)),
+            );
+            let mut parsed = plugin.mcp_servers;
+            parsed.sort_by(|left, right| left.server_name.cmp(&right.server_name));
+            servers.extend(parsed.into_iter().map(|server| PluginServer {
+                name: server.id,
+                plugin: registered.name.clone(),
+                server: server.server_name,
+                data: data.clone(),
+                launch: server.launch,
+            }));
+        }
+        Self {
+            servers,
+            startup_lines: Arc::new(Mutex::new(Some(lines))),
+        }
+    }
+
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    fn take_startup_lines(&self) -> Vec<String> {
+        self.startup_lines
+            .lock()
+            .expect("plugin startup lines lock")
+            .take()
+            .unwrap_or_default()
+    }
+}
+
+/// Cloneable handle captured by both agent-build paths. The worker reloads
+/// it, providers and subagents share its catalog, and `/mcp` asks state only
+/// for names from standalone config.
+#[derive(Clone)]
 pub struct McpServers {
     connections: Arc<RwLock<HashMap<String, Connection>>>,
     catalog: McpCatalog,
+    desired: Arc<RwLock<Vec<DesiredServer>>>,
+    plugin_collisions: Arc<Mutex<BTreeSet<PluginCollision>>>,
+    plugins: PluginSnapshot,
+}
+
+impl Default for McpServers {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl McpServers {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_plugin_snapshot(PluginSnapshot::load())
     }
 
-    /// The three stable interfaces followed by hidden remote tools. The model
-    /// adapter filters hidden schemas, while dispatch can still resolve a
-    /// selected remote tool by its ordinary registered name.
+    fn with_plugin_snapshot(plugins: PluginSnapshot) -> Self {
+        Self {
+            connections: Arc::default(),
+            catalog: McpCatalog::new(),
+            desired: Arc::default(),
+            plugin_collisions: Arc::default(),
+            plugins,
+        }
+    }
+
+    /// The three stable interfaces followed by every hidden remote tool in
+    /// deterministic desired-server order. Existing agent builders register
+    /// this exact set, so plugin tools inherit the same gates and wrappers.
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         let mut tools = self.catalog.interface_tools();
-        let connections = self.connections.read().expect("mcp lock");
+        let desired = self.desired.read().expect("mcp desired lock");
         tools.extend(
-            crate::config::stored_mcp_servers()
+            desired
                 .iter()
-                .filter(|server| connections.contains_key(&server.name))
                 .flat_map(|server| self.catalog.server_tools(&server.name)),
         );
         tools
@@ -67,8 +204,6 @@ impl McpServers {
         self.catalog.clone()
     }
 
-    /// The last attempt's outcome for `name`, or `None` when the server
-    /// is disabled or has not been connected yet.
     pub fn state(&self, name: &str) -> Option<McpState> {
         let connections = self.connections.read().expect("mcp lock");
         let connection = connections.get(name)?;
@@ -81,50 +216,51 @@ impl McpServers {
         })
     }
 
-    /// Bring the live connections in line with the config: connect what
-    /// is new or changed, drop what was removed or disabled, leave the
-    /// rest running. Returns one transcript status line per *changed*
-    /// server; an unchanged config reports nothing. A server that fails
-    /// to connect loses its tools but never stops the others.
+    /// Reconcile standalone config and the process's fixed plugin snapshot.
+    /// Each launch is independent, so one parse, data, spawn, handshake, or
+    /// catalog failure never blocks healthy siblings.
     pub async fn reload(&self) -> Vec<String> {
         let configured = crate::config::stored_mcp_servers();
+        let (desired, collisions) = self.desired_servers(&configured);
+        let previous_desired = self.desired.read().expect("mcp desired lock").clone();
+        let desired_changed = previous_desired != desired;
+        let mut lines = self.plugins.take_startup_lines();
+        self.report_new_collisions(collisions, &mut lines);
 
-        // Drop first, so a removed server's process is gone before the
-        // replacement for a renamed/edited one spawns.
-        let mut lines = Vec::new();
-        let stale: Vec<String> = {
+        // Drop first, so removed or changed processes are gone before their
+        // replacements start. Catalog-duplicate failures retry only when the
+        // surrounding desired set changes and may have released the name.
+        let stale = {
             let connections = self.connections.read().expect("mcp lock");
             connections
                 .iter()
                 .filter(|(name, connection)| {
-                    !configured.iter().any(|server| {
-                        server.enabled
-                            && server.name == **name
-                            && server.command == connection.command
-                    }) || (connection.error.is_none() && !self.catalog.healthy(name))
-                        || connection
-                            .error
-                            .as_ref()
-                            .is_some_and(|error| error.contains("duplicate MCP tool name"))
+                    desired
+                        .iter()
+                        .find(|server| server.name == **name)
+                        .is_none_or(|server| server != &connection.desired)
+                        || (connection.error.is_none() && !self.catalog.healthy(name))
+                        || (desired_changed
+                            && connection
+                                .error
+                                .as_ref()
+                                .is_some_and(|error| error.contains("duplicate MCP tool name")))
                 })
                 .map(|(name, _)| name.clone())
-                .collect()
+                .collect::<Vec<_>>()
         };
         if !stale.is_empty() {
             let mut connections = self.connections.write().expect("mcp lock");
             for name in &stale {
                 connections.remove(name);
                 self.catalog.remove(name);
-                // A server that is merely gone from the config was
-                // reported by /mcp remove already; only disabling and
-                // re-command are worth a line here.
-                if configured.iter().any(|s| &s.name == name) {
+                if configured.iter().any(|server| &server.name == name) {
                     lines.push(format!("MCP {name} disconnected"));
                 }
             }
         }
 
-        for server in configured.iter().filter(|s| s.enabled) {
+        for server in &desired {
             if self
                 .connections
                 .read()
@@ -133,11 +269,12 @@ impl McpServers {
             {
                 continue;
             }
-            let connection = match McpClient::connect(&server.name, &server.command).await {
+            let connected = self.connect(server).await;
+            let connection = match connected {
                 Ok(connected) => {
                     let count = match connected.tools().len() {
                         1 => "1 tool".to_string(),
-                        n => format!("{n} tools"),
+                        count => format!("{count} tools"),
                     };
                     let tools = connected
                         .tools()
@@ -147,29 +284,29 @@ impl McpServers {
                         .collect();
                     match self.catalog.insert(server.name.clone(), connected) {
                         Ok(()) => {
-                            lines.push(format!("MCP {} connected · {count}", server.name));
+                            lines.push(server.connected_line(&count));
                             Connection {
-                                command: server.command.clone(),
+                                desired: server.clone(),
                                 tools,
                                 error: None,
                             }
                         }
-                        Err(err) => {
-                            lines.push(format!("MCP {} · {err}", server.name));
+                        Err(error) => {
+                            lines.push(server.error_line(&error.to_string()));
                             Connection {
-                                command: server.command.clone(),
+                                desired: server.clone(),
                                 tools: Vec::new(),
-                                error: Some(err.to_string()),
+                                error: Some(error.to_string()),
                             }
                         }
                     }
                 }
-                Err(err) => {
-                    lines.push(format!("MCP {} · {err}", server.name));
+                Err(error) => {
+                    lines.push(server.error_line(&error.to_string()));
                     Connection {
-                        command: server.command.clone(),
+                        desired: server.clone(),
                         tools: Vec::new(),
-                        error: Some(err.to_string()),
+                        error: Some(error.to_string()),
                     }
                 }
             };
@@ -178,56 +315,133 @@ impl McpServers {
                 .expect("mcp lock")
                 .insert(server.name.clone(), connection);
         }
+        *self.desired.write().expect("mcp desired lock") = desired;
         lines
+    }
+
+    async fn connect(
+        &self,
+        server: &DesiredServer,
+    ) -> Result<orca_harness_tool_extensions::mcp::McpConnection, String> {
+        match &server.launch {
+            LaunchIdentity::Legacy(command) => McpClient::connect(&server.name, command)
+                .await
+                .map_err(|error| error.to_string()),
+            LaunchIdentity::Structured(launch) => {
+                let DesiredSource::Plugin { data, .. } = &server.source else {
+                    unreachable!("structured launches are plugin-owned")
+                };
+                crate::config::create_plugin_data_dir(data)
+                    .map_err(|error| format!("cannot create plugin data directory: {error}"))?;
+                McpClient::connect_stdio(&server.name, launch)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+
+    fn desired_servers(
+        &self,
+        configured: &[crate::config::McpServer],
+    ) -> (Vec<DesiredServer>, BTreeSet<PluginCollision>) {
+        let mut desired = configured
+            .iter()
+            .filter(|server| server.enabled)
+            .map(|server| DesiredServer {
+                name: server.name.clone(),
+                launch: LaunchIdentity::Legacy(server.command.clone()),
+                source: DesiredSource::Standalone,
+            })
+            .collect::<Vec<_>>();
+        desired.extend(self.plugins.servers.iter().map(|server| DesiredServer {
+            name: server.name.clone(),
+            launch: LaunchIdentity::Structured(server.launch.clone()),
+            source: DesiredSource::Plugin {
+                plugin: server.plugin.clone(),
+                server: server.server.clone(),
+                data: server.data.clone(),
+            },
+        }));
+
+        let mut counts = HashMap::<String, usize>::new();
+        for server in &desired {
+            *counts.entry(server.name.clone()).or_default() += 1;
+        }
+        let collisions = desired
+            .iter()
+            .filter_map(|server| {
+                let DesiredSource::Plugin {
+                    plugin,
+                    server: plugin_server,
+                    ..
+                } = &server.source
+                else {
+                    return None;
+                };
+                (counts[&server.name] > 1).then(|| PluginCollision {
+                    plugin: plugin.clone(),
+                    server: plugin_server.clone(),
+                    id: server.name.clone(),
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        desired.retain(|server| {
+            let DesiredSource::Plugin {
+                plugin,
+                server: plugin_server,
+                ..
+            } = &server.source
+            else {
+                return true;
+            };
+            !collisions.contains(&PluginCollision {
+                plugin: plugin.clone(),
+                server: plugin_server.clone(),
+                id: server.name.clone(),
+            })
+        });
+        (desired, collisions)
+    }
+
+    fn report_new_collisions(
+        &self,
+        collisions: BTreeSet<PluginCollision>,
+        lines: &mut Vec<String>,
+    ) {
+        let mut previous = self
+            .plugin_collisions
+            .lock()
+            .expect("plugin collision lock");
+        lines.extend(collisions.difference(&previous).map(|collision| {
+            format!(
+                "Plugin {} MCP {} · desired server ID collision: {}",
+                collision.plugin, collision.server, collision.id
+            )
+        }));
+        *previous = collisions;
+    }
+}
+
+impl DesiredServer {
+    fn connected_line(&self, count: &str) -> String {
+        match &self.source {
+            DesiredSource::Standalone => format!("MCP {} connected · {count}", self.name),
+            DesiredSource::Plugin { plugin, server, .. } => {
+                format!("Plugin {plugin} MCP {server} connected · {count}")
+            }
+        }
+    }
+
+    fn error_line(&self, error: &str) -> String {
+        match &self.source {
+            DesiredSource::Standalone => format!("MCP {} · {error}", self.name),
+            DesiredSource::Plugin { plugin, server, .. } => {
+                format!("Plugin {plugin} MCP {server} · {error}")
+            }
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Reload against an empty config clears the set quietly; a
-    /// misconfigured server reports and is skipped, never fatal.
-    #[tokio::test]
-    async fn reload_reports_per_server_and_replaces_the_set() {
-        let servers = McpServers::new();
-        assert!(servers.reload().await.is_empty());
-        assert_eq!(servers.tools().len(), 3);
-
-        crate::config::save_mcp_server("ghost", "orca-no-such-binary-xyz").unwrap();
-        let lines = servers.reload().await;
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("MCP ghost ·"), "line: {}", lines[0]);
-        assert_eq!(servers.tools().len(), 3);
-        assert!(matches!(servers.state("ghost"), Some(McpState::Failed(_))));
-    }
-
-    /// The diff: an unchanged config is a no-op, so toggling one server
-    /// never re-handshakes the others. Disabling drops the connection;
-    /// re-enabling retries it.
-    #[tokio::test]
-    async fn reload_only_touches_servers_that_changed() {
-        let servers = McpServers::new();
-        crate::config::save_mcp_server("ghost", "orca-no-such-binary-xyz").unwrap();
-        assert_eq!(servers.reload().await.len(), 1);
-
-        // Second reload with the same config: nothing reconnects, and
-        // the recorded failure is kept rather than retried.
-        assert!(servers.reload().await.is_empty());
-        assert!(matches!(servers.state("ghost"), Some(McpState::Failed(_))));
-
-        crate::config::set_mcp_enabled("ghost", false).unwrap();
-        assert_eq!(servers.reload().await, ["MCP ghost disconnected"]);
-        assert_eq!(servers.state("ghost"), None);
-
-        crate::config::set_mcp_enabled("ghost", true).unwrap();
-        assert_eq!(servers.reload().await.len(), 1);
-        assert!(matches!(servers.state("ghost"), Some(McpState::Failed(_))));
-
-        // Removal drops the connection without a "disconnected" line —
-        // /mcp remove already reported it.
-        crate::config::remove_mcp_server("ghost").unwrap();
-        assert!(servers.reload().await.is_empty());
-        assert_eq!(servers.state("ghost"), None);
-    }
-}
+#[path = "mcp/tests.rs"]
+mod tests;

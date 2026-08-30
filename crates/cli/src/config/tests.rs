@@ -284,9 +284,40 @@ mod tests {
             Some("rl-tools")
         );
         assert_eq!(
-            path.parent().and_then(Path::file_name).and_then(|name| name.to_str()),
+            path.parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
             Some("plugin-data")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_data_directory_is_created_lazily_with_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "orcacode-plugin-data-config-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("plugin-data/example");
+        assert!(!path.exists());
+
+        create_plugin_data_dir(&path).unwrap();
+
+        assert!(path.is_dir());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_plugin_data_dir(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

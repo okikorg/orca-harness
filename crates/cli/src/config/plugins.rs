@@ -1,3 +1,4 @@
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -106,4 +107,36 @@ pub fn plugin_data_path(name: &str) -> io::Result<PathBuf> {
     } else {
         Ok(std::env::current_dir()?.join(path))
     }
+}
+
+/// Create the already-resolved data boundary immediately before a plugin
+/// server starts. Static validation and disabled/no-server plugins never call
+/// this, so merely loading plugin metadata stays side-effect free.
+pub(crate) fn create_plugin_data_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700).create(path)?;
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "plugin data path is not a directory",
+            ));
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)?;
+        if !fs::metadata(path)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "plugin data path is not a directory",
+            ));
+        }
+    }
+    Ok(())
 }
