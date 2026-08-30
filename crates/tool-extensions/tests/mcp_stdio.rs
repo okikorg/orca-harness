@@ -5,7 +5,7 @@
 #![cfg(unix)]
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -83,9 +83,9 @@ read _call
 exec sleep 10
 "#;
 
-fn environment_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+fn environment_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn one_tool_server(server: &str, remote: &str) -> String {
@@ -119,7 +119,7 @@ fn ctx(tool_name: &str) -> ToolContext {
 
 #[tokio::test]
 async fn structured_stdio_launch_uses_literal_args_cwd_and_sanitized_env() {
-    let _environment = environment_lock().lock().unwrap();
+    let _environment = environment_lock().lock().await;
     let path = script("structured-launch", STRUCTURED_LAUNCH_SERVER);
     let cwd = path.parent().unwrap().join("working-directory");
     std::fs::create_dir_all(&cwd).unwrap();
@@ -153,7 +153,7 @@ async fn structured_stdio_launch_uses_literal_args_cwd_and_sanitized_env() {
 
 #[tokio::test]
 async fn compatibility_connect_preserves_the_inherited_environment() {
-    let _environment = environment_lock().lock().unwrap();
+    let _environment = environment_lock().lock().await;
     let path = script("compatibility-environment", INHERITED_ENV_SERVER);
     let original_marker = std::env::var_os("ORCA_MCP_COMPAT_MARKER");
     std::env::set_var("ORCA_MCP_COMPAT_MARKER", "inherited");
@@ -356,7 +356,7 @@ async fn search_requires_deliberate_terms_and_filters_metadata() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-struct ObservedTools(Arc<Mutex<Vec<Vec<String>>>>);
+struct ObservedTools(Arc<StdMutex<Vec<Vec<String>>>>);
 
 #[async_trait]
 impl Model for ObservedTools {
@@ -393,7 +393,7 @@ async fn selection_reaches_the_next_provider_request_without_core_changes() {
         .collect();
     assert_eq!(schemas.len(), 4);
 
-    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::new(StdMutex::new(Vec::new()));
     let model = McpModel::new(ObservedTools(observed.clone()), catalog.clone());
     let context = Context::new();
     model.generate(&context, &schemas).await.unwrap();
