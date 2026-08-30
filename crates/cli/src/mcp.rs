@@ -315,6 +315,12 @@ impl McpServers {
                 .expect("mcp lock")
                 .insert(server.name.clone(), connection);
         }
+        self.catalog.reorder(
+            &desired
+                .iter()
+                .map(|server| server.name.clone())
+                .collect::<Vec<_>>(),
+        );
         *self.desired.write().expect("mcp desired lock") = desired;
         lines
     }

@@ -112,6 +112,11 @@ pub fn plugin_data_path(name: &str) -> io::Result<PathBuf> {
 /// Create the already-resolved data boundary immediately before a plugin
 /// server starts. Static validation and disabled/no-server plugins never call
 /// this, so merely loading plugin metadata stays side-effect free.
+///
+/// On Unix, creation and every reuse enforce mode 0700. Rust's standard
+/// library has no portable owner-only Windows ACL API, so non-Unix hosts rely
+/// on the containing user-profile/config-tree ACL and Orcacode does not claim
+/// to enforce an owner-only ACL there.
 pub(crate) fn create_plugin_data_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -130,6 +135,8 @@ pub(crate) fn create_plugin_data_dir(path: &Path) -> io::Result<()> {
     }
     #[cfg(not(unix))]
     {
+        // `path` is client-managed beneath the Orcacode config directory;
+        // its containing OS/user-profile ACL is the non-Unix security boundary.
         fs::create_dir_all(path)?;
         if !fs::metadata(path)?.is_dir() {
             return Err(io::Error::new(

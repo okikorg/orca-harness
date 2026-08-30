@@ -73,6 +73,20 @@ impl McpCatalog {
             .retain(|server| server.name != name);
     }
 
+    /// Match catalog iteration to the caller's complete desired-server order.
+    /// Unlisted servers remain at the end in their existing relative order.
+    pub fn reorder(&self, desired: &[String]) {
+        self.servers
+            .write()
+            .expect("mcp catalog lock")
+            .sort_by_key(|server| {
+                desired
+                    .iter()
+                    .position(|name| name == &server.name)
+                    .unwrap_or(usize::MAX)
+            });
+    }
+
     pub fn healthy(&self, name: &str) -> bool {
         self.servers
             .read()

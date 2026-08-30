@@ -28,6 +28,15 @@ read _call
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"plugin call passed"}]}}'
 "#;
 
+const STANDALONE_SERVER: &str = r#"#!/bin/sh
+read _initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}'
+read _initialized
+read _list
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"echo structured fixture","inputSchema":{"type":"object"}}]}}'
+read _call
+"#;
+
 struct Fixture {
     root: PathBuf,
     data_root: PathBuf,
@@ -90,6 +99,12 @@ impl Fixture {
 
     fn snapshot(&self, plugins: Vec<crate::config::RegisteredPlugin>) -> PluginSnapshot {
         PluginSnapshot::from_registrations(plugins, |name| Ok(self.data_root.join(name)))
+    }
+
+    fn standalone_server(&self, name: &str) -> PathBuf {
+        let path = self.root.join(format!("{name}.sh"));
+        fs::write(&path, STANDALONE_SERVER).unwrap();
+        path
     }
 }
 
@@ -315,6 +330,49 @@ async fn desired_id_collisions_exclude_all_affected_plugins_only() {
     assert!(!fixture.data_root.join("alpha.plugin").exists());
     assert!(fixture.data_root.join("alpha-plugin").is_dir());
     assert!(!fixture.data_root.join("standalone-victim").exists());
+}
+
+#[tokio::test]
+async fn changed_standalone_remains_first_in_actual_catalog_order() {
+    let fixture = Fixture::new("catalog-reorder");
+    let plugin = fixture.plugin("catalog-plugin", &["echo"]);
+    let first = fixture.standalone_server("standalone-first");
+    crate::config::save_mcp_server("standalone", &format!("sh {}", first.display())).unwrap();
+    let servers = McpServers::with_plugin_snapshot(fixture.snapshot(vec![plugin]));
+    servers.reload().await;
+
+    let replacement = fixture.standalone_server("standalone-replacement");
+    crate::config::save_mcp_server("standalone", &format!("sh {}", replacement.display())).unwrap();
+    let lines = servers.reload().await;
+    assert!(lines
+        .iter()
+        .any(|line| line == "MCP standalone disconnected"));
+    assert!(lines
+        .iter()
+        .any(|line| line.starts_with("MCP standalone connected")));
+    assert!(!lines.iter().any(|line| line.contains("catalog-plugin MCP")));
+
+    let search = servers
+        .tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_search_tools")
+        .unwrap();
+    let result = search
+        .call(
+            json!({"query": "structured echo"}),
+            &context("mcp_search_tools"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["server"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["standalone", "plugin__catalog_plugin__echo"]
+    );
 }
 
 #[test]

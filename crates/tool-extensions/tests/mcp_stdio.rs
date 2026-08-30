@@ -356,6 +356,51 @@ async fn search_requires_deliberate_terms_and_filters_metadata() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn catalog_reorder_controls_search_ties_without_reconnecting() {
+    let plugin_path = script("catalog-order-plugin", &one_tool_server("plugin", "echo"));
+    let standalone_path = script(
+        "catalog-order-standalone",
+        &one_tool_server("standalone", "echo"),
+    );
+    let plugin = McpClient::connect("plugin", &format!("sh {}", plugin_path.display()))
+        .await
+        .unwrap();
+    let standalone = McpClient::connect("standalone", &format!("sh {}", standalone_path.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("plugin".into(), plugin).unwrap();
+    catalog.insert("standalone".into(), standalone).unwrap();
+    let plugin_tool = catalog.server_tools("plugin")[0].clone();
+    let standalone_tool = catalog.server_tools("standalone")[0].clone();
+
+    catalog.reorder(&["standalone".into(), "plugin".into()]);
+
+    assert!(Arc::ptr_eq(
+        &plugin_tool,
+        &catalog.server_tools("plugin")[0]
+    ));
+    assert!(Arc::ptr_eq(
+        &standalone_tool,
+        &catalog.server_tools("standalone")[0]
+    ));
+    let search = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_search_tools")
+        .unwrap();
+    let result = search
+        .call(json!({"query": "echo"}), &ctx("mcp_search_tools"))
+        .await
+        .unwrap();
+    assert_eq!(result["tools"][0]["server"], "standalone");
+    assert_eq!(result["tools"][1]["server"], "plugin");
+
+    let _ = std::fs::remove_dir_all(plugin_path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(standalone_path.parent().unwrap());
+}
+
 struct ObservedTools(Arc<StdMutex<Vec<Vec<String>>>>);
 
 #[async_trait]

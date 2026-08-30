@@ -291,6 +291,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plugin_data_directory_creation_is_explicit_and_yields_a_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "orcacode-plugin-data-portable-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("plugin-data/example");
+        assert!(!path.exists());
+
+        create_plugin_data_dir(&path).unwrap();
+
+        assert!(path.is_dir());
+        create_plugin_data_dir(&path).unwrap();
+        assert!(path.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn plugin_data_directory_is_created_lazily_with_owner_only_permissions() {
