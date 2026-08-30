@@ -73,6 +73,20 @@ impl McpCatalog {
             .retain(|server| server.name != name);
     }
 
+    /// Match catalog iteration to the caller's complete desired-server order.
+    /// Unlisted servers remain at the end in their existing relative order.
+    pub fn reorder(&self, desired: &[String]) {
+        self.servers
+            .write()
+            .expect("mcp catalog lock")
+            .sort_by_key(|server| {
+                desired
+                    .iter()
+                    .position(|name| name == &server.name)
+                    .unwrap_or(usize::MAX)
+            });
+    }
+
     pub fn healthy(&self, name: &str) -> bool {
         self.servers
             .read()
@@ -139,7 +153,7 @@ impl Tool for SearchTools {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "mcp_search_tools".into(),
-            description: "Search tool metadata across all configured MCP servers. Use deliberate capability terms describing the tool you need; generic terms such as 'mcp' may not match. Returns exact names for mcp_select_tool without loading input schemas.".into(),
+            description: "Search tool metadata across all configured MCP servers. Precise all-term matches rank first; when none exist, relevant partial matches are returned so natural-language qualifiers do not hide available tools. Returns exact names for mcp_select_tool without loading input schemas.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -177,6 +191,7 @@ impl Tool for SearchTools {
         let limit = optional_u64(&input, "limit", 1, 100)?.unwrap_or(SEARCH_DEFAULT_LIMIT) as usize;
         let servers = self.0.servers.read().expect("mcp catalog lock");
         let mut matches = Vec::new();
+        let mut fallback_matches = Vec::new();
         let mut order = 0;
         for server in servers
             .iter()
@@ -190,8 +205,8 @@ impl Tool for SearchTools {
                     server: tokens(&server.name),
                     parameters: tokens(&schema.parameters.to_string()),
                 };
-                if let Some(score) = relevance(&terms, &fields) {
-                    matches.push((
+                let ranked = |score| {
+                    (
                         Reverse(score),
                         fields.name.len(),
                         order,
@@ -202,10 +217,18 @@ impl Tool for SearchTools {
                             "description": schema.description,
                             "selected": tool.is_selected(),
                         }),
-                    ));
+                    )
+                };
+                if let Some(score) = relevance(&terms, &fields) {
+                    matches.push(ranked(score));
+                } else if let Some(score) = partial_relevance(&terms, &fields) {
+                    fallback_matches.push(ranked(score));
                 }
                 order += 1;
             }
+        }
+        if matches.is_empty() {
+            matches = fallback_matches;
         }
         matches.sort_by_key(|(score, name_len, order, _)| (*score, *name_len, *order));
         Ok(json!({
@@ -266,21 +289,9 @@ fn term_match(term: &str, field: &[String], normalize_plural: bool) -> u64 {
 }
 
 fn relevance(terms: &[String], fields: &SearchFields) -> Option<u64> {
-    let mut score = 0;
-    for term in terms {
-        let best = [
-            term_match(term, &fields.name, true) * 8,
-            term_match(term, &fields.description, false) * 4,
-            term_match(term, &fields.server, false) * 2,
-            term_match(term, &fields.parameters, false),
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or_default();
-        if best == 0 {
-            return None;
-        }
-        score += best;
+    let (matched, mut score) = match_score(terms, fields);
+    if matched != terms.len() {
+        return None;
     }
 
     let normalized_terms: Vec<String> = terms.iter().map(|term| singular(term)).collect();
@@ -294,6 +305,42 @@ fn relevance(terms: &[String], fields: &SearchFields) -> Option<u64> {
         score += 20;
     }
     Some(score)
+}
+
+/// Natural-language searches often add words absent from compact MCP schemas.
+/// Use this only when no tool matched every term, preserving precise results
+/// while keeping one unmatched adjective from hiding the whole catalog.
+fn partial_relevance(terms: &[String], fields: &SearchFields) -> Option<u64> {
+    let (matched, mut score) = match_score(terms, fields);
+    if matched == 0 {
+        return None;
+    }
+    score += (matched as u64 * 100) / terms.len() as u64;
+
+    let normalized_terms: Vec<String> = terms.iter().map(|term| singular(term)).collect();
+    let normalized_name: Vec<String> = fields.name.iter().map(|term| singular(term)).collect();
+    if normalized_name
+        .iter()
+        .all(|term| normalized_terms.contains(term))
+    {
+        score += 20;
+    }
+    Some(score)
+}
+
+fn match_score(terms: &[String], fields: &SearchFields) -> (usize, u64) {
+    terms.iter().fold((0, 0), |(matched, score), term| {
+        let best = [
+            term_match(term, &fields.name, true) * 8,
+            term_match(term, &fields.description, false) * 4,
+            term_match(term, &fields.server, false) * 2,
+            term_match(term, &fields.parameters, false),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or_default();
+        (matched + usize::from(best > 0), score + best)
+    })
 }
 
 struct SelectTool(McpCatalog);

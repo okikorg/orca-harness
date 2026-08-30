@@ -1,5 +1,6 @@
 mod overlays;
 mod pickers;
+mod plugins;
 mod shell;
 mod transcript;
 

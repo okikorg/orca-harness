@@ -22,8 +22,10 @@ mod format;
 mod input;
 mod inspector;
 mod keys;
+mod mcp_picker;
+mod skills_picker;
 
-pub(crate) use self::commands::{remove_skill, slash_command};
+pub(crate) use self::commands::{plugin_picker_action, remove_skill, slash_command};
 
 pub(crate) use self::events::{flush_terminal_requests, handle_terminal_event, handle_ui_msg};
 #[cfg(test)]

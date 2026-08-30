@@ -6,7 +6,8 @@
 //! Server-initiated traffic is tolerated, not supported: notifications are
 //! ignored, `ping` is answered, anything else is refused with a JSON-RPC error.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
@@ -26,6 +27,28 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26"];
 /// Cap on each handshake step so a broken command cannot wedge the
 /// caller. Generous because `npx`-style launchers download on first run.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Environment policy for a stdio MCP server process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessEnvironment {
+    /// Preserve the host process environment, then apply [`StdioLaunch::env`].
+    #[default]
+    Inherit,
+    /// Start with only runtime essentials, then apply [`StdioLaunch::env`].
+    Sanitized,
+}
+
+/// Fully structured process configuration for a stdio MCP server.
+///
+/// The command is executed directly: `args` are never passed to a shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StdioLaunch {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub cwd: Option<PathBuf>,
+    pub environment: ProcessEnvironment,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
@@ -70,7 +93,7 @@ pub struct McpClient {
     next_id: AtomicU64,
     healthy: AtomicBool,
     capabilities: OnceLock<ServerCapabilities>,
-    child: StdMutex<Child>,
+    child: StdMutex<Option<Child>>,
     wire: Mutex<Wire>,
 }
 
@@ -87,14 +110,34 @@ impl McpClient {
         let program = parts
             .next()
             .ok_or_else(|| McpError::Protocol("empty command".into()))?;
-        let mut child = Command::new(program)
-            .args(parts)
+        Self::connect_stdio(
+            server,
+            &StdioLaunch {
+                command: program.to_string(),
+                args: parts.map(ToString::to_string).collect(),
+                env: BTreeMap::new(),
+                cwd: None,
+                environment: ProcessEnvironment::Inherit,
+            },
+        )
+        .await
+    }
+
+    /// Spawn a stdio MCP server without involving a shell, then run the MCP
+    /// handshake and retain the live client plus the server's tools.
+    pub async fn connect_stdio(
+        server: &str,
+        launch: &StdioLaunch,
+    ) -> Result<McpConnection, McpError> {
+        let mut command = Command::new(&launch.command);
+        command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             // A server's diagnostics must not corrupt the host terminal.
             .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        apply_stdio_launch(&mut command, launch);
+        let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout piped"));
         let client = Arc::new(Self {
@@ -102,7 +145,7 @@ impl McpClient {
             next_id: AtomicU64::new(1),
             healthy: AtomicBool::new(true),
             capabilities: OnceLock::new(),
-            child: StdMutex::new(child),
+            child: StdMutex::new(Some(child)),
             wire: Mutex::new(Wire { stdin, stdout }),
         });
 
@@ -167,7 +210,15 @@ impl McpClient {
         if !self.healthy.swap(false, Ordering::AcqRel) {
             return;
         }
-        let _ = self.child.lock().expect("MCP child lock").start_kill();
+        // Taking ownership lets the background reaper await the killed child
+        // without holding a synchronous mutex across an await point.
+        let Some(mut child) = self.child.lock().expect("MCP child lock").take() else {
+            return;
+        };
+        let _ = child.start_kill();
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+        });
     }
 
     /// One request/response exchange.
@@ -191,6 +242,54 @@ impl McpClient {
         wire.send(&json!({ "jsonrpc": "2.0", "method": method }))
             .await
     }
+}
+
+/// The smallest portable environment that lets ordinary CLI servers find
+/// executables, user/config directories, temporary storage, locales, platform
+/// runtime services, and trusted certificate bundles. Plugin variables are
+/// intentionally not reserved here; callers overlay them through `launch.env`.
+pub(crate) fn apply_stdio_launch(command: &mut Command, launch: &StdioLaunch) {
+    command.args(&launch.args);
+    if let Some(cwd) = &launch.cwd {
+        command.current_dir(cwd);
+    }
+    if launch.environment == ProcessEnvironment::Sanitized {
+        command.env_clear();
+        command.envs(sanitized_runtime_environment());
+    }
+    command.envs(&launch.env);
+}
+
+fn sanitized_runtime_environment() -> impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>
+{
+    std::env::vars_os().filter(|(name, _)| {
+        name.to_str()
+            .is_some_and(is_sanitized_runtime_environment_variable)
+    })
+}
+
+fn is_sanitized_runtime_environment_variable(name: &str) -> bool {
+    matches!(
+        name,
+        // Executable discovery.
+        "PATH" | "PATHEXT"
+            // Home and profile directories.
+            | "HOME" | "USER" | "LOGNAME" | "USERNAME" | "USERPROFILE" | "HOMEDRIVE"
+            | "HOMEPATH" | "APPDATA" | "LOCALAPPDATA"
+            // Temporary directories.
+            | "TMP" | "TEMP" | "TMPDIR"
+            // Locale and timezone.
+            | "LANG" | "LANGUAGE" | "LC_ALL" | "LC_CTYPE" | "LC_MESSAGES" | "LC_COLLATE"
+            | "LC_NUMERIC" | "LC_MONETARY" | "LC_TIME" | "LC_PAPER" | "LC_NAME" | "LC_ADDRESS"
+            | "LC_TELEPHONE" | "LC_MEASUREMENT" | "LC_IDENTIFICATION" | "TZ"
+            // Platform runtime variables (not arbitrary host configuration).
+            | "SystemRoot" | "SYSTEMROOT" | "WINDIR" | "COMSPEC" | "OS"
+            | "PROCESSOR_ARCHITECTURE" | "PROCESSOR_ARCHITEW6432" | "NUMBER_OF_PROCESSORS"
+            | "XDG_RUNTIME_DIR"
+            // Trusted CA bundle locations.
+            | "SSL_CERT_FILE" | "SSL_CERT_DIR" | "CURL_CA_BUNDLE" | "REQUESTS_CA_BUNDLE"
+            | "NODE_EXTRA_CA_CERTS" | "GIT_SSL_CAINFO" | "AWS_CA_BUNDLE"
+    )
 }
 
 /// Run a request with the same cancellation/deadline semantics as tools/call.

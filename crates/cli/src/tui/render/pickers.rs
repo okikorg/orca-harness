@@ -7,7 +7,7 @@ use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
 use crate::tui::components::tray::Tray;
 use crate::view::{self, theme};
 
-use super::super::format::{age_label, redact_command, size};
+use super::super::format::age_label;
 use super::super::state::SubagentSetting;
 use super::super::subagents::{subagent_current, subagent_setting_label};
 use super::super::{App, InspectorMode, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
@@ -338,112 +338,6 @@ pub(crate) fn extensions_picker_lines(picker: &ListPicker, width: usize) -> Vec<
         rows,
         [(12, 12), (3, 3), (0, usize::MAX)],
         width,
-    )
-}
-
-/// The configured MCP servers: state, tool count, launch command.
-///
-/// On/off comes from `servers` (the overlay's own copy, updated the
-/// instant the toggle is saved) so a press redraws now; the tool count
-/// comes from the shared handle and lags by one reconnect, showing `…`
-/// until the worker reports. A server that failed to connect shows why
-/// instead of a count. Commands are redacted: the config may hold a
-/// literal token, and this list is the one place it would be on screen.
-pub(crate) fn mcp_picker_lines(
-    servers: &[crate::config::McpServer],
-    mcp: &crate::mcp::McpServers,
-    filter: &str,
-    picker: &ListPicker,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let indices = matching_indices(servers, filter, |server| &server.name);
-    let rows = indices.into_iter().map(|index| {
-        let server = &servers[index];
-        let (count, why) = if !server.enabled {
-            (String::new(), String::new())
-        } else {
-            match mcp.state(&server.name) {
-                Some(crate::mcp::McpState::Connected(1)) => ("1 tool".into(), String::new()),
-                Some(crate::mcp::McpState::Connected(n)) => (format!("{n} tools"), String::new()),
-                // The reason goes after the command, not in the count
-                // column: an error is far too long to keep the columns
-                // aligned, and it would push the command off the row.
-                Some(crate::mcp::McpState::Failed(err)) => ("failed".into(), format!("  — {err}")),
-                None => ("…".into(), String::new()),
-            }
-        };
-        let state = if server.enabled { "on " } else { "off" };
-        [
-            server.name.clone(),
-            state.to_string(),
-            count,
-            format!("{}{why}", redact_command(&server.command)),
-        ]
-    });
-    let filter_note = if filter.is_empty() {
-        "type to filter".into()
-    } else {
-        format!("filter: {filter}")
-    };
-    picker.windowed_table_lines(
-        &format!("MCP servers · {filter_note} · ↑↓ move · →/enter/space toggle · esc close"),
-        rows,
-        [(4, 16), (3, 3), (9, 9), (0, usize::MAX)],
-        width,
-        PICKER_ROWS,
-    )
-}
-
-/// The skills found on disk: state, where each came from, and what it
-/// is for.
-///
-/// On/off comes from `entries` (the overlay's own copy, updated the
-/// instant the toggle is saved) so a press redraws now. Rows that could
-/// not load, or that lost a name collision to an earlier root, are
-/// listed too — a skill that silently is not there is the failure mode
-/// worth spending a row on.
-pub(crate) fn skills_picker_lines(
-    entries: &[crate::skills::SkillEntry],
-    filter: &str,
-    picker: &ListPicker,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let indices = matching_indices(entries, filter, |entry| &entry.name);
-    let rows = indices.into_iter().map(|index| {
-        let entry = &entries[index];
-        let (state, root, size, detail) = match &entry.state {
-            crate::skills::SkillState::Loaded { root, bytes } => (
-                if entry.enabled { "on " } else { "off" },
-                root.clone(),
-                size(*bytes),
-                entry.description.clone(),
-            ),
-            crate::skills::SkillState::Shadowed { root, by } => (
-                "—  ",
-                root.clone(),
-                String::new(),
-                format!("shadowed by {by}"),
-            ),
-            crate::skills::SkillState::Failed { root, reason } => (
-                "—  ",
-                root.clone(),
-                String::new(),
-                format!("failed — {reason}"),
-            ),
-        };
-        [entry.name.clone(), state.to_string(), root, size, detail]
-    });
-    let filter_note = if filter.is_empty() {
-        "type to filter".into()
-    } else {
-        format!("filter: {filter}")
-    };
-    picker.windowed_table_lines(
-        &format!("Skills · {filter_note} · ↑↓ move · →/enter toggle · esc close"),
-        rows,
-        [(4, 20), (3, 3), (0, 28), (0, 8), (0, usize::MAX)],
-        width,
-        PICKER_ROWS,
     )
 }
 

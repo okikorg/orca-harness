@@ -4,13 +4,17 @@
 
 #![cfg(unix)]
 
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use orca_harness_core::{
     CancellationToken, Context, Model, ModelError, ModelResponse, Tool, ToolContext, ToolSchema,
 };
-use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient, McpError, McpModel};
+use orca_harness_tool_extensions::mcp::{
+    McpCatalog, McpClient, McpError, McpModel, ProcessEnvironment, StdioLaunch,
+};
 use serde_json::json;
 
 const FAKE_SERVER: &str = r#"#!/bin/sh
@@ -44,6 +48,46 @@ read _call
 sleep 10
 "#;
 
+const STRUCTURED_LAUNCH_SERVER: &str = r#"#!/bin/sh
+[ "$1" = '--literal=argument with spaces;$(not-a-shell)' ] || exit 41
+[ "$PWD" = "$EXPECTED_CWD" ] || exit 42
+[ "$LAUNCH_VALUE" = "from-launch" ] || exit 43
+[ "$PLUGIN_ROOT" = "/plugins/example" ] || exit 44
+[ "$PLUGIN_DATA" = "/data/example" ] || exit 45
+[ -n "$PATH" ] || exit 46
+[ -z "${ORCA_MCP_AMBIENT_SECRET+x}" ] || exit 47
+read _initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"structured","version":"0.0.0"}}}'
+read _initialized
+read _list
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}'
+"#;
+
+const INHERITED_ENV_SERVER: &str = r#"#!/bin/sh
+[ "$ORCA_MCP_COMPAT_MARKER" = "inherited" ] || exit 51
+read _initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"compat","version":"0.0.0"}}}'
+read _initialized
+read _list
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}'
+"#;
+
+const CLEANUP_SERVER: &str = r#"#!/bin/sh
+printf '%s\n' "$$" > "$1"
+read _initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"cleanup","version":"0.0.0"}}}'
+read _initialized
+read _list
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"wait","inputSchema":{"type":"object"}}]}}'
+read _call
+exec sleep 10
+"#;
+
+fn environment_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 fn one_tool_server(server: &str, remote: &str) -> String {
     format!(
         r#"#!/bin/sh
@@ -71,6 +115,150 @@ fn ctx(tool_name: &str) -> ToolContext {
         cancellation: CancellationToken::new(),
         deadline: None,
     }
+}
+
+#[tokio::test]
+async fn structured_stdio_launch_uses_literal_args_cwd_and_sanitized_env() {
+    let _environment = environment_lock().lock().await;
+    let path = script("structured-launch", STRUCTURED_LAUNCH_SERVER);
+    let cwd = path.parent().unwrap().join("working-directory");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let expected_cwd = cwd.canonicalize().unwrap();
+    let original_secret = std::env::var_os("ORCA_MCP_AMBIENT_SECRET");
+    std::env::set_var("ORCA_MCP_AMBIENT_SECRET", "must-not-reach-child");
+
+    let launch = StdioLaunch {
+        command: "/bin/sh".into(),
+        args: vec![
+            path.display().to_string(),
+            "--literal=argument with spaces;$(not-a-shell)".into(),
+        ],
+        env: BTreeMap::from([
+            ("EXPECTED_CWD".into(), expected_cwd.display().to_string()),
+            ("LAUNCH_VALUE".into(), "from-launch".into()),
+            ("PLUGIN_DATA".into(), "/data/example".into()),
+            ("PLUGIN_ROOT".into(), "/plugins/example".into()),
+        ]),
+        cwd: Some(cwd),
+        environment: ProcessEnvironment::Sanitized,
+    };
+    let result = McpClient::connect_stdio("structured", &launch).await;
+    match original_secret {
+        Some(value) => std::env::set_var("ORCA_MCP_AMBIENT_SECRET", value),
+        None => std::env::remove_var("ORCA_MCP_AMBIENT_SECRET"),
+    }
+    result.unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn compatibility_connect_preserves_the_inherited_environment() {
+    let _environment = environment_lock().lock().await;
+    let path = script("compatibility-environment", INHERITED_ENV_SERVER);
+    let original_marker = std::env::var_os("ORCA_MCP_COMPAT_MARKER");
+    std::env::set_var("ORCA_MCP_COMPAT_MARKER", "inherited");
+
+    let result = McpClient::connect("compat", &format!("sh {}", path.display())).await;
+    match original_marker {
+        Some(value) => std::env::set_var("ORCA_MCP_COMPAT_MARKER", value),
+        None => std::env::remove_var("ORCA_MCP_COMPAT_MARKER"),
+    }
+    result.unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn deadline_closes_the_connection_instead_of_leaving_a_stale_exchange() {
+    let path = script("deadline", CANCEL_SERVER);
+    let connection = McpClient::connect("deadline", &format!("sh {}", path.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("deadline".into(), connection).unwrap();
+    let selector = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_select_tool")
+        .unwrap();
+    selector
+        .call(
+            json!({ "name": "mcp__deadline__wait" }),
+            &ctx("mcp_select_tool"),
+        )
+        .await
+        .unwrap();
+    let tool = catalog.server_tools("deadline").into_iter().next().unwrap();
+    let mut call_ctx = ctx("mcp__deadline__wait");
+    call_ctx.deadline = Some(tokio::time::Instant::now() + Duration::from_millis(20));
+    assert_eq!(
+        tool.call(json!({}), &call_ctx).await.unwrap_err().message,
+        "deadline exceeded"
+    );
+    let second = tool
+        .call(json!({}), &ctx("mcp__deadline__wait"))
+        .await
+        .unwrap_err();
+    assert!(second.message.contains("interrupted request"), "{second:?}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn cancellation_terminates_the_spawned_mcp_child() {
+    let path = script("child-cleanup", CLEANUP_SERVER);
+    let pid_file = path.parent().unwrap().join("child.pid");
+    let launch = StdioLaunch {
+        command: "/bin/sh".into(),
+        args: vec![path.display().to_string(), pid_file.display().to_string()],
+        env: BTreeMap::new(),
+        cwd: None,
+        environment: ProcessEnvironment::Sanitized,
+    };
+    let connection = McpClient::connect_stdio("cleanup", &launch).await.unwrap();
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("cleanup".into(), connection).unwrap();
+    let selector = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_select_tool")
+        .unwrap();
+    selector
+        .call(
+            json!({ "name": "mcp__cleanup__wait" }),
+            &ctx("mcp_select_tool"),
+        )
+        .await
+        .unwrap();
+    let tool = catalog.server_tools("cleanup").into_iter().next().unwrap();
+    let call_ctx = ctx("mcp__cleanup__wait");
+    let cancellation = call_ctx.cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancellation.cancel();
+    });
+    assert_eq!(
+        tool.call(json!({}), &call_ctx).await.unwrap_err().message,
+        "cancelled"
+    );
+    let pid = pid.trim().to_string();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("MCP child was not terminated after cancellation");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
 #[tokio::test]
@@ -168,7 +356,52 @@ async fn search_requires_deliberate_terms_and_filters_metadata() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-struct ObservedTools(Arc<Mutex<Vec<Vec<String>>>>);
+#[tokio::test]
+async fn catalog_reorder_controls_search_ties_without_reconnecting() {
+    let plugin_path = script("catalog-order-plugin", &one_tool_server("plugin", "echo"));
+    let standalone_path = script(
+        "catalog-order-standalone",
+        &one_tool_server("standalone", "echo"),
+    );
+    let plugin = McpClient::connect("plugin", &format!("sh {}", plugin_path.display()))
+        .await
+        .unwrap();
+    let standalone = McpClient::connect("standalone", &format!("sh {}", standalone_path.display()))
+        .await
+        .unwrap();
+    let catalog = McpCatalog::new();
+    catalog.insert("plugin".into(), plugin).unwrap();
+    catalog.insert("standalone".into(), standalone).unwrap();
+    let plugin_tool = catalog.server_tools("plugin")[0].clone();
+    let standalone_tool = catalog.server_tools("standalone")[0].clone();
+
+    catalog.reorder(&["standalone".into(), "plugin".into()]);
+
+    assert!(Arc::ptr_eq(
+        &plugin_tool,
+        &catalog.server_tools("plugin")[0]
+    ));
+    assert!(Arc::ptr_eq(
+        &standalone_tool,
+        &catalog.server_tools("standalone")[0]
+    ));
+    let search = catalog
+        .interface_tools()
+        .into_iter()
+        .find(|tool| tool.schema().name == "mcp_search_tools")
+        .unwrap();
+    let result = search
+        .call(json!({"query": "echo"}), &ctx("mcp_search_tools"))
+        .await
+        .unwrap();
+    assert_eq!(result["tools"][0]["server"], "standalone");
+    assert_eq!(result["tools"][1]["server"], "plugin");
+
+    let _ = std::fs::remove_dir_all(plugin_path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(standalone_path.parent().unwrap());
+}
+
+struct ObservedTools(Arc<StdMutex<Vec<Vec<String>>>>);
 
 #[async_trait]
 impl Model for ObservedTools {
@@ -205,7 +438,7 @@ async fn selection_reaches_the_next_provider_request_without_core_changes() {
         .collect();
     assert_eq!(schemas.len(), 4);
 
-    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::new(StdMutex::new(Vec::new()));
     let model = McpModel::new(ObservedTools(observed.clone()), catalog.clone());
     let context = Context::new();
     model.generate(&context, &schemas).await.unwrap();

@@ -370,9 +370,7 @@ pub fn remove_mcp_server(name: &str) -> io::Result<PathBuf> {
     })
 }
 
-// In-memory stand-in for the config file under test: tests must never
-// touch the developer's real config, and each test thread gets its own
-// isolated copy so tests cannot interfere with each other.
+// Thread-local storage keeps tests isolated from each other and the real config.
 #[cfg(test)]
 thread_local! {
     static TEST_FILE: std::cell::RefCell<Option<String>> =
@@ -407,7 +405,7 @@ fn write_config(path: &Path, body: &str) -> io::Result<()> {
     }
 }
 
-fn load_root() -> Option<Value> {
+pub(super) fn load_root() -> Option<Value> {
     serde_json::from_str(&read_config()?)
         .ok()
         .filter(Value::is_object)
@@ -440,7 +438,9 @@ fn save_str(section: Option<&str>, field: &str, value: &str) -> io::Result<PathB
 }
 
 /// Load, edit, and rewrite the config, preserving unrelated fields.
-fn mutate_root(edit: impl FnOnce(&mut serde_json::Map<String, Value>)) -> io::Result<PathBuf> {
+pub(super) fn mutate_root(
+    edit: impl FnOnce(&mut serde_json::Map<String, Value>),
+) -> io::Result<PathBuf> {
     let path = config_path()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory for config"))?;
     let mut root = load_root().unwrap_or_else(|| json!({}));
@@ -453,7 +453,7 @@ fn mutate_root(edit: impl FnOnce(&mut serde_json::Map<String, Value>)) -> io::Re
 
 /// Edit one value inside a named object section (`api_keys`, `models`,
 /// `approvals`), creating the section if needed.
-fn mutate_section(
+pub(super) fn mutate_section(
     section: &str,
     field: &str,
     edit: impl FnOnce(&mut Value),

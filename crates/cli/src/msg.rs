@@ -281,6 +281,8 @@ pub enum WorkerCmd {
     /// catalog the model sees matches what is on disk (the conversation
     /// context is kept).
     ReloadSkills,
+    /// Execute a bounded Agent Plugin MCP probe without blocking the TUI.
+    TestPlugin { path: std::path::PathBuf },
     /// Copy skills in from a folder or a repository, then rescan and
     /// rebuild. Runs in the worker because cloning is slow and must not
     /// block the interface.

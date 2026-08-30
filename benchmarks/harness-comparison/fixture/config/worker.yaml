@@ -1,0 +1,5 @@
+worker:
+  concurrency: 8
+heartbeat:
+  interval_seconds: 30
+  timeout_seconds: 20

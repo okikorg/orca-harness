@@ -485,13 +485,13 @@ pub(crate) async fn worker<F>(
                 agent = build(&endpoint);
             }
             WorkerCmd::ReloadMcp => {
-                // The UI already saved the add/remove; reconnect, report
-                // per server, and rebuild so the tool set matches.
+                // Reconnect saved servers, report each result, then rebuild the agent.
                 for line in mcp.reload().await {
                     let _ = ui.send(UiMsg::Notice(line));
                 }
                 agent = build(&endpoint);
             }
+            WorkerCmd::TestPlugin { path } => super::plugin::test(&path, &ui).await,
             WorkerCmd::InstallSkill { source, here } => {
                 match skills.add(&source, here).await {
                     Ok(lines) => {

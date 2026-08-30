@@ -1,0 +1,5 @@
+2026-08-29T10:14:03Z request=req-1041 dependency=storage status=ok
+2026-08-29T10:15:00Z request=req-1042 dependency=storage error=connection_pool_exhausted attempt=1
+2026-08-29T10:15:01Z request=req-1042 dependency=storage error=connection_pool_exhausted attempt=2
+2026-08-29T10:15:03Z request=req-1042 dependency=storage error=connection_pool_exhausted attempt=3
+2026-08-29T10:16:09Z request=req-1044 dependency=queue status=ok

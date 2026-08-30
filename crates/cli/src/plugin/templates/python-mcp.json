@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "echo": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--project", "${PLUGIN_ROOT}", "python", "-m", "{{PACKAGE}}.server"],
+      "env": {
+        "UV_PROJECT_ENVIRONMENT": "${PLUGIN_DATA}/venv",
+        "UV_CACHE_DIR": "${PLUGIN_DATA}/uv-cache"
+      },
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}

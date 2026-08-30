@@ -30,6 +30,9 @@ pub struct OpenAiModel {
     parallel_tool_calls: Option<bool>,
     headers: Vec<(String, String)>,
     usage_accounting: bool,
+    prompt_cache: bool,
+    session_id: Option<String>,
+    prompt_cache_key: Option<String>,
 }
 
 impl OpenAiModel {
@@ -46,6 +49,9 @@ impl OpenAiModel {
             parallel_tool_calls: None,
             headers: Vec::new(),
             usage_accounting: false,
+            prompt_cache: false,
+            session_id: None,
+            prompt_cache_key: None,
         }
     }
 
@@ -54,6 +60,25 @@ impl OpenAiModel {
     /// plain OpenAI rejects the parameter, so it is off by default.
     pub fn usage_accounting(mut self, enabled: bool) -> Self {
         self.usage_accounting = enabled;
+        self
+    }
+
+    /// Add OpenRouter's normalized prompt-cache directive. Kept opt-in
+    /// because not every OpenAI-compatible endpoint accepts this field.
+    pub(crate) fn prompt_cache(mut self, enabled: bool) -> Self {
+        self.prompt_cache = enabled;
+        self
+    }
+
+    /// Keep gateway routing stable across every model step in one agent run.
+    pub(crate) fn session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Keep OpenAI's automatic prompt cache routed by one run-stable key.
+    pub fn prompt_cache_key(mut self, prompt_cache_key: impl Into<String>) -> Self {
+        self.prompt_cache_key = Some(prompt_cache_key.into());
         self
     }
 
@@ -173,6 +198,15 @@ impl OpenAiModel {
         }
         if self.usage_accounting {
             body["usage"] = json!({"include": true});
+        }
+        if self.prompt_cache {
+            body["cache_control"] = json!({"type": "ephemeral"});
+        }
+        if let Some(session_id) = &self.session_id {
+            body["session_id"] = json!(session_id);
+        }
+        if let Some(prompt_cache_key) = &self.prompt_cache_key {
+            body["prompt_cache_key"] = json!(prompt_cache_key);
         }
         body
     }
@@ -502,5 +536,26 @@ mod tests {
         let body = model.request_body(&context(), &[]);
         assert_eq!(body["reasoning"], json!({"effort": "low"}));
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn prompt_cache_and_session_are_opt_in() {
+        let plain = OpenAiModel::new("m").request_body(&context(), &[]);
+        assert!(plain.get("cache_control").is_none());
+        assert!(plain.get("session_id").is_none());
+        assert!(plain.get("prompt_cache_key").is_none());
+
+        let cached = OpenAiModel::new("m")
+            .prompt_cache(true)
+            .session_id("run-123")
+            .request_body(&context(), &[]);
+        assert_eq!(cached["cache_control"], json!({"type": "ephemeral"}));
+        assert_eq!(cached["session_id"], "run-123");
+
+        let openai = OpenAiModel::new("m")
+            .prompt_cache_key("run-456")
+            .request_body(&context(), &[]);
+        assert_eq!(openai["prompt_cache_key"], "run-456");
+        assert!(openai.get("cache_control").is_none());
     }
 }

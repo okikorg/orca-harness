@@ -1,17 +1,29 @@
-use crate::parse_args;
 use crate::view;
 use crate::Endpoint;
+use crate::{parse_invocation, Invocation};
 use std::process::ExitCode;
 
 use super::interactive::run_mode;
 
 pub(crate) async fn entrypoint() -> ExitCode {
-    let cfg = match parse_args() {
-        Ok(cfg) => cfg,
+    let invocation = match parse_invocation() {
+        Ok(invocation) => invocation,
         Err(err) => {
             eprintln!("{err}");
             return ExitCode::FAILURE;
         }
+    };
+    let cfg = match invocation {
+        Invocation::Plugin(command) => {
+            return match crate::plugin::run(command).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Invocation::Run(cfg) => *cfg,
     };
 
     match view::ThemeName::from_str(&cfg.theme) {

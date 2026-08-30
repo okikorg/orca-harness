@@ -1,0 +1,6 @@
+2026-08-29T10:14:03Z request=req-1041 route=/v2/invoices status=201 service=ledger
+2026-08-29T10:15:00Z request=req-1042 route=/v2/invoices attempt=1 status=503 service=ledger
+2026-08-29T10:15:01Z request=req-1042 route=/v2/invoices attempt=2 status=503 service=ledger
+2026-08-29T10:15:03Z request=req-1042 route=/v2/invoices attempt=3 status=503 service=ledger
+2026-08-29T10:15:03Z request=req-1042 route=/v2/invoices final_status=502 service=gateway
+2026-08-29T10:16:11Z request=req-1043 route=/health status=200 service=gateway

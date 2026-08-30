@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Final live headless comparison of Orcacode, Pi, and Claude Code across ten read-only repository tasks.">
+  <title>Orca Harness comparison — optimized rerun</title>
+  <style>
+    :root { color-scheme:dark; --bg:#090d12; --panel:#101720; --panel-2:#151e29; --line:#293542; --text:#f1f5f9; --muted:#9cabb9; --orca:#67d7ad; --pi:#e4b65b; --claude:#df8769; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background-color:var(--bg); background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px); background-size:32px 32px; color:var(--text); font:15px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(1180px,calc(100% - 32px)); margin:auto; padding:46px 0 64px; }
+    header { padding:0 0 30px; border-bottom:1px solid var(--line); }
+    h1 { max-width:900px; margin:10px 0 0; font-size:clamp(2.25rem,5vw,4.5rem); line-height:1; letter-spacing:-.05em; }
+    h2 { margin:44px 0 8px; font-size:1.4rem; letter-spacing:-.02em; }
+    h3 { margin:0 0 8px; font-size:1rem; }
+    p { color:var(--muted); } a { color:var(--orca); } code { color:#c8d6ff; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .eyebrow { color:var(--orca); font:700 12px/1.2 ui-monospace,SFMono-Regular,monospace; letter-spacing:.15em; text-transform:uppercase; }
+    .lede { max-width:850px; margin-bottom:0; font-size:1.08rem; }
+    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:28px 0 16px; }
+    .card,.callout,.table-wrap,.chart,.method-item { border:1px solid var(--line); background:rgba(16,23,32,.95); border-radius:6px; }
+    .card { padding:18px; border-top-width:3px; }
+    .card:first-child { border-top-color:var(--orca); }
+    .card .label { margin:0; color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.1em; }
+    .card .value { margin:7px 0 1px; color:var(--text); font-size:2.15rem; font-weight:800; letter-spacing:-.05em; }
+    .card:first-child .value,.pass { color:var(--orca); }
+    .card p:last-child { margin:0; }
+    .callout { padding:15px 17px; border-left:4px solid var(--orca); }
+    .chart { margin-top:14px; padding:20px; }
+    .chart-row { display:grid; grid-template-columns:110px minmax(160px,1fr) 86px; align-items:center; gap:14px; margin:14px 0; font-variant-numeric:tabular-nums; }
+    .chart-label { font-weight:750; }
+    .track { height:24px; background:#080b0f; border:1px solid var(--line); }
+    .bar { height:100%; min-width:2px; }
+    .bar.orca { width:51.1%; background:var(--orca); }
+    .bar.pi { width:72.9%; background:var(--pi); }
+    .bar.claude { width:100%; background:var(--claude); }
+    .chart-value { text-align:right; font:700 13px/1 ui-monospace,SFMono-Regular,monospace; }
+    .method-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-top:14px; }
+    .method-item { padding:17px; }
+    .method-item p { margin:0; }
+    .table-wrap { overflow:auto; margin-top:14px; }
+    table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+    caption { padding:14px 16px; color:var(--text); text-align:left; font-weight:750; }
+    th,td { padding:10px 13px; border-top:1px solid var(--line); text-align:right; white-space:nowrap; }
+    th:first-child,td:first-child { text-align:left; }
+    th { color:var(--muted); font-size:.72rem; letter-spacing:.07em; text-transform:uppercase; }
+    .task-catalog { table-layout:fixed; }
+    .task-catalog th,.task-catalog td { text-align:left; white-space:normal; vertical-align:top; }
+    .task-catalog th:first-child { width:21%; }
+    .task-catalog th:nth-child(2) { width:31%; }
+    .task-catalog code { overflow-wrap:anywhere; }
+    tr.winner td { background:rgba(103,215,173,.08); }
+    .pass { font-weight:750; }
+    footer { margin-top:44px; padding-top:18px; border-top:1px solid var(--line); }
+    @media (max-width:760px) { .cards,.method-grid { grid-template-columns:1fr; } .chart-row { grid-template-columns:82px minmax(100px,1fr) 72px; gap:8px; } main { width:min(100% - 20px,1180px); padding-top:28px; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+  </style>
+</head>
+<body><main>
+  <header><div class="eyebrow">Live headless benchmark · 30 August 2026</div><h1>Orcacode beats Pi after the targeted fixes.</h1><p class="lede">Ten read-only tasks, one repetition, the same <code>anthropic/claude-sonnet-4.6</code> model through OpenRouter, high reasoning effort, rotated harness order, exact-answer scoring, and fresh temporary fixture copies.</p></header>
+  <section class="cards" aria-label="Headline results">
+    <article class="card"><p class="label">Orcacode total</p><p class="value">49.45s</p><p>10/10 · 20 tools · 22 turns</p></article>
+    <article class="card"><p class="label">Lead over Pi</p><p class="value">21.01s</p><p>29.8% less wall time</p></article>
+    <article class="card"><p class="label">Uncached input reduction</p><p class="value">93.6%</p><p>168,879 baseline → 10,738</p></article>
+  </section>
+  <div class="callout"><strong>Result:</strong> Orcacode, Pi, and Claude Code all scored 10/10. Orcacode had no timeout or retry and finished first. This is one repetition, not a regression threshold; repeat at least three times for stable per-task medians and spread.</div>
+
+  <section aria-labelledby="wall-time-heading"><h2 id="wall-time-heading">Wall-time comparison</h2><p>Lower is better. Bar lengths are normalized to the slowest harness in this run.</p>
+    <div class="chart" role="img" aria-label="Orcacode 49.45 seconds, Pi 70.46 seconds, Claude Code 96.68 seconds">
+      <div class="chart-row"><span class="chart-label">Orcacode</span><div class="track"><div class="bar orca"></div></div><span class="chart-value">49.45s</span></div>
+      <div class="chart-row"><span class="chart-label">Pi</span><div class="track"><div class="bar pi"></div></div><span class="chart-value">70.46s</span></div>
+      <div class="chart-row"><span class="chart-label">Claude Code</span><div class="track"><div class="bar claude"></div></div><span class="chart-value">96.68s</span></div>
+    </div>
+  </section>
+
+  <section><h2>Aggregate</h2><p>Input is uncached input. Total prompt is input plus cache reads and cache writes.</p><div class="table-wrap"><table>
+    <caption>Optimized comparison totals</caption><thead><tr><th>Harness</th><th>Correct</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Total prompt</th><th>Tools</th><th>Turns</th><th>Total</th><th>Mean</th><th>Median</th><th>Max</th></tr></thead><tbody>
+    <tr class="winner"><td>Orcacode</td><td class="pass">10/10</td><td>10,738</td><td>2,294</td><td>1,839</td><td>14,126</td><td>26,703</td><td>20</td><td>22</td><td>49.45s</td><td>4.94s</td><td>4.44s</td><td>8.22s</td></tr>
+    <tr><td>Pi</td><td class="pass">10/10</td><td>45</td><td>2,823</td><td>48,019</td><td>34,527</td><td>82,591</td><td>23</td><td>25</td><td>70.46s</td><td>7.05s</td><td>6.12s</td><td>12.32s</td></tr>
+    <tr><td>Claude Code</td><td class="pass">10/10</td><td>236</td><td>4,300</td><td>224,066</td><td>104,150</td><td>328,452</td><td>22</td><td>32</td><td>96.68s</td><td>9.67s</td><td>9.10s</td><td>17.97s</td></tr>
+    </tbody></table></div></section>
+
+  <section><h2>Orcacode before and after</h2><div class="table-wrap"><table><caption>Primary ten-task totals</caption><thead><tr><th>Run</th><th>Correct</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Tools</th><th>Turns</th><th>Wall</th></tr></thead><tbody>
+    <tr><td>Initial installed stack</td><td>9/10</td><td>168,879</td><td>2,217</td><td>0</td><td>0</td><td>29</td><td>26</td><td>74.49s</td></tr>
+    <tr class="winner"><td>Optimized headless</td><td class="pass">10/10</td><td>10,738</td><td>2,294</td><td>1,839</td><td>14,126</td><td>20</td><td>22</td><td>49.45s</td></tr>
+    </tbody></table></div></section>
+
+  <section aria-labelledby="tasks-heading"><h2 id="tasks-heading">The ten benchmark tasks</h2><p>Every harness received the same request and had to return only the exact expected terminal line.</p>
+    <div class="table-wrap"><table class="task-catalog"><caption>Task catalog and scoring answers</caption><thead><tr><th>Task</th><th>Request</th><th>Expected terminal line</th></tr></thead><tbody>
+      <tr><td>1 · Component weights</td><td>Sum component weights and identify the heaviest</td><td><code>total_weight=31; heaviest=ledger</code></td></tr>
+      <tr><td>2 · Request timeouts</td><td>Compare production and local request timeouts</td><td><code>prod_timeout=45; local_timeout=12; delta=33</code></td></tr>
+      <tr><td>3 · Retry budgets</td><td>Find every retry budget</td><td><code>production=7; local=2; difference=5</code></td></tr>
+      <tr><td>4 · Invoice endpoint</td><td>Find the read-one-invoice method, route, and production port</td><td><code>method=GET; path=/v2/invoices/:id; port=7412</code></td></tr>
+      <tr><td>5 · Traffic aggregate</td><td>Aggregate traffic and identify the highest p95</td><td><code>total_requests=2610; total_errors=24; max_p95_route=/v2/invoices; max_p95_ms=240</code></td></tr>
+      <tr><td>6 · Role permissions</td><td>Count permissions by role</td><td><code>admin_actions=5; operator_actions=3; auditor_actions=1</code></td></tr>
+      <tr><td>7 · Cache configuration</td><td>Compare cache-key format and TTLs</td><td><code>format_match=yes; ttl_success=900; ttl_miss=30</code></td></tr>
+      <tr><td>8 · Breaking change</td><td>Find the newest breaking change</td><td><code>version=2.4.0; date=2026-08-15; breaking=invoice cache keys now end in :v2</code></td></tr>
+      <tr><td>9 · Dependency waves</td><td>Produce dependency-first ready-node waves, ordered by declaration</td><td><code>order=storage-&gt;queue-&gt;identity-&gt;ledger-&gt;gateway</code></td></tr>
+      <tr><td>10 · p95 threshold</td><td>Compare invoice p95 with the page threshold</td><td><code>threshold_ms=225; observed_route=/v2/invoices; observed_ms=240; breach=yes; excess_ms=15</code></td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section><h2>All run data</h2>
+    <div class="table-wrap"><table><caption>Orcacode per task</caption><thead><tr><th>Task</th><th>Status</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Tools</th><th>Turns</th><th>Time</th></tr></thead><tbody>
+      <tr><td>1 · Component weights</td><td class="pass">Pass</td><td>962</td><td>161</td><td>0 / 1,193</td><td>1</td><td>2</td><td>3.632s</td></tr><tr><td>2 · Request timeouts</td><td class="pass">Pass</td><td>1,432</td><td>246</td><td>637 / 1,565</td><td>4</td><td>3</td><td>5.249s</td></tr><tr><td>3 · Retry budgets</td><td class="pass">Pass</td><td>957</td><td>131</td><td>0 / 1,185</td><td>2</td><td>2</td><td>3.270s</td></tr><tr><td>4 · Invoice endpoint</td><td class="pass">Pass</td><td>963</td><td>136</td><td>0 / 1,851</td><td>2</td><td>2</td><td>3.044s</td></tr><tr><td>5 · Traffic aggregate</td><td class="pass">Pass</td><td>988</td><td>342</td><td>0 / 1,137</td><td>1</td><td>2</td><td>7.054s</td></tr><tr><td>6 · Role permissions</td><td class="pass">Pass</td><td>966</td><td>191</td><td>0 / 1,141</td><td>1</td><td>2</td><td>3.474s</td></tr><tr><td>7 · Cache configuration</td><td class="pass">Pass</td><td>1,540</td><td>331</td><td>1,202 / 2,322</td><td>5</td><td>3</td><td>6.357s</td></tr><tr><td>8 · Breaking change</td><td class="pass">Pass</td><td>959</td><td>118</td><td>0 / 1,164</td><td>1</td><td>2</td><td>3.324s</td></tr><tr><td>9 · Dependency waves</td><td class="pass">Pass</td><td>977</td><td>331</td><td>0 / 1,208</td><td>1</td><td>2</td><td>8.218s</td></tr><tr><td>10 · p95 threshold</td><td class="pass">Pass</td><td>994</td><td>307</td><td>0 / 1,360</td><td>2</td><td>2</td><td>5.827s</td></tr>
+    </tbody></table></div>
+    <div class="table-wrap"><table><caption>Pi per task</caption><thead><tr><th>Task</th><th>Status</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Tools</th><th>Turns</th><th>Time</th></tr></thead><tbody>
+      <tr><td>1 · Component weights</td><td class="pass">Pass</td><td>4</td><td>162</td><td>3,101 / 3,289</td><td>1</td><td>2</td><td>4.626s</td></tr><tr><td>2 · Request timeouts</td><td class="pass">Pass</td><td>5</td><td>390</td><td>6,557 / 3,764</td><td>7</td><td>3</td><td>7.752s</td></tr><tr><td>3 · Retry budgets</td><td class="pass">Pass</td><td>4</td><td>110</td><td>3,097 / 3,246</td><td>1</td><td>2</td><td>4.409s</td></tr><tr><td>4 · Invoice endpoint</td><td class="pass">Pass</td><td>6</td><td>336</td><td>10,226 / 3,827</td><td>4</td><td>4</td><td>7.928s</td></tr><tr><td>5 · Traffic aggregate</td><td class="pass">Pass</td><td>4</td><td>256</td><td>3,127 / 3,261</td><td>1</td><td>2</td><td>6.457s</td></tr><tr><td>6 · Role permissions</td><td class="pass">Pass</td><td>4</td><td>186</td><td>3,107 / 3,247</td><td>1</td><td>2</td><td>4.326s</td></tr><tr><td>7 · Cache configuration</td><td class="pass">Pass</td><td>4</td><td>192</td><td>3,115 / 3,722</td><td>2</td><td>2</td><td>4.837s</td></tr><tr><td>8 · Breaking change</td><td class="pass">Pass</td><td>5</td><td>170</td><td>6,257 / 3,340</td><td>2</td><td>3</td><td>5.777s</td></tr><tr><td>9 · Dependency waves</td><td class="pass">Pass</td><td>5</td><td>509</td><td>6,299 / 3,371</td><td>2</td><td>3</td><td>12.321s</td></tr><tr><td>10 · p95 threshold</td><td class="pass">Pass</td><td>4</td><td>512</td><td>3,133 / 3,460</td><td>2</td><td>2</td><td>12.029s</td></tr>
+    </tbody></table></div>
+    <div class="table-wrap"><table><caption>Claude Code per task</caption><thead><tr><th>Task</th><th>Status</th><th>Input</th><th>Output</th><th>Cache R/W</th><th>Tools</th><th>Turns</th><th>Time</th></tr></thead><tbody>
+      <tr><td>1 · Component weights</td><td class="pass">Pass</td><td>18</td><td>220</td><td>11,849 / 12,198</td><td>1</td><td>2</td><td>5.697s</td></tr><tr><td>2 · Request timeouts</td><td class="pass">Pass</td><td>26</td><td>275</td><td>26,125 / 9,955</td><td>2</td><td>3</td><td>8.670s</td></tr><tr><td>3 · Retry budgets</td><td class="pass">Pass</td><td>26</td><td>477</td><td>26,115 / 10,390</td><td>3</td><td>4</td><td>9.675s</td></tr><tr><td>4 · Invoice endpoint</td><td class="pass">Pass</td><td>26</td><td>428</td><td>26,178 / 10,418</td><td>3</td><td>4</td><td>9.589s</td></tr><tr><td>5 · Traffic aggregate</td><td class="pass">Pass</td><td>18</td><td>285</td><td>14,110 / 9,912</td><td>1</td><td>2</td><td>6.553s</td></tr><tr><td>6 · Role permissions</td><td class="pass">Pass</td><td>18</td><td>227</td><td>14,082 / 9,891</td><td>1</td><td>2</td><td>5.583s</td></tr><tr><td>7 · Cache configuration</td><td class="pass">Pass</td><td>34</td><td>977</td><td>39,337 / 10,951</td><td>5</td><td>6</td><td>17.968s</td></tr><tr><td>8 · Breaking change</td><td class="pass">Pass</td><td>26</td><td>356</td><td>26,063 / 10,128</td><td>2</td><td>3</td><td>8.324s</td></tr><tr><td>9 · Dependency waves</td><td class="pass">Pass</td><td>26</td><td>606</td><td>26,095 / 10,114</td><td>2</td><td>3</td><td>15.095s</td></tr><tr><td>10 · p95 threshold</td><td class="pass">Pass</td><td>18</td><td>449</td><td>14,112 / 10,193</td><td>2</td><td>3</td><td>9.528s</td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section aria-labelledby="changes-heading"><h2 id="changes-heading">What changed in Orcacode</h2><div class="method-grid">
+    <article class="method-item"><h3>Stable prompt caching</h3><p>Enabled provider prompt caching with a stable cache identity while keeping task sessions ephemeral.</p></article>
+    <article class="method-item"><h3>Narrow tool surface</h3><p>Used bare headless mode with only <code>read_file</code> and <code>grep</code>, matching the read-only workload.</p></article>
+    <article class="method-item"><h3>Bounded generation</h3><p>Set high reasoning effort, a 2,048-token output ceiling, and a 20-step ceiling.</p></article>
+    <article class="method-item"><h3>Machine-readable accounting</h3><p>Collected final NDJSON summaries for provider usage, tool calls, turns, status, and wall time.</p></article>
+  </div></section>
+
+  <section aria-labelledby="method-heading"><h2 id="method-heading">Benchmark method</h2><p>Each harness received the same ten exact-answer tasks against a fresh copy of the same fixture in a temporary directory. Harness order rotated by task to reduce order bias. Runs were headless, read-only, and prohibited shell execution, writes, and servers. Correctness was scored from the required final line; timing used process wall time; tokens and cache activity came from each provider or harness summary.</p><p><strong>Orcacode profile:</strong> <code>--bare --tools read_file,grep --effort high --prompt-cache --max-output-tokens 2048 --max-steps 20 --json --no-session</code>. Pi used <code>read,grep,find,ls</code>; Claude Code used <code>Read,Grep,Glob</code>.</p><p><strong>Interpretation boundary:</strong> these results establish this workload and configuration only. One repetition is directional evidence; use at least three repetitions and compare per-task medians before making a regression budget.</p><p>Full protocol: <a href="../harness-comparison/README.md">benchmark contract, fixture, task definitions, metric mappings, and interpretation boundaries</a>.</p></section>
+  <footer><p><strong>Final rerun:</strong> 30 August 2026. Built from live provider-reported usage and process wall time. Raw streams remain in <code>/private/tmp/orca-harness-benchmark-runs/final-1/</code> and were not committed. No API keys or authorization data appear in this report.</p></footer>
+</main></body></html>

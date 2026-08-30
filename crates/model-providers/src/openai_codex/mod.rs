@@ -158,6 +158,7 @@ pub struct OpenAiCodexModel {
     base_url: String,
     model: String,
     reasoning_effort: Option<String>,
+    prompt_cache_key: Option<String>,
     credentials: Arc<dyn CodexCredentialSource>,
     reasoning_by_call: Mutex<HashMap<String, Vec<serde_json::Value>>>,
 }
@@ -169,6 +170,7 @@ impl OpenAiCodexModel {
             base_url: CODEX_BASE_URL.into(),
             model: model.into(),
             reasoning_effort: None,
+            prompt_cache_key: None,
             credentials,
             reasoning_by_call: Mutex::new(HashMap::new()),
         }
@@ -181,6 +183,12 @@ impl OpenAiCodexModel {
 
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
+        self
+    }
+
+    /// Keep subscription-backed Responses requests on one prompt-cache key.
+    pub fn prompt_cache_key(mut self, prompt_cache_key: impl Into<String>) -> Self {
+        self.prompt_cache_key = Some(prompt_cache_key.into());
         self
     }
 
@@ -240,6 +248,7 @@ impl OpenAiCodexModel {
                 stream,
                 &continuation,
                 self.reasoning_effort.as_deref(),
+                self.prompt_cache_key.as_deref(),
             ));
         request = request.header("chatgpt-account-id", credential.account_id);
         request

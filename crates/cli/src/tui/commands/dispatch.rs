@@ -162,24 +162,29 @@ pub(crate) fn slash_command(
     }
     if let Some(rest) = command.strip_prefix("mcp") {
         if rest.is_empty() {
-            // Same interface as /extensions: a picker overlay where
-            // space toggles the selected server. With nothing
-            // configured the overlay would be a dead end, so the hint
-            // stands in for it.
-            let servers = crate::config::stored_mcp_servers();
-            if servers.is_empty() {
-                push_notice(app, "no MCP servers configured — /mcp add <name> <command>");
+            let entries = crate::tui::mcp_picker::snapshot(&app.cfg.mcp);
+            if entries.is_empty() {
+                push_notice(
+                    app,
+                    "no MCP servers configured or loaded — /mcp add <name> <command>",
+                );
                 return;
             }
             app.overlay = Some(Overlay::Mcp {
-                picker: ListPicker::new(servers.len()),
+                picker: ListPicker::new(entries.len()),
                 filter: String::new(),
-                servers,
+                entries,
             });
             return;
         }
         if let Some(args) = rest.strip_prefix(' ') {
             mcp_command(app, args, worker);
+            return;
+        }
+    }
+    if let Some(rest) = command.strip_prefix("plugin") {
+        if rest.is_empty() || rest.starts_with(' ') {
+            plugin_command(app, rest.trim(), worker);
             return;
         }
     }

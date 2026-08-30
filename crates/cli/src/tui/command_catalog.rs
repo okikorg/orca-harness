@@ -273,7 +273,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "mcp",
-        description: "toggle MCP servers, add <name> <command>, or remove <name>",
+        description: "manage standalone MCP and view plugin servers",
+        category: "Session",
+        takes_args: true,
+    },
+    CommandSpec {
+        name: "plugin",
+        description: "list and manage Agent Plugins; no argument opens the picker",
         category: "Session",
         takes_args: true,
     },
@@ -415,5 +421,12 @@ mod tests {
     #[test]
     fn unknown_query_matches_nothing() {
         assert!(filter_commands("zzz").is_empty());
+    }
+
+    #[test]
+    fn plugin_management_is_in_the_command_palette() {
+        let plugin = COMMANDS.iter().find(|command| command.name == "plugin");
+        assert!(plugin.is_some(), "/plugin is missing from the palette");
+        assert!(plugin.unwrap().takes_args);
     }
 }

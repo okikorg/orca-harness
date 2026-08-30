@@ -162,6 +162,63 @@ mod skills_command_tests {
         assert!(overlay_text(&app).contains("1/2"));
     }
 
+    #[test]
+    fn plugin_skill_row_is_read_only_and_enter_inserts_its_mention() {
+        let fixture = Fixture::new("plugin-row");
+        let mut app = fixture.app();
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let entry = crate::skills::SkillEntry {
+            name: "draft-release-notes".into(),
+            description: "Draft release notes from commits".into(),
+            enabled: true,
+            state: crate::skills::SkillState::Loaded {
+                root: "plugin:release-tools".into(),
+                bytes: 321,
+            },
+            dir: fixture.dir.join("release-tools/skills/draft-release-notes"),
+            removable: false,
+        };
+
+        app.overlay = Some(Overlay::Skills {
+            entries: vec![entry.clone()],
+            filter: String::new(),
+            picker: ListPicker::new(1).actions(crate::tui::state::SKILL_ACTIONS),
+        });
+        let shown = overlay_text(&app);
+        assert!(shown.contains("plugin:release-tools"), "{shown}");
+        assert!(shown.contains("read-only"), "{shown}");
+        assert!(shown.contains("$draft-release-notes"), "{shown}");
+
+        press(&mut app, &worker, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer, "$draft-release-notes ");
+        assert!(rx.try_recv().is_err(), "using a plugin Skill does not reload");
+
+        app.composer.clear();
+        app.cursor = 0;
+        app.overlay = Some(Overlay::Skills {
+            entries: vec![entry.clone()],
+            filter: String::new(),
+            picker: ListPicker::new(1).actions(crate::tui::state::SKILL_ACTIONS),
+        });
+        press(&mut app, &worker, KeyCode::Char(' '));
+        press(&mut app, &worker, KeyCode::Char('t'));
+        assert!(app.overlay.is_none());
+        assert!(app.composer.is_empty());
+        assert!(printed(&app).contains("read-only here"), "{}", printed(&app));
+        assert!(rx.try_recv().is_err(), "read-only action does not reload");
+
+        app.overlay = Some(Overlay::Skills {
+            entries: vec![entry],
+            filter: String::new(),
+            picker: ListPicker::new(1).actions(crate::tui::state::SKILL_ACTIONS),
+        });
+        press(&mut app, &worker, KeyCode::Char(' '));
+        press(&mut app, &worker, KeyCode::Char('d'));
+        assert!(app.overlay.is_none());
+        assert!(rx.try_recv().is_err(), "read-only delete does not reload");
+    }
+
     /// Delete removes the folder, the row, and the saved override — and
     /// only for skills this host installed.
     #[test]

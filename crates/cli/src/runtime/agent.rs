@@ -27,6 +27,7 @@ pub(crate) fn subagent_extensions(
     mode: &ModeHandle,
     plan_area: &PlanArea,
     settings: &orca_harness_tools::SubagentDepth,
+    plugin_hooks: Option<&Arc<orca_harness_tool_extensions::plugin_hooks::PluginHookExtension>>,
 ) -> Vec<Arc<dyn Extension>> {
     let ui = ui.clone();
     let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
@@ -39,7 +40,7 @@ pub(crate) fn subagent_extensions(
         task: spawn.task.clone(),
         identity: spawn.identity.clone(),
     });
-    vec![
+    let mut extensions = vec![
         Arc::new(EventStream::from_fn(move |event| {
             let _ = ui.send(UiMsg::SubagentEvent {
                 id,
@@ -49,7 +50,12 @@ pub(crate) fn subagent_extensions(
                 event,
             });
         })) as Arc<dyn Extension>,
-        Arc::new(Truncation::new(settings.output_chars() as usize)) as Arc<dyn Extension>,
         Arc::new(PlanGate::new(mode.clone(), plan_area.clone())) as Arc<dyn Extension>,
-    ]
+    ];
+    if let Some(plugin_hooks) = plugin_hooks {
+        extensions.push(plugin_hooks.clone());
+    }
+    extensions
+        .push(Arc::new(Truncation::new(settings.output_chars() as usize)) as Arc<dyn Extension>);
+    extensions
 }

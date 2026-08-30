@@ -5,6 +5,8 @@
 //! Packaging them together avoids one crate per integration while preserving
 //! explicit module and runtime activation boundaries.
 
+pub mod agent_plugins;
 pub mod mcp;
+pub mod plugin_hooks;
 pub mod skills;
 pub mod web;

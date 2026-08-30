@@ -8,6 +8,7 @@ pub(crate) fn body(
     stream: bool,
     continuation: &[Value],
     reasoning_effort: Option<&str>,
+    prompt_cache_key: Option<&str>,
 ) -> Value {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
@@ -99,6 +100,9 @@ pub(crate) fn body(
     if let Some(effort) = reasoning_effort {
         value["reasoning"] = json!({"effort": effort});
     }
+    if let Some(prompt_cache_key) = prompt_cache_key {
+        value["prompt_cache_key"] = json!(prompt_cache_key);
+    }
     value
 }
 
@@ -124,7 +128,7 @@ mod tests {
             description: "run".into(),
             parameters: json!({"type":"object"}),
         }];
-        let value = body("codex", &context, &tools, true, &[], None);
+        let value = body("codex", &context, &tools, true, &[], None, None);
         assert_eq!(value["instructions"], "be careful");
         assert_eq!(value["input"][1]["type"], "function_call");
         assert_eq!(value["input"][2]["type"], "function_call_output");
@@ -144,7 +148,7 @@ mod tests {
             }],
         );
 
-        let value = body("codex", &context, &[], true, &[], None);
+        let value = body("codex", &context, &[], true, &[], None, None);
         assert_eq!(
             value["input"][0]["content"],
             json!([
@@ -174,6 +178,7 @@ mod tests {
             true,
             std::slice::from_ref(&reasoning),
             None,
+            None,
         );
         let input = value["input"].as_array().unwrap();
         let reasoning_at = input
@@ -194,7 +199,16 @@ mod tests {
 
     #[test]
     fn selected_effort_uses_responses_reasoning_shape() {
-        let value = body("codex", &Context::new(), &[], true, &[], Some("xhigh"));
+        let value = body(
+            "codex",
+            &Context::new(),
+            &[],
+            true,
+            &[],
+            Some("xhigh"),
+            Some("run-123"),
+        );
         assert_eq!(value["reasoning"], json!({"effort": "xhigh"}));
+        assert_eq!(value["prompt_cache_key"], "run-123");
     }
 }

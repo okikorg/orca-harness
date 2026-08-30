@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::plugins::*;
 
     fn raw() -> String {
         TEST_FILE
@@ -204,6 +205,137 @@ mod tests {
                 ("f".to_string(), "run f".to_string(), false),
             ]
         );
+    }
+
+    #[test]
+    fn plugins_round_trip_in_name_order_and_preserve_unrelated_config() {
+        seed(r#"{"future": {"kept": true}}"#);
+        save_plugin("zeta", "/plugins/zeta", false).unwrap();
+        save_plugin("alpha", "/plugins/alpha", true).unwrap();
+
+        let plugins = stored_plugins();
+        assert_eq!(
+            plugins,
+            [
+                RegisteredPlugin {
+                    name: "alpha".into(),
+                    root: PathBuf::from("/plugins/alpha"),
+                    enabled: true,
+                },
+                RegisteredPlugin {
+                    name: "zeta".into(),
+                    root: PathBuf::from("/plugins/zeta"),
+                    enabled: false,
+                },
+            ]
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&raw()).unwrap()["future"]["kept"],
+            true
+        );
+    }
+
+    #[test]
+    fn malformed_plugin_entries_are_skipped_and_valid_entries_can_change_state() {
+        seed(
+            r#"{"plugins": {
+                "missing-root": {"enabled": true},
+                "bad-root": {"root": 7, "enabled": false},
+                "bad-enabled": {"root": "/plugins/bad", "enabled": "yes"},
+                "relative-root": {"root": "plugins/relative", "enabled": false},
+                "../escape": {"root": "/plugins/escape", "enabled": true},
+                "valid": {"root": "/plugins/valid", "enabled": false}
+            }}"#,
+        );
+        assert_eq!(stored_plugins().len(), 1);
+        assert_eq!(stored_plugin("valid").unwrap().name, "valid");
+        assert!(stored_plugin("missing-root").is_none());
+
+        assert!(set_plugin_enabled("valid", true).unwrap());
+        assert!(stored_plugin("valid").unwrap().enabled);
+        assert!(!set_plugin_enabled("unknown", true).unwrap());
+        assert!(remove_plugin("valid").unwrap());
+        assert!(!remove_plugin("valid").unwrap());
+        assert!(stored_plugins().is_empty());
+    }
+
+    #[test]
+    fn enabling_a_plugin_atomically_canonicalizes_root_and_preserves_unknown_fields() {
+        seed(
+            r#"{"future":true,"plugins":{"valid":{
+                "root":"/plugins/old/../valid","enabled":false,"futureEntry":"kept"
+            }}}"#,
+        );
+
+        assert!(enable_plugin("valid", Path::new("/plugins/valid")).unwrap());
+
+        let saved: Value = serde_json::from_str(&raw()).unwrap();
+        assert_eq!(saved["future"], true);
+        assert_eq!(saved["plugins"]["valid"]["root"], "/plugins/valid");
+        assert_eq!(saved["plugins"]["valid"]["enabled"], true);
+        assert_eq!(saved["plugins"]["valid"]["futureEntry"], "kept");
+    }
+
+    #[test]
+    fn plugin_data_path_is_beside_config_under_the_plugin_name() {
+        let path = plugin_data_path("rl-tools").unwrap();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("rl-tools")
+        );
+        assert_eq!(
+            path.parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("plugin-data")
+        );
+    }
+
+    #[test]
+    fn plugin_data_directory_creation_is_explicit_and_yields_a_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "orcacode-plugin-data-portable-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("plugin-data/example");
+        assert!(!path.exists());
+
+        create_plugin_data_dir(&path).unwrap();
+
+        assert!(path.is_dir());
+        create_plugin_data_dir(&path).unwrap();
+        assert!(path.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_data_directory_is_created_lazily_with_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "orcacode-plugin-data-config-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("plugin-data/example");
+        assert!(!path.exists());
+
+        create_plugin_data_dir(&path).unwrap();
+
+        assert!(path.is_dir());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_plugin_data_dir(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

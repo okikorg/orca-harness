@@ -1,0 +1,4 @@
+defaults:
+  async_receipts: true
+  invoice_pdf: true
+  tax_shadow: false

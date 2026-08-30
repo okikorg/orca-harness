@@ -8,7 +8,8 @@ server commands, credentials, or full input schemas.
 `corpus.py` mirrors the production search: separator-aware tokens, exact-token
 preference, basic singular/plural fallback in tool names, weighted
 name/description/server fields, exact-name bonuses, shorter-name tie-breaking,
-then stable catalog order.
+then stable catalog order. Precise all-term results remain the default; only an
+empty result set falls back to coverage-ranked partial matches.
 
 ## Run
 

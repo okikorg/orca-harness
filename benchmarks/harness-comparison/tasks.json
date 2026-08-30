@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "tasks": [
+    {
+      "id": "component-weights",
+      "category": "targeted-retrieval",
+      "mode": "read",
+      "prompt": "Read project.toml. Sum every component weight and identify the heaviest component. End with exactly: total_weight=<sum>; heaviest=<name>.",
+      "expected": "total_weight=31; heaviest=ledger"
+    },
+    {
+      "id": "timeout-delta",
+      "category": "cross-file-comparison",
+      "mode": "read",
+      "prompt": "Compare the production and local request timeouts. End with exactly: prod_timeout=<n>; local_timeout=<n>; delta=<n>.",
+      "expected": "prod_timeout=45; local_timeout=12; delta=33"
+    },
+    {
+      "id": "retry-budgets",
+      "category": "repository-search",
+      "mode": "read",
+      "prompt": "Find the production and local retry budgets and calculate their difference. End with exactly: production=<n>; local=<n>; difference=<n>.",
+      "expected": "production=7; local=2; difference=5"
+    },
+    {
+      "id": "invoice-endpoint",
+      "category": "cross-format-join",
+      "mode": "read",
+      "prompt": "Find the read-one-invoice method and path, then join it with the production gateway port. End with exactly: method=<method>; path=<path>; port=<n>.",
+      "expected": "method=GET; path=/v2/invoices/:id; port=7412"
+    },
+    {
+      "id": "traffic-aggregate",
+      "category": "structured-aggregation",
+      "mode": "read",
+      "prompt": "Aggregate data/traffic.csv and identify the route with the highest p95. End with exactly: total_requests=<n>; total_errors=<n>; max_p95_route=<path>; max_p95_ms=<n>.",
+      "expected": "total_requests=2610; total_errors=24; max_p95_route=/v2/invoices; max_p95_ms=240"
+    },
+    {
+      "id": "role-permissions",
+      "category": "structured-data-reasoning",
+      "mode": "read",
+      "prompt": "Count distinct permitted actions for admin, operator, and auditor in src/permissions.json. End with exactly: admin_actions=<n>; operator_actions=<n>; auditor_actions=<n>.",
+      "expected": "admin_actions=5; operator_actions=3; auditor_actions=1"
+    },
+    {
+      "id": "cache-contract",
+      "category": "source-doc-consistency",
+      "mode": "read",
+      "prompt": "Compare the invoice cache-key format in source and docs and report success and miss TTLs. End with exactly: format_match=<yes-or-no>; ttl_success=<n>; ttl_miss=<n>.",
+      "expected": "format_match=yes; ttl_success=900; ttl_miss=30"
+    },
+    {
+      "id": "latest-breaking-change",
+      "category": "temporal-reasoning",
+      "mode": "read",
+      "prompt": "Find the newest breaking change in the changelog. End with exactly: version=<version>; date=<date>; breaking=<text>.",
+      "expected": "version=2.4.0; date=2026-08-15; breaking=invoice cache keys now end in :v2"
+    },
+    {
+      "id": "dependency-order",
+      "category": "graph-reasoning",
+      "mode": "read",
+      "prompt": "Using project.toml, produce dependency-first ready-node waves, ordering each wave by component declaration order before forming the next. End with exactly: order=<a->b->c>.",
+      "expected": "order=storage->queue->identity->ledger->gateway"
+    },
+    {
+      "id": "invoice-slo",
+      "category": "threshold-evaluation",
+      "mode": "read",
+      "prompt": "Compare the observed invoice collection p95 with the runbook page threshold. End with exactly: threshold_ms=<n>; observed_route=<path>; observed_ms=<n>; breach=<yes-or-no>; excess_ms=<n>.",
+      "expected": "threshold_ms=225; observed_route=/v2/invoices; observed_ms=240; breach=yes; excess_ms=15"
+    },
+    {
+      "id": "incident-correlation",
+      "category": "log-diagnosis",
+      "mode": "read",
+      "prompt": "Correlate request req-1042 across the gateway and ledger logs. Identify the failing dependency, root error, ledger attempts, and final gateway status. End with exactly: request=req-1042; dependency=<name>; root_error=<error>; attempts=<n>; final_status=<n>.",
+      "expected": "request=req-1042; dependency=storage; root_error=connection_pool_exhausted; attempts=3; final_status=502"
+    },
+    {
+      "id": "api-contract-diff",
+      "category": "schema-diff",
+      "mode": "read",
+      "prompt": "Compare api/v1.json and api/v2.json. Report the added route, newly required invoice field, and removed invoice field. End with exactly: added_route=<method path>; new_required=<field>; removed_field=<field>.",
+      "expected": "added_route=POST /v2/refunds; new_required=currency; removed_field=legacy_note"
+    },
+    {
+      "id": "dependency-budget",
+      "category": "cost-aggregation",
+      "mode": "read",
+      "prompt": "Analyze data/dependencies.csv. Sum size and cold-load time for critical dependencies and find the largest non-build dependency by size. End with exactly: critical_size_kb=<n>; critical_cold_ms=<n>; largest_runtime=<name>; largest_runtime_kb=<n>.",
+      "expected": "critical_size_kb=2050; critical_cold_ms=55; largest_runtime=reqwest; largest_runtime_kb=1100"
+    },
+    {
+      "id": "feature-precedence",
+      "category": "configuration-precedence",
+      "mode": "read",
+      "prompt": "Apply the documented defaults, production runtime, and EU-region feature precedence. End with exactly: async_receipts=<true-or-false>; invoice_pdf=<true-or-false>; tax_shadow=<true-or-false>.",
+      "expected": "async_receipts=false; invoice_pdf=false; tax_shadow=true"
+    },
+    {
+      "id": "fix-retry-boundary",
+      "category": "single-file-code-edit",
+      "mode": "edit",
+      "prompt": "Fix the off-by-one bug in src/retry.rs. max_attempts is the total allowed attempts, so another retry is allowed only while attempts_made is strictly less than max_attempts. Make the smallest possible edit. End with exactly: changed=src/retry.rs; condition=attempts_made<max_attempts.",
+      "expected": "changed=src/retry.rs; condition=attempts_made<max_attempts",
+      "allowed_changes": ["src/retry.rs"],
+      "checks": [
+        {
+          "path": "src/retry.rs",
+          "contains": ["attempts_made < max_attempts"],
+          "not_contains": ["attempts_made <= max_attempts"]
+        }
+      ]
+    },
+    {
+      "id": "fix-worker-heartbeat",
+      "category": "cross-file-config-edit",
+      "mode": "edit",
+      "prompt": "Reconcile config/worker.yaml with docs/workers.md by correcting only the heartbeat timeout. Make the smallest possible edit. End with exactly: changed=config/worker.yaml; heartbeat_timeout_seconds=75.",
+      "expected": "changed=config/worker.yaml; heartbeat_timeout_seconds=75",
+      "allowed_changes": ["config/worker.yaml"],
+      "checks": [
+        {
+          "path": "config/worker.yaml",
+          "contains": ["timeout_seconds: 75"],
+          "not_contains": ["timeout_seconds: 20"]
+        }
+      ]
+    }
+  ]
+}

@@ -107,6 +107,10 @@ fn choices_with_openrouter_key(
         api_key: None,
         model: String::new(),
         reasoning_effort: None,
+        max_output_tokens: None,
+        prompt_cache: true,
+        request_session_id: Some(orca_harness_extensions::new_session_id()),
+        model_retries: Arc::default(),
     };
     let mut choices = build(&local, &LOCAL);
 
@@ -122,6 +126,10 @@ fn choices_with_openrouter_key(
             api_key: Some(key),
             model: String::new(),
             reasoning_effort: None,
+            max_output_tokens: None,
+            prompt_cache: true,
+            request_session_id: Some(orca_harness_extensions::new_session_id()),
+            model_retries: Arc::default(),
         };
         choices.extend(build(&openrouter, &OPENROUTER));
     }
@@ -167,6 +175,10 @@ mod tests {
                 api_key: None,
                 model: "orchestrator".into(),
                 reasoning_effort: None,
+                max_output_tokens: None,
+                prompt_cache: false,
+                request_session_id: None,
+                model_retries: Arc::default(),
             },
             Some("key".into()),
         );
@@ -188,6 +200,10 @@ mod tests {
             api_key: Some("openai-key".into()),
             model: "gpt-4o".into(),
             reasoning_effort: None,
+            max_output_tokens: None,
+            prompt_cache: false,
+            request_session_id: None,
+            model_retries: Arc::default(),
         };
         let choices = choices_with_openrouter_key(&endpoint, None);
         assert_eq!(choices.len(), 3);
@@ -202,6 +218,10 @@ mod tests {
             api_key: None,
             model: "qwen3.5:9b".into(),
             reasoning_effort: None,
+            max_output_tokens: None,
+            prompt_cache: false,
+            request_session_id: None,
+            model_retries: Arc::default(),
         };
         let choices = choices_with_openrouter_key(&endpoint, Some("openrouter-key".into()));
         assert_eq!(choices.len(), 12);

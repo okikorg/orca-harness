@@ -1,0 +1,7 @@
+{
+  "invoice.read": ["viewer", "operator", "admin"],
+  "invoice.create": ["operator", "admin"],
+  "invoice.refund": ["admin"],
+  "receipt.create": ["operator", "admin"],
+  "audit.export": ["auditor", "admin"]
+}

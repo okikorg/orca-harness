@@ -245,6 +245,9 @@ fn floor_boundary(text: &str, mut index: usize) -> usize {
 /// tree, and this walk runs inline on the call.
 fn resources_of(dir: &Path) -> Vec<String> {
     const MAX_DEPTH: usize = 3;
+    let Ok(base) = dir.canonicalize() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
     while let Some((current, depth)) = stack.pop() {
@@ -258,7 +261,13 @@ fn resources_of(dir: &Path) -> Vec<String> {
             if name.starts_with('.') {
                 continue;
             }
-            if path.is_dir() {
+            let Ok(resolved) = path.canonicalize() else {
+                continue;
+            };
+            if !resolved.starts_with(&base) {
+                continue;
+            }
+            if resolved.is_dir() {
                 if depth + 1 < MAX_DEPTH {
                     stack.push((path, depth + 1));
                 }
@@ -438,6 +447,26 @@ mod tests {
                 .expect_err("a symlink out of the folder is still out of the folder");
             assert!(err.to_string().contains("skill folder"), "{err}");
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resource_listing_does_not_follow_escaping_directory_symlinks() {
+        let temp = Temp::new("listing-escape");
+        release(&temp);
+        temp.write("outside/private-name.txt", "secret\n");
+        std::os::unix::fs::symlink(
+            temp.0.join("outside"),
+            temp.0.join("repo/.orca/skills/release/escaped"),
+        )
+        .unwrap();
+
+        let out = tool(&temp)
+            .call(json!({"name": "release"}), &ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(out["resources"], json!(["checklist.md"]));
     }
 
     #[tokio::test]

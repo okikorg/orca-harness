@@ -1,0 +1,10 @@
+environment: local
+http:
+  gateway_port: 8412
+  admin_port: 8413
+  request_timeout_seconds: 12
+retries:
+  retry_budget: 2
+features:
+  ledger_v2: true
+  async_receipts: true

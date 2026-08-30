@@ -1,0 +1,23 @@
+[project]
+name = "northstar"
+version = "2.4.0"
+
+[components.gateway]
+depends_on = ["identity", "ledger"]
+weight = 8
+
+[components.identity]
+depends_on = ["storage"]
+weight = 5
+
+[components.ledger]
+depends_on = ["storage", "queue"]
+weight = 13
+
+[components.storage]
+depends_on = []
+weight = 3
+
+[components.queue]
+depends_on = []
+weight = 2

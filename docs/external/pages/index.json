@@ -78,6 +78,13 @@
   },
   {
     "group": "EXTEND",
+    "id": "plugins",
+    "label": "Plugins",
+    "title": "Package portable local tools",
+    "lede": "Agent Plugins 1.0 packages an MCP-over-stdio server with portable metadata. Orcacode links a reviewed local package, keeps it disabled until enabled, and routes its tools through the existing MCP policy path."
+  },
+  {
+    "group": "EXTEND",
     "id": "skills",
     "label": "Skills & instructions",
     "title": "Add durable guidance",

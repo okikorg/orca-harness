@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn sanitized_launch_environment_allows_runtime_essentials_but_not_secrets() {
+    for name in [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "SYSTEMROOT",
+        "SSL_CERT_FILE",
+    ] {
+        assert!(
+            is_sanitized_runtime_environment_variable(name),
+            "expected {name} to be preserved"
+        );
+    }
+    for name in ["API_KEY", "DATABASE_URL", "ORCA_MCP_AMBIENT_SECRET"] {
+        assert!(
+            !is_sanitized_runtime_environment_variable(name),
+            "expected {name} to be removed"
+        );
+    }
+}
+
+#[test]
 fn tool_list_prefixes_names_and_requires_input_schemas() {
     let listed = json!({ "tools": [
         { "name": "echo", "description": "echo back",

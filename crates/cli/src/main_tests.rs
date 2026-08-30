@@ -13,7 +13,84 @@ mod main_tests {
     use crate::msg::Provider;
     use crate::plan::PlanArea;
     use crate::runtime::{context_from, rewind_cut, subagent_extensions};
-    use crate::{resolve_theme, select_provider, system_prompt, Config, Planning};
+    use crate::{parse_run_args, resolve_theme, select_provider, system_prompt, Config, Planning};
+
+    #[test]
+    fn bare_prompt_is_small_and_enforces_the_requested_output_contract() {
+        let prompt = crate::headless::bare_system_prompt(
+            &Workspace::new(PathBuf::from(".")),
+            &["read_file".into(), "grep".into()],
+        );
+        assert!(prompt.contains("read_file, grep"));
+        assert!(prompt.contains("entire response must be only that line"));
+        assert!(prompt.contains("Batch independent reads"));
+        assert!(!prompt.contains("subagent"));
+        assert!(!prompt.contains("memory"));
+    }
+
+    #[test]
+    fn headless_benchmark_flags_parse_without_changing_interactive_defaults() {
+        let cfg = parse_run_args(
+            [
+                "--openrouter",
+                "--model",
+                "anthropic/claude-sonnet-4.6",
+                "--effort",
+                "high",
+                "--prompt-cache",
+                "--bare",
+                "--tools",
+                "read_file,grep,glob,list_dir",
+                "--max-output-tokens",
+                "512",
+                "-p",
+                "inspect",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(cfg.max_output_tokens, Some(512));
+        assert!(cfg.prompt_cache);
+        assert!(cfg.bare);
+        assert_eq!(
+            cfg.tools.unwrap(),
+            ["read_file", "grep", "glob", "list_dir"]
+        );
+    }
+
+    #[test]
+    fn prompt_cache_defaults_on_and_can_be_disabled() {
+        let enabled = parse_run_args(
+            ["--openrouter", "-p", "inspect"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .unwrap();
+        assert!(enabled.prompt_cache);
+
+        let disabled = parse_run_args(
+            ["--openrouter", "--no-prompt-cache", "-p", "inspect"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .unwrap();
+        assert!(!disabled.prompt_cache);
+    }
+
+    #[test]
+    fn bare_and_tool_allowlists_are_headless_only() {
+        let error = match parse_run_args(vec!["--bare".into()]) {
+            Ok(_) => panic!("--bare without a prompt must fail"),
+            Err(error) => error,
+        };
+        assert!(error.contains("require headless"), "{error}");
+    }
 
     #[test]
     fn theme_prefers_explicit_then_stored_then_default() {
@@ -278,7 +355,7 @@ mod main_tests {
             )),
         };
         let settings = orca_harness_tools::SubagentDepth::default();
-        let extensions = subagent_extensions(&spawn, &ui, &mode, &PlanArea::new(), &settings);
+        let extensions = subagent_extensions(&spawn, &ui, &mode, &PlanArea::new(), &settings, None);
         let names: Vec<&str> = extensions.iter().map(|ext| ext.name()).collect();
         assert!(names.contains(&"plan-mode"), "{names:?}");
         assert!(names.contains(&"truncation"), "{names:?}");
@@ -382,6 +459,11 @@ mod main_tests {
             json: false,
             auto_approve: false,
             max_steps: 4,
+            max_output_tokens: None,
+            reasoning_effort: None,
+            prompt_cache: false,
+            tools: None,
+            bare: false,
             subagent_depth: 1,
             continue_latest: false,
             resume_id: None,
