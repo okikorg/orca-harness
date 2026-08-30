@@ -5,6 +5,11 @@ use std::path::{Component, Path, PathBuf};
 
 use super::PluginError;
 
+pub(super) fn require_utf8<'a>(path: &'a Path, label: &str) -> Result<&'a str, PluginError> {
+    path.to_str()
+        .ok_or_else(|| PluginError::new(format!("{label} must be valid UTF-8")))
+}
+
 pub(super) fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, PluginError> {
     let canonical = fs::canonicalize(path)
         .map_err(|error| PluginError::new(format!("cannot resolve {label}: {error}")))?;

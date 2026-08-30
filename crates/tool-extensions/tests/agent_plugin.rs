@@ -8,6 +8,9 @@ use orca_harness_tool_extensions::agent_plugins::{
 use orca_harness_tool_extensions::mcp::ProcessEnvironment;
 use serde_json::{json, Value};
 
+#[path = "agent_plugin/review_regressions.rs"]
+mod review_regressions;
+
 const PLUGIN_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MCP_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
 

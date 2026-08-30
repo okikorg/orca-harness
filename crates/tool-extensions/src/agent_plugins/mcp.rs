@@ -110,6 +110,8 @@ fn parse_stdio(
     server_name: &str,
 ) -> Result<PluginMcpServer, String> {
     reject_unknown_fields(object, STDIO_FIELDS)?;
+    let root_text = utf8_path(root, "plugin root")?;
+    let plugin_data_text = utf8_path(plugin_data, "plugin data path")?;
     let command = object
         .get("command")
         .and_then(Value::as_str)
@@ -117,17 +119,14 @@ fn parse_stdio(
     let command = resolve_command(command, root)?;
     let args = parse_args(object.get("args"))?
         .into_iter()
-        .map(|value| expand(&value, root, plugin_data))
+        .map(|value| expand(&value, root_text, plugin_data_text))
         .collect();
     let mut env = parse_env(object.get("env"))?
         .into_iter()
-        .map(|(name, value)| (name, expand(&value, root, plugin_data)))
+        .map(|(name, value)| (name, expand(&value, root_text, plugin_data_text)))
         .collect::<BTreeMap<_, _>>();
-    env.insert("PLUGIN_ROOT".into(), root.to_string_lossy().into_owned());
-    env.insert(
-        "PLUGIN_DATA".into(),
-        plugin_data.to_string_lossy().into_owned(),
-    );
+    env.insert("PLUGIN_ROOT".into(), root_text.to_owned());
+    env.insert("PLUGIN_DATA".into(), plugin_data_text.to_owned());
     let cwd = parse_cwd(object.get("cwd"), root, plugin_data)?;
 
     Ok(PluginMcpServer {
@@ -150,7 +149,11 @@ fn resolve_command(command: &str, root: &Path) -> Result<String, String> {
     }
     if let Some(suffix) = command.strip_prefix("./") {
         return resolve_descendant(root, Path::new(suffix))
-            .map(|path| path.to_string_lossy().into_owned())
+            .and_then(|path| {
+                path.into_os_string()
+                    .into_string()
+                    .map_err(|_| "command resolves to a non-UTF-8 path".to_string())
+            })
             .map_err(|message| format!("invalid plugin-relative command: {message}"));
     }
     if command.contains('/') || command.contains('\\') || Path::new(command).is_absolute() {
@@ -171,6 +174,13 @@ fn parse_args(value: Option<&Value>) -> Result<Vec<String>, String> {
 }
 
 fn parse_env(value: Option<&Value>) -> Result<BTreeMap<String, String>, String> {
+    parse_env_with_semantics(value, cfg!(windows))
+}
+
+fn parse_env_with_semantics(
+    value: Option<&Value>,
+    case_insensitive_names: bool,
+) -> Result<BTreeMap<String, String>, String> {
     let Some(value) = value else {
         return Ok(BTreeMap::new());
     };
@@ -179,7 +189,7 @@ fn parse_env(value: Option<&Value>) -> Result<BTreeMap<String, String>, String> 
         .ok_or_else(|| "env must be an object of strings".to_string())?;
     let mut env = BTreeMap::new();
     for (name, value) in object {
-        if matches!(name.as_str(), "PLUGIN_ROOT" | "PLUGIN_DATA") {
+        if is_reserved_env_name(name, case_insensitive_names) {
             return Err(format!("env must not override reserved {name}"));
         }
         let value = value
@@ -197,29 +207,29 @@ fn parse_cwd(value: Option<&Value>, root: &Path, plugin_data: &Path) -> Result<P
     let value = value
         .as_str()
         .ok_or_else(|| "cwd must be a string".to_string())?;
-    if let Some(suffix) = value.strip_prefix("./") {
-        return resolve_descendant(root, Path::new(suffix));
-    }
-    if let Some(suffix) = rooted_suffix(value, "${PLUGIN_ROOT}") {
-        return resolve_descendant(root, Path::new(suffix));
-    }
-    if let Some(suffix) = rooted_suffix(value, "${PLUGIN_DATA}") {
-        return resolve_descendant(plugin_data, Path::new(suffix));
-    }
-    Err("cwd must begin with ./, ${PLUGIN_ROOT}, or ${PLUGIN_DATA}".into())
-}
-
-fn rooted_suffix<'a>(value: &'a str, placeholder: &str) -> Option<&'a str> {
-    if value == placeholder {
-        Some("")
+    let boundary = if value.starts_with("./") || is_placeholder_rooted(value, "${PLUGIN_ROOT}") {
+        root
+    } else if is_placeholder_rooted(value, "${PLUGIN_DATA}") {
+        plugin_data
     } else {
-        value.strip_prefix(placeholder)?.strip_prefix('/')
-    }
+        return Err("cwd must begin with ./, ${PLUGIN_ROOT}, or ${PLUGIN_DATA}".into());
+    };
+    let expanded = expand(
+        value,
+        utf8_path(root, "plugin root")?,
+        utf8_path(plugin_data, "plugin data path")?,
+    );
+    resolve_descendant(boundary, Path::new(&expanded))
 }
 
-fn expand(value: &str, root: &Path, plugin_data: &Path) -> String {
-    let root = root.to_string_lossy();
-    let plugin_data = plugin_data.to_string_lossy();
+fn is_placeholder_rooted(value: &str, placeholder: &str) -> bool {
+    value == placeholder
+        || value
+            .strip_prefix(placeholder)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn expand(value: &str, root: &str, plugin_data: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut cursor = 0;
     while cursor < value.len() {
@@ -237,6 +247,21 @@ fn expand(value: &str, root: &Path, plugin_data: &Path) -> String {
         }
     }
     output
+}
+
+fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("{label} must be valid UTF-8"))
+}
+
+fn is_reserved_env_name(name: &str, case_insensitive: bool) -> bool {
+    ["PLUGIN_ROOT", "PLUGIN_DATA"].iter().any(|reserved| {
+        if case_insensitive {
+            name.eq_ignore_ascii_case(reserved)
+        } else {
+            name == *reserved
+        }
+    })
 }
 
 fn validate_remote(object: &Map<String, Value>) -> Result<(), String> {
@@ -322,4 +347,21 @@ fn remove_collisions(
         }
     }
     kept
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::parse_env_with_semantics;
+
+    #[test]
+    fn agent_plugin_reserved_env_names_follow_platform_semantics() {
+        let aliases = json!({ "plugin_root": "wrong", "Plugin_Data": "wrong" });
+        let portable = json!({ "PLUGIN_CACHE": "allowed" });
+
+        assert!(parse_env_with_semantics(Some(&aliases), true).is_err());
+        assert!(parse_env_with_semantics(Some(&aliases), false).is_ok());
+        assert!(parse_env_with_semantics(Some(&portable), true).is_ok());
+    }
 }

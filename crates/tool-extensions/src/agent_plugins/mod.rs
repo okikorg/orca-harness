@@ -72,8 +72,12 @@ impl PluginError {
 
 /// Load and statically validate one Agent Plugins 1.0 package.
 pub fn load_agent_plugin(root: &Path, plugin_data: &Path) -> Result<AgentPlugin, PluginError> {
+    paths::require_utf8(root, "plugin root")?;
     let root = paths::canonical_directory(root, "plugin root")?;
+    paths::require_utf8(&root, "resolved plugin root")?;
+    paths::require_utf8(plugin_data, "plugin data path")?;
     let plugin_data = paths::normalize_data_boundary(plugin_data)?;
+    paths::require_utf8(&plugin_data, "resolved plugin data path")?;
     let manifest_path = paths::required_file(&root, "plugin.json")?;
     let bytes = fs::read(&manifest_path)
         .map_err(|error| PluginError::new(format!("cannot read plugin.json: {error}")))?;
@@ -143,10 +147,18 @@ fn warn_for_unsupported_components(
     let mut namespaces: BTreeSet<String> = manifest_namespaces.iter().cloned().collect();
     if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if looks_like_extension_namespace(&name)
-                && fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir())
-            {
+            if !fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir()) {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str().map(str::to_owned) else {
+                warnings.push(PluginWarning::new(
+                    "extensions",
+                    "non-UTF-8 extension directory name ignored",
+                ));
+                continue;
+            };
+            if looks_like_extension_namespace(&name) {
                 namespaces.insert(name);
             }
         }
