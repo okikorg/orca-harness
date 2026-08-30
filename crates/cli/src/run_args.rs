@@ -95,6 +95,10 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
                 print!("{USAGE}");
                 std::process::exit(0);
             }
+            "-V" | "--version" => {
+                println!("orcacode {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             other => return Err(format!("unknown flag: {other}\n\n{USAGE}")),
         }
     }

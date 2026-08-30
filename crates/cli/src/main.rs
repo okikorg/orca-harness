@@ -122,6 +122,7 @@ OPTIONS:
                      (implied by --yolo)
   -p, --prompt TEXT  headless prompt
   -h, --help         show this help
+  -V, --version      print the version and exit
 
 In the TUI, /provider selects local, OpenAI API, OpenRouter, or the
 OpenAI Codex ChatGPT-subscription provider. Selecting openai-codex starts
