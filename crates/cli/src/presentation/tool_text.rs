@@ -17,11 +17,37 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
             .get("query")
             .and_then(Value::as_str)
             .map(|q| format!("'{q}'")),
+        "glob" => glob_call_detail(args),
+        "skill" => args.get("name").and_then(Value::as_str).map(|name| {
+            args.get("resource")
+                .and_then(Value::as_str)
+                .filter(|resource| !resource.is_empty())
+                .map(|resource| format!("{name} · {resource}"))
+                .unwrap_or_else(|| name.to_string())
+        }),
+        "subagent" => args.get("task").and_then(Value::as_str).map(str::to_string),
+        "web_fetch" | "web_crawl" => args.get("url").and_then(Value::as_str).map(str::to_string),
+        "web_search" => args
+            .get("query")
+            .and_then(Value::as_str)
+            .map(|query| format!("'{query}'")),
         "process" => process_call_detail(args),
         _ => None,
     };
     let detail = detail.unwrap_or_else(|| args.to_string());
     truncate_line(&format!("{name} {detail}"), 100)
+}
+
+fn glob_call_detail(args: &Value) -> Option<String> {
+    let pattern = args.get("pattern").and_then(Value::as_str)?;
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty());
+    Some(match path {
+        Some(path) => format!("{path}/{pattern}"),
+        None => pattern.to_string(),
+    })
 }
 
 pub(super) fn process_call_detail(args: &Value) -> Option<String> {
@@ -107,11 +133,91 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .get("entries")
             .and_then(Value::as_array)
             .map(|e| format!("{} entries", e.len())),
+        "glob" | "grep" => matches_summary(output),
+        "skill" => output
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| format!("loaded {name}")),
+        "subagent" => subagent_result_summary(output),
+        "web_fetch" => web_fetch_result_summary(output),
+        "web_search" => output
+            .get("results")
+            .and_then(Value::as_array)
+            .map(|results| count_label(results.len(), "result", "results")),
+        "web_crawl" => web_crawl_result_summary(output),
         "process" => process_result_summary(output),
         _ => None,
     };
     let summary = summary.unwrap_or_else(|| output.to_string());
     truncate_line(&summary, 120)
+}
+
+fn matches_summary(output: &Value) -> Option<String> {
+    let matches = output.get("matches").and_then(Value::as_array)?;
+    let suffix = if output.get("truncated").and_then(Value::as_bool) == Some(true) {
+        "+"
+    } else {
+        ""
+    };
+    Some(format!(
+        "{count}{suffix} {label}",
+        count = matches.len(),
+        label = if matches.len() == 1 {
+            "match"
+        } else {
+            "matches"
+        }
+    ))
+}
+
+fn subagent_result_summary(output: &Value) -> Option<String> {
+    let termination = output
+        .get("termination")
+        .and_then(Value::as_str)
+        .unwrap_or("completed");
+    let mut parts = vec![termination.to_string()];
+    if let Some(steps) = output.get("steps").and_then(Value::as_u64) {
+        parts.push(count_label(steps as usize, "step", "steps"));
+    }
+    if let Some(tools) = output.get("toolCalls").and_then(Value::as_u64) {
+        parts.push(count_label(tools as usize, "tool", "tools"));
+    }
+    Some(parts.join(" · "))
+}
+
+fn web_fetch_result_summary(output: &Value) -> Option<String> {
+    let status = output.get("status").and_then(Value::as_u64)?;
+    let mut summary = format!("status {status}");
+    if let Some(content_type) = output
+        .get("contentType")
+        .and_then(Value::as_str)
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        summary.push_str(" · ");
+        summary.push_str(content_type);
+    }
+    if output.get("truncated").and_then(Value::as_bool) == Some(true) {
+        summary.push_str(" · truncated");
+    }
+    Some(summary)
+}
+
+fn web_crawl_result_summary(output: &Value) -> Option<String> {
+    let pages = output.get("pagesReturned").and_then(Value::as_u64)? as usize;
+    let mut summary = count_label(pages, "page", "pages");
+    if output.get("timedOut").and_then(Value::as_bool) == Some(true) {
+        summary.push_str(" · timed out");
+    } else if let Some(status) = output.get("status").and_then(Value::as_str) {
+        summary.push_str(" · ");
+        summary.push_str(status);
+    }
+    Some(summary)
+}
+
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
 pub(super) fn process_result_summary(output: &Value) -> Option<String> {

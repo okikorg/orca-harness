@@ -89,6 +89,45 @@ mod tests {
     }
 
     #[test]
+    fn skill_and_glob_calls_show_their_useful_arguments() {
+        assert_eq!(
+            tool_call_line("skill", &json!({"name": "dry-yagni"})),
+            "skill dry-yagni"
+        );
+        assert_eq!(
+            tool_call_line(
+                "skill",
+                &json!({"name": "dry-yagni", "resource": "references/checklist.md"})
+            ),
+            "skill dry-yagni · references/checklist.md"
+        );
+        assert_eq!(
+            tool_call_line("glob", &json!({"path": "", "pattern": ".orca/**/*.md"})),
+            "glob .orca/**/*.md"
+        );
+        assert_eq!(
+            tool_call_line("glob", &json!({"path": "src", "pattern": "*.rs"})),
+            "glob src/*.rs"
+        );
+    }
+
+    #[test]
+    fn agent_and_web_calls_show_intent_not_json() {
+        assert_eq!(
+            tool_call_line("subagent", &json!({"task": "Review the renderer"})),
+            "subagent Review the renderer"
+        );
+        assert_eq!(
+            tool_call_line("web_fetch", &json!({"url": "https://example.com/docs"})),
+            "web_fetch https://example.com/docs"
+        );
+        assert_eq!(
+            tool_call_line("web_search", &json!({"query": "ratatui rendering"})),
+            "web_search 'ratatui rendering'"
+        );
+    }
+
+    #[test]
     fn process_calls_show_actions_instead_of_json() {
         assert_eq!(
             tool_call_line(
@@ -158,6 +197,74 @@ mod tests {
         );
         let out = json!({"path": ".", "entries": ["a", "b"]});
         assert_eq!(tool_result_summary("list_dir", &out, false), "2 entries");
+    }
+
+    #[test]
+    fn skill_and_glob_results_are_semantic_not_json() {
+        assert_eq!(
+            tool_result_summary(
+                "skill",
+                &json!({"name": "dry-yagni", "instructions": "# DRY"}),
+                false
+            ),
+            "loaded dry-yagni"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "glob",
+                &json!({"matches": ["a.md", "b.md"], "truncated": false}),
+                false
+            ),
+            "2 matches"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "glob",
+                &json!({"matches": ["a.md", "b.md"], "truncated": true}),
+                false
+            ),
+            "2+ matches"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "grep",
+                &json!({"matches": [{"path": "a.rs", "line": 1}]}),
+                false
+            ),
+            "1 match"
+        );
+    }
+
+    #[test]
+    fn agent_and_web_results_are_semantic_not_json() {
+        assert_eq!(
+            tool_result_summary(
+                "subagent",
+                &json!({"termination": "completed", "steps": 3, "toolCalls": 1}),
+                false
+            ),
+            "completed · 3 steps · 1 tool"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "web_fetch",
+                &json!({"status": 200, "contentType": "text/html; charset=utf-8", "truncated": false}),
+                false
+            ),
+            "status 200 · text/html"
+        );
+        assert_eq!(
+            tool_result_summary("web_search", &json!({"results": [{}, {}]}), false),
+            "2 results"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "web_crawl",
+                &json!({"pagesReturned": 2, "status": "completed", "timedOut": false}),
+                false
+            ),
+            "2 pages · completed"
+        );
     }
 
     #[test]

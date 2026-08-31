@@ -51,7 +51,7 @@ pub(crate) fn location_picker_lines(picker: &LocationPicker, width: usize) -> Ve
             picker.query
         )
     };
-    picker.picker.lines(
+    picker.picker.windowed_lines(
         &header,
         filtered.into_iter().map(|entry| {
             if entry.directory {
@@ -61,6 +61,7 @@ pub(crate) fn location_picker_lines(picker: &LocationPicker, width: usize) -> Ve
             }
         }),
         width,
+        PICKER_ROWS,
     )
 }
 

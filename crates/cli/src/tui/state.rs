@@ -18,7 +18,6 @@ use orca_harness_model_providers::openrouter::ModelInfo;
 use orca_harness_model_providers::SupportedEfforts;
 
 use super::format::TokenEstimator;
-use super::PICKER_ROWS;
 
 /// Everything the terminal needs to know about the workspace it is
 /// rendering, passed once by the runner and updated by slash commands
@@ -104,7 +103,6 @@ impl LocationPicker {
         self.entries
             .iter()
             .filter(|entry| needle.is_empty() || entry.path.to_lowercase().contains(&needle))
-            .take(PICKER_ROWS)
             .collect()
     }
 

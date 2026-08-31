@@ -1,5 +1,6 @@
 //! Composer location-mention parsing and workspace path discovery.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -78,19 +79,26 @@ fn remove_mention_before_cursor(
 /// focused on files an agent can meaningfully work with.
 pub(crate) fn workspace_locations(root: &Path) -> Vec<LocationEntry> {
     const MAX_LOCATIONS: usize = 5_000;
+    workspace_locations_with_limit(root, MAX_LOCATIONS)
+}
+
+fn workspace_locations_with_limit(root: &Path, max_locations: usize) -> Vec<LocationEntry> {
     const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".next", "dist"];
 
-    fn visit(root: &Path, dir: &Path, entries: &mut Vec<LocationEntry>) {
-        if entries.len() >= MAX_LOCATIONS {
-            return;
-        }
+    let mut entries = Vec::new();
+    // Walk by depth so one large hidden subtree cannot starve its siblings.
+    let mut pending = VecDeque::from([root.to_path_buf()]);
+    while entries.len() < max_locations {
+        let Some(dir) = pending.pop_front() else {
+            break;
+        };
         let Ok(children) = fs::read_dir(dir) else {
-            return;
+            continue;
         };
         let mut children: Vec<_> = children.filter_map(Result::ok).collect();
         children.sort_by_key(|entry| entry.file_name());
         for child in children {
-            if entries.len() >= MAX_LOCATIONS {
+            if entries.len() >= max_locations {
                 break;
             }
             let Ok(kind) = child.file_type() else {
@@ -112,13 +120,11 @@ pub(crate) fn workspace_locations(root: &Path) -> Vec<LocationEntry> {
                 directory: kind.is_dir(),
             });
             if kind.is_dir() {
-                visit(root, &path, entries);
+                pending.push_back(path);
             }
         }
     }
 
-    let mut entries = Vec::new();
-    visit(root, root, &mut entries);
     entries.sort_by(|left, right| {
         right
             .directory
@@ -126,4 +132,32 @@ pub(crate) fn workspace_locations(root: &Path) -> Vec<LocationEntry> {
             .then_with(|| left.path.cmp(&right.path))
     });
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_locations_with_limit;
+
+    #[test]
+    fn leading_dot_folder_cannot_consume_the_whole_location_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "orca-location-breadth-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join(".first/one/two/three")).unwrap();
+        std::fs::create_dir_all(root.join("z-last")).unwrap();
+        std::fs::write(root.join("z-last/wanted.rs"), "fn wanted() {}").unwrap();
+
+        let entries = workspace_locations_with_limit(&root, 4);
+
+        assert!(
+            entries.iter().any(|entry| entry.path == "z-last/wanted.rs"),
+            "later workspace folders must remain searchable: {entries:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

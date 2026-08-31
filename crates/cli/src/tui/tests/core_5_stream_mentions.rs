@@ -197,6 +197,29 @@
     }
 
     #[test]
+    fn location_picker_searches_entries_beyond_the_visible_window() {
+        let mut app = test_app();
+        let entries = (0..PICKER_ROWS + 1)
+            .map(|index| LocationEntry {
+                path: format!("folder-{index}/file.txt"),
+                directory: false,
+            })
+            .collect();
+        app.overlay = Some(Overlay::Locations(LocationPicker {
+            picker: ListPicker::new(PICKER_ROWS + 1),
+            entries,
+            query: "folder-10".into(),
+            token_start: 0,
+        }));
+
+        let Some(Overlay::Locations(location)) = &app.overlay else {
+            panic!("expected @ location picker");
+        };
+        assert_eq!(location.filtered().len(), 1);
+        assert_eq!(location.selected().unwrap().path, "folder-10/file.txt");
+    }
+
+    #[test]
     fn backspace_cancels_an_empty_location_picker_and_removes_the_at() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();

@@ -201,10 +201,7 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let child = text
-            .lines()
-            .find(|l| l.contains("subagent {\"task\":\"inner"))
-            .unwrap();
+        let child = text.lines().find(|l| l.contains("subagent inner")).unwrap();
         let grandchild = text.lines().find(|l| l.contains("grep")).unwrap();
         let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
         assert!(
