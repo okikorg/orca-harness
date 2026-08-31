@@ -41,6 +41,13 @@ type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 /// Inner-agent retry policy: total attempts plus backoff.
 type RetryPolicy = (u32, std::time::Duration);
 
+enum ModelRoute {
+    Inherit,
+    Auto,
+    Preference(Vec<String>),
+    Fixed(String),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentIdentity {
     pub provider: String,
@@ -211,8 +218,9 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         self
     }
 
-    /// Offer a host-approved model shortlist to the orchestrator. Omitting
-    /// `model` in a call continues to use the model passed to [`Self::new`].
+    /// Offer host-approved models for `/subagents` routing. `inherit` hides
+    /// the shortlist, `auto` exposes it, `preference` exposes only saved
+    /// preferred models, and a fixed route exposes its preferred model.
     pub fn models(mut self, models: impl IntoIterator<Item = SubagentModel<M>>) -> Self {
         self.models = models.into_iter().collect();
         self.max_depth
@@ -317,44 +325,88 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
                 json!({"type": "string", "description": "Optional system prompt override for this agent."}),
             ),
         ]);
-        if !self.models.is_empty() {
-            let ids: Vec<&str> = self
+        let route = self.max_depth.effective_model_route();
+        let requires_model = matches!(&route, ModelRoute::Preference(_));
+        let visible_models: Vec<&SubagentModel<M>> = match &route {
+            ModelRoute::Inherit => Vec::new(),
+            ModelRoute::Auto => self.models.iter().collect(),
+            ModelRoute::Preference(preferred) => self
                 .models
                 .iter()
-                .map(|choice| choice.id.as_str())
-                .collect();
-            let choices = self
+                .filter(|choice| preferred.contains(&choice.id))
+                .collect(),
+            ModelRoute::Fixed(preferred) => self
                 .models
+                .iter()
+                .filter(|choice| choice.id == *preferred)
+                .collect(),
+        };
+        if !visible_models.is_empty() || requires_model {
+            let ids = visible_models
+                .iter()
+                .map(|choice| choice.id.as_str())
+                .collect::<Vec<_>>();
+            let choices = visible_models
                 .iter()
                 .map(|choice| format!("{} — {}", choice.id, choice.description))
                 .collect::<Vec<_>>()
                 .join("; ");
+            let description = if visible_models.is_empty() {
+                "Required worker model, but no saved preferred model is currently available."
+                    .to_string()
+            } else if requires_model {
+                format!("Required user-preferred worker model. Choices: {choices}")
+            } else {
+                format!("Optional worker model. Choices: {choices}")
+            };
             properties.insert(
                 "model".into(),
                 json!({
                     "type": "string",
                     "enum": ids,
-                    "description": format!(
-                        "Optional worker model. Omit to use the orchestrator's current model. Choices: {choices}"
-                    )
+                    "description": description
                 }),
             );
         }
 
+        let routing = match &route {
+            ModelRoute::Inherit => " The user's `/subagents` route is `inherit`; omit `model`. \
+                Every worker uses the orchestrator's current model, and explicit model requests \
+                are rejected."
+                .to_string(),
+            ModelRoute::Auto => " The user's `/subagents` route is `auto`; choose any approved \
+                worker model per task, or omit `model` to inherit the orchestrator's current \
+                model."
+                .to_string(),
+            ModelRoute::Preference(_) => " The user's `/subagents` route is `preference`; choose \
+                exactly one of the user's saved preferred models exposed in `model`. Omitting \
+                `model` or requesting any other model is rejected."
+                .to_string(),
+            ModelRoute::Fixed(preferred) => format!(
+                " The user's `/subagents` route is locked to `{preferred}`; omit `model` or pass \
+                 exactly `{preferred}`. Conflicting model requests are rejected."
+            ),
+        };
+        let required = if requires_model {
+            json!(["task", "model"])
+        } else {
+            json!(["task"])
+        };
         ToolSchema {
             name: "subagent".into(),
-            description: "Spawn an independent agent with its own context and full file/shell \
+            description: format!(
+                "Spawn an independent agent with its own context and full file/shell \
                 tool access to work on one bounded task. Subagents can run for many model steps, \
                 so delegate deliberately: give a complete, self-contained task with the exact \
                 result expected and an explicit stopping condition. Avoid open-ended goals or \
                 investigation without a defined deliverable. It sees nothing of this conversation \
                 and returns only its final answer. Several subagent calls issued in the same \
-                response run in parallel."
-                .into(),
+                response run in parallel.{routing}"
+            ),
             parameters: Value::Object(serde_json::Map::from_iter([
                 ("type".into(), Value::String("object".into())),
                 ("properties".into(), Value::Object(properties)),
-                ("required".into(), json!(["task"])),
+                ("required".into(), required),
             ])),
         }
     }
@@ -369,9 +421,47 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`task` (string) is required"))?;
         let requested = input.get("model").and_then(Value::as_str);
-        let selected = requested
-            .map(str::to_string)
-            .or_else(|| self.max_depth.default_model());
+        let route = self.max_depth.effective_model_route();
+        if let Some(requested) = requested {
+            if !self.models.iter().any(|choice| choice.id == requested) {
+                return Err(ToolError::msg(format!(
+                    "unknown subagent model `{requested}`"
+                )));
+            }
+        }
+        match (&route, requested) {
+            (ModelRoute::Inherit, Some(requested)) => {
+                return Err(ToolError::msg(format!(
+                    "subagent model `{requested}` conflicts with the user's `inherit` \
+                     preference selected via `/subagents`; omit `model` to use the \
+                     orchestrator's current model"
+                )));
+            }
+            (ModelRoute::Fixed(preferred), Some(requested)) if requested != preferred => {
+                return Err(ToolError::msg(format!(
+                    "subagent model `{requested}` conflicts with the user's preferred model \
+                     `{preferred}` selected via `/subagents`; omit `model` or request \
+                     `{preferred}`"
+                )));
+            }
+            (ModelRoute::Preference(_), None) => {
+                return Err(ToolError::msg(
+                    "the user's `preference` route requires one saved preferred `model`",
+                ));
+            }
+            (ModelRoute::Preference(preferred), Some(requested))
+                if !preferred.iter().any(|model| model == requested) =>
+            {
+                return Err(ToolError::msg(format!(
+                    "subagent model `{requested}` is not one of the user's saved preferred models"
+                )));
+            }
+            _ => {}
+        }
+        let selected = requested.map(str::to_string).or(match route {
+            ModelRoute::Fixed(preferred) => Some(preferred),
+            _ => None,
+        });
         let (model, identity) = match selected.as_deref() {
             None => (self.model.clone(), self.inherited_identity.clone()),
             Some(id) => {

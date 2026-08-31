@@ -49,7 +49,11 @@ pub(crate) fn subagent_current(settings: &SubagentDepth, setting: SubagentSettin
 
 pub(crate) fn subagent_values(settings: &SubagentDepth, setting: SubagentSetting) -> Vec<String> {
     if setting == SubagentSetting::Route {
-        let mut routes = vec!["inherit".to_string()];
+        let mut routes = vec![
+            "inherit".to_string(),
+            orca_harness_tools::AUTO_SUBAGENT_ROUTE.to_string(),
+            orca_harness_tools::PREFERENCE_SUBAGENT_ROUTE.to_string(),
+        ];
         routes.extend(
             ["local", "flash", "mid", "frontier"]
                 .into_iter()
@@ -71,6 +75,21 @@ pub(crate) fn subagent_values(settings: &SubagentDepth, setting: SubagentSetting
         _ => unreachable!(),
     };
     numbers.iter().map(u32::to_string).collect()
+}
+
+pub(crate) fn subagent_route_description(route: &str) -> &'static str {
+    match route {
+        "inherit" => "always use the parent model",
+        orca_harness_tools::AUTO_SUBAGENT_ROUTE => "model chooses per subagent",
+        orca_harness_tools::PREFERENCE_SUBAGENT_ROUTE => {
+            "model chooses only from your preferred models"
+        }
+        "local" => "always use the preferred local model",
+        "flash" => "always use the preferred fast cloud model",
+        "mid" => "always use the preferred balanced cloud model",
+        "frontier" => "always use the preferred strongest cloud model",
+        _ => "approved worker route",
+    }
 }
 
 pub(crate) fn subagent_selected(

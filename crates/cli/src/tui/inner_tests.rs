@@ -12,6 +12,7 @@ mod tests {
 }
 
 include!("tests/theme_subagent_mode.rs");
+include!("tests/subagent_routes.rs");
 include!("tests/extensions.rs");
 include!("tests/mcp_stats_nested.rs");
 include!("tests/plugins.rs");

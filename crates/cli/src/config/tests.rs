@@ -37,6 +37,18 @@ mod tests {
     }
 
     #[test]
+    fn saved_subagent_model_chosen_routes_load_without_a_model_catalog() {
+        for route in ["auto", "preference"] {
+            seed(&format!(r#"{{"subagents":{{"route":"{route}"}}}}"#));
+            let loaded = orca_harness_tools::SubagentDepth::new(1);
+
+            load_subagent_settings(&loaded);
+
+            assert_eq!(loaded.model_route().as_deref(), Some(route));
+        }
+    }
+
+    #[test]
     fn save_then_load_round_trips_per_provider() {
         assert_eq!(stored_key("openrouter"), None);
         save_key("openrouter", "sk-or-123").unwrap();

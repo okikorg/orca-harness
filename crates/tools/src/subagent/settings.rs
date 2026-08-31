@@ -18,6 +18,10 @@ pub const MIN_SUBAGENT_OUTPUT_CHARS: u32 = 1_000;
 pub const MAX_SUBAGENT_OUTPUT_CHARS: u32 = 64_000;
 pub const MAX_SUBAGENT_RETRY_ATTEMPTS: u32 = 10;
 pub const MAX_SUBAGENT_RETRY_BACKOFF_MS: u32 = 2_000;
+pub const AUTO_SUBAGENT_ROUTE: &str = "auto";
+pub const PREFERENCE_SUBAGENT_ROUTE: &str = "preference";
+
+const MODEL_TIERS: [&str; 4] = ["local", "flash", "mid", "frontier"];
 
 #[derive(Debug, Clone, Copy)]
 struct LiveRetry {
@@ -156,12 +160,32 @@ impl SubagentDepth {
         let mut routing = self.0.routing.lock().unwrap();
         if route
             .as_ref()
-            .is_some_and(|tier| models_for_tier(&routing.available, tier).is_empty())
+            .is_some_and(|route| !route_available(&routing.available, route))
         {
             return false;
         }
         routing.route = route;
         true
+    }
+
+    pub(super) fn effective_model_route(&self) -> super::ModelRoute {
+        let routing = self.0.routing.lock().unwrap();
+        match routing.route.as_deref() {
+            None => super::ModelRoute::Inherit,
+            Some(AUTO_SUBAGENT_ROUTE) => super::ModelRoute::Auto,
+            Some(PREFERENCE_SUBAGENT_ROUTE) => super::ModelRoute::Preference(
+                MODEL_TIERS
+                    .iter()
+                    .filter_map(|tier| routing.preferred.get(*tier).cloned())
+                    .collect(),
+            ),
+            Some(tier) => routing
+                .preferred
+                .get(tier)
+                .cloned()
+                .map(super::ModelRoute::Fixed)
+                .unwrap_or(super::ModelRoute::Inherit),
+        }
     }
 
     pub fn preferred_model(&self, tier: &str) -> Option<String> {
@@ -215,7 +239,7 @@ impl SubagentDepth {
     pub(super) fn set_available_models(&self, models: Vec<String>) {
         let mut routing = self.0.routing.lock().unwrap();
         routing.available = models;
-        for tier in ["local", "flash", "mid", "frontier"] {
+        for tier in MODEL_TIERS {
             let choices = models_for_tier(&routing.available, tier);
             match routing.preferred.get(tier) {
                 Some(current) if choices.contains(current) => {}
@@ -232,11 +256,19 @@ impl SubagentDepth {
         if routing
             .route
             .as_ref()
-            .is_some_and(|tier| models_for_tier(&routing.available, tier).is_empty())
+            .is_some_and(|route| !route_available(&routing.available, route))
         {
             routing.route = None;
         }
     }
+}
+
+fn route_available(models: &[String], route: &str) -> bool {
+    if matches!(route, AUTO_SUBAGENT_ROUTE | PREFERENCE_SUBAGENT_ROUTE) {
+        return true;
+    }
+    let prefix = format!("{route}/");
+    models.iter().any(|id| id.starts_with(&prefix))
 }
 
 fn models_for_tier(models: &[String], tier: &str) -> Vec<String> {

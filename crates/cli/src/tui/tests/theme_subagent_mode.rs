@@ -83,7 +83,7 @@ mod subagents_command_tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn depth_app(depth: SubagentDepth) -> App {
+    pub(super) fn depth_app(depth: SubagentDepth) -> App {
         App::new(TuiConfig {
             model_name: "m".into(),
             workspace_name: "w".into(),

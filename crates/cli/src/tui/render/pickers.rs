@@ -9,7 +9,9 @@ use crate::view::{self, theme};
 
 use super::super::format::age_label;
 use super::super::state::SubagentSetting;
-use super::super::subagents::{subagent_current, subagent_setting_label};
+use super::super::subagents::{
+    subagent_current, subagent_route_description, subagent_setting_label,
+};
 use super::super::{App, InspectorMode, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
 
 pub(super) fn command_picker_row(spec: &CommandSpec) -> [String; 3] {
@@ -247,14 +249,21 @@ pub(crate) fn subagent_value_lines(
     picker: &ListPicker,
     width: usize,
 ) -> Vec<Line<'static>> {
-    picker.lines(
-        &format!(
-            "Subagent {} · ↑↓ move · ← back · →/enter use · esc close",
-            subagent_setting_label(setting)
-        ),
-        values.iter().cloned(),
-        width,
-    )
+    let title = format!(
+        "Subagent {} · ↑↓ move · ← back · →/enter use · esc close",
+        subagent_setting_label(setting)
+    );
+    if setting == SubagentSetting::Route {
+        return picker.table_lines(
+            &title,
+            values
+                .iter()
+                .map(|value| [value.clone(), subagent_route_description(value).to_string()]),
+            [(12, 12), (0, usize::MAX)],
+            width,
+        );
+    }
+    picker.lines(&title, values.iter().cloned(), width)
 }
 
 pub(crate) fn inspector_picker_lines(

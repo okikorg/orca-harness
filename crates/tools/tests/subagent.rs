@@ -13,8 +13,8 @@ use orca_harness_core::{
     ToolError, ToolSchema, Usage,
 };
 use orca_harness_tools::{
-    SubagentModel, SubagentTool, Workspace, DEFAULT_SUBAGENT_MAX_STEPS, DEFAULT_SUBAGENT_TIMEOUT,
-    MAX_SUBAGENT_MAX_STEPS,
+    SubagentModel, SubagentTool, Workspace, AUTO_SUBAGENT_ROUTE, DEFAULT_SUBAGENT_MAX_STEPS,
+    DEFAULT_SUBAGENT_TIMEOUT, MAX_SUBAGENT_MAX_STEPS, PREFERENCE_SUBAGENT_ROUTE,
 };
 
 static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

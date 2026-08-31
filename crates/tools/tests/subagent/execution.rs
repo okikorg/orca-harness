@@ -221,18 +221,28 @@ async fn task_is_required() {
 }
 
 #[tokio::test]
-async fn selected_model_runs_while_omission_keeps_the_default() {
+async fn auto_route_lets_the_model_select_or_inherit_with_identity() {
     let default = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
         "default",
     )]));
     let flash = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash")]));
+    let settings = SubagentDepth::new(1);
+    assert!(settings.set_model_route(Some(AUTO_SUBAGENT_ROUTE.into())));
     let (ws, _dir) = temp_ws();
     let tool = SubagentTool::new(default.clone(), &ws)
         .inherited_identity("openrouter", "default/model")
         .models([
             SubagentModel::new("flash/test", "fast test model", flash.clone())
                 .identity("openrouter", "vendor/flash-model"),
-        ]);
+        ])
+        .max_depth(settings);
+
+    let schema = tool.schema();
+    assert_eq!(
+        schema.parameters["properties"]["model"]["enum"],
+        json!(["flash/test"])
+    );
+    assert!(schema.description.contains("route is `auto`"));
 
     let selected = tool
         .call(json!({"task": "one", "model": "flash/test"}), &ctx())
@@ -275,7 +285,7 @@ async fn unknown_model_fails_before_spawning() {
 }
 
 #[test]
-fn schema_only_advertises_configured_model_ids() {
+fn schema_describes_bounded_delegation_and_inherit_omits_model() {
     let (ws, _dir) = temp_ws();
     let model = Arc::new(ScriptedModel::new(vec![]));
     let plain = SubagentTool::new(model.clone(), &ws);
@@ -285,16 +295,32 @@ fn schema_only_advertises_configured_model_ids() {
     assert!(description.contains("explicit stopping condition"));
     assert!(description.contains("Avoid open-ended goals"));
     assert!(plain.schema().parameters["properties"]["model"].is_null());
+    assert_eq!(plain.schema().parameters["required"], json!(["task"]));
+}
 
-    let configured = SubagentTool::new(model.clone(), &ws).models([
-        SubagentModel::new("flash/one", "fast", model.clone()),
-        SubagentModel::new("frontier/two", "strong", model),
-    ]);
-    assert_eq!(
-        configured.schema().parameters["properties"]["model"]["enum"],
-        json!(["flash/one", "frontier/two"])
-    );
-    assert_eq!(configured.schema().parameters["required"], json!(["task"]));
+#[tokio::test]
+async fn inherit_rejects_an_explicit_model_before_spawning() {
+    let default = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("inherited")]));
+    let flash = Arc::new(ScriptedModel::new(vec![]));
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(default.clone(), &ws)
+        .models([SubagentModel::new("flash/one", "fast", flash.clone())]);
+
+    let schema = tool.schema();
+    assert!(schema.parameters["properties"]["model"].is_null());
+    assert!(schema.description.contains("route is `inherit`"));
+
+    let err = tool
+        .call(json!({"task": "wrong route", "model": "flash/one"}), &ctx())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("conflicts with the user's `inherit` preference"));
+
+    let inherited = tool.call(json!({"task": "right route"}), &ctx()).await.unwrap();
+    assert_eq!(inherited["answer"], "inherited");
+    assert_eq!(default.generate_calls(), 1);
+    assert_eq!(flash.generate_calls(), 0);
 }
 
 use orca_harness_core::Message;

@@ -31,14 +31,16 @@ async fn nested_subagents_inherit_selected_model_and_choices() {
     let (ws, _dir) = temp_ws();
     let spawns: Arc<Mutex<Vec<SubagentSpawn>>> = Arc::new(Mutex::new(Vec::new()));
     let recorded = spawns.clone();
+    let settings = SubagentDepth::new(2);
     let tool = SubagentTool::new(default.clone(), &ws)
         .models([SubagentModel::new("flash/test", "fast", flash.clone())
             .identity("openrouter", "vendor/flash")])
-        .max_depth(SubagentDepth::new(2))
+        .max_depth(settings.clone())
         .spawn_extensions(Arc::new(move |spawn| {
             recorded.lock().unwrap().push(spawn.clone());
             Vec::new()
         }));
+    assert!(settings.set_default_model(Some("flash/test".into())));
 
     let out = tool
         .call(json!({"task": "outer", "model": "flash/test"}), &ctx())
@@ -210,11 +212,84 @@ fn catalog_rebuild_preserves_valid_tier_choices_and_reconciles_removed_ones() {
     assert_eq!(settings.preferred_model("local"), None);
 }
 
+#[test]
+fn model_chosen_routes_survive_catalog_changes() {
+    for route in [AUTO_SUBAGENT_ROUTE, PREFERENCE_SUBAGENT_ROUTE] {
+        let settings = SubagentDepth::new(1);
+        assert!(settings.set_model_route(Some(route.into())));
+
+        let model = Arc::new(ScriptedModel::new(vec![]));
+        let (ws, _dir) = temp_ws();
+        let _tool = SubagentTool::new(model, &ws).max_depth(settings.clone());
+
+        assert_eq!(settings.model_route().as_deref(), Some(route));
+        assert_eq!(settings.default_model(), None);
+    }
+}
+
 #[tokio::test]
-async fn tier_route_uses_its_preferred_model_and_explicit_call_wins() {
+async fn preference_route_only_accepts_saved_preferred_models() {
     let default = Arc::new(ScriptedModel::new(vec![]));
-    let local = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("local")]));
-    let flash = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash")]));
+    let local_a = Arc::new(ScriptedModel::new(vec![]));
+    let local_b = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("local b")]));
+    let flash_a = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash a")]));
+    let settings = SubagentDepth::new(1);
+    let (ws, _dir) = temp_ws();
+    let tool = SubagentTool::new(default.clone(), &ws)
+        .models([
+            SubagentModel::new("local/a", "local a", local_a.clone()),
+            SubagentModel::new("local/b", "local b", local_b.clone()),
+            SubagentModel::new("flash/a", "flash a", flash_a.clone()),
+        ])
+        .max_depth(settings.clone());
+    assert!(settings.set_preferred_model("local", "local/b".into()));
+    assert!(settings.set_model_route(Some(PREFERENCE_SUBAGENT_ROUTE.into())));
+
+    let schema = tool.schema();
+    assert_eq!(
+        schema.parameters["properties"]["model"]["enum"],
+        json!(["local/b", "flash/a"])
+    );
+    assert_eq!(schema.parameters["required"], json!(["task", "model"]));
+    assert!(schema.description.contains("route is `preference`"));
+
+    let local = tool
+        .call(json!({"task": "one", "model": "local/b"}), &ctx())
+        .await
+        .unwrap();
+    let flash = tool
+        .call(json!({"task": "two", "model": "flash/a"}), &ctx())
+        .await
+        .unwrap();
+    let omitted = tool
+        .call(json!({"task": "three"}), &ctx())
+        .await
+        .unwrap_err()
+        .to_string();
+    let non_preferred = tool
+        .call(json!({"task": "four", "model": "local/a"}), &ctx())
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(local["answer"], "local b");
+    assert_eq!(flash["answer"], "flash a");
+    assert!(omitted.contains("requires one saved preferred `model`"));
+    assert!(non_preferred.contains("not one of the user's saved preferred models"));
+    assert_eq!(default.generate_calls(), 0);
+    assert_eq!(local_a.generate_calls(), 0);
+    assert_eq!(local_b.generate_calls(), 1);
+    assert_eq!(flash_a.generate_calls(), 1);
+}
+
+#[tokio::test]
+async fn tier_route_enforces_its_preferred_model() {
+    let default = Arc::new(ScriptedModel::new(vec![]));
+    let local = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::final_text("local default"),
+        ModelResponse::final_text("local explicit"),
+    ]));
+    let flash = Arc::new(ScriptedModel::new(vec![]));
     let settings = SubagentDepth::new(1);
     let (ws, _dir) = temp_ws();
     let tool = SubagentTool::new(default.clone(), &ws)
@@ -235,14 +310,29 @@ async fn tier_route_uses_its_preferred_model_and_explicit_call_wins() {
     assert!(settings.set_model_route(Some("local".into())));
     assert!(!settings.set_model_route(Some("frontier".into())));
 
+    let schema = tool.schema();
+    assert_eq!(
+        schema.parameters["properties"]["model"]["enum"],
+        json!(["local/test"])
+    );
+    assert!(schema.description.contains("locked to `local/test`"));
+
     let routed = tool.call(json!({"task": "one"}), &ctx()).await.unwrap();
     let explicit = tool
-        .call(json!({"task": "two", "model": "flash/test"}), &ctx())
+        .call(json!({"task": "two", "model": "local/test"}), &ctx())
         .await
         .unwrap();
-    assert_eq!(routed["answer"], "local");
-    assert_eq!(explicit["answer"], "flash");
+    let err = tool
+        .call(json!({"task": "three", "model": "flash/test"}), &ctx())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(routed["answer"], "local default");
+    assert_eq!(explicit["answer"], "local explicit");
+    assert!(err.contains("conflicts with the user's preferred model `local/test`"));
     assert_eq!(default.generate_calls(), 0);
+    assert_eq!(flash.generate_calls(), 0);
+    assert_eq!(local.generate_calls(), 2);
 }
 
 #[tokio::test]
