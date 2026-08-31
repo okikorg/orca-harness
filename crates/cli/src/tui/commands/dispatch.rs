@@ -386,7 +386,7 @@ pub(crate) fn apply_mode(app: &mut App, next: crate::mode::Mode) {
     }
 }
 
-/// `/mode [normal|plan|yolo]` — no argument opens the standard picker,
+/// `/mode [normal|plan|auto|yolo]` — no argument opens the standard picker,
 /// preselected on the current mode, exactly like /provider and /theme.
 /// A name picks directly: `mode` is a command typed hourly, so the
 /// text form stays.
@@ -407,7 +407,7 @@ pub(crate) fn mode_command(app: &mut App, arg: &str) {
         None => {
             push_error(
                 app,
-                format!("unknown mode: {arg} — valid modes: normal, plan, yolo"),
+                format!("unknown mode: {arg} — valid modes: normal, plan, auto, yolo"),
             );
         }
     }

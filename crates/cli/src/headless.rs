@@ -23,6 +23,7 @@ use orca_harness_tools::{
 };
 
 use crate::approval::HeadlessGate;
+use crate::auto_approval::AutoApproval;
 use crate::mode::{ModeHandle, PlanGate};
 use crate::presentation;
 use crate::Config;
@@ -162,13 +163,15 @@ pub async fn run<M: Model + Clone + 'static>(
         }
     });
 
+    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone());
     let (meter, usage) = UsageMeter::new();
     // PlanGate first: --plan denies before --yolo/--auto-approve can allow.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
         .extension(meter)
-        .extension(PlanGate::new(mode.clone(), plan_area.clone()));
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(auto_approval.clone());
     if let Some(plugin_hooks) = &plugin_hooks {
         agent = agent.extension_arc(plugin_hooks.clone());
     }
@@ -178,10 +181,9 @@ pub async fn run<M: Model + Clone + 'static>(
     if crate::extensions::enabled("retry") {
         agent = agent.extension(crate::extensions::tool_retry());
     }
-    // Yolo implies auto-approve: a headless run started with --yolo has
-    // opted out of every ask, so the headless gate must not re-add the
-    // one the interactive path just removed.
-    if !cfg.auto_approve && !cfg.mode().bypasses_approval() {
+    // Auto owns unresolved admission and yolo disables it, so neither may
+    // have the headless human gate re-added afterward.
+    if !cfg.auto_approve && !cfg.mode().bypasses_human_approval() {
         agent = agent.extension(HeadlessGate);
     }
     if let Some(session) = &session {
@@ -241,8 +243,10 @@ pub async fn run<M: Model + Clone + 'static>(
                 }));
             crate::config::load_subagent_settings(&subagent_settings);
             let subagent_plugin_hooks = plugin_hooks.clone();
+            let subagent_auto_approval = auto_approval.for_subagent();
             agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
-                let mut extensions = Vec::new();
+                let mut extensions = vec![Arc::new(subagent_auto_approval.clone())
+                    as Arc<dyn orca_harness_core::Extension>];
                 if let Some(plugin_hooks) = &subagent_plugin_hooks {
                     extensions.push(plugin_hooks.clone() as Arc<dyn orca_harness_core::Extension>);
                 }

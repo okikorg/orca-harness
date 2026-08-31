@@ -3,10 +3,9 @@
 //! `Normal` is the agent as usual — every registered tool is available,
 //! and the gated ones ask for approval. `Plan` is read-only: the agent
 //! may investigate but may not change anything, so it answers with a
-//! plan instead of a diff. `Yolo` removes friction instead of adding
-//! it: gated tools stop asking entirely. Because that silences exactly
-//! the mechanism whose job is to say "wait", it never renders quietly —
-//! the status line carries `yolo` for as long as it is on.
+//! plan instead of a diff. `Auto` reviews unresolved exact actions against
+//! the root request. `Yolo` removes review entirely. Both remain visible
+//! in the status line because neither opens ordinary approval prompts.
 //!
 //! Plan mode is an **allowlist**, not a denylist. A denylist would have
 //! to enumerate every mutating tool, and the session's tool set is not
@@ -35,18 +34,22 @@ pub enum Mode {
     Normal,
     /// Read-only: only the tools in [`READ_ONLY_TOOLS`] run.
     Plan,
+    /// Unresolved actions are reviewed automatically against the current
+    /// root request instead of opening a human approval prompt.
+    Auto,
     /// Every tool runs without approval prompts. The status line shows
     /// `yolo` for the whole session.
     Yolo,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 3] = [Mode::Normal, Mode::Plan, Mode::Yolo];
+    pub const ALL: [Mode; 4] = [Mode::Normal, Mode::Plan, Mode::Auto, Mode::Yolo];
 
     pub fn label(self) -> &'static str {
         match self {
             Mode::Normal => "normal",
             Mode::Plan => "plan",
+            Mode::Auto => "auto",
             Mode::Yolo => "yolo",
         }
     }
@@ -55,6 +58,7 @@ impl Mode {
         match self {
             Mode::Normal => "every tool is available; gated tools ask for approval",
             Mode::Plan => "read-only: the agent investigates and proposes, but changes nothing",
+            Mode::Auto => "safe tools run; unresolved actions are reviewed automatically",
             Mode::Yolo => "every tool runs without approval prompts",
         }
     }
@@ -65,16 +69,17 @@ impl Mode {
         match label.trim().to_ascii_lowercase().as_str() {
             "normal" | "default" | "off" | "act" => Some(Mode::Normal),
             "plan" | "planning" | "read-only" | "readonly" | "ro" => Some(Mode::Plan),
+            "auto" | "automatic" => Some(Mode::Auto),
             "yolo" => Some(Mode::Yolo),
             _ => None,
         }
     }
 
-    /// True when gated tools must not prompt. Plan mode denies them
-    /// before approval is ever consulted ([`PlanGate`] registers
-    /// first); yolo skips the ask on purpose.
-    pub fn bypasses_approval(self) -> bool {
-        matches!(self, Mode::Yolo)
+    /// True when the ordinary human prompt must not open. Plan mode denies
+    /// before approval; auto delegates unresolved calls to its reviewer;
+    /// yolo admits them without review.
+    pub fn bypasses_human_approval(self) -> bool {
+        matches!(self, Mode::Auto | Mode::Yolo)
     }
 }
 
@@ -121,6 +126,7 @@ impl ModeHandle {
         match self.0.load(Ordering::Relaxed) {
             0 => Mode::Normal,
             1 => Mode::Plan,
+            2 => Mode::Auto,
             _ => Mode::Yolo,
         }
     }
@@ -129,7 +135,8 @@ impl ModeHandle {
         let encoded = match mode {
             Mode::Normal => 0,
             Mode::Plan => 1,
-            Mode::Yolo => 2,
+            Mode::Auto => 2,
+            Mode::Yolo => 3,
         };
         self.0.store(encoded, Ordering::Relaxed);
     }
@@ -240,6 +247,7 @@ mod tests {
         }
         assert_eq!(Mode::from_label("READ-ONLY"), Some(Mode::Plan));
         assert_eq!(Mode::from_label(" off "), Some(Mode::Normal));
+        assert_eq!(Mode::from_label("AUTOMATIC"), Some(Mode::Auto));
         assert_eq!(Mode::from_label("YOLO"), Some(Mode::Yolo));
         assert_eq!(Mode::from_label("nonsense"), None);
     }
@@ -250,7 +258,7 @@ mod tests {
         assert_eq!(handle.get(), Mode::Normal);
         assert!(!handle.is_plan());
         handle.set(Mode::Yolo);
-        assert!(handle.get().bypasses_approval());
+        assert!(handle.get().bypasses_human_approval());
         // Clones share one state: the TUI and the gate see the same mode.
         let clone = handle.clone();
         handle.set(Mode::Plan);

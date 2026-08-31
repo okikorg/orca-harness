@@ -5,6 +5,7 @@ fn shift_tab_cycles_session_modes() {
 
     for (code, expected) in [
         (KeyCode::BackTab, crate::mode::Mode::Plan),
+        (KeyCode::BackTab, crate::mode::Mode::Auto),
         (KeyCode::BackTab, crate::mode::Mode::Yolo),
         (KeyCode::Tab, crate::mode::Mode::Normal),
     ] {
@@ -25,6 +26,7 @@ fn shift_tab_cycles_session_modes() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("plan mode"), "{text}");
+    assert!(text.contains("auto mode"), "{text}");
     assert!(text.contains("yolo mode"), "{text}");
     assert!(text.contains("normal mode"), "{text}");
 }

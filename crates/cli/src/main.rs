@@ -5,6 +5,7 @@
 
 mod approval;
 mod auth;
+mod auto_approval;
 mod config;
 mod extensions;
 mod headless;
@@ -110,6 +111,9 @@ OPTIONS:
   --plan             start in plan mode: read-only tools, and docs/plan/
                      the only writable directory — the agent decides
                      whether to write a plan (/mode opens a picker)
+  --normal           start in normal mode: gated tools ask for approval
+  --auto             start in auto mode (default): safe tools run and
+                     unresolved actions are reviewed against your request
   --yolo             start in yolo mode: every gated tool runs without
                      approval prompts, interactive or headless. The
                      status line reads yolo for the whole session
@@ -171,6 +175,12 @@ pub struct Config {
     /// and a session that silently came back read-only would be a
     /// puzzle rather than a safeguard.
     pub plan: bool,
+    /// Start with ordinary human approval prompts instead of the default
+    /// automatic exact-action review. This per-session choice is not saved.
+    pub normal: bool,
+    /// Start with automatic exact-action reviews instead of human prompts.
+    /// Like the other modes, this is a per-session stance and is not saved.
+    pub auto: bool,
     /// Start with approvals off. Same reasoning as `plan`: not
     /// persisted, and the status line keeps saying yolo for as long
     /// as the session lives so it can never be forgotten.
@@ -190,18 +200,22 @@ impl Config {
         }
     }
 
-    /// The mode a session starts in. `--plan` wins over `--yolo` when
-    /// both are given: read-only-and-unprompted is a coherent, safe
-    /// stance (investigation runs unattended), while letting the
-    /// louder flag win would turn an ambiguous invocation into
-    /// "everything writable, nobody asked".
+    /// Safer explicit modes win ambiguous combinations. With no mode flag,
+    /// automatic exact-action review is the CLI default. `--auto-approve`
+    /// alone retains its legacy normal-mode behavior.
     pub fn mode(&self) -> Mode {
         if self.plan {
             Mode::Plan
+        } else if self.normal {
+            Mode::Normal
+        } else if self.auto {
+            Mode::Auto
         } else if self.yolo {
             Mode::Yolo
-        } else {
+        } else if self.auto_approve {
             Mode::Normal
+        } else {
+            Mode::Auto
         }
     }
 }

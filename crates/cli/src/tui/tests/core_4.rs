@@ -439,7 +439,7 @@
         for expected in [
             "hotkeys",
             "Shift+Tab",
-            "cycle normal, plan, and yolo modes",
+            "cycle normal, plan, auto, and yolo modes",
             "Ctrl+O",
             "expand the latest work or tool output",
             "Ctrl+Y",

@@ -6,6 +6,7 @@ use orca_harness_core::Extension;
 use orca_harness_extensions::{EventStream, Truncation};
 use orca_harness_tools::SubagentSpawn;
 
+use crate::auto_approval::AutoApproval;
 use crate::mode::{ModeHandle, PlanGate};
 use crate::msg::UiMsg;
 use crate::plan::PlanArea;
@@ -28,6 +29,7 @@ pub(crate) fn subagent_extensions(
     plan_area: &PlanArea,
     settings: &orca_harness_tools::SubagentDepth,
     plugin_hooks: Option<&Arc<orca_harness_tool_extensions::plugin_hooks::PluginHookExtension>>,
+    auto_approval: Option<&AutoApproval>,
 ) -> Vec<Arc<dyn Extension>> {
     let ui = ui.clone();
     let (id, parent_id, depth) = (spawn.id, spawn.parent_id, spawn.depth);
@@ -54,6 +56,9 @@ pub(crate) fn subagent_extensions(
     ];
     if let Some(plugin_hooks) = plugin_hooks {
         extensions.push(plugin_hooks.clone());
+    }
+    if let Some(auto_approval) = auto_approval {
+        extensions.push(Arc::new(auto_approval.clone()));
     }
     extensions
         .push(Arc::new(Truncation::new(settings.output_chars() as usize)) as Arc<dyn Extension>);

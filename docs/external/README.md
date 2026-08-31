@@ -35,7 +35,7 @@ audited together.
 ## Included guides
 
 - Install and first session
-- Approvals, plan mode, and yolo mode
+- Approvals, plan mode, auto mode, and yolo mode
 - Providers, models, and persistent configuration
 - Workspace tools, background processes, and output retrieval
 - Durable memory, automatic scoped recall, explicit management, and local storage

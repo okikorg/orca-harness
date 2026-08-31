@@ -93,6 +93,21 @@ mod main_tests {
     }
 
     #[test]
+    fn auto_flag_selects_automatic_review_mode() {
+        let default = parse_run_args(Vec::new()).unwrap();
+        assert_eq!(default.mode(), Mode::Auto);
+
+        let cfg = parse_run_args(vec!["--auto".into()]).unwrap();
+        assert_eq!(cfg.mode(), Mode::Auto);
+
+        let normal = parse_run_args(vec!["--normal".into()]).unwrap();
+        assert_eq!(normal.mode(), Mode::Normal);
+
+        let legacy_auto_approve = parse_run_args(vec!["--auto-approve".into()]).unwrap();
+        assert_eq!(legacy_auto_approve.mode(), Mode::Normal);
+    }
+
+    #[test]
     fn theme_prefers_explicit_then_stored_then_default() {
         assert_eq!(resolve_theme(None), "default");
         assert_eq!(resolve_theme(Some("mono".to_string())), "mono");
@@ -355,7 +370,8 @@ mod main_tests {
             )),
         };
         let settings = orca_harness_tools::SubagentDepth::default();
-        let extensions = subagent_extensions(&spawn, &ui, &mode, &PlanArea::new(), &settings, None);
+        let extensions =
+            subagent_extensions(&spawn, &ui, &mode, &PlanArea::new(), &settings, None, None);
         let names: Vec<&str> = extensions.iter().map(|ext| ext.name()).collect();
         assert!(names.contains(&"plan-mode"), "{names:?}");
         assert!(names.contains(&"truncation"), "{names:?}");
@@ -440,12 +456,9 @@ mod main_tests {
         assert!(planning.area.written().is_empty(), "a fresh list");
     }
 
-    /// `--plan` starts a session read-only; `--yolo` starts it with
-    /// approvals off. When both are given, plan wins: read-only and
-    /// unprompted is coherent, writable and unprompted by accident is
-    /// not.
+    /// Ambiguous startup combinations resolve toward the safer mode.
     #[test]
-    fn plan_and_yolo_flags_pick_the_mode() {
+    fn startup_flags_pick_the_safest_requested_mode() {
         let base = Config {
             provider: Provider::Local,
             model: "m".into(),
@@ -470,9 +483,11 @@ mod main_tests {
             no_session: true,
             theme: "default".into(),
             plan: false,
+            normal: false,
+            auto: false,
             yolo: false,
         };
-        assert_eq!(base.mode(), Mode::Normal);
+        assert_eq!(base.mode(), Mode::Auto);
         assert_eq!(
             Config {
                 plan: true,
@@ -483,16 +498,53 @@ mod main_tests {
         );
         assert_eq!(
             Config {
+                normal: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Normal
+        );
+        assert_eq!(
+            Config {
+                auto: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Auto
+        );
+        assert_eq!(
+            Config {
                 yolo: true,
                 ..base.clone()
             }
             .mode(),
             Mode::Yolo
         );
-        // Plan outranks yolo when both are asked for.
+        // Normal outranks auto/yolo, and plan outranks all three.
+        assert_eq!(
+            Config {
+                normal: true,
+                auto: true,
+                yolo: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Normal
+        );
+        assert_eq!(
+            Config {
+                auto: true,
+                yolo: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Auto
+        );
         assert_eq!(
             Config {
                 plan: true,
+                normal: true,
+                auto: true,
                 yolo: true,
                 ..base
             }

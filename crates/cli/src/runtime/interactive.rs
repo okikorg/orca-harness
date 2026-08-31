@@ -22,6 +22,7 @@ use orca_harness_tools::{
 };
 
 use crate::approval::Approval;
+use crate::auto_approval::AutoApproval;
 use crate::mode::{ModeHandle, PlanGate};
 use crate::msg::UiMsg;
 use crate::plan::PlanArea;
@@ -189,14 +190,20 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     for line in instruction_notices {
         let _ = ui_tx.send(UiMsg::Notice(line));
     }
-    // A session that starts in yolo says so once, up front. The status
-    // line keeps saying it for the rest of the session; this is the
-    // prose version, so the first thing on the transcript is honest
-    // about what will (not) be asked.
-    if cfg.mode().bypasses_approval() {
-        let _ = ui_tx.send(UiMsg::Notice(
-            "yolo mode · every gated tool runs without approval prompts".into(),
-        ));
+    // Modes that replace human approval say so once up front, and remain
+    // visible in the status line for the session.
+    match cfg.mode() {
+        crate::mode::Mode::Auto => {
+            let _ = ui_tx.send(UiMsg::Notice(
+                "auto mode · unresolved actions are reviewed automatically".into(),
+            ));
+        }
+        crate::mode::Mode::Yolo => {
+            let _ = ui_tx.send(UiMsg::Notice(
+                "yolo mode · every gated tool runs without approval prompts".into(),
+            ));
+        }
+        _ => {}
     }
     let build = {
         let cfg = cfg.clone();
@@ -336,6 +343,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         model,
         MemoryExtension::new(memory.clone(), memory_scope.clone()),
     ));
+    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone());
     let events = EventStream::from_fn({
         let ui = ui.clone();
         move |event| {
@@ -349,7 +357,8 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
-        .extension(PlanGate::new(mode.clone(), plan_area.clone()));
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(auto_approval.clone());
     if let Some(plugin_hooks) = plugin_hooks {
         agent = agent.extension_arc(plugin_hooks.clone());
     }
@@ -459,6 +468,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let subagent_plan = plan_area.clone();
     let subagent_settings = subagent_depth.clone();
     let subagent_plugin_hooks = plugin_hooks.clone();
+    let subagent_auto_approval = auto_approval.for_subagent();
     subagent = subagent.spawn_extensions(std::sync::Arc::new(move |spawn: &SubagentSpawn| {
         subagent_extensions(
             spawn,
@@ -467,6 +477,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             &subagent_plan,
             &subagent_settings,
             subagent_plugin_hooks.as_ref(),
+            Some(&subagent_auto_approval),
         )
     }));
     agent = agent.tool_arc(std::sync::Arc::new(subagent));

@@ -31,7 +31,7 @@ pub const HOTKEYS: &[HotkeySpec] = &[
     },
     HotkeySpec {
         keys: "Shift+Tab",
-        description: "cycle normal, plan, and yolo modes",
+        description: "cycle normal, plan, auto, and yolo modes",
         category: "Composer",
     },
     HotkeySpec {
@@ -291,7 +291,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "mode",
-        description: "pick a session mode (normal, plan read-only, yolo no-approvals); no argument opens the picker",
+        description: "pick a session mode (normal, plan, auto review, or yolo); no argument opens the picker",
         category: "Session",
         takes_args: true,
     },

@@ -78,9 +78,9 @@ impl Extension for Approval {
     }
 
     async fn before_tool(&self, call: &ToolCall) -> Result<ToolDecision, ExtensionError> {
-        // Yolo first: the whole point of the mode is that nothing asks,
-        // not even for a tool with a saved revocation or a fresh deny.
-        if self.mode.get().bypasses_approval() {
+        // Auto has its own final-input reviewer and yolo intentionally has
+        // no gate. Neither mode should also open the ordinary human prompt.
+        if self.mode.get().bypasses_human_approval() {
             return Ok(ToolDecision::Continue);
         }
         if !self.gated.contains(&call.name) || self.always_allowed(&call.name) {
@@ -313,9 +313,17 @@ mod tests {
         handle.await.unwrap();
     }
 
-    /// Plan and normal modes keep prompting: bypassing is yolo's job
-    /// alone. (In plan mode a mutating call is denied by the plan gate,
-    /// which registers first; whatever still reaches us gets asked.)
+    #[tokio::test]
+    async fn auto_mode_leaves_gated_calls_to_the_automatic_reviewer() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let approval = Approval::with_mode(ModeHandle::new(Mode::Auto), tx, "/test-ws".into());
+        let decision = approval.before_tool(&call("shell")).await.unwrap();
+        assert!(matches!(decision, ToolDecision::Continue));
+        assert!(rx.try_recv().is_err(), "auto must not open a human prompt");
+    }
+
+    /// Plan and normal modes keep prompting. Auto is covered separately
+    /// above; in plan mode the plan gate denies mutations before this hook.
     #[tokio::test]
     async fn non_yolo_modes_still_prompt() {
         let (tx, mut rx) = mpsc::unbounded_channel();

@@ -206,6 +206,8 @@ mod mode_rewind_todo_tests {
         // Setting the mode it is already in is not a toggle.
         slash_command(&mut app, "mode plan", &worker, 80);
         assert_eq!(mode.get(), Mode::Plan);
+        slash_command(&mut app, "mode auto", &worker, 80);
+        assert_eq!(mode.get(), Mode::Auto);
         slash_command(&mut app, "mode yolo", &worker, 80);
         assert_eq!(mode.get(), Mode::Yolo);
         slash_command(&mut app, "mode normal", &worker, 80);
@@ -229,7 +231,8 @@ mod mode_rewind_todo_tests {
         let mut app = app_with(mode.clone(), TodoList::new());
         slash_command(&mut app, "mode", &worker, 80);
 
-        // Down twice → yolo row, enter lands it with the loud notice.
+        // Down three times → yolo row, enter lands it with the loud notice.
+        handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
@@ -244,7 +247,8 @@ mod mode_rewind_todo_tests {
         let Some(Overlay::Mode { ref picker }) = app.overlay else {
             panic!("expected the mode picker");
         };
-        assert_eq!(picker.index(), 2);
+        assert_eq!(picker.index(), 3);
+        handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
@@ -332,7 +336,7 @@ mod mode_rewind_todo_tests {
     /// it silences every approval prompt, so its segment never
     /// abbreviates away either, and it reads as a warning.
     #[test]
-    fn plan_and_yolo_modes_show_in_the_status_line() {
+    fn non_normal_modes_show_in_the_status_line() {
         let mode = ModeHandle::default();
         let plan = crate::plan::PlanArea::new();
         assert_eq!(mode_segment(&mode, &plan), "");
@@ -346,6 +350,8 @@ mod mode_rewind_todo_tests {
         // Normal mode says nothing, whatever was written.
         mode.set(Mode::Normal);
         assert_eq!(mode_segment(&mode, &plan), "");
+        mode.set(Mode::Auto);
+        assert_eq!(mode_segment(&mode, &plan), " · auto");
         // Yolo keeps the warning up whatever else happens.
         mode.set(Mode::Yolo);
         assert_eq!(mode_segment(&mode, &plan), " · yolo");

@@ -32,6 +32,8 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut resume_id: Option<String> = None;
     let mut no_session = false;
     let mut plan = false;
+    let mut normal = false;
+    let mut auto = false;
     let mut yolo = false;
     let mut theme = std::env::var("ORCA_THEME").ok();
 
@@ -87,6 +89,8 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             "--resume" => resume_id = Some(value("--resume")?),
             "--no-session" => no_session = true,
             "--plan" => plan = true,
+            "--normal" => normal = true,
+            "--auto" => auto = true,
             "--yolo" => yolo = true,
             "--json" => json = true,
             "--auto-approve" => auto_approve = true,
@@ -156,6 +160,8 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         no_session,
         theme,
         plan,
+        normal,
+        auto,
         yolo,
     })
 }

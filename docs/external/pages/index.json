@@ -4,7 +4,7 @@
     "id": "start",
     "label": "Welcome",
     "title": "Your Orcacode field manual",
-    "lede": "Orcacode is the interactive terminal host for Orca Harness. It works inside a chosen workspace, asks before actions that change state, and keeps your work as a recoverable session."
+    "lede": "Orcacode is the interactive terminal host for Orca Harness. It works inside a chosen workspace, automatically reviews unresolved actions by default, and keeps your work as a recoverable session."
   },
   {
     "group": "GETTING STARTED",
@@ -26,6 +26,13 @@
     "label": "Plan mode",
     "title": "Investigate, then plan",
     "lede": "Plan mode is a read-only stance for exploration and design. It does not try to guess whether a shell command is safe; it allows only a small, explicit set of research tools."
+  },
+  {
+    "group": "WORK SAFELY",
+    "id": "auto-mode",
+    "label": "Auto mode",
+    "title": "Proceed without repeated prompts",
+    "lede": "Auto mode lets known-safe tools run immediately and asks a narrow model reviewer whether each unresolved exact action is clearly authorized by your root request."
   },
   {
     "group": "CONFIGURE",
