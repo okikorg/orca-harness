@@ -576,6 +576,9 @@ pub(crate) struct App {
     pub(crate) split_inspector_cache: Option<InspectorBodyCache>,
     pub(crate) inspector_mode: InspectorMode,
     pub(crate) split_scroll: u16,
+    /// Where the last frame drew the inspector, so the wheel can be routed
+    /// to it without the event loop re-deriving the split geometry.
+    pub(crate) inspector_area: Option<ratatui::layout::Rect>,
     /// Live inner activity of running subagents, keyed by spawn id.
     pub(crate) subagent_activity: HashMap<u64, SpawnActivity>,
     /// Resolved top-level worker identity retained until the work phase commits,

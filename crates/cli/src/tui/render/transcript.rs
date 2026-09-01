@@ -8,7 +8,7 @@ use crate::tui::components::activity_rail::{ActivityRail, ActivityRailKind};
 use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
 use crate::tui::components::subagent_row::SubagentRow;
 use crate::tui::components::tool_row::ToolRow;
-use crate::tui::components::transcript::{append_block, BlockSpacing};
+use crate::tui::components::transcript::{append_block, line_is_blank, BlockSpacing};
 use crate::tui::components::tree::{Connector, TreeBranch};
 use crate::tui::state::SubagentDisplay;
 use crate::view::{self, theme};
@@ -96,20 +96,53 @@ pub(crate) fn skill_mention_picker_lines(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
     projected_transcript_selected(app, width, None)
 }
 
+/// The whole projection as one vector: committed history plus the live
+/// tail. The renderer reads the two parts separately so the history is
+/// not copied on every frame; tests want the joined view.
+#[cfg(test)]
 pub(crate) fn projected_transcript_selected(
     app: &App,
     width: usize,
     selected_tool: Option<usize>,
 ) -> Vec<Line<'static>> {
-    let mut lines = app.transcript.clone();
-    if !app.running() {
+    let tail = projected_tail(app, width, selected_tool);
+    let mut lines = committed_transcript(app, !tail.is_empty()).to_vec();
+    lines.extend(tail);
+    lines
+}
+
+/// The committed transcript as the renderer reads it. When a live tail
+/// follows, trailing blank rows are left off so the tail's own spacing
+/// rule sets the gap, exactly as `append_block` would have popped them.
+pub(crate) fn committed_transcript(app: &App, tail_follows: bool) -> &[Line<'static>] {
+    let lines = app.transcript.as_slice();
+    if !tail_follows {
         return lines;
     }
+    let end = lines
+        .iter()
+        .rposition(|line| !line_is_blank(line))
+        .map_or(0, |index| index + 1);
+    &lines[..end]
+}
 
+/// The render-only projection of the in-progress turn: live activity and
+/// the streaming answer, spaced as if appended after the committed
+/// transcript. Empty when nothing is running or nothing has arrived yet.
+pub(crate) fn projected_tail(
+    app: &App,
+    width: usize,
+    selected_tool: Option<usize>,
+) -> Vec<Line<'static>> {
+    let mut tail = Vec::new();
+    if !app.running() {
+        return tail;
+    }
     let activity = activity_lines_selected(app, width, true, selected_tool);
     let answer = if !app.text.is_empty() {
         Some(app.text.as_str())
@@ -118,20 +151,19 @@ pub(crate) fn projected_transcript_selected(
             .as_deref()
             .filter(|text| !text.is_empty())
     };
-    if activity.is_empty() && answer.is_none() {
-        return lines;
-    }
-
-    append_block(&mut lines, activity, BlockSpacing::Section, None);
+    // What the committed transcript ends with, once its trailing blank
+    // rows are ignored: a row of content, or nothing at all.
+    let prior = (!committed_transcript(app, true).is_empty()).then_some(false);
+    append_block(&mut tail, activity, BlockSpacing::Section, prior);
     if let Some(answer) = answer {
         append_block(
-            &mut lines,
+            &mut tail,
             view::markdown_lines(answer, width, "  "),
             BlockSpacing::Section,
-            None,
+            prior,
         );
     }
-    lines
+    tail
 }
 
 fn identity_label(identity: &orca_harness_tools::SubagentIdentity) -> String {

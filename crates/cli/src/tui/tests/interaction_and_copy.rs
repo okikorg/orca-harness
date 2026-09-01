@@ -308,6 +308,8 @@ fn mouse_wheel_over_split_inspector_scrolls_only_the_inspector() {
     let mut app = test_app();
     app.view_mode = ViewMode::Split;
     let transcript_scroll = app.scroll;
+    // The wheel is routed by where the last frame drew the inspector.
+    rendered_rows(&mut app, 120, 24);
 
     handle_terminal_event(
         &mut app,

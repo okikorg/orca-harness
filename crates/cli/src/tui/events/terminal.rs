@@ -20,7 +20,7 @@ use super::super::input::{
     insert_clipboard_image, insert_paste, marker_ending_at, marker_starting_at, remove_marker,
 };
 use super::super::render::transcript_content_width;
-use super::super::state::{App, LocationPicker, Overlay, RunState, SkillMentionPicker, ViewMode};
+use super::super::state::{App, LocationPicker, Overlay, RunState, SkillMentionPicker};
 use super::super::PALETTE_ROWS;
 use super::super::{
     copy_command, expand_latest_work, expand_tool, handle_approval_key, handle_overlay_key,
@@ -44,9 +44,9 @@ pub(crate) fn handle_terminal_event(
     let key = match event {
         CtEvent::Key(key) => key,
         CtEvent::Mouse(mouse) => {
-            let split_boundary = ((width as u32 * 58) / 100) as u16;
-            let over_inspector =
-                app.view_mode == ViewMode::Split && width >= 100 && mouse.column >= split_boundary;
+            let over_inspector = app.inspector_area.is_some_and(|area| {
+                area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+            });
             match mouse.kind {
                 MouseEventKind::ScrollUp if over_inspector => {
                     app.split_scroll = app.split_scroll.saturating_sub(3)

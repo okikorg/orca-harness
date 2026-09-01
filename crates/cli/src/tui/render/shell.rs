@@ -4,7 +4,7 @@
 // returns `Vec<Line>`; the terminal loop in the parent `run`/`draw`
 // drives the actual frames.
 
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
@@ -33,45 +33,119 @@ use super::transcript::*;
 /// renderer asks the padded block for its inner width, so previews wrap to
 /// the real content box rather than compensating with scattered subtraction.
 const INSPECTOR_PADDING: Padding = Padding::right(1);
+/// Narrowest terminal that fits the inspector beside the transcript.
+pub(crate) const SPLIT_MIN_WIDTH: usize = 100;
+/// Shortest terminal that fits the inspector under the transcript.
+const STACK_MIN_HEIGHT: usize = 18;
 
-fn inspector_block(border_style: ratatui::style::Style) -> Block<'static> {
-    Block::default()
-        .borders(Borders::LEFT)
-        .border_style(border_style)
-        .padding(INSPECTOR_PADDING)
+/// Where the inspector goes in split view. Geometry is decided here once;
+/// the transcript wrap width and the wheel routing both follow it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SplitKind {
+    Off,
+    /// Inspector on the right, 42% of the width.
+    SideBySide,
+    /// Too narrow for a second column: inspector under the transcript.
+    Stacked,
 }
 
-fn inspector_content_width(area: ratatui::layout::Rect) -> usize {
-    inspector_block(ratatui::style::Style::default())
-        .inner(area)
-        .width as usize
+impl SplitKind {
+    pub(crate) fn side_by_side(mode: ViewMode, width: usize) -> bool {
+        mode == ViewMode::Split && width >= SPLIT_MIN_WIDTH
+    }
+
+    pub(crate) fn for_area(mode: ViewMode, width: usize, height: usize) -> Self {
+        if Self::side_by_side(mode, width) {
+            Self::SideBySide
+        } else if mode == ViewMode::Split && height >= STACK_MIN_HEIGHT {
+            Self::Stacked
+        } else {
+            Self::Off
+        }
+    }
+
+    /// `[conversation, inspector]`; both are the whole area when off.
+    fn areas(self, area: Rect) -> [Rect; 2] {
+        match self {
+            Self::SideBySide => {
+                Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+                    .areas(area)
+            }
+            Self::Stacked => {
+                Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(area)
+            }
+            Self::Off => [area, area],
+        }
+    }
+
+    fn block(self, border_style: ratatui::style::Style) -> Block<'static> {
+        let borders = match self {
+            Self::Stacked => Borders::TOP,
+            Self::SideBySide | Self::Off => Borders::LEFT,
+        };
+        Block::default()
+            .borders(borders)
+            .border_style(border_style)
+            .padding(INSPECTOR_PADDING)
+    }
+
+    fn content_width(self, area: Rect) -> usize {
+        self.block(ratatui::style::Style::default()).inner(area).width as usize
+    }
 }
+
+/// Rows the layout keeps for the conversation around the live region:
+/// three transcript rows, the composer gap and the status line.
+const RESERVED_ROWS: usize = 5;
 
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
     // Split the whole terminal first so the transcript, live rail, composer,
-    // and status share one left column and the inspector owns the full right.
-    let split_active = app.view_mode == ViewMode::Split && width >= 100;
-    let [left_root, inspector_area] = if split_active {
-        Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .areas(frame.area())
-    } else {
-        [frame.area(), frame.area()]
-    };
+    // and status share one column and the inspector owns the rest.
+    let split = SplitKind::for_area(app.view_mode, width, frame.area().height as usize);
+    let split_active = split != SplitKind::Off;
+    let [left_root, inspector_area] = split.areas(frame.area());
+    app.inspector_area = split_active.then_some(inspector_area);
     let left_width = left_root.width as usize;
-    let live = live_lines(app, left_width);
+
+    let placeholder = if app.approval.is_some() {
+        "answering approval above"
+    } else if app.ask.is_some() {
+        "answering agent clarification above"
+    } else if app.running() {
+        "type another prompt to queue"
+    } else if !app.prompt_queue.is_empty() {
+        "queue paused · enter to resume"
+    } else {
+        "ask anything · @ add files · /help commands"
+    };
+    let pill_spans = super::super::input::image_marker_spans(&app.pastes, &app.composer);
+    let composer = Composer::new(
+        &app.composer,
+        app.cursor,
+        placeholder,
+        left_width,
+        theme().accent,
+        theme().dim,
+        &pill_spans,
+    )
+    .render();
+    let composer_height = composer.lines.len();
+
+    let live = live_region(app, left_width);
     // Let a todo rail use the available height rather than silently
-    // clipping later steps. Preserve three transcript rows plus the gap,
-    // composer, and status rows on short terminals.
-    let live_height = live
-        .len()
-        .min((left_root.height as usize).saturating_sub(6)) as u16;
+    // clipping later steps, while keeping the reserved rows and the
+    // composer on short terminals.
+    let live_height = live.lines.len().min(
+        (left_root.height as usize).saturating_sub(RESERVED_ROWS + composer_height),
+    );
     let [transcript_area, live_area, _composer_gap_area, composer_area, status_area] =
         Layout::vertical([
             Constraint::Min(3),
-            Constraint::Length(live_height),
+            Constraint::Length(live_height as u16),
             Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(composer_height as u16),
             Constraint::Length(1),
         ])
         .areas(left_root);
@@ -79,6 +153,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // Transcript: committed history plus a render-only projection of the
     // in-progress turn. Deltas therefore appear in their final location
     // instead of streaming through the temporary area and jumping here.
+    // The committed part is read in place; only the live tail is built
+    // per frame.
     let height = transcript_area.height as usize;
     let transcript_width = transcript_area.width as usize;
     let selected_tool = (split_active && !app.activity_tools.is_empty()).then(|| {
@@ -86,11 +162,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .unwrap_or_else(|| app.activity_tools.len().saturating_sub(1))
             .min(app.activity_tools.len().saturating_sub(1))
     });
-    let projected = if selected_tool.is_some() {
-        projected_transcript_selected(app, transcript_width, selected_tool)
-    } else {
-        projected_transcript(app, transcript_width)
-    };
+    let tail = projected_tail(app, transcript_width, selected_tool);
+    let projected_len = committed_transcript(app, !tail.is_empty()).len() + tail.len();
     // Connector startup notices are transcript history, but they should not
     // displace the empty-state welcome before the user begins a conversation.
     // Keep them recorded in the background and reveal the transcript on the
@@ -105,14 +178,18 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .lines(full_height, height, transcript_width);
         frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
     } else {
-        let max_scroll = projected.len().saturating_sub(height);
+        let max_scroll = projected_len.saturating_sub(height);
         stabilize_transcript_scroll(app, max_scroll);
-        let end = projected.len().saturating_sub(app.scroll);
+        let end = projected_len.saturating_sub(app.scroll);
         let start = end.saturating_sub(height);
-        frame.render_widget(
-            Paragraph::new(Text::from(projected[start..end].to_vec())),
-            transcript_area,
-        );
+        let window: Vec<Line<'static>> = committed_transcript(app, !tail.is_empty())
+            .iter()
+            .chain(tail.iter())
+            .skip(start)
+            .take(end - start)
+            .cloned()
+            .collect();
+        frame.render_widget(Paragraph::new(Text::from(window)), transcript_area);
     }
 
     if split_active {
@@ -120,7 +197,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .and_then(|selected| app.activity_tools.get(selected))
             .or(app.split_snapshot.as_ref());
         let border_style = theme().dim;
-        let inspector_width = inspector_content_width(inspector_area);
+        let inspector_width = split.content_width(inspector_area);
         let (header, body) = if let Some(tool) = inspected {
             let complete = tool.elapsed.is_some();
             let cache_valid = app.split_inspector_cache.as_ref().is_some_and(|cache| {
@@ -161,7 +238,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .saturating_sub(body_area.height as usize)
             .min(u16::MAX as usize) as u16;
         app.split_scroll = app.split_scroll.min(max_scroll);
-        let divider = || inspector_block(border_style);
+        let divider = || split.block(border_style);
         frame.render_widget(
             Paragraph::new(Text::from(header)).block(divider()),
             header_area,
@@ -174,32 +251,16 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
 
-    frame.render_widget(Paragraph::new(Text::from(live)), live_area);
+    frame.render_widget(
+        Paragraph::new(Text::from(live.window(live_height).to_vec())),
+        live_area,
+    );
 
-    let placeholder = if app.approval.is_some() {
-        "answering approval above"
-    } else if app.ask.is_some() {
-        "answering agent clarification above"
-    } else if app.running() {
-        "type another prompt to queue"
-    } else if !app.prompt_queue.is_empty() {
-        "queue paused · enter to resume"
-    } else {
-        "ask anything · @ add files · /help commands"
-    };
-    let pill_spans = super::super::input::image_marker_spans(&app.pastes, &app.composer);
-    let composer = Composer::new(
-        &app.composer,
-        app.cursor,
-        placeholder,
-        composer_area.width as usize,
-        theme().accent,
-        theme().dim,
-        &pill_spans,
-    )
-    .render();
-    frame.render_widget(Paragraph::new(composer.line), composer_area);
-    frame.set_cursor_position((composer_area.x + composer.cursor_x, composer_area.y));
+    frame.render_widget(Paragraph::new(Text::from(composer.lines)), composer_area);
+    frame.set_cursor_position((
+        composer_area.x + composer.cursor_x,
+        composer_area.y + composer.cursor_y,
+    ));
 
     // Status line with contextual hints.
     let state = if app.approval.is_some() {
@@ -299,7 +360,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 pub(crate) fn transcript_content_width(app: &App, terminal_width: usize) -> usize {
-    if app.view_mode == ViewMode::Split && terminal_width >= 100 {
+    if SplitKind::side_by_side(app.view_mode, terminal_width) {
         terminal_width.saturating_mul(58) / 100
     } else {
         terminal_width
@@ -434,20 +495,60 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+/// Which end of the live region survives when it is taller than the space.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LiveAnchor {
+    /// Prompts, overlays and pickers are read from their header down.
+    Top,
+    /// While a run is in progress the spinner row at the foot is what the
+    /// user watches, so a tall queue or todo list gives up its head.
+    Bottom,
+}
+
+pub(crate) struct LiveRegion {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) anchor: LiveAnchor,
+}
+
+impl LiveRegion {
+    fn top(lines: Vec<Line<'static>>) -> Self {
+        Self {
+            lines,
+            anchor: LiveAnchor::Top,
+        }
+    }
+
+    /// The rows that fit in `height`, taken from the anchored end.
+    pub(crate) fn window(&self, height: usize) -> &[Line<'static>] {
+        let len = self.lines.len();
+        match self.anchor {
+            LiveAnchor::Top => &self.lines[..height.min(len)],
+            LiveAnchor::Bottom => &self.lines[len.saturating_sub(height)..],
+        }
+    }
+}
+
+/// The pinned live region's rows; see [`live_region`] for the anchoring.
+pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    live_region(app, width).lines
+}
+
 /// The pinned live region: approval prompt beats ask form, overlays, palette,
 /// then run status. Streaming content itself is projected into the main transcript.
-pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
     let t = theme();
     if let Some(request) = &app.approval {
-        return ApprovalPrompt {
-            tool_name: &request.tool_name,
-            detail: &request.detail,
-            yes_no: request.yes_no,
-        }
-        .lines(width);
+        return LiveRegion::top(
+            ApprovalPrompt {
+                tool_name: &request.tool_name,
+                detail: &request.detail,
+                yes_no: request.yes_no,
+            }
+            .lines(width),
+        );
     }
     if let Some(ask) = &app.ask {
-        return ask.lines(width);
+        return LiveRegion::top(ask.lines(width));
     }
     if let Some(overlay) = &app.overlay {
         let mut lines = match overlay {
@@ -509,10 +610,10 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     .into();
             }
         }
-        return lines;
+        return LiveRegion::top(lines);
     }
     if app.palette_query().is_some() {
-        return palette_lines(app, PALETTE_ROWS + 2, width);
+        return LiveRegion::top(palette_lines(app, PALETTE_ROWS + 2, width));
     }
     if app.running() {
         let mut lines = queue_lines(app, width);
@@ -546,14 +647,20 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 ),
             ]));
         }
-        return lines;
+        return LiveRegion {
+            lines,
+            anchor: LiveAnchor::Bottom,
+        };
     }
     let mut lines = queue_lines(app, width);
     lines.extend(todo_lines(&app.cfg.todos, width));
     if let Some(summary) = &app.last_turn_summary {
         lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
     }
-    lines
+    LiveRegion {
+        lines,
+        anchor: LiveAnchor::Bottom,
+    }
 }
 
 #[cfg(test)]
@@ -562,12 +669,47 @@ mod tests {
 
     #[test]
     fn inspector_content_width_comes_from_the_padded_block() {
-        let area = ratatui::layout::Rect::new(0, 0, 50, 20);
-        let block = inspector_block(ratatui::style::Style::default());
+        let area = Rect::new(0, 0, 50, 20);
+        let block = SplitKind::SideBySide.block(ratatui::style::Style::default());
         assert_eq!(
-            inspector_content_width(area),
+            SplitKind::SideBySide.content_width(area),
             block.inner(area).width as usize
         );
         assert_eq!(block.inner(area).right(), area.right() - 1);
+    }
+
+    #[test]
+    fn split_falls_back_to_stacking_on_narrow_terminals() {
+        assert_eq!(
+            SplitKind::for_area(ViewMode::Split, 120, 24),
+            SplitKind::SideBySide
+        );
+        assert_eq!(
+            SplitKind::for_area(ViewMode::Split, 90, 30),
+            SplitKind::Stacked
+        );
+        assert_eq!(SplitKind::for_area(ViewMode::Split, 90, 12), SplitKind::Off);
+        assert_eq!(SplitKind::for_area(ViewMode::Classic, 200, 60), SplitKind::Off);
+        let [top, bottom] = SplitKind::Stacked.areas(Rect::new(0, 0, 90, 30));
+        assert_eq!(top.width, 90);
+        assert_eq!(top.height + bottom.height, 30);
+    }
+
+    #[test]
+    fn a_running_live_region_keeps_its_foot() {
+        let region = LiveRegion {
+            lines: (0..5).map(|n| Line::from(n.to_string())).collect(),
+            anchor: LiveAnchor::Bottom,
+        };
+        let shown: Vec<String> = region
+            .window(2)
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert_eq!(shown, ["3", "4"]);
+        let region = LiveRegion::top(region.lines);
+        assert_eq!(region.window(2).len(), 2);
+        assert_eq!(region.window(2)[0].to_string(), "0");
+        assert_eq!(region.window(9).len(), 5);
     }
 }

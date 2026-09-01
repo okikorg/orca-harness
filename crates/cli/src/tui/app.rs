@@ -82,6 +82,7 @@ impl App {
             split_inspector_cache: None,
             inspector_mode: super::state::InspectorMode::stored(),
             split_scroll: 0,
+            inspector_area: None,
             subagent_activity: std::collections::HashMap::new(),
             subagent_display: std::collections::HashMap::new(),
             palette_picker: ListPicker::new(super::command_catalog::COMMANDS.len()),
