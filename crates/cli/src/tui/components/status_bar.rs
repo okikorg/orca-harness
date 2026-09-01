@@ -28,11 +28,12 @@ const SEPARATOR: &str = " · ";
 /// Cells between the last segment and a right-anchored trailing segment.
 const TRAILING_GAP: usize = 2;
 
+/// One piece of the bar. Every segment renders in the bar's own style:
+/// presence, not paint, is the signal.
 #[derive(Clone, Debug)]
 pub struct Segment {
     text: String,
     priority: u8,
-    style: Option<Style>,
 }
 
 impl Segment {
@@ -40,16 +41,7 @@ impl Segment {
         Self {
             text: text.into(),
             priority,
-            style: None,
         }
-    }
-
-    /// Paint this segment differently from the bar. Presence, not paint,
-    /// is the normal signal; reserve this for a state the user must not
-    /// miss.
-    pub fn styled(mut self, style: Style) -> Self {
-        self.style = Some(style);
-        self
     }
 
     fn width(&self) -> usize {
@@ -133,18 +125,12 @@ impl StatusBar {
             if index > 0 {
                 spans.push(Span::styled(SEPARATOR, style));
             }
-            spans.push(Span::styled(
-                segment.text.clone(),
-                segment.style.unwrap_or(style),
-            ));
+            spans.push(Span::styled(segment.text.clone(), style));
         }
         if let Some(segment) = trailing {
             let pad = slack.saturating_sub(segment.width()).max(TRAILING_GAP);
             spans.push(Span::styled(" ".repeat(pad), style));
-            spans.push(Span::styled(
-                segment.text.clone(),
-                segment.style.unwrap_or(style),
-            ));
+            spans.push(Span::styled(segment.text.clone(), style));
         }
         Line::from(spans)
     }
@@ -180,7 +166,9 @@ mod tests {
         let line = bar().line(80, Style::default());
         let text = text(&line);
         assert!(
-            text.starts_with(" model · effort high · idle · plan mode · ctx 10% · todo 1/3 · enter send"),
+            text.starts_with(
+                " model · effort high · idle · plan mode · ctx 10% · todo 1/3 · enter send"
+            ),
             "{text}"
         );
         assert!(text.ends_with("repo"), "{text}");

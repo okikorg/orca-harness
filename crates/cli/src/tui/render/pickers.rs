@@ -3,8 +3,8 @@ use ratatui::text::{Line, Span};
 use crate::msg::{Provider, ProviderAuth};
 use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
-use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
 use crate::tui::components::section::Section;
+use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
 use crate::view::{self, theme};
 
 use super::super::format::age_label;

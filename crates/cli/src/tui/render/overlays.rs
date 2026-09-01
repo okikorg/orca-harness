@@ -107,7 +107,7 @@ pub(crate) fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<
     }
 
     let rows = height.saturating_sub(2).max(1);
-    let mut picker = app.palette_picker;
+    let mut picker = app.palette_picker.clone();
     picker.set_len(filtered.len());
     picker.windowed_table_lines(
         "Commands · type to filter · →/enter run · tab complete · esc close",

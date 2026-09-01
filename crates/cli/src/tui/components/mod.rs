@@ -13,6 +13,6 @@ pub mod section;
 pub mod status_bar;
 pub mod subagent_row;
 pub mod tool_row;
-pub mod tree;
 pub mod transcript;
+pub mod tree;
 pub mod welcome;

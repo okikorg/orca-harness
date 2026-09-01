@@ -89,7 +89,10 @@ impl CodePreview<'_> {
                         format!(
                             "{}{}",
                             self.indent,
-                            view::truncate_line(line, self.width.saturating_sub(view::cell_width(self.indent)))
+                            view::truncate_line(
+                                line,
+                                self.width.saturating_sub(view::cell_width(self.indent))
+                            )
                         ),
                         self.plain_style,
                     ))

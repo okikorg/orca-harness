@@ -42,8 +42,10 @@ pub fn progress_list(label: &str, items: &[ProgressItem<'_>], width: usize) -> V
             ProgressState::Pending => ("□", t.dim),
         };
         let prefix = format!("{}{marker} ", branch.prefix());
-        let content =
-            view::truncate_line(item.content, width.saturating_sub(view::cell_width(&prefix)));
+        let content = view::truncate_line(
+            item.content,
+            width.saturating_sub(view::cell_width(&prefix)),
+        );
         lines.push(Line::from(vec![
             Span::styled(prefix, style),
             Span::styled(content, style),

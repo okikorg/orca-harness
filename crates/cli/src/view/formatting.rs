@@ -443,7 +443,7 @@ pub fn take_cells(s: &str, max: usize) -> String {
 
 /// The transcript line announcing a tool call, e.g. `shell $ cargo test`
 /// or `read_file src/main.rs`.
-pub(super) fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+pub fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     if spans_width(&spans) <= max {
         return spans;
     }

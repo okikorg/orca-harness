@@ -31,13 +31,12 @@ impl ApprovalPrompt<'_> {
         }
     }
 
-    /// The compact form of the choices for the status hint.
+    /// The status hint: the two ends of the legend, short enough to
+    /// survive a narrow bar. The prompt above carries every choice.
     pub fn hint(&self) -> String {
-        self.choices()
-            .iter()
-            .map(|(key, label)| format!("{key} {label}"))
-            .collect::<Vec<_>>()
-            .join(" · ")
+        let choices = self.choices();
+        let (first, last) = (choices[0], choices[choices.len() - 1]);
+        format!("{} {} · {} {}", first.0, first.1, last.0, last.1)
     }
 
     pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
@@ -109,7 +108,11 @@ mod tests {
         assert!(lines.iter().all(|line| line.width() <= 60), "{lines:?}");
         let key_rows = lines
             .iter()
-            .filter(|line| line.spans.iter().any(|span| span.content == "y" || span.content == "n"))
+            .filter(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content == "y" || span.content == "n")
+            })
             .count();
         assert_eq!(key_rows, 2, "the four choices split across two rows");
     }
@@ -119,5 +122,7 @@ mod tests {
         let mut prompt = prompt();
         prompt.yes_no = true;
         assert_eq!(prompt.hint(), "y yes · n no");
+        prompt.yes_no = false;
+        assert_eq!(prompt.hint(), "y allow once · n deny");
     }
 }

@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
-use crate::tui::components::composer::Composer;
 use crate::tui::components::approval::ApprovalPrompt;
+use crate::tui::components::composer::Composer;
 use crate::tui::components::status_bar::{self, Segment, StatusBar};
 use crate::tui::components::tree::TreeBranch;
 use crate::tui::components::welcome::Welcome;
@@ -91,7 +91,9 @@ impl SplitKind {
     }
 
     fn content_width(self, area: Rect) -> usize {
-        self.block(ratatui::style::Style::default()).inner(area).width as usize
+        self.block(ratatui::style::Style::default())
+            .inner(area)
+            .width as usize
     }
 }
 
@@ -137,9 +139,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // Let a todo rail use the available height rather than silently
     // clipping later steps, while keeping the reserved rows and the
     // composer on short terminals.
-    let live_height = live.lines.len().min(
-        (left_root.height as usize).saturating_sub(RESERVED_ROWS + composer_height),
-    );
+    let live_height = live
+        .lines
+        .len()
+        .min((left_root.height as usize).saturating_sub(RESERVED_ROWS + composer_height));
     let [transcript_area, live_area, _composer_gap_area, composer_area, status_area] =
         Layout::vertical([
             Constraint::Min(3),
@@ -343,7 +346,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         status.push(Segment::new(stat, status_bar::STATS));
     }
     status
-        .push(Segment::new(todo_segment(&app.cfg.todos), status_bar::COUNTS))
+        .push(Segment::new(
+            todo_segment(&app.cfg.todos),
+            status_bar::COUNTS,
+        ))
         .push(Segment::new(
             queue_segment(app.prompt_queue.len()),
             status_bar::COUNTS,
@@ -689,7 +695,10 @@ mod tests {
             SplitKind::Stacked
         );
         assert_eq!(SplitKind::for_area(ViewMode::Split, 90, 12), SplitKind::Off);
-        assert_eq!(SplitKind::for_area(ViewMode::Classic, 200, 60), SplitKind::Off);
+        assert_eq!(
+            SplitKind::for_area(ViewMode::Classic, 200, 60),
+            SplitKind::Off
+        );
         let [top, bottom] = SplitKind::Stacked.areas(Rect::new(0, 0, 90, 30));
         assert_eq!(top.width, 90);
         assert_eq!(top.height + bottom.height, 30);

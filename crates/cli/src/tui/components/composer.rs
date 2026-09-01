@@ -35,7 +35,6 @@ pub struct ComposerRender {
 struct Cell {
     ch: char,
     row: usize,
-    col: usize,
     /// Char index into the composer text.
     index: usize,
 }
@@ -62,7 +61,9 @@ impl<'a> Composer<'a> {
     }
 
     fn inner_width(&self) -> usize {
-        self.width.saturating_sub(view::cell_width(SPINE) + 1).max(8)
+        self.width
+            .saturating_sub(view::cell_width(SPINE) + 1)
+            .max(8)
     }
 
     /// Place every char on a row and column; the cursor sits after the
@@ -83,7 +84,7 @@ impl<'a> Composer<'a> {
             if index == cursor {
                 (cursor_row, cursor_col) = (row, col);
             }
-            cells.push(Cell { ch, row, col, index });
+            cells.push(Cell { ch, row, index });
             col += w;
         }
         if cursor == cells.len() {
@@ -219,12 +220,28 @@ mod tests {
     fn very_long_input_scrolls_rows_to_the_cursor() {
         let long: String = (0..90).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
         // width 12 → 9 chars per row → 10 rows; only six show.
-        let tail = Composer::new(&long, 90, "unused", 12, Style::default(), Style::default(), &[])
-            .render();
+        let tail = Composer::new(
+            &long,
+            90,
+            "unused",
+            12,
+            Style::default(),
+            Style::default(),
+            &[],
+        )
+        .render();
         assert_eq!(tail.lines.len(), COMPOSER_MAX_ROWS);
         assert_eq!(tail.cursor_y, (COMPOSER_MAX_ROWS - 1) as u16);
-        let head = Composer::new(&long, 0, "unused", 12, Style::default(), Style::default(), &[])
-            .render();
+        let head = Composer::new(
+            &long,
+            0,
+            "unused",
+            12,
+            Style::default(),
+            Style::default(),
+            &[],
+        )
+        .render();
         assert_eq!(text(&head.lines[0]), "│ abcdefghi");
         assert_eq!(head.cursor_y, 0);
     }

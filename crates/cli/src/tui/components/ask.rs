@@ -269,13 +269,15 @@ impl AskForm {
                         ),
                     ]));
                     if let Some(description) = &option.description {
-                        lines.push(Line::from(Span::styled(
-                            format!(
-                                "            {}",
-                                view::truncate_line(description, width.saturating_sub(12))
-                            ),
-                            t.dim,
-                        )));
+                        // The explanation the agent wrote is the point of
+                        // the option: wrap it rather than cut it.
+                        let description = view::sanitize_cells(description);
+                        for part in textwrap::wrap(&description, width.saturating_sub(12).max(16)) {
+                            lines.push(Line::from(Span::styled(
+                                format!("            {part}"),
+                                t.dim,
+                            )));
+                        }
                     }
                 }
             }
@@ -289,7 +291,13 @@ impl AskForm {
                 if active { t.accent } else { t.dim },
             ),
             Span::styled("Other", if active { t.strong } else { t.dim }),
-            Span::styled(" · optional answer outside these choices", t.dim),
+            Span::styled(
+                view::truncate_line(
+                    " · optional answer outside these choices",
+                    width.saturating_sub(9),
+                ),
+                t.dim,
+            ),
         ]));
         let additional = if draft.additional_context.is_empty() {
             "Type another answer or requirement…"
@@ -308,7 +316,10 @@ impl AskForm {
             ),
         ]));
         lines.push(Line::from(Span::styled(
-            "    ↑↓ question · ←→ option · space choose · tab next topic · enter send · esc cancel",
+            view::truncate_line(
+                "    ↑↓ question · ←→ option · space choose · tab next topic · enter send · esc cancel",
+                width,
+            ),
             t.dim,
         )));
         lines
@@ -375,5 +386,24 @@ mod tests {
         assert!(text.contains("□ Scope"));
         assert!(text.contains("Other · optional answer outside these choices"));
         assert!(text.contains("Type another answer"));
+    }
+
+    #[test]
+    fn long_option_descriptions_wrap_instead_of_truncating() {
+        let lines = form().lines(40);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert!(lines.iter().all(|line| line.width() <= 40), "{text:?}");
+        assert!(
+            text.iter().any(|line| line.contains("production support")),
+            "the end of the description is still there: {text:?}"
+        );
     }
 }

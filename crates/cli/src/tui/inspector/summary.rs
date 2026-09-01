@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::tui::components::inspector::{
     inspector_fields, inspector_text, CodePreview, INSPECTOR_BODY_INDENT,
 };
-use crate::tui::components::section::Section;
 use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
+use crate::tui::components::section::Section;
 use crate::view::{self, theme};
 
 use super::{inspector_size_label, language_for_path, limit_inspector_preview, ToolActivity};
