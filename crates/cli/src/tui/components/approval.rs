@@ -3,6 +3,7 @@
 use ratatui::text::{Line, Span};
 
 use super::inspector::spine_text;
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 pub struct ApprovalPrompt<'a> {
@@ -44,7 +45,7 @@ impl ApprovalPrompt<'_> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
-                Span::styled("  ? ", t.warn),
+                Span::styled(format!("  {} ", glyphs().attention), t.warn),
                 Span::styled("approval required", t.warn),
                 Span::styled(format!(" · {}", self.tool_name), t.dim),
             ]),

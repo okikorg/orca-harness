@@ -1,9 +1,9 @@
 //! Standard single-row application status bar.
 //!
 //! Segments carry a priority. When the row does not fit, the lowest
-//! priority leaves first, so a narrow terminal keeps the run state, the
-//! mode, the context gauge and the key hint, and gives up the reasoning
-//! effort, the background stats and the counts. The workspace is anchored
+//! priority leaves first, so a narrow terminal keeps the action-required
+//! state, the mode, the context gauge and the key hint, and gives up the
+//! reasoning effort, the background stats and the counts. The workspace is anchored
 //! at the right edge. Only when nothing droppable is left does the row
 //! truncate.
 
@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 
 use crate::view;
 
-/// Never dropped: the run state and the mode.
+/// Never dropped: an action-required state or non-normal mode.
 pub const KEEP: u8 = u8::MAX;
 pub const CONTEXT: u8 = 8;
 pub const HINT: u8 = 7;
@@ -33,6 +33,8 @@ const TRAILING_GAP: usize = 2;
 #[derive(Clone, Debug)]
 pub struct Segment {
     text: String,
+    /// A shorter rendering the bar falls back to before dropping anything.
+    compact: Option<String>,
     priority: u8,
 }
 
@@ -40,8 +42,20 @@ impl Segment {
     pub fn new(text: impl Into<String>, priority: u8) -> Self {
         Self {
             text: text.into(),
+            compact: None,
             priority,
         }
+    }
+
+    /// A shorter form to show when the row is tight. Decoration gives way
+    /// before information: every compact form is taken before the first
+    /// segment is dropped.
+    pub fn with_compact(mut self, compact: impl Into<String>) -> Self {
+        let compact = compact.into();
+        if compact != self.text {
+            self.compact = Some(compact);
+        }
+        self
     }
 
     fn width(&self) -> usize {
@@ -78,7 +92,7 @@ impl StatusBar {
     }
 
     pub fn line(&self, width: usize, style: Style) -> Line<'static> {
-        let mut kept: Vec<&Segment> = self.segments.iter().collect();
+        let mut kept: Vec<Segment> = self.segments.clone();
         let mut trailing = self.trailing.as_ref();
         loop {
             let body = 1
@@ -87,6 +101,13 @@ impl StatusBar {
             let total = body + trailing.map_or(0, |segment| TRAILING_GAP + segment.width());
             if total <= width {
                 return self.assemble(&kept, trailing, width.saturating_sub(body), style);
+            }
+            // Compact forms first, in bar order, so a tight row loses its
+            // decoration (the context meter) before its key hints, and
+            // both before any segment.
+            if let Some(segment) = kept.iter_mut().find(|segment| segment.compact.is_some()) {
+                segment.text = segment.compact.take().expect("checked above");
+                continue;
             }
             // Drop the lowest priority; on a tie, the rightmost goes first.
             let lowest = kept
@@ -115,7 +136,7 @@ impl StatusBar {
 
     fn assemble(
         &self,
-        kept: &[&Segment],
+        kept: &[Segment],
         trailing: Option<&Segment>,
         slack: usize,
         style: Style,
@@ -159,6 +180,20 @@ mod tests {
             .push(Segment::new("enter send", HINT))
             .trailing(Segment::new("repo", WORKSPACE));
         bar
+    }
+
+    #[test]
+    fn compact_forms_give_way_before_any_segment_is_dropped() {
+        let mut bar = StatusBar::new();
+        bar.push(Segment::new("idle", KEEP))
+            .push(Segment::new("ctx [==      ] 30%", CONTEXT).with_compact("ctx 30%"))
+            .push(Segment::new("effort high", EFFORT));
+        let wide = text(&bar.line(60, Style::default()));
+        assert!(wide.contains("ctx [==      ] 30% · effort high"), "{wide}");
+        let tight = text(&bar.line(30, Style::default()));
+        assert_eq!(tight.trim_end(), " idle · ctx 30% · effort high");
+        let tighter = text(&bar.line(16, Style::default()));
+        assert_eq!(tighter.trim_end(), " idle · ctx 30%");
     }
 
     #[test]

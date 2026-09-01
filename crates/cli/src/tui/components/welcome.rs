@@ -11,6 +11,7 @@ pub struct Welcome<'a> {
 }
 
 impl Welcome<'_> {
+    /// The card, centred in the terminal and clipped to the transcript area.
     pub fn lines(&self, full_height: usize, clip: usize, width: usize) -> Vec<Line<'static>> {
         let t = theme();
         let available_width = width.saturating_sub(4).min(64);
@@ -37,10 +38,9 @@ impl Welcome<'_> {
                 Span::styled("› ", t.accent),
                 Span::styled("Describe a task to begin", t.strong),
             ]),
-            Line::from(Span::styled(
-                "  /help commands · /models switch model",
-                t.dim,
-            )),
+            row("/help", "commands"),
+            row("/models", "switch model"),
+            row("/mode", "plan, auto review, yolo"),
         ];
         let content_width = content.iter().map(Line::width).max().unwrap_or(0);
         let indent = " ".repeat(width.saturating_sub(content_width) / 2);
@@ -50,7 +50,9 @@ impl Welcome<'_> {
             spans.extend(line.spans);
             Line::from(spans)
         });
-        let top = (full_height.saturating_sub(6) / 2).min(clip.saturating_sub(6));
+        let content: Vec<Line<'static>> = content.collect();
+        let rows = content.len();
+        let top = (full_height.saturating_sub(rows) / 2).min(clip.saturating_sub(rows));
         std::iter::repeat_n(Line::from(""), top)
             .chain(content)
             .collect()

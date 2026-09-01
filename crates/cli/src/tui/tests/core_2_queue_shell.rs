@@ -267,21 +267,20 @@ fn run_done_reports_turn_duration_and_tool_calls() {
             80,
         );
     }
+    app.turn_tokens_in = 12_004;
+    app.turn_tokens_out = 611;
     handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
-    let summary = app.last_turn_summary.clone().expect("summary recorded");
-    assert!(summary.starts_with("Turn took"), "{summary}");
-    assert!(summary.contains("s and took 2 tool calls"), "{summary}");
-    assert!(
-        !pending_texts(&app).iter().any(|t| t.contains("Turn took")),
-        "summary stays out of the transcript"
-    );
-    let rail: Vec<String> = live_lines(&app, 80)
+    let texts = pending_texts(&app);
+    let footer = texts
         .iter()
-        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-        .collect();
+        .rev()
+        .find(|t| !t.trim().is_empty())
+        .expect("footer is the last transcript row");
+    assert!(footer.starts_with("  done · "), "{footer}");
+    assert!(footer.ends_with(" · 2 tools · ↑12.0k ↓611"), "{footer}");
     assert!(
-        rail.iter().any(|t| t.contains(&summary)),
-        "summary rendered in the rail above the composer: {rail:?}"
+        live_lines(&app, 80).is_empty(),
+        "nothing floats above the composer once the turn is over"
     );
 
     let mut failed = test_app();
@@ -296,7 +295,7 @@ fn run_done_reports_turn_duration_and_tool_calls() {
         80,
     );
     assert!(
-        failed.last_turn_summary.is_none(),
-        "no summary on an interrupted run"
+        !pending_texts(&failed).iter().any(|t| t.contains("done · ")),
+        "no footer on an interrupted run"
     );
 }

@@ -173,6 +173,9 @@ pub(super) fn inline_spans(text: &str) -> Vec<(String, Style)> {
     let mut code = false;
     let mut index = 0;
 
+    // Without color, italic is all that separates `code` from prose, and
+    // many terminals do not render italic; the backticks stay in that case.
+    let keep_ticks = super::theme_name() == super::ThemeName::Mono;
     let flush = |segments: &mut Vec<(String, Style)>, buffer: &mut String, bold, code| {
         if buffer.is_empty() {
             return;
@@ -181,7 +184,13 @@ pub(super) fn inline_spans(text: &str) -> Vec<(String, Style)> {
         if bold {
             style = style.add_modifier(Modifier::BOLD);
         }
-        segments.push((std::mem::take(buffer), style));
+        let text = if code && keep_ticks {
+            format!("`{buffer}`")
+        } else {
+            buffer.clone()
+        };
+        buffer.clear();
+        segments.push((text, style));
     };
 
     while index < text.len() {

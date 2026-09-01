@@ -18,6 +18,7 @@ use crossterm::event::KeyCode;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 /// One row action an overlay offers beyond enter-to-select.
@@ -281,7 +282,7 @@ impl ListPicker {
             .skip(window.start)
         {
             let is_selected = index == selected;
-            let marker = if is_selected { "  ▸ " } else { "    " };
+            let marker = format!("  {} ", if is_selected { glyphs().cursor } else { " " });
             let mut spans = vec![Span::styled(
                 marker,
                 if is_selected { t.select } else { t.dim },

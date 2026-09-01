@@ -226,6 +226,8 @@ pub(crate) enum Overlay {
     Mode { picker: ListPicker },
     /// Vertical spacing between transcript sections.
     TranscriptSpacing { picker: ListPicker },
+    /// The mark vocabulary: minimal or glyph.
+    Style { picker: ListPicker },
     /// Default split Tool Inspector rendering.
     Inspector { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
@@ -313,7 +315,7 @@ impl SubagentSetting {
 
 /// Rows in the settings overlay: provider, model, theme, transcript view,
 /// api key, approvals.
-pub(crate) const SETTINGS_ROWS: usize = 8;
+pub(crate) const SETTINGS_ROWS: usize = 9;
 
 /// Row actions in the /sessions picker (space arms them).
 pub(crate) const SESSION_ACTIONS: &[PickerAction] = &[PickerAction {
@@ -420,6 +422,16 @@ impl InspectorMode {
     }
 }
 
+/// Where a tool call stands, as the transcript marks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolStatus {
+    Running,
+    Done,
+    Failed,
+    /// Never finished and the run is over: interrupted or dropped.
+    Abandoned,
+}
+
 #[derive(Clone)]
 pub(crate) struct ToolActivity {
     /// The model-assigned tool-call id (anchors nested subagent spawns).
@@ -434,6 +446,18 @@ pub(crate) struct ToolActivity {
     pub(crate) output: Option<serde_json::Value>,
     pub(crate) is_error: bool,
     pub(crate) approval: Option<String>,
+}
+
+impl ToolActivity {
+    pub(crate) fn status(&self, live: bool) -> ToolStatus {
+        let finished = self.output.is_some() || self.elapsed.is_some();
+        match (finished, self.is_error, live) {
+            (true, true, _) => ToolStatus::Failed,
+            (true, false, _) => ToolStatus::Done,
+            (false, _, true) => ToolStatus::Running,
+            (false, _, false) => ToolStatus::Abandoned,
+        }
+    }
 }
 
 pub(crate) struct InspectorBodyCache {
@@ -492,6 +516,10 @@ impl HeldInput {
 
 pub(crate) struct App {
     pub(crate) cfg: TuiConfig,
+    /// The workspace's branch captured when the TUI starts. `None` covers
+    /// non-Git directories and detached HEADs without adding Git work to
+    /// every frame.
+    pub(crate) git_branch: Option<String>,
     /// Explicit reasoning effort chosen for the active model. `None` lets
     /// the provider use its advertised default.
     pub(crate) reasoning_effort: Option<String>,
@@ -562,9 +590,6 @@ pub(crate) struct App {
     pub(crate) welcome_dismissed: bool,
     /// Top-level tool calls made during the current turn.
     pub(crate) turn_tool_calls: usize,
-    /// Duration/tool-call summary of the last completed turn, shown in
-    /// the rail above the composer until the next run starts.
-    pub(crate) last_turn_summary: Option<String>,
     /// Call lines for in-flight tool calls, keyed by call id.
     pub(crate) pending_calls: HashMap<String, usize>,
     pub(crate) activity_tools: Vec<ToolActivity>,

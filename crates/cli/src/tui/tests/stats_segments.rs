@@ -14,7 +14,7 @@ mod stats_segment_tests {
         stats.inc_bun_repls();
         assert_eq!(
             stats_segments(&stats),
-            ["procs 2", "pykernel", "bun_repl", "agents 1"]
+            ["procs 2", "pykernel", "bun", "agents 1"]
         );
     }
 }

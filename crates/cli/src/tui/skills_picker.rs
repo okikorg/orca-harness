@@ -3,8 +3,8 @@
 use ratatui::text::Line;
 
 use super::components::picker::ListPicker;
-use super::format::size;
 use super::PICKER_ROWS;
+use crate::view::byte_label;
 
 pub(crate) fn plugin_name(entry: &crate::skills::SkillEntry) -> Option<&str> {
     let root = match &entry.state {
@@ -56,7 +56,7 @@ fn row(entry: &crate::skills::SkillEntry) -> [String; 5] {
             } else {
                 entry.description.clone()
             };
-            (state, root.clone(), size(*bytes), detail)
+            (state, root.clone(), byte_label(*bytes), detail)
         }
         crate::skills::SkillState::Shadowed { root, by } => (
             if plugin.is_some() { "plugin" } else { "—" },

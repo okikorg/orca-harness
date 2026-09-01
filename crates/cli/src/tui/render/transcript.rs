@@ -10,7 +10,8 @@ use crate::tui::components::subagent_row::SubagentRow;
 use crate::tui::components::tool_row::ToolRow;
 use crate::tui::components::transcript::{append_block, line_is_blank, BlockSpacing};
 use crate::tui::components::tree::{Connector, TreeBranch};
-use crate::tui::state::SubagentDisplay;
+use crate::tui::state::{SubagentDisplay, ToolStatus};
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 use super::super::format::{elapsed_label, plural, tool_timing_label};
@@ -156,12 +157,16 @@ pub(crate) fn projected_tail(
     let prior = (!committed_transcript(app, true).is_empty()).then_some(false);
     append_block(&mut tail, activity, BlockSpacing::Section, prior);
     if let Some(answer) = answer {
-        append_block(
-            &mut tail,
-            view::markdown_lines(answer, width, "  "),
-            BlockSpacing::Section,
-            prior,
-        );
+        let mut lines = view::markdown_lines(answer, width, "  ");
+        // The caret marks where the stream is; only while text is still
+        // arriving, never on a message waiting for its result.
+        let caret = glyphs().caret;
+        if !caret.is_empty() && !app.text.is_empty() {
+            if let Some(last) = lines.iter_mut().rev().find(|line| !line_is_blank(line)) {
+                last.spans.push(Span::styled(caret, theme().accent));
+            }
+        }
+        append_block(&mut tail, lines, BlockSpacing::Section, prior);
     }
     tail
 }
@@ -225,6 +230,30 @@ pub(crate) fn nested_subagent_lines(
     }
 }
 
+/// The mark and color for a tool row, from the style table. Nested and
+/// top-level rows read the same function so they cannot drift apart.
+fn tool_mark(tool: &ToolActivity, live: bool, frame: usize) -> (String, ratatui::style::Style) {
+    let t = theme();
+    let g = glyphs();
+    match tool.status(live) {
+        ToolStatus::Running => (g.running_frame(frame).to_string(), t.dim),
+        ToolStatus::Done => (g.done.to_string(), t.success),
+        ToolStatus::Failed => (g.failed.to_string(), t.error),
+        ToolStatus::Abandoned => (g.failed.to_string(), t.warn),
+    }
+}
+
+/// The section label mark: the live frame while the run goes, the rest
+/// mark once it is committed.
+fn section_mark(live: bool, frame: usize) -> String {
+    let g = glyphs();
+    if live {
+        g.active_frame(frame).to_string()
+    } else {
+        g.section.to_string()
+    }
+}
+
 pub(crate) fn nested_spawn_rows(
     app: &App,
     id: u64,
@@ -247,13 +276,8 @@ pub(crate) fn nested_spawn_rows(
             last: position + 1 == visible.len(),
         };
         let elapsed = tool_timing_label(tool, false);
-        let (glyph, style) = match (&tool.output, tool.elapsed) {
-            (Some(_), _) if tool.is_error => ("×", t.error),
-            (Some(_), _) => ("✓", t.dim),
-            (None, Some(_)) if tool.is_error => ("×", t.error),
-            (None, Some(_)) => ("✓", t.dim),
-            (None, None) => ("□", t.dim),
-        };
+        let (glyph, style) = tool_mark(tool, true, app.spinner_frame);
+        let glyph = glyph.as_str();
         let child = (tool.tool_name == "subagent")
             .then(|| {
                 app.subagent_activity
@@ -343,7 +367,7 @@ pub(crate) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
             .sum::<Duration>();
         ActivityRail::new(
             ActivityRailKind::Thinking,
-            "•",
+            &section_mark(false, 0),
             format!(
                 "{} · {}",
                 elapsed_label(thinking_elapsed),
@@ -365,8 +389,13 @@ pub(crate) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
         } else {
             theme().dim
         };
-        ActivityRail::new(ActivityRailKind::Work, "•", parts.join(" · "), style)
-            .append_to(&mut lines);
+        ActivityRail::new(
+            ActivityRailKind::Work,
+            &section_mark(false, 0),
+            parts.join(" · "),
+            style,
+        )
+        .append_to(&mut lines);
     }
 
     lines
@@ -400,18 +429,11 @@ pub(crate) fn activity_lines_selected(
                 .reasoning_started
                 .map(|started| started.elapsed())
                 .unwrap_or_default();
-        let marker = if live {
-            if app.spinner_frame.is_multiple_of(2) {
-                "•"
-            } else {
-                " "
-            }
-        } else {
-            "•"
-        };
+        // Thinking is at rest once a tool call or answer has followed it.
+        let thinking_live = live && current_thinking;
         let mut thinking = ActivityRail::new(
             ActivityRailKind::Thinking,
-            marker,
+            &section_mark(thinking_live, app.spinner_frame),
             format!(
                 "{} · {}",
                 elapsed_label(elapsed),
@@ -446,17 +468,19 @@ pub(crate) fn activity_lines_selected(
         .filter(|tool| tool.elapsed.is_some())
         .count();
     let running = app.activity_tools.len() - complete;
+    let g = glyphs();
     let (marker, summary) = if live {
-        let dot = if app.spinner_frame.is_multiple_of(2) {
-            "•"
-        } else {
-            " "
-        };
-        (dot, format!("✓ {complete} · □ {running}"))
+        (
+            section_mark(running > 0, app.spinner_frame),
+            format!("{} {complete} · {} {running}", g.done, g.waiting),
+        )
     } else {
-        ("•", plural(app.activity_tools.len(), "tool"))
+        (
+            section_mark(false, 0),
+            plural(app.activity_tools.len(), "tool"),
+        )
     };
-    let mut work = ActivityRail::new(ActivityRailKind::Work, marker, summary, t.dim);
+    let mut work = ActivityRail::new(ActivityRailKind::Work, &marker, summary, t.dim);
 
     let visible_indices = if live && app.activity_tools.len() > LIVE_TOOL_ROWS {
         let mut selected: Vec<usize> = app
@@ -497,22 +521,13 @@ pub(crate) fn activity_lines_selected(
             indent: "    ",
             last: position + 1 == visible_indices.len(),
         };
-        let (glyph, mut detail, status_style) = match &tool.output {
-            Some(output) if tool.is_error => (
-                "×",
-                view::tool_result_summary(&tool.tool_name, output, true),
-                t.error,
-            ),
-            Some(output) => (
-                "✓",
-                view::tool_result_summary(&tool.tool_name, output, false),
-                t.dim,
-            ),
-            None if tool.elapsed.is_some() && tool.is_error => ("×", String::new(), t.error),
-            None if tool.elapsed.is_some() => ("✓", String::new(), t.dim),
-            None if live => ("□", String::new(), t.dim),
-            None => ("×", String::new(), t.warn),
-        };
+        let (glyph, status_style) = tool_mark(tool, live, app.spinner_frame);
+        let glyph = glyph.as_str();
+        let mut detail = tool
+            .output
+            .as_ref()
+            .map(|output| view::tool_result_summary(&tool.tool_name, output, tool.is_error))
+            .unwrap_or_default();
         if let Some(approval) = &tool.approval {
             detail = if detail.is_empty() {
                 approval.clone()

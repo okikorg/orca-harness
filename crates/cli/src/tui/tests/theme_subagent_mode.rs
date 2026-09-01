@@ -325,7 +325,7 @@ mod mode_rewind_todo_tests {
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
         slash_command(&mut app, "mode plan", &worker, 80);
         let rendered = texts(&app);
-        assert!(rendered.contains("plan mode"), "{rendered}");
+        assert!(rendered.contains("plan"), "{rendered}");
         assert!(!rendered.contains("plan saved"), "{rendered}");
         assert!(!rendered.contains("docs/plan"), "{rendered}");
     }
@@ -341,12 +341,12 @@ mod mode_rewind_todo_tests {
         let plan = crate::plan::PlanArea::new();
         assert_eq!(mode_segment(&mode, &plan), "");
         mode.set(Mode::Plan);
-        assert_eq!(mode_segment(&mode, &plan), "plan mode");
+        assert_eq!(mode_segment(&mode, &plan), "plan");
         // A landed plan is visible without waiting for /mode normal.
         plan.record("docs/plan/2026-08-22-a.md");
-        assert_eq!(mode_segment(&mode, &plan), "plan mode · 1 plan");
+        assert_eq!(mode_segment(&mode, &plan), "plan · 1 plan");
         plan.record("docs/plan/2026-08-22-b.md");
-        assert_eq!(mode_segment(&mode, &plan), "plan mode · 2 plans");
+        assert_eq!(mode_segment(&mode, &plan), "plan · 2 plans");
         // Normal mode says nothing, whatever was written.
         mode.set(Mode::Normal);
         assert_eq!(mode_segment(&mode, &plan), "");

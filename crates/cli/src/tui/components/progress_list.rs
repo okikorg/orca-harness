@@ -3,6 +3,7 @@
 use ratatui::text::{Line, Span};
 
 use super::tree::TreeBranch;
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 #[derive(Clone, Copy)]
@@ -36,10 +37,11 @@ pub fn progress_list(label: &str, items: &[ProgressItem<'_>], width: usize) -> V
             indent: "  ",
             last: index == last,
         };
+        let g = glyphs();
         let (marker, style) = match item.state {
-            ProgressState::Completed => ("✓", t.dim),
-            ProgressState::Active => ("▸", t.strong),
-            ProgressState::Pending => ("□", t.dim),
+            ProgressState::Completed => (g.done.to_string(), t.dim),
+            ProgressState::Active => (g.cursor.to_string(), t.strong),
+            ProgressState::Pending => (g.waiting.to_string(), t.dim),
         };
         let prefix = format!("{}{marker} ", branch.prefix());
         let content = view::truncate_line(

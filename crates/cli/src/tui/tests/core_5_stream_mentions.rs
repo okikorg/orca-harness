@@ -94,11 +94,16 @@
             80,
         );
 
-        let joined = rendered_rows(&mut app, 80, 24).join("\n");
-        assert!(joined.contains("Streaming heading"));
+        let rows = rendered_rows(&mut app, 80, 24);
+        let heading = rows
+            .iter()
+            .find(|row| row.contains("Streaming heading"))
+            .expect("heading row");
+        // The prefix is the style's heading mark, not the raw source line.
+        assert_eq!(heading.trim_start(), "# Streaming heading");
         assert!(
-            !joined.contains("# Streaming heading"),
-            "markdown syntax is rendered, not printed raw: {joined}"
+            rendered_cell_is_bold(&mut app, 80, 24, "Streaming"),
+            "heading text is rendered bold: {heading}"
         );
     }
 

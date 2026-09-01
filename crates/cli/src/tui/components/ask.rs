@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 
 use orca_harness_tools::{AskAnswer, AskRequest, AskResponse, AskTopic, AskTopicAnswer};
 
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 #[derive(Debug, Clone, Default)]
@@ -187,10 +188,11 @@ impl AskForm {
 
     pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
         let t = theme();
+        let g = glyphs();
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
-                Span::styled("  ? ", t.accent),
+                Span::styled(format!("  {} ", g.attention), t.accent),
                 Span::styled("Clarification needed", t.strong),
                 Span::styled(
                     format!(
@@ -209,9 +211,9 @@ impl AskForm {
                 topic_line.push(Span::styled("  ───  ", t.dim));
             }
             let glyph = if self.topic_complete_at(index) {
-                "✓"
+                g.done
             } else {
-                "□"
+                g.waiting
             };
             let style = if index == self.topic { t.select } else { t.dim };
             topic_line.push(Span::styled(format!("{glyph} {}", topic.title), style));
@@ -227,7 +229,7 @@ impl AskForm {
             let active = question_index == self.focus;
             lines.push(Line::from(vec![
                 Span::styled(
-                    if active { "  ▸ " } else { "    " },
+                    format!("  {} ", if active { g.cursor } else { " " }),
                     if active { t.accent } else { t.dim },
                 ),
                 Span::styled(
@@ -257,10 +259,10 @@ impl AskForm {
                 for (option_index, option) in question.options.iter().enumerate() {
                     let selected = answer.values.iter().any(|value| value == &option.label);
                     let cursor = active && answer.option == option_index;
-                    let marker = if selected { "✓" } else { "□" };
+                    let marker = if selected { g.done } else { g.waiting };
                     lines.push(Line::from(vec![
                         Span::styled(
-                            if cursor { "      ▸ " } else { "        " },
+                            format!("      {} ", if cursor { g.cursor } else { " " }),
                             if cursor { t.accent } else { t.dim },
                         ),
                         Span::styled(
@@ -287,7 +289,7 @@ impl AskForm {
         let active = self.focus == topic.questions.len();
         lines.push(Line::from(vec![
             Span::styled(
-                if active { "  ▸ " } else { "    " },
+                format!("  {} ", if active { g.cursor } else { " " }),
                 if active { t.accent } else { t.dim },
             ),
             Span::styled("Other", if active { t.strong } else { t.dim }),

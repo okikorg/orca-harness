@@ -14,15 +14,16 @@ use crate::tui::components::composer::Composer;
 use crate::tui::components::status_bar::{self, Segment, StatusBar};
 use crate::tui::components::tree::TreeBranch;
 use crate::tui::components::welcome::Welcome;
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
-use super::super::format::{elapsed_label, fmt_turn_tokens, workspace_status_name};
+use super::super::format::{elapsed_label, fmt_tokens, workspace_status_name};
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
 use super::super::{
     App, InspectorBodyCache, Overlay, RunState, ViewMode, PALETTE_ROWS, PICKER_ROWS,
-    QUEUE_PREVIEW_ROWS, SPINNER,
+    QUEUE_PREVIEW_ROWS,
 };
 use super::overlays::*;
 use super::pickers::*;
@@ -158,6 +159,23 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // instead of streaming through the temporary area and jumping here.
     // The committed part is read in place; only the live tail is built
     // per frame.
+    // A split gives the transcript pane a header to balance the
+    // inspector's, so both halves read as panes.
+    let transcript_area = if split_active {
+        let [header_area, rest] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(transcript_area);
+        let turn = app.turn_count + usize::from(app.running());
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  transcript · turn {turn}"),
+                theme().dim,
+            ))),
+            header_area,
+        );
+        rest
+    } else {
+        transcript_area
+    };
     let height = transcript_area.height as usize;
     let transcript_width = transcript_area.width as usize;
     let selected_tool = (split_active && !app.activity_tools.is_empty()).then(|| {
@@ -172,13 +190,12 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // Keep them recorded in the background and reveal the transcript on the
     // first explicit command or model turn.
     if !app.welcome_dismissed && app.turn_count == 0 && !app.running() {
-        let full_height = frame.area().height as usize;
         let welcome = Welcome {
             version: env!("CARGO_PKG_VERSION"),
             model: &app.cfg.model_name,
             workspace: &app.cfg.workspace_name,
         }
-        .lines(full_height, height, transcript_width);
+        .lines(frame.area().height as usize, height, transcript_width);
         frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
     } else {
         let max_scroll = projected_len.saturating_sub(height);
@@ -265,17 +282,18 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         composer_area.y + composer.cursor_y,
     ));
 
-    // Status line with contextual hints.
+    // Status line with contextual hints. Idle and running have live-region
+    // indicators already; approval, questions, and a paused queue need the
+    // persistent status label because they require user action.
+    let g = glyphs();
     let state = if app.approval.is_some() {
-        "awaiting approval"
+        format!("{}awaiting approval", g.status_prefix(g.attention))
     } else if app.ask.is_some() {
-        "awaiting answer"
-    } else if app.running() {
-        "running"
+        format!("{}awaiting answer", g.status_prefix(g.attention))
     } else if !app.prompt_queue.is_empty() {
-        "queue paused"
+        format!("{}queue paused", g.status_prefix(g.waiting))
     } else {
-        "idle"
+        String::new()
     };
     let approval_hint = app.approval.as_ref().map(|request| {
         ApprovalPrompt {
@@ -329,7 +347,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         .push(Segment::new(
             app.reasoning_effort
                 .as_deref()
-                .map(|effort| format!("effort {effort}"))
+                .map(str::to_string)
                 .unwrap_or_default(),
             status_bar::EFFORT,
         ))
@@ -338,10 +356,17 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             mode_segment(&app.cfg.mode, &app.cfg.plan),
             status_bar::KEEP,
         ))
-        .push(Segment::new(
-            context_segment(app.context_tokens, app.context_window),
-            status_bar::CONTEXT,
-        ));
+        .push(
+            Segment::new(
+                context_segment(app.context_tokens, app.context_window, false),
+                status_bar::CONTEXT,
+            )
+            .with_compact(context_segment(
+                app.context_tokens,
+                app.context_window,
+                true,
+            )),
+        );
     for stat in stats_segments(&app.cfg.stats) {
         status.push(Segment::new(stat, status_bar::STATS));
     }
@@ -354,9 +379,15 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             queue_segment(app.prompt_queue.len()),
             status_bar::COUNTS,
         ))
-        .push(Segment::new(hint, status_bar::HINT))
+        .push(Segment::new(hint, status_bar::HINT).with_compact(shorter_hint(hint)))
         .trailing(Segment::new(
-            workspace_status_name(&app.cfg.workspace_name),
+            match &app.git_branch {
+                Some(branch) => format!(
+                    "{} · {branch}",
+                    workspace_status_name(&app.cfg.workspace_name)
+                ),
+                None => workspace_status_name(&app.cfg.workspace_name).to_string(),
+            },
             status_bar::WORKSPACE,
         ));
     frame.render_widget(
@@ -400,7 +431,7 @@ pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> Vec
         out.push("pykernel".to_string());
     }
     if stats.bun_repls() > 0 {
-        out.push("bun_repl".to_string());
+        out.push("bun".to_string());
     }
     if stats.agents() > 0 {
         out.push(format!("agents {}", stats.agents()));
@@ -412,7 +443,7 @@ pub(crate) fn queue_segment(queued: usize) -> String {
     if queued == 0 {
         String::new()
     } else {
-        format!("queued {queued}")
+        format!("q {queued}")
     }
 }
 
@@ -437,9 +468,9 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
         crate::mode::Mode::Plan => {}
     }
     match plan.written().len() {
-        0 => "plan mode".to_string(),
-        1 => "plan mode · 1 plan".to_string(),
-        n => format!("plan mode · {n} plans"),
+        0 => "plan".to_string(),
+        1 => "plan · 1 plan".to_string(),
+        n => format!("plan · {n} plans"),
     }
 }
 
@@ -455,12 +486,14 @@ pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
 /// they start, so the conversation preserves its actual chronology.
 pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let t = theme();
+    let g = glyphs();
     if app.prompt_queue.is_empty() {
         return Vec::new();
     }
 
     let mut lines = vec![Line::from(vec![
-        Span::styled("  queued", t.strong),
+        Span::styled(format!("  {}", g.status_prefix(g.waiting)), t.dim),
+        Span::styled("queued", t.strong),
         Span::styled(format!(" · {}", app.prompt_queue.len()), t.dim),
     ])];
     let visible = app.prompt_queue.len().min(QUEUE_PREVIEW_ROWS);
@@ -535,6 +568,7 @@ impl LiveRegion {
 }
 
 /// The pinned live region's rows; see [`live_region`] for the anchoring.
+#[cfg(test)]
 pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     live_region(app, width).lines
 }
@@ -568,6 +602,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
             Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),
             Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
+            Overlay::Style { picker } => style_lines(picker, width),
             Overlay::Inspector { picker } => {
                 inspector_picker_lines(app.inspector_mode, picker, width)
             }
@@ -624,7 +659,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
     if app.running() {
         let mut lines = queue_lines(app, width);
         lines.extend(todo_lines(&app.cfg.todos, width));
-        let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+        let spinner = glyphs().active_frame(app.spinner_frame);
         let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
             "writing"
         } else if !app.reasoning.is_empty() {
@@ -638,8 +673,8 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             } else {
                 format!(
                     " · ↑{} ↓{}",
-                    fmt_turn_tokens(app.turn_tokens_in),
-                    fmt_turn_tokens(app.turn_tokens_out)
+                    fmt_tokens(app.turn_tokens_in),
+                    fmt_tokens(app.turn_tokens_out)
                 )
             };
             lines.push(Line::from(vec![
@@ -660,18 +695,30 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
     }
     let mut lines = queue_lines(app, width);
     lines.extend(todo_lines(&app.cfg.todos, width));
-    if let Some(summary) = &app.last_turn_summary {
-        lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
-    }
     LiveRegion {
         lines,
         anchor: LiveAnchor::Bottom,
     }
 }
 
+/// The hint without its last ` · piece`: a tight row gives up the least
+/// useful key before it gives up the model name.
+fn shorter_hint(hint: &str) -> String {
+    hint.rsplit_once(" · ")
+        .map(|(head, _)| head)
+        .unwrap_or(hint)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shorter_hint_drops_its_last_piece_only() {
+        assert_eq!(shorter_hint("a · b · c"), "a · b");
+        assert_eq!(shorter_hint("alone"), "alone");
+    }
 
     #[test]
     fn inspector_content_width_comes_from_the_padded_block() {

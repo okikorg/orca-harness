@@ -50,10 +50,12 @@ impl SubagentRow<'_> {
             spans.push(Span::styled(" · ", self.branch_style));
             spans.push(Span::styled(task, self.task_style));
         }
-        spans.push(Span::styled(
-            format!(" · {}", self.elapsed),
-            self.glyph_style,
-        ));
+        if !self.elapsed.is_empty() {
+            spans.push(Span::styled(
+                format!(" · {}", self.elapsed),
+                self.glyph_style,
+            ));
+        }
         finish_row(spans, self.width, self.connector, self.branch_style)
     }
 }

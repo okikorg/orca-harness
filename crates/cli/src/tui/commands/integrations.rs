@@ -1,8 +1,8 @@
 use super::super::*;
 use crate::tui::components::picker::{ListPicker, PickerAction};
-use crate::tui::format::size;
 use crate::tui::render::matching_indices;
 use crate::tui::state::SKILL_ACTIONS;
+use crate::view::byte_label;
 
 pub(crate) const PLUGIN_ACTIONS: &[PickerAction] = &[
     PickerAction {
@@ -381,7 +381,7 @@ pub(crate) fn skills_command(app: &mut App, args: &str, worker: &mpsc::Unbounded
             let detail = match &entry.state {
                 crate::skills::SkillState::Loaded { root, bytes } => format!(
                     "{name} · {root} · {} · {}",
-                    size(*bytes),
+                    byte_label(*bytes),
                     if entry.enabled { "on" } else { "off" }
                 ),
                 crate::skills::SkillState::Shadowed { root, by } => {

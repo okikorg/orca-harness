@@ -8,7 +8,7 @@ use crate::view::{self, theme};
 
 use super::super::format::fmt_tokens;
 use super::super::{App, EffortPicker, ModelPicker, ToolActivity};
-use super::pickers::command_picker_row;
+use super::pickers::{command_picker_row, COMMAND_COLUMNS};
 /// Exact, source-preserving mutation context beneath edit and patch rows.
 /// Small changes remain fully visible; large batches stay bounded so one call
 /// cannot take over the live rail.
@@ -112,7 +112,7 @@ pub(crate) fn palette_lines(app: &App, height: usize, width: usize) -> Vec<Line<
     picker.windowed_table_lines(
         "Commands · type to filter · →/enter run · tab complete · esc close",
         filtered.into_iter().map(command_picker_row),
-        [(6, 16), (12, 64), (0, 10)],
+        COMMAND_COLUMNS,
         width,
         rows,
     )
@@ -259,12 +259,20 @@ pub(crate) fn effort_picker_lines(picker: &EffortPicker, width: usize) -> Vec<Li
 
 /// The status-line context segment: percentage of the model's window when
 /// known (`ctx 33%`), a plain count only when no window is discoverable.
-/// Exact figures live behind /usage, never here.
-pub(crate) fn context_segment(tokens: u64, window: Option<u64>) -> String {
-    match window {
-        Some(window) if window > 0 => {
-            format!("ctx {}%", (100 * tokens / window).min(999))
-        }
-        _ => format!("ctx ~{}", fmt_tokens(tokens)),
+/// Exact figures live behind /usage, never here. The full form adds the
+/// style's meter when it has one; the `compact` form is what a tight row
+/// falls back to.
+pub(crate) fn context_segment(tokens: u64, window: Option<u64>, compact: bool) -> String {
+    let Some(window) = window.filter(|window| *window > 0) else {
+        return format!("ctx ~{}", fmt_tokens(tokens));
+    };
+    let percent = (100 * tokens / window).min(999);
+    // No meter for an empty context: a bar of nothing says nothing.
+    let meter = (!compact && tokens > 0)
+        .then(|| crate::view::glyphs::glyphs().meter_bar(6, tokens as f64 / window as f64))
+        .flatten();
+    match meter {
+        Some(bar) => format!("ctx {bar} {percent}%"),
+        None => format!("ctx {percent}%"),
     }
 }

@@ -4,6 +4,8 @@
 //! terminal or the worker.
 
 use std::collections::VecDeque;
+use std::path::Path;
+use std::process::Command;
 
 use ratatui::text::Line;
 
@@ -12,6 +14,7 @@ use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::{
     append_block, line_is_blank, set_transcript_spacing, BlockSpacing, TranscriptSpacing,
 };
+use crate::view::glyphs::{set_ui_style, UiStyle};
 use crate::view::theme;
 
 use super::render::{activity_lines_selected, collapsed_activity_lines};
@@ -20,18 +23,22 @@ use super::{elapsed_label, line_text, SCROLL_HINT, TRANSCRIPT_CAP};
 
 impl App {
     pub(crate) fn new(cfg: TuiConfig) -> Self {
+        let git_branch = git_branch(&cfg.workspace_root);
         let spacing = crate::config::stored_transcript_spacing()
             .as_deref()
             .and_then(TranscriptSpacing::from_slug)
             .unwrap_or(TranscriptSpacing::Comfortable);
-        // The preference is process-global; serialize the write against
-        // tests that transition the picker live (see `SPACING_GUARD`).
-        let _guard = super::SPACING_GUARD
+        let style = UiStyle::stored();
+        // The preferences are process-global; serialize the writes against
+        // tests that transition the pickers live (see `PREFERENCE_GUARD`).
+        let _guard = super::PREFERENCE_GUARD
             .lock()
             .unwrap_or_else(|err| err.into_inner());
         set_transcript_spacing(spacing);
+        set_ui_style(style);
         Self {
             cfg,
+            git_branch,
             reasoning_effort: None,
             pending_history: Vec::new(),
             transcript: Vec::new(),
@@ -73,7 +80,6 @@ impl App {
             turn_count: 0,
             welcome_dismissed: false,
             turn_tool_calls: 0,
-            last_turn_summary: None,
             pending_calls: std::collections::HashMap::new(),
             activity_tools: Vec::new(),
             view_mode: ViewMode::stored(),
@@ -212,7 +218,6 @@ impl App {
         self.turn_reasoning_tokens = Default::default();
         self.turn_text_tokens = Default::default();
         self.turn_tool_input_tokens = Default::default();
-        self.last_turn_summary = None;
         self.reasoning.clear();
         self.reasoning_started = None;
         self.thinking_log.clear();
@@ -311,5 +316,32 @@ impl App {
             let excess = self.transcript.len() - TRANSCRIPT_CAP;
             self.transcript.drain(..excess);
         }
+    }
+}
+
+/// Resolve the named branch once at startup. A detached checkout has no
+/// branch name, and status chrome should remain quiet outside a Git worktree.
+fn git_branch(workspace_root: &str) -> Option<String> {
+    Path::new(workspace_root)
+        .join(".git")
+        .exists()
+        .then_some(())?;
+    Command::new("git")
+        .args(["-C", workspace_root, "branch", "--show-current"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|branch| branch.trim().to_string())
+        .filter(|branch| !branch.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_branch;
+
+    #[test]
+    fn git_branch_is_absent_outside_a_worktree() {
+        assert_eq!(git_branch("/definitely/not/a/git/worktree"), None);
     }
 }

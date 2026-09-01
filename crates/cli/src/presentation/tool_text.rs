@@ -15,10 +15,16 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
         }
         "apply_patch" => patch_call_detail(args),
         "multi_edit" => multi_edit_call_detail(args),
-        "grep" => args
-            .get("query")
-            .and_then(Value::as_str)
-            .map(|q| format!("'{q}'")),
+        "grep" => args.get("query").and_then(Value::as_str).map(|query| {
+            let path = args
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty() && *p != ".");
+            match path {
+                Some(path) => format!("'{query}' in {path}"),
+                None => format!("'{query}'"),
+            }
+        }),
         "glob" => glob_call_detail(args),
         "skill" => args.get("name").and_then(Value::as_str).map(|name| {
             args.get("resource")
@@ -36,8 +42,24 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
         "process" => process_call_detail(args),
         _ => None,
     };
-    let detail = detail.unwrap_or_else(|| args.to_string());
-    truncate_line(&format!("{name} {detail}"), 100)
+    let detail = detail.unwrap_or_else(|| first_text_field(args));
+    truncate_line(format!("{name} {detail}").trim_end(), 100)
+}
+
+/// A readable stand-in for an unknown shape: the first string field, the
+/// key list for an object of non-strings, and nothing for an empty value.
+/// Serialized JSON is never shown; it is the model's, not the reader's.
+fn first_text_field(value: &Value) -> String {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .find_map(|(_, v)| v.as_str().filter(|s| !s.trim().is_empty()))
+            .map(str::to_string)
+            .unwrap_or_else(|| map.keys().cloned().collect::<Vec<_>>().join(" ")),
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 fn glob_call_detail(args: &Value) -> Option<String> {
@@ -157,15 +179,15 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
         "read_file" => output
             .get("bytes")
             .and_then(Value::as_u64)
-            .map(|b| format!("read {b} bytes")),
+            .map(|b| format!("read {}", byte_label(b))),
         "write_file" => output
             .get("bytesWritten")
             .and_then(Value::as_u64)
-            .map(|b| format!("wrote {b} bytes")),
+            .map(|b| format!("wrote {}", byte_label(b))),
         "edit_file" => output
             .get("replacements")
             .and_then(Value::as_u64)
-            .map(|n| format!("{n} replacement(s)")),
+            .map(|n| count_label(n as usize, "replacement", "replacements")),
         "multi_edit" => output
             .get("filesChanged")
             .and_then(Value::as_u64)
@@ -213,8 +235,24 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
         "process" => process_result_summary(output),
         _ => None,
     };
-    let summary = summary.unwrap_or_else(|| output.to_string());
+    let summary = summary.unwrap_or_else(|| {
+        let text = first_text_field(output);
+        if text.is_empty() {
+            "ok".to_string()
+        } else {
+            text
+        }
+    });
     truncate_line(&summary, 120)
+}
+
+/// `3 bytes`, `5.0 kB`, `1.2 MB`.
+pub fn byte_label(bytes: u64) -> String {
+    match bytes {
+        0..=1023 => count_label(bytes as usize, "byte", "bytes"),
+        1024..=1_048_575 => format!("{:.1} kB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    }
 }
 
 fn matches_summary(output: &Value) -> Option<String> {

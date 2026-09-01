@@ -188,10 +188,13 @@ fn tool_timing_separates_review_from_execution() {
         approval: None,
     };
 
+    // The inspector attributes the wait; a row shows the wait the reader
+    // felt when the run itself was instant.
     assert_eq!(
-        tool_timing_label(&tool, false),
+        tool_timing_label(&tool, true),
         "preflight 2.3s · run 219µs"
     );
+    assert_eq!(tool_timing_label(&tool, false), "2.3s");
 }
 
 #[test]

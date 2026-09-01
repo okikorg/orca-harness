@@ -29,11 +29,11 @@ impl ToolRow<'_> {
         let row_width = row_budget(self.width, self.connector);
         let detail_width = (row_width / 3).clamp(12, 40);
         let detail = view::truncate_line(self.detail, detail_width);
-        let status = if detail.is_empty() {
-            format!(" · {}", self.elapsed)
-        } else {
-            format!(" · {detail} · {}", self.elapsed)
-        };
+        let status: String = [detail.as_str(), self.elapsed]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .map(|part| format!(" · {part}"))
+            .collect();
         let fixed_width = view::cell_width(&prefix) + 2 + view::cell_width(&status);
         let call_width = row_width.saturating_sub(fixed_width).max(8);
         let spans = vec![
