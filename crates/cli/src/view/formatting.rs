@@ -66,7 +66,7 @@ pub(super) fn render_table(
     let columns = header.len();
     let separator_width = 3 * columns.saturating_sub(1);
     let available = width
-        .saturating_sub(indent.chars().count())
+        .saturating_sub(cell_width(indent))
         .saturating_sub(separator_width)
         .max(columns);
     let minimum = if available >= columns * 6 {
@@ -81,7 +81,7 @@ pub(super) fn render_table(
                 .map(|cell| {
                     inline_spans(cell)
                         .iter()
-                        .map(|(text, _)| text.chars().count())
+                        .map(|(text, _)| cell_width(text))
                         .sum()
                 })
                 .max()
@@ -151,10 +151,7 @@ pub(super) fn render_table_row(
         let mut spans = vec![Span::raw(indent.to_string())];
         for (column, cell_width) in widths.iter().enumerate() {
             let cell_line = wrapped[column].get(line_index).cloned().unwrap_or_default();
-            let content_width: usize = cell_line
-                .iter()
-                .map(|span| span.content.chars().count())
-                .sum();
+            let content_width = spans_width(&cell_line);
             spans.extend(cell_line);
             spans.push(Span::raw(
                 " ".repeat(cell_width.saturating_sub(content_width)),
@@ -402,24 +399,52 @@ pub(super) fn skip_escape_sequence(chars: &mut std::str::Chars) {
     }
 }
 
-/// Truncate to `max` chars, appending an ellipsis when cut. Multi-line
+/// Terminal cells a string occupies. Every width decision in the renderer
+/// goes through here rather than `chars().count()`: a CJK glyph or an
+/// emoji is two cells wide, and a row measured in chars overflows the
+/// terminal, wraps inside the Paragraph, and throws the transcript's
+/// line-based scroll off by one for every such row.
+pub fn cell_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
+/// Cells across every span of a rendered line.
+pub fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| cell_width(&span.content)).sum()
+}
+
+/// Truncate to `max` cells, appending an ellipsis when cut. Multi-line
 /// input is flattened to its first line first.
 pub fn truncate_line(s: &str, max: usize) -> String {
     let sanitized = sanitize_cells(s);
     let line = sanitized.lines().next().unwrap_or("").trim_end();
-    if line.chars().count() <= max {
+    if cell_width(line) <= max {
         return line.to_string();
     }
-    let mut out: String = line.chars().take(max.saturating_sub(1)).collect();
+    let mut out = take_cells(line, max.saturating_sub(1));
     out.push('…');
+    out
+}
+
+/// The longest prefix of `s` that fits in `max` cells.
+pub fn take_cells(s: &str, max: usize) -> String {
+    let mut used = 0;
+    let mut out = String::new();
+    for c in s.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > max {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
     out
 }
 
 /// The transcript line announcing a tool call, e.g. `shell $ cargo test`
 /// or `read_file src/main.rs`.
 pub(super) fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
-    let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    if total <= max {
+    if spans_width(&spans) <= max {
         return spans;
     }
 
@@ -429,13 +454,13 @@ pub(super) fn truncate_styled_line(spans: Vec<Span<'static>>, max: usize) -> Vec
         if remaining == 0 {
             break;
         }
-        let span_width = span.content.chars().count();
+        let span_width = cell_width(&span.content);
         if span_width <= remaining {
             remaining -= span_width;
             output.push(span);
             continue;
         }
-        let clipped: String = span.content.chars().take(remaining).collect();
+        let clipped = take_cells(&span.content, remaining);
         output.push(Span::styled(clipped, span.style));
         break;
     }

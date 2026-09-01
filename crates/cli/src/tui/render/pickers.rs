@@ -4,7 +4,7 @@ use crate::msg::{Provider, ProviderAuth};
 use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
-use crate::tui::components::tray::Tray;
+use crate::tui::components::section::Section;
 use crate::view::{self, theme};
 
 use super::super::format::age_label;
@@ -91,7 +91,7 @@ pub(crate) fn usage_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         ),
         _ => format!("~{} (window unknown)", app.context_tokens),
     };
-    let mut tray = Tray::new("Session usage · esc close", t.dim);
+    let mut tray = Section::tray("Session usage · esc close", t.dim);
     let rows = [
         ("model", app.cfg.model_name.clone()),
         ("context", context),
@@ -397,7 +397,7 @@ pub(crate) fn sessions_picker_lines(
 
 pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static>> {
     let t = theme();
-    let mut tray = Tray::new(
+    let mut tray = Section::tray(
         format!(
             "{} API key (saved for future sessions) · enter confirm · esc close",
             provider.label()

@@ -1,4 +1,5 @@
-//! Atomic Inspector sections and source previews.
+//! Inspector prose, field and source-preview helpers. Blocks themselves
+//! are [`super::section::Section::inspector`].
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -7,44 +8,8 @@ use crate::view;
 use crate::view::theme;
 
 pub const INSPECTOR_BODY_INDENT: &str = "  ";
-
-pub struct InspectorSection {
-    label: String,
-    style: Style,
-    rows: Vec<Line<'static>>,
-}
-
-impl InspectorSection {
-    pub fn new(label: impl Into<String>, style: Style) -> Self {
-        Self {
-            label: label.into(),
-            style,
-            rows: Vec::new(),
-        }
-    }
-
-    pub fn push(&mut self, row: Line<'static>) {
-        self.rows.push(row);
-    }
-
-    pub fn extend<I>(&mut self, rows: I)
-    where
-        I: IntoIterator<Item = Line<'static>>,
-    {
-        self.rows.extend(rows);
-    }
-
-    pub fn append_to(self, target: &mut Vec<Line<'static>>) {
-        if !target.is_empty() {
-            target.push(Line::from(""));
-        }
-        target.push(Line::from(Span::styled(
-            format!("  {}", self.label),
-            self.style,
-        )));
-        target.extend(self.rows);
-    }
-}
+/// Widest metadata label before it is truncated to keep values aligned.
+const INSPECTOR_LABEL_CAP: usize = 14;
 
 /// Wrapped prose with the same straight spine used by code previews,
 /// clarification inputs, and transcript detail rows.
@@ -52,7 +17,7 @@ pub fn inspector_text(text: &str, width: usize, style: Style) -> Vec<Line<'stati
     let text = view::sanitize_cells(text);
     let prefix = format!("{INSPECTOR_BODY_INDENT}│");
     let text_prefix = format!("{prefix} ");
-    let body_width = width.saturating_sub(text_prefix.chars().count()).max(8);
+    let body_width = width.saturating_sub(view::cell_width(&text_prefix)).max(8);
     let mut lines = Vec::new();
     for source in text.lines() {
         let wrapped = textwrap::wrap(source, body_width);
@@ -79,18 +44,21 @@ where
     let rows: Vec<_> = rows.into_iter().collect();
     let label_width = rows
         .iter()
-        .map(|(label, _)| label.chars().count())
+        .map(|(label, _)| view::cell_width(label))
         .max()
         .unwrap_or(0)
-        .min(14);
+        .min(INSPECTOR_LABEL_CAP);
     rows.into_iter()
         .map(|(label, value)| {
+            // A label past the cap is cut like any other cell, so one long
+            // key cannot push every value out of its column.
+            let label = view::truncate_line(label, label_width);
             let prefix = format!("{INSPECTOR_BODY_INDENT}{label:<label_width$}  ");
             Line::from(vec![
                 Span::styled(prefix.clone(), theme().dim),
                 Span::raw(view::truncate_line(
                     &value,
-                    width.saturating_sub(prefix.chars().count()),
+                    width.saturating_sub(view::cell_width(&prefix)),
                 )),
             ])
         })
@@ -115,7 +83,7 @@ impl CodePreview<'_> {
                         format!(
                             "{}{}",
                             self.indent,
-                            view::truncate_line(line, self.width.saturating_sub(self.indent.len()))
+                            view::truncate_line(line, self.width.saturating_sub(view::cell_width(self.indent)))
                         ),
                         self.plain_style,
                     ))

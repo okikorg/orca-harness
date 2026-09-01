@@ -7,7 +7,7 @@ use crate::view;
 
 pub fn user_prompt(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let indent = "┃ ";
-    let body_width = width.saturating_sub(indent.len()).max(16);
+    let body_width = width.saturating_sub(view::cell_width(indent)).max(16);
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
         if paragraph.trim().is_empty() {

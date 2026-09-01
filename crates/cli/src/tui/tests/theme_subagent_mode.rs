@@ -423,12 +423,12 @@ mod mode_rewind_todo_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("todo · 1/3 done"), "{rendered}");
-        assert!(rendered.contains("├ ✓ inspect the rendering"), "{rendered}");
+        assert!(rendered.contains("├─ ✓ inspect the rendering"), "{rendered}");
         assert!(
-            rendered.contains("├ ▸ add a visible progress cue"),
+            rendered.contains("├─ ▸ add a visible progress cue"),
             "{rendered}"
         );
-        assert!(rendered.contains("└ □ verify it"), "{rendered}");
+        assert!(rendered.contains("└─ □ verify it"), "{rendered}");
     }
 
     #[tokio::test]
@@ -450,8 +450,8 @@ mod mode_rewind_todo_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("todo · 2/2 done"), "{rendered}");
-        assert!(rendered.contains("├ ✓ inspect"), "{rendered}");
-        assert!(rendered.contains("└ ✓ verify"), "{rendered}");
+        assert!(rendered.contains("├─ ✓ inspect"), "{rendered}");
+        assert!(rendered.contains("└─ ✓ verify"), "{rendered}");
     }
 
     #[tokio::test]

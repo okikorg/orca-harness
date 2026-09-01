@@ -2,6 +2,7 @@
 
 use ratatui::text::{Line, Span};
 
+use super::tree::TreeBranch;
 use crate::view::{self, theme};
 
 #[derive(Clone, Copy)]
@@ -31,15 +32,18 @@ pub fn progress_list(label: &str, items: &[ProgressItem<'_>], width: usize) -> V
     ])];
     let last = items.len() - 1;
     for (index, item) in items.iter().enumerate() {
-        let branch = if index == last { "└" } else { "├" };
+        let branch = TreeBranch {
+            indent: "  ",
+            last: index == last,
+        };
         let (marker, style) = match item.state {
             ProgressState::Completed => ("✓", t.dim),
             ProgressState::Active => ("▸", t.strong),
             ProgressState::Pending => ("□", t.dim),
         };
-        let prefix = format!("  {branch} {marker} ");
+        let prefix = format!("{}{marker} ", branch.prefix());
         let content =
-            view::truncate_line(item.content, width.saturating_sub(prefix.chars().count()));
+            view::truncate_line(item.content, width.saturating_sub(view::cell_width(&prefix)));
         lines.push(Line::from(vec![
             Span::styled(prefix, style),
             Span::styled(content, style),

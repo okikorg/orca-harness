@@ -11,6 +11,7 @@ use ratatui::Frame;
 
 use crate::tui::components::composer::Composer;
 use crate::tui::components::status_bar::StatusBar;
+use crate::tui::components::tree::TreeBranch;
 use crate::tui::components::welcome::Welcome;
 use crate::view::{self, theme};
 
@@ -370,8 +371,10 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let visible = app.prompt_queue.len().min(QUEUE_PREVIEW_ROWS);
     let overflow = app.prompt_queue.len().saturating_sub(visible);
     for (index, prompt) in app.prompt_queue.iter().take(visible).enumerate() {
-        let last = index + 1 == visible && overflow == 0;
-        let branch = if last { "└" } else { "├" };
+        let branch = TreeBranch {
+            indent: "  ",
+            last: index + 1 == visible && overflow == 0,
+        };
         let label = if index == 0 {
             "next".to_string()
         } else {
@@ -379,7 +382,7 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         };
         let available = width.saturating_sub(12).max(8);
         lines.push(Line::from(vec![
-            Span::styled(format!("  {branch} "), t.dim),
+            Span::styled(branch.prefix(), t.dim),
             Span::styled(
                 format!("{label:<4} "),
                 if index == 0 { t.accent } else { t.dim },
@@ -391,8 +394,12 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         ]));
     }
     if overflow > 0 {
+        let branch = TreeBranch {
+            indent: "  ",
+            last: true,
+        };
         lines.push(Line::from(Span::styled(
-            format!("  └      +{overflow} more"),
+            format!("{}     +{overflow} more", branch.prefix()),
             t.dim,
         )));
     }

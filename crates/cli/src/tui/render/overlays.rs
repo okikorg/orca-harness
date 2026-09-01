@@ -47,7 +47,7 @@ pub(crate) fn mutation_diff_preview_lines(
 
     let hidden = changed.len().saturating_sub(MAX_EDIT_DIFF_ROWS);
     let prefix = format!("    {continuation} ");
-    let diff_width = width.saturating_sub(prefix.chars().count() + 2).max(16);
+    let diff_width = width.saturating_sub(view::cell_width(&prefix) + 2).max(16);
     let mut lines = changed
         .into_iter()
         .take(MAX_EDIT_DIFF_ROWS)
