@@ -10,7 +10,8 @@ use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::components::composer::Composer;
-use crate::tui::components::status_bar::StatusBar;
+use crate::tui::components::approval::ApprovalPrompt;
+use crate::tui::components::status_bar::{self, Segment, StatusBar};
 use crate::tui::components::tree::TreeBranch;
 use crate::tui::components::welcome::Welcome;
 use crate::view::{self, theme};
@@ -175,7 +176,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
 
     frame.render_widget(Paragraph::new(Text::from(live)), live_area);
 
-    let placeholder = if app.ask.is_some() {
+    let placeholder = if app.approval.is_some() {
+        "answering approval above"
+    } else if app.ask.is_some() {
         "answering agent clarification above"
     } else if app.running() {
         "type another prompt to queue"
@@ -210,7 +213,17 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         "idle"
     };
-    let hint = if app.scroll > 0 {
+    let approval_hint = app.approval.as_ref().map(|request| {
+        ApprovalPrompt {
+            tool_name: &request.tool_name,
+            detail: &request.detail,
+            yes_no: request.yes_no,
+        }
+        .hint()
+    });
+    let hint = if let Some(hint) = approval_hint.as_deref() {
+        hint
+    } else if app.scroll > 0 {
         // Fresh scroll: name the two ways to get text out, since capture
         // means a plain drag will not select. Then it settles back to the
         // shorter form so the status line is not permanently crowded.
@@ -246,24 +259,39 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         "enter send · @ paths · ctrl+o expand · wheel scroll"
     };
-    let mode = mode_segment(&app.cfg.mode, &app.cfg.plan);
-    let context = context_segment(app.context_tokens, app.context_window);
-    let stats = stats_segments(&app.cfg.stats);
-    let todo = todo_segment(&app.cfg.todos);
-    let queue = queue_segment(app.prompt_queue.len());
-    let workspace = workspace_status_name(&app.cfg.workspace_name);
-    let status = StatusBar {
-        model: &app.cfg.model_name,
-        effort: app.reasoning_effort.as_deref(),
-        state,
-        mode: &mode,
-        context: &context,
-        stats: &stats,
-        todo: &todo,
-        queue: &queue,
-        hint,
-        workspace,
-    };
+    let mut status = StatusBar::new();
+    status
+        .push(Segment::new(&app.cfg.model_name, status_bar::MODEL))
+        .push(Segment::new(
+            app.reasoning_effort
+                .as_deref()
+                .map(|effort| format!("effort {effort}"))
+                .unwrap_or_default(),
+            status_bar::EFFORT,
+        ))
+        .push(Segment::new(state, status_bar::KEEP))
+        .push(Segment::new(
+            mode_segment(&app.cfg.mode, &app.cfg.plan),
+            status_bar::KEEP,
+        ))
+        .push(Segment::new(
+            context_segment(app.context_tokens, app.context_window),
+            status_bar::CONTEXT,
+        ));
+    for stat in stats_segments(&app.cfg.stats) {
+        status.push(Segment::new(stat, status_bar::STATS));
+    }
+    status
+        .push(Segment::new(todo_segment(&app.cfg.todos), status_bar::COUNTS))
+        .push(Segment::new(
+            queue_segment(app.prompt_queue.len()),
+            status_bar::COUNTS,
+        ))
+        .push(Segment::new(hint, status_bar::HINT))
+        .trailing(Segment::new(
+            workspace_status_name(&app.cfg.workspace_name),
+            status_bar::WORKSPACE,
+        ));
     frame.render_widget(
         Paragraph::new(status.line(left_width, theme().dim)),
         status_area,
@@ -296,19 +324,19 @@ pub(crate) fn stabilize_transcript_scroll(app: &mut App, max_scroll: usize) {
 
 /// Status-line segments for live background work; empty when idle so the
 /// line stays quiet. Each persistent compute tool is unnumbered (0 or 1).
-pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> String {
-    let mut out = String::new();
+pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> Vec<String> {
+    let mut out = Vec::new();
     if stats.processes() > 0 {
-        out.push_str(&format!(" · procs {}", stats.processes()));
+        out.push(format!("procs {}", stats.processes()));
     }
     if stats.kernels() > 0 {
-        out.push_str(" · pykernel");
+        out.push("pykernel".to_string());
     }
     if stats.bun_repls() > 0 {
-        out.push_str(" · bun_repl");
+        out.push("bun_repl".to_string());
     }
     if stats.agents() > 0 {
-        out.push_str(&format!(" · agents {}", stats.agents()));
+        out.push(format!("agents {}", stats.agents()));
     }
     out
 }
@@ -317,7 +345,7 @@ pub(crate) fn queue_segment(queued: usize) -> String {
     if queued == 0 {
         String::new()
     } else {
-        format!(" · queued {queued}")
+        format!("queued {queued}")
     }
 }
 
@@ -337,14 +365,14 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
         crate::mode::Mode::Normal => {
             return String::new();
         }
-        crate::mode::Mode::Auto => return " · auto".to_string(),
-        crate::mode::Mode::Yolo => return " · yolo".to_string(),
+        crate::mode::Mode::Auto => return "auto".to_string(),
+        crate::mode::Mode::Yolo => return "yolo".to_string(),
         crate::mode::Mode::Plan => {}
     }
     match plan.written().len() {
-        0 => " · plan mode".to_string(),
-        1 => " · plan mode · 1 plan".to_string(),
-        n => format!(" · plan mode · {n} plans"),
+        0 => "plan mode".to_string(),
+        1 => "plan mode · 1 plan".to_string(),
+        n => format!("plan mode · {n} plans"),
     }
 }
 
@@ -352,7 +380,7 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
 pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
     match todos.progress() {
         (_, 0) => String::new(),
-        (done, total) => format!(" · todo {done}/{total}"),
+        (done, total) => format!("todo {done}/{total}"),
     }
 }
 
@@ -411,27 +439,12 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
 pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     if let Some(request) = &app.approval {
-        return vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  approval required: {}", request.tool_name),
-                t.warn,
-            )),
-            Line::from(Span::raw(format!(
-                "    {}",
-                view::truncate_line(&request.detail, width.saturating_sub(6))
-            ))),
-            Line::from(Span::styled(
-                match request.yes_no {
-                    true => "    [y] yes   [n] no",
-                    false => {
-                        "    [y] allow once   [a] always (this session)   \
-                         [A] always (save for workspace)   [n] deny"
-                    }
-                },
-                t.dim,
-            )),
-        ];
+        return ApprovalPrompt {
+            tool_name: &request.tool_name,
+            detail: &request.detail,
+            yes_no: request.yes_no,
+        }
+        .lines(width);
     }
     if let Some(ask) = &app.ask {
         return ask.lines(width);

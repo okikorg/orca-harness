@@ -568,8 +568,8 @@
             "model not first: {status}"
         );
         assert!(
-            status.ends_with("· orca-harness"),
-            "workspace not last: {status}"
+            status.trim_end().ends_with("  orca-harness"),
+            "workspace not anchored right: {status}"
         );
         assert!(
             !status.contains("cwd"),

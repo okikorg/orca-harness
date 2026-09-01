@@ -1,43 +1,152 @@
 //! Standard single-row application status bar.
+//!
+//! Segments carry a priority. When the row does not fit, the lowest
+//! priority leaves first, so a narrow terminal keeps the run state, the
+//! mode, the context gauge and the key hint, and gives up the reasoning
+//! effort, the background stats and the counts. The workspace is anchored
+//! at the right edge. Only when nothing droppable is left does the row
+//! truncate.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::view;
 
-pub struct StatusBar<'a> {
-    pub model: &'a str,
-    pub effort: Option<&'a str>,
-    pub state: &'a str,
-    pub mode: &'a str,
-    pub context: &'a str,
-    pub stats: &'a str,
-    pub todo: &'a str,
-    pub queue: &'a str,
-    pub hint: &'a str,
-    pub workspace: &'a str,
+/// Never dropped: the run state and the mode.
+pub const KEEP: u8 = u8::MAX;
+pub const CONTEXT: u8 = 8;
+pub const HINT: u8 = 7;
+pub const MODEL: u8 = 6;
+pub const WORKSPACE: u8 = 5;
+/// Todo progress and the queue length.
+pub const COUNTS: u8 = 4;
+/// Background processes, kernels, agents.
+pub const STATS: u8 = 3;
+pub const EFFORT: u8 = 2;
+
+const SEPARATOR: &str = " · ";
+/// Cells between the last segment and a right-anchored trailing segment.
+const TRAILING_GAP: usize = 2;
+
+#[derive(Clone, Debug)]
+pub struct Segment {
+    text: String,
+    priority: u8,
+    style: Option<Style>,
 }
 
-impl StatusBar<'_> {
+impl Segment {
+    pub fn new(text: impl Into<String>, priority: u8) -> Self {
+        Self {
+            text: text.into(),
+            priority,
+            style: None,
+        }
+    }
+
+    /// Paint this segment differently from the bar. Presence, not paint,
+    /// is the normal signal; reserve this for a state the user must not
+    /// miss.
+    pub fn styled(mut self, style: Style) -> Self {
+        self.style = Some(style);
+        self
+    }
+
+    fn width(&self) -> usize {
+        view::cell_width(&self.text)
+    }
+}
+
+#[derive(Default)]
+pub struct StatusBar {
+    segments: Vec<Segment>,
+    trailing: Option<Segment>,
+}
+
+impl StatusBar {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a segment; empty text is skipped so callers can pass optional
+    /// segments without branching.
+    pub fn push(&mut self, segment: Segment) -> &mut Self {
+        if !segment.text.is_empty() {
+            self.segments.push(segment);
+        }
+        self
+    }
+
+    /// The segment pinned to the right edge.
+    pub fn trailing(&mut self, segment: Segment) -> &mut Self {
+        if !segment.text.is_empty() {
+            self.trailing = Some(segment);
+        }
+        self
+    }
+
     pub fn line(&self, width: usize, style: Style) -> Line<'static> {
-        let effort = self
-            .effort
-            .map(|effort| format!(" · effort {effort}"))
-            .unwrap_or_default();
-        let status = format!(
-            " {}{} · {}{} · {}{}{}{} · {} · {}",
-            self.model,
-            effort,
-            self.state,
-            self.mode,
-            self.context,
-            self.stats,
-            self.todo,
-            self.queue,
-            self.hint,
-            self.workspace,
-        );
-        Line::from(Span::styled(view::truncate_line(&status, width), style))
+        let mut kept: Vec<&Segment> = self.segments.iter().collect();
+        let mut trailing = self.trailing.as_ref();
+        loop {
+            let body = 1
+                + kept.iter().map(|segment| segment.width()).sum::<usize>()
+                + view::cell_width(SEPARATOR) * kept.len().saturating_sub(1);
+            let total = body + trailing.map_or(0, |segment| TRAILING_GAP + segment.width());
+            if total <= width {
+                return self.assemble(&kept, trailing, width.saturating_sub(body), style);
+            }
+            // Drop the lowest priority; on a tie, the rightmost goes first.
+            let lowest = kept
+                .iter()
+                .enumerate()
+                .rev()
+                .min_by_key(|(_, segment)| segment.priority)
+                .map(|(index, segment)| (segment.priority, Some(index)));
+            let trailing_priority = trailing.map(|segment| (segment.priority, None));
+            match [lowest, trailing_priority]
+                .into_iter()
+                .flatten()
+                .min_by_key(|(priority, _)| *priority)
+            {
+                Some((priority, _)) if priority == KEEP => {
+                    return self.assemble(&kept, None, 0, style);
+                }
+                Some((_, Some(index))) => {
+                    kept.remove(index);
+                }
+                Some((_, None)) => trailing = None,
+                None => return self.assemble(&kept, None, 0, style),
+            }
+        }
+    }
+
+    fn assemble(
+        &self,
+        kept: &[&Segment],
+        trailing: Option<&Segment>,
+        slack: usize,
+        style: Style,
+    ) -> Line<'static> {
+        let mut spans = vec![Span::styled(" ", style)];
+        for (index, segment) in kept.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(SEPARATOR, style));
+            }
+            spans.push(Span::styled(
+                segment.text.clone(),
+                segment.style.unwrap_or(style),
+            ));
+        }
+        if let Some(segment) = trailing {
+            let pad = slack.saturating_sub(segment.width()).max(TRAILING_GAP);
+            spans.push(Span::styled(" ".repeat(pad), style));
+            spans.push(Span::styled(
+                segment.text.clone(),
+                segment.style.unwrap_or(style),
+            ));
+        }
+        Line::from(spans)
     }
 }
 
@@ -45,73 +154,78 @@ impl StatusBar<'_> {
 mod tests {
     use super::*;
 
+    fn text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn bar() -> StatusBar {
+        let mut bar = StatusBar::new();
+        bar.push(Segment::new("model", MODEL))
+            .push(Segment::new("effort high", EFFORT))
+            .push(Segment::new("idle", KEEP))
+            .push(Segment::new("plan mode", KEEP))
+            .push(Segment::new("ctx 10%", CONTEXT))
+            .push(Segment::new("", STATS))
+            .push(Segment::new("todo 1/3", COUNTS))
+            .push(Segment::new("enter send", HINT))
+            .trailing(Segment::new("repo", WORKSPACE));
+        bar
+    }
+
     #[test]
-    fn assembles_segments_in_the_standard_order() {
-        let line = StatusBar {
-            model: "model",
-            effort: None,
-            state: "idle",
-            mode: " · normal",
-            context: "ctx 10%",
-            stats: "",
-            todo: "",
-            queue: "",
-            hint: "enter send",
-            workspace: "repo",
-        }
-        .line(100, Style::default());
-        assert_eq!(
-            line.spans[0].content.as_ref(),
-            " model · idle · normal · ctx 10% · enter send · repo"
+    fn assembles_segments_in_order_and_anchors_the_workspace_right() {
+        let line = bar().line(80, Style::default());
+        let text = text(&line);
+        assert!(
+            text.starts_with(" model · effort high · idle · plan mode · ctx 10% · todo 1/3 · enter send"),
+            "{text}"
         );
+        assert!(text.ends_with("repo"), "{text}");
+        assert_eq!(line.width(), 80);
+    }
+
+    #[test]
+    fn narrow_rows_drop_the_lowest_priority_first() {
+        let text = text(&bar().line(66, Style::default()));
+        assert!(!text.contains("effort"), "effort goes first: {text}");
+        assert!(text.contains("todo 1/3"), "{text}");
+        let text = super::tests::text(&bar().line(44, Style::default()));
+        assert!(!text.contains("todo"), "{text}");
+        assert!(text.contains("enter send"), "hint outlives counts: {text}");
+        assert!(text.contains("plan mode"), "{text}");
+    }
+
+    #[test]
+    fn keep_segments_survive_everything_else() {
+        let line = bar().line(12, Style::default());
+        assert_eq!(text(&line), " idle · plan mode");
     }
 
     /// The yolo segment renders like any other mode segment — plain
-    /// text, one unstyled span. Presence, not paint, is the signal.
+    /// text, the bar's own style. Presence, not paint, is the signal.
     #[test]
     fn yolo_segment_renders_like_any_other() {
-        let line = StatusBar {
-            model: "model",
-            effort: None,
-            state: "idle",
-            mode: " · yolo",
-            context: "ctx 10%",
-            stats: "",
-            todo: "",
-            queue: "",
-            hint: "enter send",
-            workspace: "repo",
-        }
-        .line(200, Style::default());
-        assert_eq!(
-            line.spans.len(),
-            1,
-            "no special styling for any mode segment"
-        );
-        assert_eq!(
-            line.spans[0].content.as_ref(),
-            " model · idle · yolo · ctx 10% · enter send · repo"
-        );
+        let mut bar = StatusBar::new();
+        bar.push(Segment::new("idle", KEEP))
+            .push(Segment::new("yolo", KEEP));
+        let style = Style::default().fg(ratatui::style::Color::Red);
+        let line = bar.line(40, style);
+        assert!(line.spans.iter().all(|span| span.style == style));
+        assert_eq!(text(&line), " idle · yolo");
     }
 
     #[test]
     fn selected_reasoning_effort_follows_the_model() {
-        let line = StatusBar {
-            model: "gpt-5",
-            effort: Some("high"),
-            state: "idle",
-            mode: "",
-            context: "ctx 10%",
-            stats: "",
-            todo: "",
-            queue: "",
-            hint: "enter send",
-            workspace: "repo",
-        }
-        .line(200, Style::default());
+        let mut bar = StatusBar::new();
+        bar.push(Segment::new("gpt-5", MODEL))
+            .push(Segment::new("effort high", EFFORT))
+            .push(Segment::new("idle", KEEP));
         assert_eq!(
-            line.spans[0].content.as_ref(),
-            " gpt-5 · effort high · idle · ctx 10% · enter send · repo"
+            text(&bar.line(60, Style::default())),
+            " gpt-5 · effort high · idle"
         );
     }
 }

@@ -341,20 +341,20 @@ mod mode_rewind_todo_tests {
         let plan = crate::plan::PlanArea::new();
         assert_eq!(mode_segment(&mode, &plan), "");
         mode.set(Mode::Plan);
-        assert_eq!(mode_segment(&mode, &plan), " · plan mode");
+        assert_eq!(mode_segment(&mode, &plan), "plan mode");
         // A landed plan is visible without waiting for /mode normal.
         plan.record("docs/plan/2026-08-22-a.md");
-        assert_eq!(mode_segment(&mode, &plan), " · plan mode · 1 plan");
+        assert_eq!(mode_segment(&mode, &plan), "plan mode · 1 plan");
         plan.record("docs/plan/2026-08-22-b.md");
-        assert_eq!(mode_segment(&mode, &plan), " · plan mode · 2 plans");
+        assert_eq!(mode_segment(&mode, &plan), "plan mode · 2 plans");
         // Normal mode says nothing, whatever was written.
         mode.set(Mode::Normal);
         assert_eq!(mode_segment(&mode, &plan), "");
         mode.set(Mode::Auto);
-        assert_eq!(mode_segment(&mode, &plan), " · auto");
+        assert_eq!(mode_segment(&mode, &plan), "auto");
         // Yolo keeps the warning up whatever else happens.
         mode.set(Mode::Yolo);
-        assert_eq!(mode_segment(&mode, &plan), " · yolo");
+        assert_eq!(mode_segment(&mode, &plan), "yolo");
     }
 
     /// `/mode yolo` lands on the handle (so gates see it immediately)
@@ -400,7 +400,7 @@ mod mode_rewind_todo_tests {
             ]),
         )
         .await;
-        assert_eq!(todo_segment(&todos), " · todo 1/3");
+        assert_eq!(todo_segment(&todos), "todo 1/3");
     }
 
     #[tokio::test]

@@ -14,8 +14,14 @@ const INSPECTOR_LABEL_CAP: usize = 14;
 /// Wrapped prose with the same straight spine used by code previews,
 /// clarification inputs, and transcript detail rows.
 pub fn inspector_text(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    spine_text(text, width, INSPECTOR_BODY_INDENT, style)
+}
+
+/// Prose wrapped beside a `│` spine at `indent`. Blank source lines keep
+/// the spine so a multi-paragraph body reads as one block.
+pub fn spine_text(text: &str, width: usize, indent: &str, style: Style) -> Vec<Line<'static>> {
     let text = view::sanitize_cells(text);
-    let prefix = format!("{INSPECTOR_BODY_INDENT}│");
+    let prefix = format!("{indent}│");
     let text_prefix = format!("{prefix} ");
     let body_width = width.saturating_sub(view::cell_width(&text_prefix)).max(8);
     let mut lines = Vec::new();

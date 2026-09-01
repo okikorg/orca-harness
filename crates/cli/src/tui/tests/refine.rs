@@ -118,8 +118,8 @@ mod refine_command_tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(prompt.contains("[y] yes"));
-        assert!(prompt.contains("[n] no"));
+        assert!(prompt.contains("y yes"), "{prompt}");
+        assert!(prompt.contains("n no"), "{prompt}");
         assert!(!prompt.contains("always"));
 
         // a and A are dead keys here; y answers.
