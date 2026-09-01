@@ -3,6 +3,8 @@
 
 use thiserror::Error;
 
+use crate::Usage;
+
 /// Terminal failure of an agent run.
 ///
 /// Note that a *tool* failing at runtime is not terminal: the Dispatcher
@@ -50,6 +52,37 @@ pub enum ModelError {
     /// The provider answered but the payload could not be interpreted.
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+
+    /// The provider stopped because its output limit was reached.
+    #[error("output limit reached: {message}")]
+    OutputLimit {
+        message: String,
+        usage: Option<Usage>,
+    },
+
+    /// The provider stopped generation because content was filtered.
+    #[error("content filtered: {message}")]
+    ContentFiltered {
+        message: String,
+        usage: Option<Usage>,
+    },
+
+    /// A streaming response ended without its completion marker.
+    #[error("incomplete response: {message}")]
+    IncompleteResponse {
+        message: String,
+        usage: Option<Usage>,
+    },
+
+    /// A completed response contained invalid JSON tool arguments.
+    #[error("malformed arguments for tool {tool_name} ({argument_bytes} bytes): {message}")]
+    MalformedToolArguments {
+        tool_name: String,
+        argument_bytes: usize,
+        finish_reason: Option<String>,
+        message: String,
+        usage: Option<Usage>,
+    },
 }
 
 /// Failure raised by a [`crate::Tool`] (or an `around_tool` wrapper).

@@ -4,9 +4,8 @@
 
 use orca_harness_core::{ModelDelta, ModelError, ModelResponse, ToolCall, Usage};
 use serde::Deserialize;
-use serde_json::Value;
 
-use super::WireUsage;
+use super::{parse_tool_arguments, WireUsage};
 
 /// Reassembles SSE `data:` payloads from arbitrarily-split byte chunks.
 #[derive(Default)]
@@ -28,6 +27,16 @@ impl SseLineBuffer {
         }
         payloads
     }
+
+    /// Consume a final SSE line when the connection omitted its trailing
+    /// newline. Non-`data:` remainder is ignored, matching `push`.
+    pub(crate) fn finish(&mut self) -> Vec<String> {
+        let line = std::mem::take(&mut self.buf);
+        line.trim()
+            .strip_prefix("data:")
+            .map(|payload| vec![payload.trim().to_string()])
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Deserialize)]
@@ -40,6 +49,7 @@ struct WireChunk {
 #[derive(Deserialize)]
 struct WireChunkChoice {
     delta: WireDelta,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -80,6 +90,7 @@ pub(crate) struct ChunkAccumulator {
     text: String,
     tool_calls: Vec<PartialToolCall>,
     usage: Option<Usage>,
+    finish_reason: Option<String>,
 }
 
 impl ChunkAccumulator {
@@ -90,8 +101,11 @@ impl ChunkAccumulator {
     /// Apply one `data:` payload (already stripped of SSE framing, not
     /// `[DONE]`). Returns the deltas this chunk contributes.
     pub(crate) fn apply(&mut self, payload: &str) -> Result<Vec<ModelDelta>, ModelError> {
-        let chunk: WireChunk = serde_json::from_str(payload).map_err(|e| {
-            ModelError::InvalidResponse(format!("bad stream chunk: {e}: {payload}"))
+        let chunk: WireChunk = serde_json::from_str(payload).map_err(|error| {
+            ModelError::InvalidResponse(format!(
+                "bad stream chunk ({} bytes): {error}",
+                payload.len()
+            ))
         })?;
 
         if let Some(usage) = chunk.usage {
@@ -100,6 +114,9 @@ impl ChunkAccumulator {
 
         let mut deltas = Vec::new();
         for choice in chunk.choices {
+            if choice.finish_reason.is_some() {
+                self.finish_reason = choice.finish_reason;
+            }
             let delta = choice.delta;
             for text in [delta.reasoning, delta.reasoning_content]
                 .into_iter()
@@ -138,7 +155,34 @@ impl ChunkAccumulator {
         Ok(deltas)
     }
 
-    pub(crate) fn finish(self) -> Result<ModelResponse, ModelError> {
+    pub(crate) fn finish(self, done_observed: bool) -> Result<ModelResponse, ModelError> {
+        let tool_diagnostic = self.tool_diagnostic();
+        match self.finish_reason.as_deref() {
+            Some("length") => {
+                return Err(ModelError::OutputLimit {
+                    message: format!(
+                        "model output ended while generating{tool_diagnostic}; retry with a smaller payload"
+                    ),
+                    usage: self.usage,
+                });
+            }
+            Some("content_filter") => {
+                return Err(ModelError::ContentFiltered {
+                    message: format!("provider stopped generation{tool_diagnostic}"),
+                    usage: self.usage,
+                });
+            }
+            _ => {}
+        }
+        if !done_observed {
+            return Err(ModelError::IncompleteResponse {
+                message: format!(
+                    "stream ended before [DONE]{tool_diagnostic}; retry with a smaller payload"
+                ),
+                usage: self.usage,
+            });
+        }
+
         if self.tool_calls.is_empty() {
             return Ok(ModelResponse::Final {
                 text: self.text,
@@ -151,22 +195,21 @@ impl ChunkAccumulator {
             .into_iter()
             .enumerate()
             .map(|(index, partial)| {
-                let arguments = if partial.arguments.trim().is_empty() {
-                    Ok(Value::Object(Default::default()))
-                } else {
-                    serde_json::from_str(&partial.arguments)
-                };
-                arguments
-                    .map(|arguments| ToolCall {
-                        id: if partial.id.is_empty() {
-                            format!("call_{index}")
-                        } else {
-                            partial.id
-                        },
-                        name: partial.name,
-                        arguments,
-                    })
-                    .map_err(|e| ModelError::InvalidResponse(format!("bad tool arguments: {e}")))
+                parse_tool_arguments(
+                    &partial.name,
+                    &partial.arguments,
+                    self.finish_reason.as_deref(),
+                    self.usage,
+                )
+                .map(|arguments| ToolCall {
+                    id: if partial.id.is_empty() {
+                        format!("call_{index}")
+                    } else {
+                        partial.id
+                    },
+                    name: partial.name,
+                    arguments,
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -179,6 +222,23 @@ impl ChunkAccumulator {
             calls,
             usage: self.usage,
         })
+    }
+
+    fn tool_diagnostic(&self) -> String {
+        self.tool_calls
+            .last()
+            .map(|call| {
+                format!(
+                    " tool {} arguments ({} bytes)",
+                    if call.name.is_empty() {
+                        "<unknown>"
+                    } else {
+                        &call.name
+                    },
+                    call.arguments.len()
+                )
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -216,6 +276,85 @@ mod tests {
     }
 
     #[test]
+    fn sse_buffer_consumes_final_frame_without_newline() {
+        let mut buf = SseLineBuffer::default();
+        assert!(buf.push(b"data: [DONE]").is_empty());
+        assert_eq!(buf.finish(), vec!["[DONE]".to_string()]);
+    }
+
+    #[test]
+    fn partial_tool_json_with_length_is_output_limit_and_keeps_usage() {
+        let mut acc = ChunkAccumulator::new();
+        apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{\"content\":\"unfinished"}}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":12,"completion_tokens":34}}"#,
+            ],
+        );
+
+        let error = acc.finish(true).unwrap_err();
+        match error {
+            ModelError::OutputLimit { message, usage } => {
+                assert!(message.contains("write_file arguments (22 bytes)"));
+                let usage = usage.expect("failed-turn usage retained");
+                assert_eq!(usage.input_tokens, 12);
+                assert_eq!(usage.output_tokens, 34);
+            }
+            other => panic!("expected OutputLimit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_done_is_incomplete_even_with_valid_terminal_choice() {
+        let mut acc = ChunkAccumulator::new();
+        apply_all(
+            &mut acc,
+            &[r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#],
+        );
+        assert!(matches!(
+            acc.finish(false),
+            Err(ModelError::IncompleteResponse { .. })
+        ));
+    }
+
+    #[test]
+    fn content_filter_is_distinct_and_not_parsed_as_tool_json() {
+        let mut acc = ChunkAccumulator::new();
+        apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"write_file","arguments":"{\"content\":"}}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"content_filter"}]}"#,
+            ],
+        );
+        assert!(matches!(
+            acc.finish(true),
+            Err(ModelError::ContentFiltered { .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_tool_json_after_tool_calls_is_not_classified_as_truncated() {
+        let mut acc = ChunkAccumulator::new();
+        apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"shell","arguments":"{not-json}"}}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+        );
+        assert!(matches!(
+            acc.finish(true),
+            Err(ModelError::MalformedToolArguments {
+                ref tool_name,
+                argument_bytes: 10,
+                ..
+            }) if tool_name == "shell"
+        ));
+    }
+
+    #[test]
     fn text_stream_emits_deltas_and_accumulates_final_text() {
         let mut acc = ChunkAccumulator::new();
         let deltas = apply_all(
@@ -227,7 +366,7 @@ mod tests {
             ],
         );
         assert_eq!(delta_tags(&deltas), vec!["text:Hel", "text:lo"]);
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::Final { text, usage } => {
                 assert_eq!(text, "Hello");
                 assert!(usage.is_none());
@@ -251,7 +390,7 @@ mod tests {
             delta_tags(&deltas),
             vec!["reasoning:let me think", "reasoning: more", "text:answer"]
         );
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::Final { text, .. } => assert_eq!(text, "answer"),
             other => panic!("expected Final, got {other:?}"),
         }
@@ -273,7 +412,7 @@ mod tests {
             delta_tags(&deltas),
             vec!["tool_input:{\"command\":", "tool_input:\"ls\"}"]
         );
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::ToolCalls { content, calls, .. } => {
                 assert!(content.is_none());
                 assert_eq!(calls.len(), 1);
@@ -295,7 +434,7 @@ mod tests {
                 r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"pattern\":\"x\"}"}}]},"finish_reason":null}]}"#,
             ],
         );
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::ToolCalls { calls, .. } => {
                 assert_eq!(calls.len(), 2);
                 assert_eq!(calls[0].name, "grep");
@@ -319,7 +458,7 @@ mod tests {
                 r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":60,"cache_write_tokens":40}}}"#,
             ],
         );
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::Final { usage, .. } => {
                 let usage = usage.expect("usage captured");
                 assert_eq!(usage.cache_read_tokens, 20, "60 reported minus 40 written");
@@ -341,7 +480,7 @@ mod tests {
                 r#"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34,"prompt_tokens_details":{"cached_tokens":5}}}"#,
             ],
         );
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::Final { usage, .. } => {
                 let usage = usage.expect("usage captured");
                 // prompt_tokens (12) includes the 5 cached: normalized
@@ -365,7 +504,7 @@ mod tests {
                 r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"shell","arguments":"{}"}}]},"finish_reason":null}]}"#,
             ],
         );
-        match acc.finish().unwrap() {
+        match acc.finish(true).unwrap() {
             ModelResponse::ToolCalls { content, .. } => {
                 assert_eq!(content.as_deref(), Some("Running ls."));
             }

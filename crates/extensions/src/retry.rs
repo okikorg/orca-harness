@@ -160,8 +160,8 @@ impl Extension for ToolRetry {
     }
 }
 
-/// Wraps a [`Model`], retrying transient [`ModelError::Request`] failures.
-/// `InvalidResponse` errors are not retried — they are deterministic.
+/// Wraps a [`Model`], retrying transient transport and incomplete-generation
+/// failures. Invalid, filtered, and malformed responses are deterministic.
 pub struct RetryModel<M: Model> {
     inner: M,
     max_attempts: u32,
@@ -199,6 +199,15 @@ impl<M: Model> RetryModel<M> {
             callback(next_attempt, self.max_attempts, error);
         }
     }
+
+    fn retryable(error: &ModelError) -> bool {
+        matches!(
+            error,
+            ModelError::Request(_)
+                | ModelError::OutputLimit { .. }
+                | ModelError::IncompleteResponse { .. }
+        )
+    }
 }
 
 #[async_trait]
@@ -212,17 +221,14 @@ impl<M: Model> Model for RetryModel<M> {
         for attempt in 1..=self.max_attempts {
             match self.inner.generate(context, tools).await {
                 Ok(response) => return Ok(response),
-                // Deterministic; retrying will not help.
-                Err(err @ (ModelError::InvalidResponse(_) | ModelError::Authentication(_))) => {
-                    return Err(err)
-                }
-                Err(err) => {
+                Err(err) if Self::retryable(&err) => {
                     if attempt < self.max_attempts {
                         self.notify_retry(attempt + 1, &err);
                         tokio::time::sleep(self.backoff).await;
                     }
                     last_err = Some(err);
                 }
+                Err(err) => return Err(err),
             }
         }
         Err(last_err.unwrap_or_else(|| ModelError::Request("retry: no attempts made".into())))
@@ -238,17 +244,14 @@ impl<M: Model> Model for RetryModel<M> {
         for attempt in 1..=self.max_attempts {
             match self.inner.generate_streaming(context, tools, sink).await {
                 Ok(response) => return Ok(response),
-                // Deterministic; retrying will not help.
-                Err(err @ (ModelError::InvalidResponse(_) | ModelError::Authentication(_))) => {
-                    return Err(err)
-                }
-                Err(err) => {
+                Err(err) if Self::retryable(&err) => {
                     if attempt < self.max_attempts {
                         self.notify_retry(attempt + 1, &err);
                         tokio::time::sleep(self.backoff).await;
                     }
                     last_err = Some(err);
                 }
+                Err(err) => return Err(err),
             }
         }
         Err(last_err.unwrap_or_else(|| ModelError::Request("retry: no attempts made".into())))

@@ -18,6 +18,24 @@ use orca_harness_core::{
 
 use self::stream::{ChunkAccumulator, SseLineBuffer};
 
+fn parse_tool_arguments(
+    tool_name: &str,
+    arguments: &str,
+    finish_reason: Option<&str>,
+    usage: Option<Usage>,
+) -> Result<Value, ModelError> {
+    if arguments.trim().is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    serde_json::from_str(arguments).map_err(|error| ModelError::MalformedToolArguments {
+        tool_name: tool_name.to_string(),
+        argument_bytes: arguments.len(),
+        finish_reason: finish_reason.map(str::to_string),
+        message: error.to_string(),
+        usage,
+    })
+}
+
 pub struct OpenAiModel {
     client: reqwest::Client,
     base_url: String,
@@ -337,6 +355,7 @@ impl WireUsage {
 #[derive(Deserialize)]
 struct Choice {
     message: ChoiceMessage,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -381,6 +400,24 @@ impl Model for OpenAiModel {
 
         let usage = completion.usage.map(WireUsage::into_usage);
 
+        match choice.finish_reason.as_deref() {
+            Some("length") => {
+                return Err(ModelError::OutputLimit {
+                    message:
+                        "model output ended before the response completed; retry with a smaller payload"
+                            .into(),
+                    usage,
+                });
+            }
+            Some("content_filter") => {
+                return Err(ModelError::ContentFiltered {
+                    message: "provider stopped generation".into(),
+                    usage,
+                });
+            }
+            _ => {}
+        }
+
         if choice.message.tool_calls.is_empty() {
             return Ok(ModelResponse::Final {
                 text: choice.message.content.unwrap_or_default(),
@@ -393,18 +430,17 @@ impl Model for OpenAiModel {
             .tool_calls
             .into_iter()
             .map(|c| {
-                let arguments = if c.function.arguments.trim().is_empty() {
-                    Ok(Value::Object(Default::default()))
-                } else {
-                    serde_json::from_str(&c.function.arguments)
-                };
-                arguments
-                    .map(|arguments| ToolCall {
-                        id: c.id,
-                        name: c.function.name,
-                        arguments,
-                    })
-                    .map_err(|e| ModelError::InvalidResponse(format!("bad tool arguments: {e}")))
+                parse_tool_arguments(
+                    &c.function.name,
+                    &c.function.arguments,
+                    choice.finish_reason.as_deref(),
+                    usage,
+                )
+                .map(|arguments| ToolCall {
+                    id: c.id,
+                    name: c.function.name,
+                    arguments,
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -429,11 +465,13 @@ impl Model for OpenAiModel {
         let mut bytes = response.bytes_stream();
         let mut lines = SseLineBuffer::default();
         let mut accumulator = ChunkAccumulator::new();
+        let mut done_observed = false;
 
         'body: while let Some(chunk) = bytes.next().await {
             let chunk = chunk.map_err(|e| ModelError::Request(e.to_string()))?;
             for payload in lines.push(&chunk) {
                 if payload == "[DONE]" {
+                    done_observed = true;
                     break 'body;
                 }
                 for delta in accumulator.apply(&payload)? {
@@ -442,7 +480,19 @@ impl Model for OpenAiModel {
             }
         }
 
-        accumulator.finish()
+        if !done_observed {
+            for payload in lines.finish() {
+                if payload == "[DONE]" {
+                    done_observed = true;
+                    break;
+                }
+                for delta in accumulator.apply(&payload)? {
+                    sink.emit(delta).await;
+                }
+            }
+        }
+
+        accumulator.finish(done_observed)
     }
 }
 

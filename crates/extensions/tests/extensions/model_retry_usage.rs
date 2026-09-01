@@ -58,6 +58,48 @@ async fn retry_model_does_not_retry_authentication_errors() {
 }
 
 #[tokio::test]
+async fn retry_model_retries_incomplete_generation_with_a_bound() {
+    struct TruncatedThenComplete(AtomicU32);
+
+    #[async_trait::async_trait]
+    impl Model for TruncatedThenComplete {
+        async fn generate(
+            &self,
+            _context: &orca_harness_core::Context,
+            _tools: &[orca_harness_core::ToolSchema],
+        ) -> Result<ModelResponse, ModelError> {
+            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(ModelError::IncompleteResponse {
+                    message: "stream ended before [DONE]".into(),
+                    usage: Some(Usage {
+                        output_tokens: 10,
+                        ..Default::default()
+                    }),
+                });
+            }
+            Ok(ModelResponse::final_text("recovered"))
+        }
+    }
+
+    let model = RetryModel::new(TruncatedThenComplete(AtomicU32::new(0)), 2)
+        .backoff(Duration::from_millis(1));
+    let answer = Agent::new(model).run("go").await.unwrap();
+    assert_eq!(answer, "recovered");
+}
+
+#[tokio::test]
+async fn retry_model_does_not_retry_malformed_tool_arguments() {
+    assert_model_error_is_not_retried(ModelError::MalformedToolArguments {
+        tool_name: "write_file".into(),
+        argument_bytes: 12_170,
+        finish_reason: Some("tool_calls".into()),
+        message: "invalid JSON".into(),
+        usage: None,
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn retry_model_preserves_streaming_and_retries_request_errors() {
     struct FlakyStreamingModel(Arc<AtomicU32>);
 

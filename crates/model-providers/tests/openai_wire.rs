@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use orca_harness_core::{Context, Model, ModelResponse, ToolSchema};
+use orca_harness_core::{Context, Model, ModelError, ModelResponse, ToolSchema};
 use orca_harness_model_providers::openai::OpenAiModel;
 
 struct Captured {
@@ -125,4 +125,33 @@ async fn unset_knob_sends_no_parallel_tool_calls_field() {
     let sent: Value = serde_json::from_str(&captured.await.unwrap().body).unwrap();
     assert!(sent.get("parallel_tool_calls").is_none());
     assert!(matches!(response, ModelResponse::Final { .. }));
+}
+
+#[tokio::test]
+async fn non_streaming_length_finish_reason_is_typed_and_retains_usage() {
+    let completion = json!({
+        "choices": [{
+            "finish_reason": "length",
+            "message": {"content": null, "tool_calls": [{
+                "id": "a", "type": "function",
+                "function": {"name": "read_file", "arguments": "{\"path\":\"unfinished"}
+            }]}
+        }],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 11}
+    });
+    let (base_url, _) = one_shot_server(completion.to_string()).await;
+    let model = OpenAiModel::new("test-model").base_url(base_url);
+
+    let error = model
+        .generate(&Context::new(), &schemas())
+        .await
+        .unwrap_err();
+    match error {
+        ModelError::OutputLimit { usage, .. } => {
+            let usage = usage.expect("failed-turn usage retained");
+            assert_eq!(usage.input_tokens, 7);
+            assert_eq!(usage.output_tokens, 11);
+        }
+        other => panic!("expected OutputLimit, got {other:?}"),
+    }
 }
