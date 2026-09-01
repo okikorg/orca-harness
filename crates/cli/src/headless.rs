@@ -164,7 +164,7 @@ pub async fn run<M: Model + Clone + 'static>(
     });
     let execution_events = events.execution_marker();
 
-    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone());
+    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws.root());
     let (meter, usage) = UsageMeter::new();
     // PlanGate first: --plan denies before --yolo/--auto-approve can allow.
     let mut agent = Agent::new(model)

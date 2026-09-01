@@ -28,7 +28,7 @@
         <thead><tr><th>Stage</th><th>What happens</th></tr></thead>
         <tbody>
             <tr><td>1. Existing gates</td><td>Plan policy and plugin <code>before_tool</code> rewrites run through the existing extension pipeline.</td></tr>
-            <tr><td>2. Safe bypass</td><td>Known-safe observation, instruction, and coordination tools; ordinary guarded workspace mutations; MCP search/selection; and process list/poll proceed without a review call.</td></tr>
+            <tr><td>2. Safe bypass</td><td>Known-safe observation, instruction, and coordination tools; ordinary guarded workspace mutations; conservative single-command local shell checks; MCP search/selection; and process list/poll proceed without a review call.</td></tr>
             <tr><td>3. Review packet</td><td>The reviewer receives the root user request, origin, tool name, and final effective arguments.</td></tr>
             <tr><td>4. Decision</td><td><code>clear</code> runs those exact arguments; <code>caution</code> returns a model-visible hold reason and runs nothing.</td></tr>
             <tr><td>5. Recovery</td><td>The agent may choose a materially safer action, but an unchanged held action remains held for the current root turn.</td></tr>
@@ -51,10 +51,28 @@
         <code>multi_edit</code>, non-deleting <code>apply_patch</code>,
         <code>mcp_search_tools</code>, <code>mcp_select_tool</code>, and
         <code>process</code> actions <code>list</code> or <code>poll</code>.
+        It also includes plain single-command forms of <code>true</code>,
+        <code>pwd</code>, <code>ls</code>, <code>grep</code>, <code>rg</code>,
+        non-mutating <code>find</code> and <code>sed -n</code>, selected
+        read-only <code>git</code> commands, and local Cargo build, check, test,
+        Clippy, or format-check commands.
         Native mutations retain their workspace, read-before-overwrite,
         exact-match, and transactional guards. Whole-file patch deletion and
         web access remain reviewed.
     </p>
+    <div class="callout">
+        <span class="callout-label">CONSERVATIVE SHELL FAST PATH</span>
+        <p>
+            Shell admission accepts one allowlisted command with workspace-local
+            arguments. Existing symlink operands are resolved against the
+            canonical workspace root. Composition, redirection, expansion,
+            absolute or parent paths, symlink-following or command-capable flags,
+            externally configured ripgrep options, write modes, unknown
+            executables, and extra input fields fall back to exact-action review.
+            This removes a reviewer round trip from routine checks without turning
+            shell into a blanket safe tool.
+        </p>
+    </div>
 </section>
 
 <section class="section" id="auto-authority">

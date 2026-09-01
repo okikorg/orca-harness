@@ -343,7 +343,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         model,
         MemoryExtension::new(memory.clone(), memory_scope.clone()),
     ));
-    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone());
+    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws.root());
     let events = EventStream::from_fn({
         let ui = ui.clone();
         move |event| {
