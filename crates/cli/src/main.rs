@@ -111,9 +111,9 @@ OPTIONS:
   --plan             start in plan mode: read-only tools, and docs/plan/
                      the only writable directory — the agent decides
                      whether to write a plan (/mode opens a picker)
-  --normal           start in normal mode: gated tools ask for approval
-  --auto             start in auto mode (default): safe tools run and
-                     unresolved actions are reviewed against your request
+  --normal           start in normal mode (default): gated tools ask for approval
+  --auto             start in auto mode: safe tools and guarded
+                     file edits run; risk-bearing actions are reviewed
   --yolo             start in yolo mode: every gated tool runs without
                      approval prompts, interactive or headless. The
                      status line reads yolo for the whole session
@@ -201,8 +201,8 @@ impl Config {
     }
 
     /// Safer explicit modes win ambiguous combinations. With no mode flag,
-    /// automatic exact-action review is the CLI default. `--auto-approve`
-    /// alone retains its legacy normal-mode behavior.
+    /// normal human approval is the CLI default. `--auto-approve` alone
+    /// retains the same mode while admitting gated headless actions.
     pub fn mode(&self) -> Mode {
         if self.plan {
             Mode::Plan
@@ -212,10 +212,8 @@ impl Config {
             Mode::Auto
         } else if self.yolo {
             Mode::Yolo
-        } else if self.auto_approve {
-            Mode::Normal
         } else {
-            Mode::Auto
+            Mode::Normal
         }
     }
 }
@@ -282,7 +280,8 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          variables and imports survive across calls; console.log what you need to see), \
          subagent (spawn an independent agent with its \
          own context and tools for a self-contained task; parallel calls fan out), \
-         read_file, write_file, edit_file, list_dir, grep, glob, \
+         read_file, write_file, edit_file, apply_patch (preferred for coordinated \
+         multi-file changes), multi_edit (ordered exact replacements and appends), list_dir, grep, glob, \
          todo_write (the task list for complex or explicitly requested planning), \
          read_tool_result (re-read the full output of a truncated result), \
          memory_search (search global and current-workspace memory), \

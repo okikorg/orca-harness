@@ -1,0 +1,40 @@
+[
+  {
+    "tool": "apply_patch",
+    "scenario": "distinct",
+    "single_average_p50_seconds": {
+      "baseline": 0.001384395,
+      "optimized": 0.00123152734375,
+      "change_percent": -11.04
+    },
+    "concurrent_wall_p50_seconds": {
+      "baseline": 0.007886042,
+      "optimized": 0.00707325,
+      "change_percent": -10.31
+    },
+    "throughput_p50_calls_per_second": {
+      "baseline": 4046.770038878078,
+      "optimized": 4521.077971923541,
+      "change_percent": 11.72
+    }
+  },
+  {
+    "tool": "multi_edit",
+    "scenario": "distinct",
+    "single_average_p50_seconds": {
+      "baseline": 0.000543369,
+      "optimized": 0.00045533853125,
+      "change_percent": -16.2
+    },
+    "concurrent_wall_p50_seconds": {
+      "baseline": 0.004569,
+      "optimized": 0.004299417,
+      "change_percent": -5.9
+    },
+    "throughput_p50_calls_per_second": {
+      "baseline": 6906.226394734003,
+      "optimized": 7421.868023878933,
+      "change_percent": 7.47
+    }
+  }
+]

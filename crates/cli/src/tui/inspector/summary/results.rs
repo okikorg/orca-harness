@@ -85,6 +85,27 @@ fn append_mutation_result(lines: &mut Vec<Line<'static>>, output: &Value, width:
     if let Some(count) = output.get("replacements").and_then(Value::as_u64) {
         rows.push(("replacements", count.to_string()));
     }
+    for (field, label) in [
+        ("filesChanged", "files changed"),
+        ("editsApplied", "edits applied"),
+        ("added", "added"),
+        ("updated", "updated"),
+        ("deleted", "deleted"),
+    ] {
+        if let Some(count) = output.get(field).and_then(Value::as_u64) {
+            rows.push((label, count.to_string()));
+        }
+    }
+    if let Some(paths) = output.get("paths").and_then(Value::as_array) {
+        rows.push((
+            "paths",
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
     let mut result = section("result");
     result.extend(inspector_fields(rows, width));
     result.append_to(lines);

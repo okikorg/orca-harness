@@ -46,7 +46,9 @@ pub(crate) use self::state::{
     RunState, SkillMentionPicker, ToolActivity, TuiConfig, ViewMode,
 };
 #[cfg(test)]
-pub(crate) use self::state::{LocationEntry, ToolRecord, SESSION_ACTIONS, SETTINGS_ROWS};
+pub(crate) use self::state::{
+    LocationEntry, ModelPickerTarget, ToolRecord, SESSION_ACTIONS, SETTINGS_ROWS,
+};
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -92,7 +94,7 @@ use crate::view::{self, theme};
 
 use self::format::elapsed_label;
 #[cfg(test)]
-use self::format::redact_command;
+use self::format::{redact_command, tool_timing_label};
 use self::input::{expand_pastes, prompt_images};
 
 use self::inspector::inspector_text_content;

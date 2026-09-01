@@ -79,6 +79,8 @@ fn inspector_source_output_reports_language_shape_and_size() {
         tool_name: "read_file".into(),
         input: serde_json::json!({"path": "src/main.rs"}),
         started: Instant::now(),
+        execution_started: None,
+        execution_elapsed: None,
         elapsed: Some(Duration::from_millis(1)),
         output: None,
         is_error: false,

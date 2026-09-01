@@ -33,6 +33,8 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
         ),
         "pykernel" | "bun_repl" => append_code_input(lines, tool, width),
         "edit_file" => append_edit_input(lines, tool, width),
+        "multi_edit" => append_multi_edit_input(lines, tool, width),
+        "apply_patch" => append_patch_input(lines, tool, width),
         "write_file" => append_file_content(lines, tool, width),
         "read_file" | "list_dir" => text_section(
             lines,
@@ -133,7 +135,9 @@ fn append_result(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usi
     match tool.tool_name.as_str() {
         "shell" | "exec_command" => append_shell_result(lines, output, width),
         "read_file" => append_file_result(lines, tool, output, width),
-        "write_file" | "edit_file" => append_mutation_result(lines, output, width),
+        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => {
+            append_mutation_result(lines, output, width)
+        }
         "list_dir" => append_collection(lines, output, "entries", "entries", width),
         "grep" => append_grep_result(lines, output, width),
         "glob" => append_collection(lines, output, "matches", "matches", width),
@@ -246,6 +250,41 @@ fn append_edit_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width:
         }
     }
     change.append_to(lines);
+}
+
+fn append_multi_edit_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
+    let Some(edits) = tool.input.get("edits") else {
+        return;
+    };
+    let count = edits.as_array().map(Vec::len).unwrap_or_default();
+    append_generic_value(lines, &format!("edits · {count}"), edits, width);
+}
+
+fn append_patch_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
+    let patch = string(&tool.input, "patch");
+    let (preview, omitted) = limit_inspector_preview(patch);
+    let mut input = section(format!(
+        "patch · {} · {}",
+        line_label(patch),
+        inspector_size_label(patch.len() as u64)
+    ));
+    input.extend(
+        CodePreview {
+            text: &preview,
+            language: "diff",
+            width,
+            indent: INSPECTOR_BODY_INDENT,
+            plain_style: Style::default(),
+        }
+        .lines(),
+    );
+    if omitted {
+        input.push(Line::from(Span::styled(
+            format!("{INSPECTOR_BODY_INDENT}patch preview shortened"),
+            theme().dim,
+        )));
+    }
+    input.append_to(lines);
 }
 
 fn append_process_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {

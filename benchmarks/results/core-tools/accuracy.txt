@@ -1,0 +1,23 @@
+   Compiling orca-harness-tools v0.1.0 (/Users/akashswamy/Workspace/orca-harness/crates/tools)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.67s
+     Running tests/core_tools.rs (/private/tmp/orca-benchmark-target/debug/deps/core_tools-612c5bf5dd815488)
+
+running 16 tests
+test mutation_tools_normalize_aliases_to_the_same_concurrency_key ... ok
+test multi_edit_empty_replacement_points_to_append_operation ... ok
+test multi_edit_locks_every_distinct_path ... ok
+test malformed_multi_edit_is_rejected_before_later_review_extensions ... ok
+test apply_patch_rejects_hunk_larger_than_file_without_panicking ... ok
+test apply_patch_locks_every_distinct_path_and_rejects_escape ... ok
+test aliases_have_safe_same_call_semantics ... ok
+test apply_patch_preflight_failure_does_not_create_earlier_file ... ok
+test multi_edit_append_preflight_failure_writes_nothing ... ok
+test no_op_edits_do_not_write_or_restamp_files ... ok
+test apply_patch_preserves_crlf_and_rejects_ambiguous_hunks ... ok
+test multi_edit_appends_to_multiple_files_atomically ... ok
+test multi_edit_applies_ordered_cross_file_replacements ... ok
+test multi_edit_preflight_failure_writes_nothing ... ok
+test same_path_calls_serialize_in_model_order ... ok
+test apply_patch_updates_adds_and_deletes_after_full_preflight ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

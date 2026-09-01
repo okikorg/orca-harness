@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::Extension;
 use orca_harness_extensions::{EventStream, Truncation};
-use orca_harness_tools::SubagentSpawn;
+use orca_harness_tools::{MutationPreflight, SubagentSpawn};
 
 use crate::auto_approval::AutoApproval;
 use crate::mode::{ModeHandle, PlanGate};
@@ -42,17 +42,20 @@ pub(crate) fn subagent_extensions(
         task: spawn.task.clone(),
         identity: spawn.identity.clone(),
     });
+    let events = EventStream::from_fn(move |event| {
+        let _ = ui.send(UiMsg::SubagentEvent {
+            id,
+            parent_id,
+            depth,
+            call_id: call_id.clone(),
+            event,
+        });
+    });
+    let execution_events = events.execution_marker();
     let mut extensions = vec![
-        Arc::new(EventStream::from_fn(move |event| {
-            let _ = ui.send(UiMsg::SubagentEvent {
-                id,
-                parent_id,
-                depth,
-                call_id: call_id.clone(),
-                event,
-            });
-        })) as Arc<dyn Extension>,
+        Arc::new(events) as Arc<dyn Extension>,
         Arc::new(PlanGate::new(mode.clone(), plan_area.clone())) as Arc<dyn Extension>,
+        Arc::new(MutationPreflight) as Arc<dyn Extension>,
     ];
     if let Some(plugin_hooks) = plugin_hooks {
         extensions.push(plugin_hooks.clone());
@@ -62,5 +65,6 @@ pub(crate) fn subagent_extensions(
     }
     extensions
         .push(Arc::new(Truncation::new(settings.output_chars() as usize)) as Arc<dyn Extension>);
+    extensions.push(Arc::new(execution_events) as Arc<dyn Extension>);
     extensions
 }

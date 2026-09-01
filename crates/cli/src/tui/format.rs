@@ -7,6 +7,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use super::state::ToolActivity;
+
 /// The basename of a workspace path for the status line, falling back to
 /// the full path when it has no usable file name.
 pub(super) fn workspace_status_name(workspace: &str) -> &str {
@@ -30,6 +32,30 @@ pub(super) fn elapsed_label(elapsed: Duration) -> String {
         format!("{}µs", elapsed.as_micros())
     } else {
         format!("{}ns", elapsed.as_nanos())
+    }
+}
+
+/// Tool calls can spend most of their wall time in approval, scheduling, or
+/// sandbox preflight. Keep compact rows compact for negligible preflight, but
+/// expose meaningful pre-execution latency instead of attributing it to the
+/// underlying tool.
+pub(super) fn tool_timing_label(tool: &ToolActivity, detailed: bool) -> String {
+    let total = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
+    let Some(execution_started) = tool.execution_started else {
+        return format!("preflight {}", elapsed_label(total));
+    };
+    let preflight = execution_started.duration_since(tool.started);
+    let execution = tool
+        .execution_elapsed
+        .unwrap_or_else(|| execution_started.elapsed());
+    if detailed || preflight >= Duration::from_millis(10) {
+        format!(
+            "preflight {} · run {}",
+            elapsed_label(preflight),
+            elapsed_label(execution)
+        )
+    } else {
+        elapsed_label(total)
     }
 }
 

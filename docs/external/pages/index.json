@@ -4,7 +4,7 @@
     "id": "start",
     "label": "Welcome",
     "title": "Your Orcacode field manual",
-    "lede": "Orcacode is the interactive terminal host for Orca Harness. It works inside a chosen workspace, automatically reviews unresolved actions by default, and keeps your work as a recoverable session."
+    "lede": "Orcacode is the interactive terminal host for Orca Harness. It works inside a chosen workspace, asks before gated actions by default, and keeps your work as a recoverable session."
   },
   {
     "group": "GETTING STARTED",
@@ -32,7 +32,7 @@
     "id": "auto-mode",
     "label": "Auto mode",
     "title": "Proceed without repeated prompts",
-    "lede": "Auto mode lets known-safe tools run immediately and asks a narrow model reviewer whether each unresolved exact action is clearly authorized by your root request."
+    "lede": "Auto mode lets known-safe tools and guarded workspace edits run immediately, then reviews actions that still carry meaningful scope or safety risk."
   },
   {
     "group": "CONFIGURE",

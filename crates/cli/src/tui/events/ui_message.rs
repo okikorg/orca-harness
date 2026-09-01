@@ -8,7 +8,7 @@ use crate::tui::components::transcript::BlockSpacing;
 use crate::view::theme;
 
 use super::super::render::{replay_transcript, reset_conversation_ui};
-use super::super::state::{App, ModelPicker, Overlay, RunState};
+use super::super::state::{App, EffortPicker, ModelPicker, ModelPickerTarget, Overlay, RunState};
 use super::super::{push_notice, push_wrapped_lines, start_next_queued_prompt};
 
 pub(crate) fn handle_ui_msg(
@@ -37,11 +37,11 @@ pub(crate) fn handle_ui_msg(
         UiMsg::Approval(request) => app.approval = Some(request),
         UiMsg::Ask(request) => app.ask = Some(crate::tui::components::ask::AskForm::new(request)),
         UiMsg::Models { request_id, result } => {
-            let Some((pending_id, seed)) = app.picker_pending.take() else {
+            let Some((pending_id, target)) = app.picker_pending.take() else {
                 return;
             };
             if pending_id != request_id {
-                app.picker_pending = Some((pending_id, seed));
+                app.picker_pending = Some((pending_id, target));
                 return;
             }
             let t = theme();
@@ -53,15 +53,34 @@ pub(crate) fn handle_ui_msg(
                     }
                 }
             }
-            match result {
-                Ok(models) if models.is_empty() => {
+            match (target, result) {
+                (_, Ok(models)) if models.is_empty() => {
                     app.overlay = app.overlay_stack.pop();
                     app.push_line(Line::from(Span::styled("no models available", t.dim)));
                 }
-                Ok(models) => {
-                    app.overlay = Some(Overlay::Models(ModelPicker::new(models, seed)));
+                (ModelPickerTarget::Models { filter }, Ok(models)) => {
+                    app.overlay = Some(Overlay::Models(ModelPicker::new(models, filter)));
                 }
-                Err(err) => {
+                (ModelPickerTarget::ActiveModelEffort, Ok(models)) => {
+                    let effort_picker = models
+                        .into_iter()
+                        .find(|model| model.id == app.cfg.model_name)
+                        .and_then(EffortPicker::new);
+                    match effort_picker {
+                        Some(picker) => app.overlay = Some(Overlay::Efforts(picker)),
+                        None => {
+                            app.overlay = app.overlay_stack.pop();
+                            app.push_line(Line::from(Span::styled(
+                                format!(
+                                    "model {} does not advertise reasoning effort choices",
+                                    app.cfg.model_name
+                                ),
+                                t.error,
+                            )));
+                        }
+                    }
+                }
+                (_, Err(err)) => {
                     app.overlay = app.overlay_stack.pop();
                     app.push_line(Line::from(Span::styled(
                         format!("model list failed: {err}"),

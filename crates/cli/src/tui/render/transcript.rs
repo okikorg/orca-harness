@@ -12,7 +12,7 @@ use crate::tui::components::transcript::{append_block, BlockSpacing};
 use crate::tui::state::SubagentDisplay;
 use crate::view::{self, theme};
 
-use super::super::format::{elapsed_label, plural};
+use super::super::format::{elapsed_label, plural, tool_timing_label};
 use super::super::{
     App, LocationPicker, SkillMentionPicker, ToolActivity, LIVE_TOOL_ROWS, PICKER_ROWS,
 };
@@ -213,8 +213,8 @@ pub(crate) fn nested_spawn_rows(
     let visible: Vec<&ToolActivity> = spawn.tools.iter().skip(hidden).collect();
     for (position, tool) in visible.iter().enumerate() {
         let last = position + 1 == visible.len();
+        let elapsed = tool_timing_label(tool, false);
         let branch = if last { "└─" } else { "├─" };
-        let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
         let (glyph, style) = match (&tool.output, tool.elapsed) {
             (Some(_), _) if tool.is_error => ("×", t.error),
             (Some(_), _) => ("✓", t.dim),
@@ -238,7 +238,6 @@ pub(crate) fn nested_spawn_rows(
             .flatten();
         if let Some((_, child)) = child.filter(|(_, child)| child.identity.is_some()) {
             let identity = identity_label(child.identity.as_ref().unwrap());
-            let elapsed = elapsed_label(elapsed);
             let row = SubagentRow {
                 last,
                 prefix,
@@ -260,7 +259,7 @@ pub(crate) fn nested_spawn_rows(
                 Span::styled(format!("{prefix}{branch} "), t.dim),
                 Span::styled(format!("{glyph} "), style),
                 Span::styled(call, t.accent),
-                Span::styled(format!(" · {}", elapsed_label(elapsed)), t.dim),
+                Span::styled(format!(" · {elapsed}"), t.dim),
             ]));
         }
         if tool.tool_name == "subagent" && tool.output.is_none() {
@@ -452,7 +451,6 @@ pub(crate) fn activity_lines_selected(
     for (position, index) in visible_indices.iter().copied().enumerate() {
         let tool = &app.activity_tools[index];
         let last = position + 1 == visible_indices.len();
-        let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
         let (glyph, mut detail, status_style) = match &tool.output {
             Some(output) if tool.is_error => (
                 "×",
@@ -476,7 +474,7 @@ pub(crate) fn activity_lines_selected(
                 format!("{approval} · {detail}")
             };
         }
-        let elapsed = elapsed_label(elapsed);
+        let elapsed = tool_timing_label(tool, false);
         let selected = selected_tool == Some(index);
         let row_style = if selected { t.select } else { t.accent };
         let continuation = if tool.tool_name == "subagent" {
@@ -534,8 +532,11 @@ pub(crate) fn activity_lines_selected(
             work.push(row.line());
             continuation
         };
-        if tool.tool_name == "edit_file" {
-            work.extend(edit_diff_preview_lines(tool, width, continuation));
+        if matches!(
+            tool.tool_name.as_str(),
+            "edit_file" | "multi_edit" | "apply_patch"
+        ) {
+            work.extend(mutation_diff_preview_lines(tool, width, continuation));
         }
         if tool.tool_name == "subagent" && tool.output.is_none() {
             let mut nested = Vec::new();

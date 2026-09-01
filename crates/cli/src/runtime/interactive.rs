@@ -350,6 +350,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             let _ = ui.send(UiMsg::Event(event));
         }
     });
+    let execution_events = events.execution_marker();
     // PlanGate before Approval: the kernel stops at the first denial, so
     // a call plan mode refuses never reaches the user as a prompt.
     // Both read the shared handle per call: /mode applies to the call
@@ -358,6 +359,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         .limits(cfg.limits())
         .extension(events)
         .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(orca_harness_tools::MutationPreflight)
         .extension(auto_approval.clone());
     if let Some(plugin_hooks) = plugin_hooks {
         agent = agent.extension_arc(plugin_hooks.clone());
@@ -384,6 +386,9 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     if extensions::enabled("retry") {
         agent = agent.extension(extensions::tool_retry());
     }
+    // Last in the around-tool chain: everything before this point is host
+    // preflight, while everything after it is actual execution.
+    agent = agent.extension(execution_events);
     // read_tool_result stays registered even with truncation off so
     // outputs trimmed before the toggle remain pageable.
     agent = agent

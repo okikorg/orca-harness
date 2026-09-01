@@ -25,6 +25,8 @@ async fn every_tool_fans_out_in_one_batch() {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src/seed.rs"), "needle in seed\n").unwrap();
     std::fs::write(dir.join("edit_me.txt"), "before\n").unwrap();
+    std::fs::write(dir.join("multi_edit_me.txt"), "before\n").unwrap();
+    std::fs::write(dir.join("patch_me.txt"), "before\n").unwrap();
     std::fs::write(dir.join("copy_me.txt"), "payload\n").unwrap();
     std::fs::write(dir.join("move_me.txt"), "mv\n").unwrap();
     std::fs::write(dir.join("delete_me.txt"), "rm\n").unwrap();
@@ -55,6 +57,16 @@ async fn every_tool_fans_out_in_one_batch() {
             "c-edit",
             "edit_file",
             json!({"path": "edit_me.txt", "old": "before", "new": "after"}),
+        ),
+        call(
+            "c-multi-edit",
+            "multi_edit",
+            json!({"edits": [{"path": "multi_edit_me.txt", "old": "before", "new": "after"}]}),
+        ),
+        call(
+            "c-apply-patch",
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Update File: patch_me.txt\n@@\n-before\n+after\n*** End Patch"}),
         ),
         call("c-list", "list_dir", json!({"path": "."})),
         call("c-grep", "grep", json!({"query": "needle"})),

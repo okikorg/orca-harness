@@ -139,7 +139,7 @@ Copying mid-stream takes the partial answer as it stands, and says so.
 `up`/`down` recall prompt history.
 
 **Tool approvals** — gated tools (`shell`, `write_file`, `edit_file`,
-`pykernel`, `bun_repl`, `subagent`) pause behind a prompt:
+`apply_patch`, `multi_edit`, `pykernel`, `bun_repl`, `subagent`) pause behind a prompt:
 
 | Key | Effect                                                                           |
 | :-- | :------------------------------------------------------------------------------- |
@@ -161,15 +161,16 @@ mode is on.
 It is an **allowlist**, not a denylist. Only `read_file`, `list_dir`,
 `grep`, `glob`, `file_info`, `read_tool_result`, `memory_search`, `web_fetch`,
 `web_search`, `web_crawl`, `skill`, `todo_write`, and `ask` run; everything else
-— `shell`, `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `subagent`,
-`memory_manage`, and every MCP tool — is denied with a reason that points the model at the
-plan directory instead. A denylist would have to know every tool the
+— `shell`, `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`,
+`apply_patch`, `multi_edit`, `subagent`, `memory_manage`, and every MCP tool — is denied
+with a reason that points the model at the plan directory instead. A denylist would have to know every tool the
 session might load, and MCP servers and skills add tools the CLI has
 never heard of, so unknown means denied.
 
 **The plan is a file, not a paragraph.** `docs/plan/` is the one writable
-directory in plan mode: `write_file` and `edit_file` pass the gate for
-markdown files directly inside it, and every other write is refused.
+directory in plan mode: `write_file`, `edit_file`, `multi_edit`, and non-deleting
+`apply_patch` calls pass the gate only when every target is a markdown file directly
+inside it; every other write is refused.
 
 **The agent decides whether to write a plan, and what to call it.** The
 host has no way to tell a feature request from a greeting at the moment a
@@ -491,10 +492,19 @@ results to the model:
   and restart explicitly after a timeout. `bun_repl` uses the `bun` executable
   on `PATH`, supports imports and top-level `await`, and never auto-installs
   missing packages.
-- `read_file`, `write_file`, `edit_file`, `list_dir`, `grep`, `glob` — all
-  rooted at a `Workspace` that rejects absolute paths and `..` escapes.
-  Writes and edits are `Keyed` by path: same-file writes serialize while
-  different-file writes run concurrently.
+- `read_file`, `write_file`, `edit_file`, `apply_patch`, `multi_edit`,
+  `list_dir`, `grep`, `glob` — all rooted at a `Workspace` that rejects
+  absolute paths and `..` escapes. `apply_patch` preflights multi-file
+  add/update/delete patches; `multi_edit` preflights ordered exact replacements
+  and explicit append operations across existing files.
+  Orcacode positions the tools crate's `MutationPreflight` extension before
+  Auto admission, so malformed mutation syntax fails cheaply without adding a
+  validation hook to `harness-core`. In Auto mode, ordinary workspace writes,
+  exact edits, multi-edits, and non-deleting patches proceed through these
+  deterministic guards without a second model review; whole-file patch
+  deletion remains reviewed.
+  Mutations lock every target path: overlapping calls serialize while disjoint
+  calls run concurrently.
 - `todo_write` — the agent's task list as structured state, shared with the
   host through a cloneable `TodoList` handle so a UI can render the plan
   without parsing it out of the conversation.
@@ -505,8 +515,8 @@ results to the model:
 
 `write_file` replaces a file wholesale, so a model that has not seen the
 current contents is not overwriting a file — it is deleting one and
-writing another. A `FileGuard` shared by `read_file`, `write_file`, and
-`edit_file` refuses that:
+writing another. A `FileGuard` shared by `read_file`, `write_file`, `edit_file`,
+`apply_patch`, and `multi_edit` makes `write_file` refuse that:
 
 | Situation                                   | Result                                     |
 | :------------------------------------------ | :----------------------------------------- |
@@ -515,9 +525,9 @@ writing another. A `FileGuard` shared by `read_file`, `write_file`, and
 | exists, never read                          | refused: read it first, or use `edit_file` |
 | changed on disk after the read              | refused: read it again                     |
 
-`edit_file` is exempt from the check — it works from the contents it just
-read and fails when its `old` text is not there — but its write is
-stamped, so a later `write_file` to the same path is not stranded. A
+`edit_file`, `apply_patch`, and `multi_edit` work from the current contents and
+fail when their expected text is absent, so they do not need a prior read. Their
+writes are stamped, so a later `write_file` to the same path is not stranded. A
 stamp is the file's own post-write modified time and length, never the
 clock.
 
@@ -537,8 +547,11 @@ registering an unused one costs nothing on the hot path:
 - **EventStream** — turns the lifecycle into a typed `HarnessEvent` stream
   delivered to a sink (closure or channel). Tags mirror a standard NDJSON
   union (`assistant_delta`, `reasoning_delta`, `assistant`, `tool_call`,
-  `tool_result`, `usage`, `result`, `error`) so a host can serialize them
-  directly. This is the main seam for building on the harness.
+  `tool_started`, `tool_finished`, `tool_result`, `usage`, `result`, `error`)
+  so a host can serialize them directly. Its host-positioned
+  `execution_marker()` emits `tool_started` through the existing extension
+  chain, keeping preflight timing outside the kernel. This is the main seam
+  for building on the harness.
 - **ToolPolicy** — allow/deny tool calls before execution (allowlist,
   denylist, or a custom predicate).
 - **Truncation** — cap oversized tool outputs to protect the context window
@@ -547,8 +560,9 @@ registering an unused one costs nothing on the hot path:
 - **ToolRetry** / **RetryModel** — retry failing tools (an `around_tool`
   extension) and transient model errors (a `Model` decorator). The CLI wires
   `ToolRetry` to also retry failures core tools report *as data* — a nonzero
-  shell exit, an HTTP 5xx from `web_fetch` — and mirrors the same policy
-  inside subagents, so every level of the agent tree retries.
+  shell exit, an HTTP 5xx from `web_fetch` — while excluding native file
+  mutation errors because exact mutation calls must not be replayed after
+  deterministic matching, read guards, or possible partial-I/O failures.
 - **UsageMeter** — accumulate self-reported token usage across a run,
   readable via a shared handle after it returns.
 - **MemoryExtension** — query one embedded SQLite FTS5 store for global and

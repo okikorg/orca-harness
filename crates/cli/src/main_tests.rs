@@ -93,9 +93,9 @@ mod main_tests {
     }
 
     #[test]
-    fn auto_flag_selects_automatic_review_mode() {
+    fn normal_is_default_and_auto_requires_its_flag() {
         let default = parse_run_args(Vec::new()).unwrap();
-        assert_eq!(default.mode(), Mode::Auto);
+        assert_eq!(default.mode(), Mode::Normal);
 
         let cfg = parse_run_args(vec!["--auto".into()]).unwrap();
         assert_eq!(cfg.mode(), Mode::Auto);
@@ -487,7 +487,7 @@ mod main_tests {
             auto: false,
             yolo: false,
         };
-        assert_eq!(base.mode(), Mode::Auto);
+        assert_eq!(base.mode(), Mode::Normal);
         assert_eq!(
             Config {
                 plan: true,

@@ -162,6 +162,7 @@ pub async fn run<M: Model + Clone + 'static>(
             _ => {}
         }
     });
+    let execution_events = events.execution_marker();
 
     let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone());
     let (meter, usage) = UsageMeter::new();
@@ -171,6 +172,7 @@ pub async fn run<M: Model + Clone + 'static>(
         .extension(events)
         .extension(meter)
         .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(orca_harness_tools::MutationPreflight)
         .extension(auto_approval.clone());
     if let Some(plugin_hooks) = &plugin_hooks {
         agent = agent.extension_arc(plugin_hooks.clone());
@@ -189,6 +191,7 @@ pub async fn run<M: Model + Clone + 'static>(
     if let Some(session) = &session {
         agent = agent.extension_arc(session.clone());
     }
+    agent = agent.extension(execution_events);
     for tool in core_tools(ws) {
         if enabled(&tool.schema().name) {
             agent = agent.tool_arc(tool);
@@ -245,8 +248,12 @@ pub async fn run<M: Model + Clone + 'static>(
             let subagent_plugin_hooks = plugin_hooks.clone();
             let subagent_auto_approval = auto_approval.for_subagent();
             agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
-                let mut extensions = vec![Arc::new(subagent_auto_approval.clone())
-                    as Arc<dyn orca_harness_core::Extension>];
+                let mut extensions = vec![
+                    Arc::new(orca_harness_tools::MutationPreflight)
+                        as Arc<dyn orca_harness_core::Extension>,
+                    Arc::new(subagent_auto_approval.clone())
+                        as Arc<dyn orca_harness_core::Extension>,
+                ];
                 if let Some(plugin_hooks) = &subagent_plugin_hooks {
                     extensions.push(plugin_hooks.clone() as Arc<dyn orca_harness_core::Extension>);
                 }

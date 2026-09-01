@@ -20,6 +20,8 @@ pub const GATED_TOOLS: &[&str] = &[
     "shell",
     "write_file",
     "edit_file",
+    "apply_patch",
+    "multi_edit",
     "web_fetch",
     "pykernel",
     "bun_repl",
@@ -272,7 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn persistent_compute_subagent_and_memory_writes_are_gated() {
+    fn mutations_compute_subagent_and_memory_writes_are_gated() {
+        assert!(GATED_TOOLS.contains(&"apply_patch"));
+        assert!(GATED_TOOLS.contains(&"multi_edit"));
         assert!(GATED_TOOLS.contains(&"pykernel"));
         assert!(GATED_TOOLS.contains(&"bun_repl"));
         assert!(GATED_TOOLS.contains(&"subagent"));

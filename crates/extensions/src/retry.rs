@@ -2,10 +2,10 @@
 //!
 //! - [`ToolRetry`] is an `around_tool` extension that re-invokes the tool
 //!   on failure, with fixed backoff. It relies on `Next` being `Copy` so
-//!   the continuation can be called more than once. `Err` results always
-//!   retry; [`ToolRetry::retry_ok_when`] extends that to failures a tool
-//!   reports *as data* (a nonzero shell exit, an HTTP 5xx) — so
-//!   "the tool ran, the operation failed" is retried too.
+//!   the continuation can be called more than once. Errors retry by default;
+//!   [`ToolRetry::retry_error_when`] can narrow them, while
+//!   [`ToolRetry::retry_ok_when`] extends retries to failures a tool reports
+//!   *as data* (a nonzero shell exit, an HTTP 5xx).
 //! - [`RetryModel`] is a `Model` decorator that retries transient model
 //!   failures. Model retries need no kernel hook — a wrapping `Model` is
 //!   the natural home — so it lives here beside the tool retry for
@@ -27,6 +27,9 @@ use orca_harness_core::{
 /// HTTP status, ...).
 type RetryRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 
+/// A predicate deciding whether a returned tool error is safe to retry.
+type ErrorRetryRule = Arc<dyn Fn(&ToolCall, &ToolError) -> bool + Send + Sync>;
+
 /// Called immediately before another model attempt begins.
 type ModelRetryNotice = Arc<dyn Fn(u32, u32, &ModelError) + Send + Sync>;
 
@@ -34,11 +37,13 @@ type ModelRetryNotice = Arc<dyn Fn(u32, u32, &ModelError) + Send + Sync>;
 pub struct ToolRetry {
     max_attempts: u32,
     backoff: Duration,
-    /// Extra failures expressed as *successful* results. `Err` results are
-    /// always retried; with this set, an `Ok` value the rule rejects is
-    /// treated as a failed attempt too. `None` keeps retry-on-Err-only
-    /// behavior.
+    /// Extra failures expressed as *successful* results. With this set, an
+    /// `Ok` value the rule rejects is treated as a failed attempt too. `None`
+    /// keeps retry-on-Err-only behavior.
     retry_ok: Option<RetryRule>,
+    /// Optional restriction for returned errors. `None` preserves the
+    /// historical behavior of retrying every `Err`.
+    retry_error: Option<ErrorRetryRule>,
 }
 
 impl ToolRetry {
@@ -49,6 +54,7 @@ impl ToolRetry {
             max_attempts: max_attempts.max(1),
             backoff: Duration::from_millis(50),
             retry_ok: None,
+            retry_error: None,
         }
     }
 
@@ -67,6 +73,17 @@ impl ToolRetry {
         rule: impl Fn(&ToolCall, &Value) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.retry_ok = Some(Arc::new(rule));
+        self
+    }
+
+    /// Retry returned errors only when `rule` accepts them. This is useful for
+    /// excluding deterministic validation errors or non-idempotent mutations
+    /// while retaining the default retry-all behavior for other tools.
+    pub fn retry_error_when(
+        mut self,
+        rule: impl Fn(&ToolCall, &ToolError) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.retry_error = Some(Arc::new(rule));
         self
     }
 }
@@ -118,6 +135,13 @@ impl Extension for ToolRetry {
                     return Ok(value);
                 }
                 Err(err) => {
+                    if self
+                        .retry_error
+                        .as_ref()
+                        .is_some_and(|rule| !rule(call, &err))
+                    {
+                        return Err(err);
+                    }
                     last_err = Some(err);
                     if attempt < self.max_attempts {
                         // Give up early if the run is being torn down.

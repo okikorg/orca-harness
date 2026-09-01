@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use orca_harness_core::{
-    Context, Extension, ExtensionError, HarnessError, ModelDelta, ModelResponse, Subscriptions,
-    ToolCall, ToolDecision, ToolResult, Usage,
+    Context, Extension, ExtensionError, HarnessError, ModelDelta, ModelResponse, Next,
+    Subscriptions, ToolCall, ToolContext, ToolDecision, ToolError, ToolResult, Usage,
 };
 
 /// A typed lifecycle event. The tags mirror the platform NDJSON union
@@ -40,6 +40,12 @@ pub enum HarnessEvent {
         tool_call_id: String,
         tool_name: String,
         input: Value,
+    },
+    /// The host-positioned execution marker was reached and the next
+    /// `around_tool` stage is beginning. A retry may emit this more than once.
+    ToolStarted {
+        tool_call_id: String,
+        tool_name: String,
     },
     /// A tool stopped executing. Completion events are live and may arrive
     /// out of call order; the final transformed output still arrives through
@@ -105,6 +111,51 @@ impl EventStream {
     pub fn channel() -> (Self, tokio::sync::mpsc::UnboundedReceiver<HarnessEvent>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         (Self::new(Arc::new(ChannelSink(tx))), rx)
+    }
+
+    /// Build a companion extension that emits [`HarnessEvent::ToolStarted`]
+    /// at its position in the existing `around_tool` chain. Hosts should
+    /// register it after approval, sandboxing, and retry wrappers so elapsed
+    /// time before this marker remains visible as preflight.
+    pub fn execution_marker(&self) -> ToolExecutionEvents {
+        ToolExecutionEvents {
+            sink: self.sink.clone(),
+        }
+    }
+}
+
+/// Host-positioned execution marker for an [`EventStream`].
+///
+/// This deliberately uses the existing extension chain rather than adding a
+/// lifecycle hook to the execution kernel.
+pub struct ToolExecutionEvents {
+    sink: Arc<dyn EventSink>,
+}
+
+#[async_trait]
+impl Extension for ToolExecutionEvents {
+    fn name(&self) -> &str {
+        "tool-execution-events"
+    }
+
+    fn subscriptions(&self) -> Subscriptions {
+        Subscriptions::none().around_tool()
+    }
+
+    async fn around_tool<'a>(
+        &self,
+        call: &ToolCall,
+        input: Value,
+        _ctx: &ToolContext,
+        next: Next<'a>,
+    ) -> Result<Value, ToolError> {
+        self.sink
+            .emit(HarnessEvent::ToolStarted {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+            })
+            .await;
+        next.run(input).await
     }
 }
 

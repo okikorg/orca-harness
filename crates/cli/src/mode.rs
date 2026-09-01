@@ -3,8 +3,9 @@
 //! `Normal` is the agent as usual — every registered tool is available,
 //! and the gated ones ask for approval. `Plan` is read-only: the agent
 //! may investigate but may not change anything, so it answers with a
-//! plan instead of a diff. `Auto` reviews unresolved exact actions against
-//! the root request. `Yolo` removes review entirely. Both remain visible
+//! plan instead of a diff. `Auto` clears guarded native workspace mutations
+//! and reviews actions with remaining scope or safety risk against the root
+//! request. `Yolo` removes review entirely. Both remain visible
 //! in the status line because neither opens ordinary approval prompts.
 //!
 //! Plan mode is an **allowlist**, not a denylist. A denylist would have
@@ -27,6 +28,8 @@ use async_trait::async_trait;
 use orca_harness_core::{Extension, ExtensionError, Subscriptions, ToolCall, ToolDecision};
 
 use crate::plan::PlanArea;
+
+mod plan_paths;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -58,7 +61,9 @@ impl Mode {
         match self {
             Mode::Normal => "every tool is available; gated tools ask for approval",
             Mode::Plan => "read-only: the agent investigates and proposes, but changes nothing",
-            Mode::Auto => "safe tools run; unresolved actions are reviewed automatically",
+            Mode::Auto => {
+                "safe tools and guarded file edits run; risk-bearing actions are reviewed"
+            }
             Mode::Yolo => "every tool runs without approval prompts",
         }
     }
@@ -85,8 +90,9 @@ impl Mode {
 
 /// The tools that only observe: they read files, search, or fetch, and
 /// leave the machine exactly as they found it. Everything else — `shell`,
-/// `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `subagent`, the
-/// `fs_admin` bundle, every MCP tool — is denied in plan mode.
+/// `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `apply_patch`,
+/// `multi_edit`, `subagent`, the `fs_admin` bundle, every MCP tool — is denied
+/// in plan mode.
 ///
 /// `shell` is absent on purpose. Most of what an agent wants it for in
 /// plan mode (`git log`, `cargo check`) is read-only, but deciding that
@@ -153,9 +159,10 @@ impl ModeHandle {
 ///
 /// The one exception is the plan area. A plan mode that cannot write its
 /// plan down leaves the plan in prose the next turn has to re-derive, so
-/// `write_file` and `edit_file` are allowed against markdown files in
-/// `docs/plan/` — and nowhere else. Which file, and whether to write one
-/// at all, is the agent's decision; the gate only holds the fence.
+/// `write_file`, `edit_file`, `multi_edit`, and non-deleting `apply_patch`
+/// calls are allowed against markdown files in `docs/plan/` — and nowhere
+/// else. Which file, and whether to write one at all, is the agent's decision;
+/// the gate only holds the fence.
 /// Because it runs before approval, an "always allow write_file" grant
 /// cannot widen past that directory.
 pub struct PlanGate {
@@ -166,14 +173,6 @@ pub struct PlanGate {
 impl PlanGate {
     pub fn new(mode: ModeHandle, plan: PlanArea) -> Self {
         Self { mode, plan }
-    }
-
-    /// The path a write-shaped call targets, if it has one.
-    fn written_path(call_name: &str, path: Option<&str>) -> Option<String> {
-        matches!(call_name, "write_file" | "edit_file")
-            .then(|| path.filter(|p| crate::plan::is_plan_path(p)))
-            .flatten()
-            .map(str::to_string)
     }
 }
 
@@ -191,8 +190,7 @@ impl Extension for PlanGate {
         if !self.mode.is_plan() || READ_ONLY_TOOLS.contains(&call.name.as_str()) {
             return Ok(ToolDecision::Continue);
         }
-        let path = call.arguments.get("path").and_then(|path| path.as_str());
-        if Self::written_path(&call.name, path).is_some() {
+        if plan_paths::written_paths(call).is_some() {
             return Ok(ToolDecision::Continue);
         }
         Ok(ToolDecision::Deny {
@@ -216,8 +214,7 @@ impl Extension for PlanGate {
         if result.is_error || !self.mode.is_plan() {
             return;
         }
-        let path = result.output.get("path").and_then(|path| path.as_str());
-        if let Some(path) = Self::written_path(&result.tool_name, path) {
+        for path in plan_paths::result_paths(result) {
             self.plan.record(&path);
         }
     }
@@ -288,6 +285,8 @@ mod tests {
             "bun_repl",
             "write_file",
             "edit_file",
+            "apply_patch",
+            "multi_edit",
             "subagent",
             "memory_manage",
             "delete_file",
@@ -325,6 +324,8 @@ mod tests {
             "shell",
             "write_file",
             "edit_file",
+            "apply_patch",
+            "multi_edit",
             "process",
             "pykernel",
             "bun_repl",
@@ -417,6 +418,45 @@ mod tests {
             gate.before_tool(&edit).await.unwrap(),
             ToolDecision::Continue
         ));
+        let multi_edit = ToolCall {
+            id: "c4".into(),
+            name: "multi_edit".into(),
+            arguments: json!({"edits": [
+                {"path": "docs/plan/x.md", "old": "a", "new": "b"},
+                {"path": "docs/plan/y.md", "old": "c", "new": "d"}
+            ]}),
+        };
+        assert!(matches!(
+            gate.before_tool(&multi_edit).await.unwrap(),
+            ToolDecision::Continue
+        ));
+        let patch = ToolCall {
+            id: "c5".into(),
+            name: "apply_patch".into(),
+            arguments: json!({"patch": "*** Begin Patch\n*** Update File: docs/plan/x.md\n@@\n-a\n+b\n*** Add File: docs/plan/z.md\n+# Plan\n*** End Patch"}),
+        };
+        assert!(matches!(
+            gate.before_tool(&patch).await.unwrap(),
+            ToolDecision::Continue
+        ));
+
+        // One path outside the fence denies the entire batch, and plan mode
+        // never permits deletion through a patch.
+        let mixed = ToolCall {
+            id: "c6".into(),
+            name: "multi_edit".into(),
+            arguments: json!({"edits": [
+                {"path": "docs/plan/x.md", "old": "a", "new": "b"},
+                {"path": "src/main.rs", "old": "c", "new": "d"}
+            ]}),
+        };
+        assert!(denied(&gate.before_tool(&mixed).await.unwrap()));
+        let deleting_patch = ToolCall {
+            id: "c7".into(),
+            name: "apply_patch".into(),
+            arguments: json!({"patch": "*** Begin Patch\n*** Delete File: docs/plan/x.md\n*** End Patch"}),
+        };
+        assert!(denied(&gate.before_tool(&deleting_patch).await.unwrap()));
 
         // Everything outside the fence stays refused.
         for path in [
@@ -488,11 +528,29 @@ mod tests {
             .await;
         assert_eq!(area.written().len(), 1);
 
+        gate.tool_result(&orca_harness_core::ToolResult {
+            call_id: "c2".into(),
+            tool_name: "apply_patch".into(),
+            output: json!({
+                "paths": ["docs/plan/kept.md", "docs/plan/second.md"],
+                "filesChanged": 2
+            }),
+            is_error: false,
+        })
+        .await;
+        assert_eq!(
+            area.written(),
+            [
+                "docs/plan/kept.md".to_string(),
+                "docs/plan/second.md".to_string()
+            ]
+        );
+
         // Outside plan mode nothing is recorded at all.
         mode.set(Mode::Normal);
         gate.tool_result(&result("write_file", "docs/plan/later.md", false))
             .await;
-        assert_eq!(area.written().len(), 1);
+        assert_eq!(area.written().len(), 2);
     }
 
     /// The denial has to send the model somewhere other than "try again".

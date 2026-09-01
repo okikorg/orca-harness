@@ -1,20 +1,21 @@
 <section class="section" id="enter-auto-mode">
     <h2>Let scoped work proceed</h2>
-    <div class="terminal"><pre><span class="prompt">$</span> orcacode
-<span class="prompt">$</span> orcacode --auto
+    <div class="terminal"><pre><span class="prompt">$</span> orcacode --auto
 <span class="prompt">$</span> orcacode --auto --workspace /path/to/project -p "Run the focused tests and fix failures"
 
 › /mode auto
 › /mode normal</pre></div>
     <p>
-        Auto is the default startup mode. It replaces ordinary approval prompts
-        with an automatic review of each unresolved tool action. The status line remains marked
+        Auto is an explicit startup mode. It replaces ordinary approval prompts
+        with automatic review of actions that still carry meaningful scope or
+        safety risk. The status line remains marked
         <code>auto</code>, and the mode is not persisted after the session.
         Use it when you want the agent to complete a bounded request without
         stopping for every shell command, write, or edit.
     </p>
     <p>
-        Pass <code>--normal</code> to start with human approval prompts instead.
+        Normal mode with human approval prompts is the startup default; pass
+        <code>--auto</code> to opt into automatic admission and review.
         Explicit startup precedence is plan, normal, auto, then yolo. Bare
         <code>--auto-approve</code> retains its legacy normal-headless behavior;
         explicit <code>--auto</code> still enables review.
@@ -27,7 +28,7 @@
         <thead><tr><th>Stage</th><th>What happens</th></tr></thead>
         <tbody>
             <tr><td>1. Existing gates</td><td>Plan policy and plugin <code>before_tool</code> rewrites run through the existing extension pipeline.</td></tr>
-            <tr><td>2. Safe bypass</td><td>Known-safe observation, instruction, and coordination tools; MCP search/selection; and process list/poll proceed without a review call.</td></tr>
+            <tr><td>2. Safe bypass</td><td>Known-safe observation, instruction, and coordination tools; ordinary guarded workspace mutations; MCP search/selection; and process list/poll proceed without a review call.</td></tr>
             <tr><td>3. Review packet</td><td>The reviewer receives the root user request, origin, tool name, and final effective arguments.</td></tr>
             <tr><td>4. Decision</td><td><code>clear</code> runs those exact arguments; <code>caution</code> returns a model-visible hold reason and runs nothing.</td></tr>
             <tr><td>5. Recovery</td><td>The agent may choose a materially safer action, but an unchanged held action remains held for the current root turn.</td></tr>
@@ -36,9 +37,9 @@
     <div class="callout">
         <span class="callout-label">EXACT ACTION, FINAL INPUT</span>
         <p>
-            Auto reviews the arguments after plugin rewrites and passes the
-            same value to the tool when cleared. A decision never authorizes a
-            later, broader, or modified call.
+            When review is required, Auto reviews the arguments after plugin
+            rewrites and passes the same value to the tool when cleared. A
+            decision never authorizes a later, broader, or modified call.
         </p>
     </div>
     <p>
@@ -46,18 +47,23 @@
         <code>grep</code>, <code>glob</code>, <code>file_info</code>,
         <code>read_tool_result</code>, <code>memory_search</code>,
         <code>skill</code>, <code>todo_write</code>, <code>ask</code>,
+        <code>write_file</code>, <code>edit_file</code>,
+        <code>multi_edit</code>, non-deleting <code>apply_patch</code>,
         <code>mcp_search_tools</code>, <code>mcp_select_tool</code>, and
         <code>process</code> actions <code>list</code> or <code>poll</code>.
-        Web fetch, search, and crawl are deliberately reviewed because they
-        create external network effects.
+        Native mutations retain their workspace, read-before-overwrite,
+        exact-match, and transactional guards. Whole-file patch deletion and
+        web access remain reviewed.
     </p>
 </section>
 
 <section class="section" id="auto-authority">
     <h2>The root request is the authority</h2>
     <p>
-        The reviewer asks whether the exact action is clearly necessary for
-        the current root user request and acceptably scoped. Tool arguments
+        The reviewer asks whether the exact action is a reasonable step toward
+        the current root user request and acceptably scoped. Intermediate
+        exploration, validation, builds, project scripts, and no-op checks do
+        not need to produce the final artifact themselves. Tool arguments
         are treated as proposed data, not as instructions to the reviewer.
         Subagents share the root authority and cannot replace it with their
         delegated task.
@@ -65,7 +71,7 @@
     <table class="command-table">
         <thead><tr><th>Usually clear</th><th>Usually held for caution</th></tr></thead>
         <tbody>
-            <tr><td>A narrow write or command directly required by the request.</td><td>An ambiguous action or one not clearly required.</td></tr>
+            <tr><td>A routine, plausibly related development step.</td><td>A clearly unrelated action or one with a meaningful safety concern.</td></tr>
             <tr><td>A precisely scoped destructive action explicitly requested by the user.</td><td>Broad or compound effects beyond the requested change.</td></tr>
             <tr><td>An external action whose target and effect are clearly authorized.</td><td>Credential access, privilege changes, deployment, publication, or external messaging without clear authority.</td></tr>
         </tbody>

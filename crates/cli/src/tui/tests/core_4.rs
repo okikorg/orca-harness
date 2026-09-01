@@ -493,6 +493,8 @@
             tool_name: "shell".into(),
             input: serde_json::json!({"command": "cargo run --release -p orcacode"}),
             started: Instant::now(),
+            execution_started: None,
+            execution_elapsed: None,
             elapsed: None,
             output: Some(serde_json::json!({"text": "compiling"})),
             is_error: false,

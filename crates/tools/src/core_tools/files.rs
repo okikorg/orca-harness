@@ -94,10 +94,15 @@ impl FileGuard {
     /// Stamp what is on disk now. Called after a write, from the file's
     /// own post-write metadata rather than the clock, so the stamp is
     /// exactly what the next check will compare against.
-    async fn restamp(&self, path: &Path) {
+    pub(crate) async fn restamp(&self, path: &Path) {
         if let Ok(meta) = fs::metadata(path).await {
             self.record(path, Stamp::of(&meta));
         }
+    }
+
+    /// Drop a stamp after a tool deletes the file.
+    pub(crate) fn forget(&self, path: &Path) {
+        self.0.lock().expect("file guard lock").remove(path);
     }
 
     /// The read-before-write check. `Ok` when the path does not exist

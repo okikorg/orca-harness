@@ -12,7 +12,7 @@ mod language;
 mod summary;
 use language::{inspector_output_language, language_for_path};
 
-use super::elapsed_label;
+use super::format::tool_timing_label;
 use super::{
     InspectorMode, ToolActivity, INSPECTOR_OUTPUT_HEAD, INSPECTOR_OUTPUT_TAIL,
     INSPECTOR_PREVIEW_CHARS, INSPECTOR_PREVIEW_LINES,
@@ -35,10 +35,9 @@ pub(super) fn tool_inspector_header_lines(
     mode: InspectorMode,
 ) -> Vec<Line<'static>> {
     let t = theme();
-    let elapsed = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
     let (status, status_style) = inspector_status(tool);
     let raw_name = tool.tool_name.to_lowercase();
-    let duration = elapsed_label(elapsed);
+    let duration = tool_timing_label(tool, true);
     let identity = format!("{raw_name} · {status} · {duration}");
     let mode_suffix = format!(" · {}", mode.label().to_lowercase());
     let action_width = width.saturating_sub(2 + mode_suffix.chars().count());
@@ -98,6 +97,8 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
         "read_file" => "Read a file",
         "write_file" => "Write a file",
         "edit_file" => "Edit a file",
+        "multi_edit" => "Apply ordered exact edits",
+        "apply_patch" => "Apply a multi-file patch",
         "list_dir" => "List a directory",
         "grep" => "Search workspace text",
         "glob" => "Find workspace paths",

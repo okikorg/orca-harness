@@ -12,6 +12,15 @@ benchmarks/results/**/*.jsonl
 benchmarks/results/**/*.md
 benchmarks/results/**/*.txt
 benchmarks/results/**/*.csv
+# This suite is intentionally checked in: it is the delivery evidence for the
+# native core-tool mutations, while other generated benchmark runs stay ignored.
+!benchmarks/results/core-tools/
+!benchmarks/results/core-tools/accuracy.txt
+!benchmarks/results/core-tools/raw.txt
+!benchmarks/results/core-tools/measurements.json
+!benchmarks/results/core-tools/summary.json
+!benchmarks/results/core-tools/baseline.json
+!benchmarks/results/core-tools/comparison.json
 __pycache__/
 
 # GitBook / HonKit build output and local tooling

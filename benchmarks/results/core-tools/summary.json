@@ -1,0 +1,268 @@
+[
+  {
+    "name": "core-tools/apply_patch/distinct wall p50",
+    "unit": "s",
+    "value": 0.00707325,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/distinct wall p99",
+    "unit": "s",
+    "value": 0.016676166,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/distinct throughput p50",
+    "unit": "operations/sec",
+    "value": 4521.077971924,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/distinct single average p50",
+    "unit": "s",
+    "value": 0.001231527,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/distinct speedup median",
+    "unit": "x",
+    "value": 5.634052262,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/guarded_distinct wall p50",
+    "unit": "s",
+    "value": 0.007186709,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/guarded_distinct wall p99",
+    "unit": "s",
+    "value": 0.057747083,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/guarded_distinct throughput p50",
+    "unit": "operations/sec",
+    "value": 4443.544009624,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/guarded_distinct single average p50",
+    "unit": "s",
+    "value": 0.00127116,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/guarded_distinct speedup median",
+    "unit": "x",
+    "value": 5.458924721,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/batch_files wall p50",
+    "unit": "s",
+    "value": 0.036372667,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/batch_files wall p99",
+    "unit": "s",
+    "value": 0.062363125,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/batch_files throughput p50",
+    "unit": "operations/sec",
+    "value": 876.412187607,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/repeated_file wall p50",
+    "unit": "s",
+    "value": 0.001298833,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 1 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/repeated_file wall p99",
+    "unit": "s",
+    "value": 0.001458042,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 1 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/repeated_file throughput p50",
+    "unit": "operations/sec",
+    "value": 24576.78016531,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 1 calls, 1 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/append_files wall p50",
+    "unit": "s",
+    "value": 0.036259083,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/append_files wall p99",
+    "unit": "s",
+    "value": 0.070570375,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/apply_patch/append_files throughput p50",
+    "unit": "operations/sec",
+    "value": 878.646144678,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/distinct wall p50",
+    "unit": "s",
+    "value": 0.004299417,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/distinct wall p99",
+    "unit": "s",
+    "value": 0.050773708,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/distinct throughput p50",
+    "unit": "operations/sec",
+    "value": 7421.868023879,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/distinct single average p50",
+    "unit": "s",
+    "value": 0.000455339,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/distinct speedup median",
+    "unit": "x",
+    "value": 3.460241104,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/guarded_distinct wall p50",
+    "unit": "s",
+    "value": 0.005348041,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/guarded_distinct wall p99",
+    "unit": "s",
+    "value": 0.03071225,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/guarded_distinct throughput p50",
+    "unit": "operations/sec",
+    "value": 5883.794687191,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/guarded_distinct single average p50",
+    "unit": "s",
+    "value": 0.000465698,
+    "range": "\u00b1 0",
+    "extra": "32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/guarded_distinct speedup median",
+    "unit": "x",
+    "value": 2.756406953,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 32 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/batch_files wall p50",
+    "unit": "s",
+    "value": 0.012916833,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/batch_files wall p99",
+    "unit": "s",
+    "value": 0.05762575,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/batch_files throughput p50",
+    "unit": "operations/sec",
+    "value": 2474.258816441,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/repeated_file wall p50",
+    "unit": "s",
+    "value": 0.003204125,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 1 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/repeated_file wall p99",
+    "unit": "s",
+    "value": 0.003655583,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 1 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/repeated_file throughput p50",
+    "unit": "operations/sec",
+    "value": 9970.530849757,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 1 calls, 1 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/append_files wall p50",
+    "unit": "s",
+    "value": 0.011418083,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/append_files wall p99",
+    "unit": "s",
+    "value": 0.0443805,
+    "range": "\u00b1 0",
+    "extra": "1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  },
+  {
+    "name": "core-tools/multi_edit/append_files throughput p50",
+    "unit": "operations/sec",
+    "value": 2785.131540457,
+    "range": "\u00b1 0",
+    "extra": "higher is better; 1 calls, 32 files, 32 operations, 1048576 bytes/file, 20 samples"
+  }
+]

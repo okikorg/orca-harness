@@ -63,8 +63,14 @@ pub(crate) struct ModelPicker {
     pub(crate) picker: ListPicker,
 }
 
-/// Provider-advertised reasoning efforts for the model chosen on the
-/// preceding `/models` page.
+/// The picker to open when a model-catalog request completes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ModelPickerTarget {
+    Models { filter: String },
+    ActiveModelEffort,
+}
+
+/// Provider-advertised reasoning efforts for the active or newly chosen model.
 pub(crate) struct EffortPicker {
     pub(crate) model_id: String,
     pub(crate) context_window: Option<u64>,
@@ -422,6 +428,8 @@ pub(crate) struct ToolActivity {
     pub(crate) tool_name: String,
     pub(crate) input: serde_json::Value,
     pub(crate) started: Instant,
+    pub(crate) execution_started: Option<Instant>,
+    pub(crate) execution_elapsed: Option<Duration>,
     pub(crate) elapsed: Option<Duration>,
     pub(crate) output: Option<serde_json::Value>,
     pub(crate) is_error: bool,
@@ -580,8 +588,8 @@ pub(crate) struct App {
     /// Parent picker pages. Right/enter descends, left returns one page,
     /// and escape clears the whole flow.
     pub(crate) overlay_stack: Vec<Overlay>,
-    /// Filter to seed the model picker with once the catalog reply arrives.
-    pub(crate) picker_pending: Option<(u64, String)>,
+    /// Picker to open once the requested model catalog arrives.
+    pub(crate) picker_pending: Option<(u64, ModelPickerTarget)>,
     pub(crate) next_picker_request: u64,
     /// Text waiting to be handed to the terminal's clipboard: decided
     /// here, written by the run loop between frames.

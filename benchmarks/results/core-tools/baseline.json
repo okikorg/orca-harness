@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-01T08:32:14.619651+00:00",
+  "git_sha": "dfb11f4188ff63c52ba3852facc24a71b1daa2fa",
+  "worktree": "dirty",
+  "platform": "macOS-26.6-arm64-arm-64bit",
+  "machine": "arm64",
+  "python": "3.12.4",
+  "accuracy_suite": "9 passed",
+  "measurements": [
+    {
+      "tool": "apply_patch",
+      "samples": 20,
+      "calls_per_sample": 32,
+      "bytes_per_file": 1048576,
+      "single_average_p50_seconds": 0.001384395,
+      "single_average_p99_seconds": 0.0021716060000000004,
+      "concurrent_wall_p50_seconds": 0.007886042,
+      "concurrent_wall_p99_seconds": 0.019972292,
+      "throughput_p50_calls_per_second": 4046.770038878078,
+      "speedup_median": 5.625
+    },
+    {
+      "tool": "multi_edit",
+      "samples": 20,
+      "calls_per_sample": 32,
+      "bytes_per_file": 1048576,
+      "single_average_p50_seconds": 0.000543369,
+      "single_average_p99_seconds": 0.001446972,
+      "concurrent_wall_p50_seconds": 0.004569,
+      "concurrent_wall_p99_seconds": 0.027806458,
+      "throughput_p50_calls_per_second": 6906.226394734003,
+      "speedup_median": 3.74
+    }
+  ]
+}

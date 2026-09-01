@@ -1,4 +1,5 @@
 use super::*;
+use crate::tui::state::ModelPickerTarget;
 
 fn finish_picker_flow(app: &mut App) {
     app.overlay = None;
@@ -127,7 +128,12 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
             }
             let request_id = app.next_picker_request;
             app.next_picker_request += 1;
-            app.picker_pending = Some((request_id, String::new()));
+            app.picker_pending = Some((
+                request_id,
+                ModelPickerTarget::Models {
+                    filter: String::new(),
+                },
+            ));
             if worker
                 .send(WorkerCmd::ListModels {
                     request_id,

@@ -83,6 +83,27 @@ mod tests {
     }
 
     #[test]
+    fn batch_mutations_show_compact_scope() {
+        assert_eq!(
+            tool_call_line(
+                "multi_edit",
+                &json!({"edits": [
+                    {"path": "a.rs", "old": "a", "new": "b"},
+                    {"path": "b.rs", "old": "c", "new": "d"}
+                ]})
+            ),
+            "multi_edit 2 edits · 2 files"
+        );
+        assert_eq!(
+            tool_call_line(
+                "apply_patch",
+                &json!({"patch": "*** Begin Patch\n*** Update File: a.rs\n@@\n-a\n+b\n*** Add File: b.rs\n+x\n*** End Patch"})
+            ),
+            "apply_patch a.rs · 2 files"
+        );
+    }
+
+    #[test]
     fn grep_shows_the_query() {
         let line = tool_call_line("grep", &json!({"query": "fn main", "path": "."}));
         assert_eq!(line, "grep 'fn main'");
@@ -194,6 +215,22 @@ mod tests {
         assert_eq!(
             tool_result_summary("edit_file", &out, false),
             "2 replacement(s)"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "multi_edit",
+                &json!({"editsApplied": 3, "filesChanged": 2}),
+                false
+            ),
+            "3 edits · 2 files"
+        );
+        assert_eq!(
+            tool_result_summary(
+                "apply_patch",
+                &json!({"filesChanged": 3, "added": 1, "updated": 2, "deleted": 0}),
+                false
+            ),
+            "3 files · +1 ~2 -0"
         );
         let out = json!({"path": ".", "entries": ["a", "b"]});
         assert_eq!(tool_result_summary("list_dir", &out, false), "2 entries");

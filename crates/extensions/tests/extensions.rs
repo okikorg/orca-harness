@@ -5,12 +5,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::time::timeout;
 
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{
-    Agent, CancellationToken, FnTool, Limits, Model, ModelError, ModelResponse, ToolError, Usage,
+    Agent, CancellationToken, Extension, FnTool, Limits, Model, ModelError, ModelResponse, Next,
+    Subscriptions, ToolCall, ToolContext, ToolError, Usage,
 };
 use orca_harness_extensions::{
     EventStream, HarnessEvent, PolicyOutcome, RetryModel, ToolPolicy, ToolRetry, Truncation,

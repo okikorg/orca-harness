@@ -1,0 +1,319 @@
+--- sample 1/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.038075541,"single_average_seconds":0.00118986065625,"speedup":1.239750946283649,"tool":"multi_edit","wall_seconds":0.03071225}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.055580167,"single_average_seconds":0.00173688021875,"speedup":2.388088219099518,"tool":"apply_patch","wall_seconds":0.023273917}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.057381875,"single_average_seconds":0.00179318359375,"speedup":5.790641446478783,"tool":"apply_patch","wall_seconds":0.009909416}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.032282792,"single_average_seconds":0.00100883725,"speedup":1.1695004009757022,"tool":"multi_edit","wall_seconds":0.027603917}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.041255}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.062580417}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.020559917}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.051408917}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003335875}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.00135975}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+--- sample 2/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.018465542,"single_average_seconds":0.0005770481875,"speedup":2.5010608033174218,"tool":"multi_edit","wall_seconds":0.007383084}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.041990667,"single_average_seconds":0.00131220834375,"speedup":2.225137700398314,"tool":"apply_patch","wall_seconds":0.018871042}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.043493416,"single_average_seconds":0.00135916925,"speedup":2.6574659212415606,"tool":"apply_patch","wall_seconds":0.0163665}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.032177542,"single_average_seconds":0.0010055481875,"speedup":1.9236934818815545,"tool":"multi_edit","wall_seconds":0.016726959}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011406792}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035329708}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.012083}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.047675458}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003296917}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001264}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+--- sample 3/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.01977975,"single_average_seconds":0.0006181171875,"speedup":2.1783764876858496,"tool":"multi_edit","wall_seconds":0.009080042}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.051247542,"single_average_seconds":0.0016014856875,"speedup":7.767279919671107,"tool":"apply_patch","wall_seconds":0.006597875}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.03837275,"single_average_seconds":0.0011991484375,"speedup":5.614257758920243,"tool":"apply_patch","wall_seconds":0.006834875}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.01398225,"single_average_seconds":0.0004369453125,"speedup":3.252126974424672,"tool":"multi_edit","wall_seconds":0.004299417}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.016320625}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.054375375}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.01892525}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.062363125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.0035465}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001458042}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+--- sample 4/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014535708,"single_average_seconds":0.000454240875,"speedup":2.818727149254756,"tool":"multi_edit","wall_seconds":0.005156834}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039339291,"single_average_seconds":0.00122935284375,"speedup":5.742613441285902,"tool":"apply_patch","wall_seconds":0.006850416}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.041861375,"single_average_seconds":0.00130816796875,"speedup":5.34065320702963,"tool":"apply_patch","wall_seconds":0.00783825}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.021562542,"single_average_seconds":0.0006738294375,"speedup":1.6311369113706418,"tool":"multi_edit","wall_seconds":0.013219333}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.022072625}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.070570375}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.011475625}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.036233333}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003295291}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001313417}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+--- sample 5/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014196417,"single_average_seconds":0.00044363803125,"speedup":2.703564463911636,"tool":"multi_edit","wall_seconds":0.005251}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.038915833,"single_average_seconds":0.00121611978125,"speedup":2.542286235638987,"tool":"apply_patch","wall_seconds":0.015307416}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.0490965,"single_average_seconds":0.001534265625,"speedup":6.14387836506124,"tool":"apply_patch","wall_seconds":0.007991125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.01382075,"single_average_seconds":0.0004318984375,"speedup":2.1320227401361116,"tool":"multi_edit","wall_seconds":0.006482459}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.0443805}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035742209}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.012311417}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.035829625}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003216875}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001298833}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+--- sample 6/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.015502458,"single_average_seconds":0.0004844518125,"speedup":1.1566876762456557,"tool":"multi_edit","wall_seconds":0.013402458}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.053099083,"single_average_seconds":0.00165934634375,"speedup":0.9195110859539001,"tool":"apply_patch","wall_seconds":0.057747083}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.037764167,"single_average_seconds":0.00118013021875,"speedup":5.786687704430955,"tool":"apply_patch","wall_seconds":0.006526042}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.020963458,"single_average_seconds":0.0006551080625,"speedup":4.480209013437341,"tool":"multi_edit","wall_seconds":0.004679125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011342584}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.04448475}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.015805333}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.042513083}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003204125}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.00127775}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+--- sample 7/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.026706417,"single_average_seconds":0.00083457553125,"speedup":2.4414041081426583,"tool":"multi_edit","wall_seconds":0.010938958}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.040827458,"single_average_seconds":0.0012758580625,"speedup":3.849800892647422,"tool":"apply_patch","wall_seconds":0.010605083}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.042845542,"single_average_seconds":0.0013389231875,"speedup":2.569268139930965,"tool":"apply_patch","wall_seconds":0.016676166}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.022678334,"single_average_seconds":0.0007086979375,"speedup":5.986953396274881,"tool":"multi_edit","wall_seconds":0.003787959}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011489583}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.036259083}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.014840958}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.035794667}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.00319875}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001318375}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+--- sample 8/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.013736625,"single_average_seconds":0.00042926953125,"speedup":3.0917454422687376,"tool":"multi_edit","wall_seconds":0.004443}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039328542,"single_average_seconds":0.0012290169375,"speedup":5.8108114058060325,"tool":"apply_patch","wall_seconds":0.006768167}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.045383541,"single_average_seconds":0.00141823565625,"speedup":6.558947372528538,"tool":"apply_patch","wall_seconds":0.006919333}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.013920917,"single_average_seconds":0.00043502865625,"speedup":3.6574241344666394,"tool":"multi_edit","wall_seconds":0.003806208}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011271041}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.037540375}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.0128695}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.041691041}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003117458}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001228958}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+--- sample 9/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014638625,"single_average_seconds":0.00045745703125,"speedup":2.8092677312821195,"tool":"multi_edit","wall_seconds":0.005210833}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039420833,"single_average_seconds":0.00123190103125,"speedup":5.47400644786008,"tool":"apply_patch","wall_seconds":0.007201459}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.039333333,"single_average_seconds":0.00122916665625,"speedup":5.59775610623877,"tool":"apply_patch","wall_seconds":0.007026625}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.04027725,"single_average_seconds":0.0012586640625,"speedup":7.334416696515604,"tool":"multi_edit","wall_seconds":0.005491541}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011321542}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035829}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.012933166}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.035755958}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003146375}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.00124}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+--- sample 10/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.01498775,"single_average_seconds":0.0004683671875,"speedup":2.935009640574776,"tool":"multi_edit","wall_seconds":0.005106542}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.040691166,"single_average_seconds":0.0012715989375,"speedup":5.787188053333334,"tool":"apply_patch","wall_seconds":0.00703125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.03903775,"single_average_seconds":0.0012199296875,"speedup":4.209904976191745,"tool":"apply_patch","wall_seconds":0.009272834}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.028438,"single_average_seconds":0.0008886875,"speedup":7.073835489918703,"tool":"multi_edit","wall_seconds":0.004020167}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011170667}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035687042}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.0132655}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.036210125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.0031405}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001310833}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+--- sample 11/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014798792,"single_average_seconds":0.00046246225,"speedup":2.7671425854813,"tool":"multi_edit","wall_seconds":0.005348041}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039245667,"single_average_seconds":0.00122642709375,"speedup":5.460867693404588,"tool":"apply_patch","wall_seconds":0.007186709}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.038897083,"single_average_seconds":0.00121553384375,"speedup":4.573929773036108,"tool":"apply_patch","wall_seconds":0.008504084}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.013065625,"single_average_seconds":0.00040830078125,"speedup":3.6779536298807267,"tool":"multi_edit","wall_seconds":0.003552417}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.01084375}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.036714667}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.012868708}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.036737959}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003209458}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001256542}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+--- sample 12/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.021206542,"single_average_seconds":0.0006627044375,"speedup":2.461726391549132,"tool":"multi_edit","wall_seconds":0.0086145}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039037,"single_average_seconds":0.00121990625,"speedup":6.2675636522089,"tool":"apply_patch","wall_seconds":0.006228417}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.038838791,"single_average_seconds":0.00121371221875,"speedup":5.768493952918178,"tool":"apply_patch","wall_seconds":0.006732917}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.014081334,"single_average_seconds":0.0004400416875,"speedup":3.430253332365418,"tool":"multi_edit","wall_seconds":0.004105042}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.0118535}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.036595917}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.012702625}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.036249792}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003218833}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001337792}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+--- sample 13/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014902333,"single_average_seconds":0.00046569790625,"speedup":2.6852666448755653,"tool":"multi_edit","wall_seconds":0.005549666}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.043122042,"single_average_seconds":0.0013475638125,"speedup":1.390642976805096,"tool":"apply_patch","wall_seconds":0.031008708}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.037938334,"single_average_seconds":0.0011855729375,"speedup":6.166661925789725,"tool":"apply_patch","wall_seconds":0.006152167}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.014289,"single_average_seconds":0.00044653125,"speedup":2.5068421052631575,"tool":"multi_edit","wall_seconds":0.0057}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.023814334}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.049344}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.0127145}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.040223625}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.0033945}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001302042}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+--- sample 14/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.025656166,"single_average_seconds":0.0008017551875,"speedup":3.346201832469269,"tool":"multi_edit","wall_seconds":0.00766725}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.043724292,"single_average_seconds":0.001366384125,"speedup":2.3799147941328123,"tool":"apply_patch","wall_seconds":0.018372209}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.04400425,"single_average_seconds":0.0013751328125,"speedup":5.082324550846749,"tool":"apply_patch","wall_seconds":0.008658292}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.01903175,"single_average_seconds":0.0005947421875,"speedup":4.460174050314011,"tool":"multi_edit","wall_seconds":0.004267042}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.01110125}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.043758625}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.05762575}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.035023292}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003101083}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001305209}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+--- sample 15/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.013746208,"single_average_seconds":0.000429569,"speedup":3.176722322018078,"tool":"multi_edit","wall_seconds":0.004327167}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.040677125,"single_average_seconds":0.00127116015625,"speedup":4.529053179496458,"tool":"apply_patch","wall_seconds":0.008981375}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.042131958,"single_average_seconds":0.0013166236875,"speedup":5.7858666895545445,"tool":"apply_patch","wall_seconds":0.007281875}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.019246375,"single_average_seconds":0.00060144921875,"speedup":1.5459970132941423,"tool":"multi_edit","wall_seconds":0.012449167}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011418083}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.036066417}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.0122995}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.03782175}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003201}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001319875}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+--- sample 16/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014543208,"single_average_seconds":0.00045447525,"speedup":2.81977197458577,"tool":"multi_edit","wall_seconds":0.005157583}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.044041584,"single_average_seconds":0.0013762995,"speedup":3.6289659178691718,"tool":"apply_patch","wall_seconds":0.012136125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.039492209,"single_average_seconds":0.00123413153125,"speedup":5.583318700738699,"tool":"apply_patch","wall_seconds":0.00707325}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.01427675,"single_average_seconds":0.0004461484375,"speedup":3.566772794817908,"tool":"multi_edit","wall_seconds":0.004002708}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.015224084}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035716625}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.0129705}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.035813}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.0031715}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001276}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+--- sample 17/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014932792,"single_average_seconds":0.00046664975,"speedup":2.7456713198289213,"tool":"multi_edit","wall_seconds":0.005438667}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.040137834,"single_average_seconds":0.0012543073125,"speedup":5.648077896460108,"tool":"apply_patch","wall_seconds":0.007106459}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.038786333,"single_average_seconds":0.00121207290625,"speedup":5.653846764954847,"tool":"apply_patch","wall_seconds":0.006860167}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.013716916,"single_average_seconds":0.000428653625,"speedup":3.7099477623606627,"tool":"multi_edit","wall_seconds":0.003697334}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.011069}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035358208}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.012916833}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.035986417}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003083542}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001270291}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+--- sample 18/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.014133875,"single_average_seconds":0.00044168359375,"speedup":2.892038475460323,"tool":"multi_edit","wall_seconds":0.004887167}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039109959,"single_average_seconds":0.00122218621875,"speedup":5.456981748741935,"tool":"apply_patch","wall_seconds":0.007166958}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.039408875,"single_average_seconds":0.00123152734375,"speedup":5.608606703195048,"tool":"apply_patch","wall_seconds":0.0070265}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.0142975,"single_average_seconds":0.000446796875,"speedup":3.3160674397315324,"tool":"multi_edit","wall_seconds":0.004311583}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.014638333}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.036419667}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.015360208}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.036372667}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003285125}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001272417}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+--- sample 19/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.013593125,"single_average_seconds":0.00042478515625,"speedup":2.922074432352546,"tool":"multi_edit","wall_seconds":0.004651875}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.039458375,"single_average_seconds":0.00123307421875,"speedup":5.6139201074684575,"tool":"apply_patch","wall_seconds":0.007028667}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.042504875,"single_average_seconds":0.00132827734375,"speedup":6.005245439433238,"tool":"apply_patch","wall_seconds":0.007077958}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.083976875,"single_average_seconds":0.00262427734375,"speedup":1.6539441042990204,"tool":"multi_edit","wall_seconds":0.050773708}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.010428958}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035515375}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.0115205}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.05073}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003655583}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001315125}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+--- sample 20/20 ---
+
+running 6 tests
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.018135833,"single_average_seconds":0.00056674478125,"speedup":0.8028035080924056,"tool":"multi_edit","wall_seconds":0.022590625}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"guarded_distinct","serial_seconds":0.04124625,"single_average_seconds":0.0012889453125,"speedup":6.254842256733892,"tool":"apply_patch","wall_seconds":0.006594291}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.038000084,"single_average_seconds":0.001187502625,"speedup":5.853521493852353,"tool":"apply_patch","wall_seconds":0.006491833}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":32,"files":32,"operations":32,"scenario":"distinct","serial_seconds":0.014570833,"single_average_seconds":0.00045533853125,"speedup":3.490228875980598,"tool":"multi_edit","wall_seconds":0.00417475}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"multi_edit","wall_seconds":0.012222375}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"append_files","tool":"apply_patch","wall_seconds":0.035900916}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"multi_edit","wall_seconds":0.022448166}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":32,"operations":32,"scenario":"batch_files","tool":"apply_patch","wall_seconds":0.0365125}
+.[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"multi_edit","wall_seconds":0.003173833}
+[core-tools-bench] {"bytes_per_file":1048576,"calls":1,"files":1,"operations":32,"scenario":"repeated_file","tool":"apply_patch","wall_seconds":0.001276417}
+.
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s

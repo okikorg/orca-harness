@@ -60,6 +60,8 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
                 tool_name,
                 input,
                 started: Instant::now(),
+                execution_started: None,
+                execution_elapsed: None,
                 elapsed: None,
                 output: None,
                 is_error: false,
@@ -69,6 +71,13 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             app.split_scroll = 0;
             app.pending_calls.insert(tool_call_id, index);
         }
+        HarnessEvent::ToolStarted { tool_call_id, .. } => {
+            if let Some(index) = app.pending_calls.get(&tool_call_id).copied() {
+                if let Some(activity) = app.activity_tools.get_mut(index) {
+                    activity.execution_started.get_or_insert_with(Instant::now);
+                }
+            }
+        }
         HarnessEvent::ToolFinished {
             tool_call_id,
             is_error,
@@ -76,7 +85,11 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
         } => {
             if let Some(index) = app.pending_calls.get(&tool_call_id).copied() {
                 if let Some(activity) = app.activity_tools.get_mut(index) {
-                    activity.elapsed = Some(activity.started.elapsed());
+                    let now = Instant::now();
+                    activity.elapsed = Some(now.duration_since(activity.started));
+                    activity.execution_elapsed = activity
+                        .execution_started
+                        .map(|started| now.duration_since(started));
                     activity.is_error = is_error;
                 }
             }
@@ -96,9 +109,15 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             let call_line = index
                 .and_then(|index| app.activity_tools.get_mut(index))
                 .map(|activity| {
+                    let now = Instant::now();
                     activity
                         .elapsed
-                        .get_or_insert_with(|| activity.started.elapsed());
+                        .get_or_insert_with(|| now.duration_since(activity.started));
+                    if activity.execution_elapsed.is_none() {
+                        activity.execution_elapsed = activity
+                            .execution_started
+                            .map(|started| now.duration_since(started));
+                    }
                     activity.output = Some(output.clone());
                     activity.is_error = is_error;
                     activity.call_line.clone()
@@ -260,12 +279,23 @@ pub(crate) fn handle_subagent_event(
                 tool_name,
                 input,
                 started: Instant::now(),
+                execution_started: None,
+                execution_elapsed: None,
                 elapsed: None,
                 output: None,
                 is_error: false,
                 approval: None,
             });
             spawn.pending.insert(tool_call_id, index);
+        }
+        HarnessEvent::ToolStarted { tool_call_id, .. } => {
+            if let Some(spawn) = app.subagent_activity.get_mut(&id) {
+                if let Some(index) = spawn.pending.get(&tool_call_id).copied() {
+                    if let Some(tool) = spawn.tools.get_mut(index) {
+                        tool.execution_started.get_or_insert_with(Instant::now);
+                    }
+                }
+            }
         }
         HarnessEvent::ToolFinished {
             tool_call_id,
@@ -275,7 +305,11 @@ pub(crate) fn handle_subagent_event(
             if let Some(spawn) = app.subagent_activity.get_mut(&id) {
                 if let Some(index) = spawn.pending.get(&tool_call_id).copied() {
                     if let Some(tool) = spawn.tools.get_mut(index) {
-                        tool.elapsed = Some(tool.started.elapsed());
+                        let now = Instant::now();
+                        tool.elapsed = Some(now.duration_since(tool.started));
+                        tool.execution_elapsed = tool
+                            .execution_started
+                            .map(|started| now.duration_since(started));
                         tool.is_error = is_error;
                     }
                 }
@@ -290,7 +324,14 @@ pub(crate) fn handle_subagent_event(
             if let Some(spawn) = app.subagent_activity.get_mut(&id) {
                 if let Some(index) = spawn.pending.remove(&tool_call_id) {
                     if let Some(tool) = spawn.tools.get_mut(index) {
-                        tool.elapsed.get_or_insert_with(|| tool.started.elapsed());
+                        let now = Instant::now();
+                        tool.elapsed
+                            .get_or_insert_with(|| now.duration_since(tool.started));
+                        if tool.execution_elapsed.is_none() {
+                            tool.execution_elapsed = tool
+                                .execution_started
+                                .map(|started| now.duration_since(started));
+                        }
                         tool.output = Some(output);
                         tool.is_error = is_error;
                     }

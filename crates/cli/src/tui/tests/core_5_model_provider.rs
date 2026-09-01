@@ -2,7 +2,12 @@
     fn stale_catalog_reply_is_ignored() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.picker_pending = Some((9, "current".into()));
+        app.picker_pending = Some((
+            9,
+            ModelPickerTarget::Models {
+                filter: "current".into(),
+            },
+        ));
         handle_ui_msg(
             &mut app,
             UiMsg::Models {
@@ -13,14 +18,83 @@
             80,
         );
         assert!(app.overlay.is_none());
-        assert_eq!(app.picker_pending, Some((9, "current".into())));
+        assert_eq!(
+            app.picker_pending,
+            Some((
+                9,
+                ModelPickerTarget::Models {
+                    filter: "current".into()
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn effort_command_opens_active_models_effort_picker_and_updates_effort() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.cfg.model_name = "acme/fast-1".into();
+
+        slash_command(&mut app, "effort", &tx, 80);
+        let Ok(WorkerCmd::ListModels { request_id, .. }) = rx.try_recv() else {
+            panic!("/effort should fetch the model catalog");
+        };
+        assert_eq!(
+            app.picker_pending,
+            Some((request_id, ModelPickerTarget::ActiveModelEffort))
+        );
+
+        let mut models = catalog();
+        models[0].reasoning = Some(orca_harness_model_providers::ReasoningCapabilities {
+            supported_efforts: Some(
+                orca_harness_model_providers::SupportedEfforts::Listed(vec![
+                    "low".into(),
+                    "medium".into(),
+                    "high".into(),
+                ]),
+            ),
+            default_effort: Some("medium".into()),
+        });
+        handle_ui_msg(
+            &mut app,
+            UiMsg::Models {
+                request_id,
+                result: Ok(models),
+            },
+            &tx,
+            80,
+        );
+
+        let Some(Overlay::Efforts(picker)) = &app.overlay else {
+            panic!("/effort should open the existing effort picker");
+        };
+        assert_eq!(picker.model_id, "acme/fast-1");
+        assert_eq!(picker.picker.index(), 1);
+
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+        match rx.try_recv() {
+            Ok(WorkerCmd::SetModel {
+                id,
+                reasoning_effort,
+            }) => {
+                assert_eq!(id, "acme/fast-1");
+                assert_eq!(reasoning_effort.as_deref(), Some("high"));
+            }
+            other => panic!("expected effort update, got {:?}", other.is_ok()),
+        }
     }
 
     #[test]
     fn catalog_reply_opens_the_picker_seeded_with_the_command_filter() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.picker_pending = Some((7, "acme".into()));
+        app.picker_pending = Some((
+            7,
+            ModelPickerTarget::Models {
+                filter: "acme".into(),
+            },
+        ));
         let request_id = app.picker_pending.as_ref().unwrap().0;
         handle_ui_msg(
             &mut app,
@@ -269,7 +343,10 @@
         assert_eq!(
             app.picker_pending
                 .as_ref()
-                .map(|(_, seed)| seed.as_str()),
+                .map(|(_, target)| match target {
+                    ModelPickerTarget::Models { filter } => filter.as_str(),
+                    ModelPickerTarget::ActiveModelEffort => "effort",
+                }),
             Some("")
         );
         press(&mut app, &tx, KeyCode::Left);

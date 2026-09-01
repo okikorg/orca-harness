@@ -254,6 +254,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
+        name: "effort",
+        description: "change reasoning effort for the active model",
+        category: "General",
+        takes_args: false,
+    },
+    CommandSpec {
         name: "provider",
         description: "switch provider (openrouter, openai, local)",
         category: "General",
@@ -394,6 +400,7 @@ mod tests {
             names(&filter_commands("e")),
             vec![
                 "expand",
+                "effort",
                 "extensions",
                 "help",
                 "hotkeys",

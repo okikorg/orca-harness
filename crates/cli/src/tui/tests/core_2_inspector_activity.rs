@@ -9,6 +9,8 @@ fn inspector_write_input_renders_source_instead_of_escaped_json() {
             "content": "# Orca\n\n    indented code\n"
         }),
         started: Instant::now(),
+        execution_started: None,
+        execution_elapsed: None,
         elapsed: Some(Duration::from_millis(1)),
         output: Some(serde_json::json!({"path": "README.md", "bytesWritten": 26})),
         is_error: false,
@@ -34,6 +36,8 @@ fn inspector_output_with_tabs_and_ansi_renders_clean_cells() {
         tool_name: "shell".into(),
         input: serde_json::json!({"command": "du -sh ~/.nvm/*"}),
         started: Instant::now(),
+        execution_started: None,
+        execution_elapsed: None,
         elapsed: Some(Duration::from_millis(1)),
         output: Some(serde_json::json!({
             "stdout": "205M\t/Users/akashswamy/.nvm/versions\n\u{1b}[31m12K\u{1b}[0m\t/tmp/x\n",
@@ -72,12 +76,15 @@ fn inspector_json_preview_stops_after_one_level() {
 
 #[test]
 fn inspector_marks_live_finished_tool_complete_before_output_arrives() {
+    let started = Instant::now();
     let tool = ToolActivity {
         call_id: "glob-1".into(),
         call_line: "glob *.rs".into(),
         tool_name: "glob".into(),
         input: serde_json::json!({"pattern": "*.rs"}),
-        started: Instant::now(),
+        started,
+        execution_started: Some(started),
+        execution_elapsed: Some(Duration::from_millis(2)),
         elapsed: Some(Duration::from_millis(2)),
         output: None,
         is_error: false,
@@ -85,7 +92,10 @@ fn inspector_marks_live_finished_tool_complete_before_output_arrives() {
     };
 
     let inspector = flat_lines(&tool_inspector_lines(&tool, 80));
-    assert!(inspector.contains("glob · completed · 2ms"), "{inspector}");
+    assert!(
+        inspector.contains("glob · completed · preflight 0ns · run 2ms"),
+        "{inspector}"
+    );
     assert!(!inspector.contains("running"), "{inspector}");
 }
 
@@ -162,6 +172,29 @@ fn elapsed_labels_keep_sub_millisecond_tool_timings_visible() {
 }
 
 #[test]
+fn tool_timing_separates_review_from_execution() {
+    let started = Instant::now();
+    let tool = ToolActivity {
+        call_id: "edit-1".into(),
+        call_line: "multi_edit 2 edits · 2 files".into(),
+        tool_name: "multi_edit".into(),
+        input: serde_json::json!({}),
+        started,
+        execution_started: Some(started + Duration::from_millis(2_300)),
+        execution_elapsed: Some(Duration::from_micros(219)),
+        elapsed: Some(Duration::from_micros(2_300_219)),
+        output: Some(serde_json::json!({"filesChanged": 2})),
+        is_error: false,
+        approval: None,
+    };
+
+    assert_eq!(
+        tool_timing_label(&tool, false),
+        "preflight 2.3s · run 219µs"
+    );
+}
+
+#[test]
 fn live_tool_completion_freezes_elapsed_before_ordered_result_arrives() {
     let mut app = test_app();
     handle_harness_event(
@@ -170,6 +203,14 @@ fn live_tool_completion_freezes_elapsed_before_ordered_result_arrives() {
             tool_call_id: "fast".into(),
             tool_name: "glob".into(),
             input: serde_json::json!({"pattern": "*.rs"}),
+        },
+        80,
+    );
+    handle_harness_event(
+        &mut app,
+        HarnessEvent::ToolStarted {
+            tool_call_id: "fast".into(),
+            tool_name: "glob".into(),
         },
         80,
     );

@@ -54,7 +54,7 @@ mod truncation;
 mod usage;
 
 pub use compact::{compact, CompactConfig, CompactError, CompactReport};
-pub use events::{EventSink, EventStream, HarnessEvent};
+pub use events::{EventSink, EventStream, HarnessEvent, ToolExecutionEvents};
 pub use long_session::{ContextCapacity, LongSession, LongSessionConfig};
 pub use memory::{
     MemoryError, MemoryExtension, MemoryManageTool, MemoryModel, MemoryRecord, MemoryScope,

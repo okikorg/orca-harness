@@ -10,6 +10,7 @@ informational or deterministic evaluation suites:
 | startup    | `./benchmarks/startup/run.sh` | fixed cost the `orcacode` host pays before accepting input     |
 | MCP search | `benchmarks/mcp/`          | metadata-search cutoff distribution and labeled query accuracy  |
 | subagent   | `benchmarks/subagent/`     | fake-model in-flight concurrency, latency, and failure observations |
+| core tool mutations | `./benchmarks/core-tools/run.sh` | real-file latency, throughput, accuracy, and distinct-path concurrency for `apply_patch` and `multi_edit` |
 | harness comparison | [`benchmarks/harness-comparison/`](harness-comparison/README.md) | informational live-model cost, cache, tool, turn, correctness, and wall-time comparison |
 
 Plus `./benchmarks/compare/run.sh`, which puts orcacode next to `fx` on the
@@ -33,6 +34,9 @@ and both end with a budget check that fails the run on regression.
 
 ./benchmarks/startup/run.sh               # 100 runs per command
 ./benchmarks/startup/run.sh --quick       # 20 runs
+
+./benchmarks/core-tools/run.sh           # 20 release samples after accuracy tests
+./benchmarks/core-tools/run.sh --quick   # 3 release samples
 ```
 
 `startup/run.sh` needs [hyperfine](https://github.com/sharkdp/hyperfine)

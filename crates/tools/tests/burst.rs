@@ -35,8 +35,9 @@ use orca_harness_core::{
     ToolResult,
 };
 use orca_harness_tools::{
-    fs_admin_tools, BunReplTool, EditFileTool, GlobTool, GrepTool, ListDirTool, ProcessTool,
-    PyKernelTool, ReadFileTool, ShellTool, SubagentTool, Workspace, WriteFileTool,
+    fs_admin_tools, ApplyPatchTool, BunReplTool, EditFileTool, GlobTool, GrepTool, ListDirTool,
+    MultiEditTool, ProcessTool, PyKernelTool, ReadFileTool, ShellTool, SubagentTool, Workspace,
+    WriteFileTool,
 };
 
 const BURST: usize = 100;
@@ -150,6 +151,8 @@ fn registry(ws: &Workspace) -> ToolRegistry {
     ));
     tools.register(Arc::new(WriteFileTool::new(ws.clone())));
     tools.register(Arc::new(EditFileTool::new(ws.clone())));
+    tools.register(Arc::new(ApplyPatchTool::new(ws.clone())));
+    tools.register(Arc::new(MultiEditTool::new(ws.clone())));
     tools.register(Arc::new(ListDirTool::new(ws.clone())));
     tools.register(Arc::new(GrepTool::new(ws.clone())));
     tools.register(Arc::new(GlobTool::new(ws.clone()).max_results(5000)));

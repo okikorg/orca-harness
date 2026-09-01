@@ -13,6 +13,8 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
         "read_file" | "write_file" | "edit_file" | "list_dir" => {
             args.get("path").and_then(Value::as_str).map(str::to_string)
         }
+        "apply_patch" => patch_call_detail(args),
+        "multi_edit" => multi_edit_call_detail(args),
         "grep" => args
             .get("query")
             .and_then(Value::as_str)
@@ -48,6 +50,41 @@ fn glob_call_detail(args: &Value) -> Option<String> {
         Some(path) => format!("{path}/{pattern}"),
         None => pattern.to_string(),
     })
+}
+
+fn multi_edit_call_detail(args: &Value) -> Option<String> {
+    let edits = args.get("edits")?.as_array()?;
+    let files = edits
+        .iter()
+        .filter_map(|edit| edit.get("path").and_then(Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    Some(format!(
+        "{} · {}",
+        count_label(edits.len(), "edit", "edits"),
+        count_label(files, "file", "files")
+    ))
+}
+
+fn patch_call_detail(args: &Value) -> Option<String> {
+    let patch = args.get("patch")?.as_str()?;
+    let paths: Vec<&str> = patch
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("*** Add File: ")
+                .or_else(|| line.strip_prefix("*** Update File: "))
+                .or_else(|| line.strip_prefix("*** Delete File: "))
+        })
+        .collect();
+    match paths.as_slice() {
+        [] => Some("no file operations".into()),
+        [path] => Some((*path).to_owned()),
+        [first, ..] => Some(format!(
+            "{} · {}",
+            first,
+            count_label(paths.len(), "file", "files")
+        )),
+    }
 }
 
 pub(super) fn process_call_detail(args: &Value) -> Option<String> {
@@ -129,6 +166,34 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .get("replacements")
             .and_then(Value::as_u64)
             .map(|n| format!("{n} replacement(s)")),
+        "multi_edit" => output
+            .get("filesChanged")
+            .and_then(Value::as_u64)
+            .map(|files| {
+                let edits = output
+                    .get("editsApplied")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                format!("{edits} edits · {files} files")
+            }),
+        "apply_patch" => output
+            .get("filesChanged")
+            .and_then(Value::as_u64)
+            .map(|files| {
+                let added = output
+                    .get("added")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let updated = output
+                    .get("updated")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let deleted = output
+                    .get("deleted")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                format!("{files} files · +{added} ~{updated} -{deleted}")
+            }),
         "list_dir" => output
             .get("entries")
             .and_then(Value::as_array)

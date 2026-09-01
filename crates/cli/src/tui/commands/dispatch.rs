@@ -15,7 +15,9 @@ use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::BlockSpacing;
 use crate::view::{self, theme};
 
-use super::super::state::{App, Overlay, SESSION_ACTIONS, SETTINGS_ROWS, SUBAGENT_ROWS};
+use super::super::state::{
+    App, ModelPickerTarget, Overlay, SESSION_ACTIONS, SETTINGS_ROWS, SUBAGENT_ROWS,
+};
 use super::super::{copy_command, expand_tool, push_error, push_notice, SESSIONS_WINDOW};
 
 pub(crate) fn slash_command(
@@ -206,13 +208,36 @@ pub(crate) fn slash_command(
             return;
         }
     }
+    if command == "effort" {
+        let request_id = app.next_picker_request;
+        app.next_picker_request += 1;
+        app.picker_pending = Some((request_id, ModelPickerTarget::ActiveModelEffort));
+        if worker
+            .send(WorkerCmd::ListModels {
+                request_id,
+                filter: String::new(),
+            })
+            .is_err()
+        {
+            app.picker_pending = None;
+            push_error(app, "worker is gone; restart orcacode");
+        } else {
+            push_notice(app, "fetching model efforts…");
+        }
+        return;
+    }
     if let Some(rest) = command.strip_prefix("models") {
         if rest.is_empty() || rest.starts_with(' ') {
             // Fetch the full catalog; the argument seeds the picker's
             // live filter so the user can widen it without refetching.
             let request_id = app.next_picker_request;
             app.next_picker_request += 1;
-            app.picker_pending = Some((request_id, rest.trim().to_lowercase()));
+            app.picker_pending = Some((
+                request_id,
+                ModelPickerTarget::Models {
+                    filter: rest.trim().to_lowercase(),
+                },
+            ));
             if worker
                 .send(WorkerCmd::ListModels {
                     request_id,

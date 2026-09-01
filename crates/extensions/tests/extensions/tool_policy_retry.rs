@@ -152,6 +152,48 @@ async fn tool_retry_exhausts_and_reports_error() {
 }
 
 #[tokio::test]
+async fn tool_retry_error_rule_skips_non_retryable_failure() {
+    let attempts = Arc::new(AtomicU32::new(0));
+    let deterministic = {
+        let attempts = attempts.clone();
+        FnTool::new(
+            "multi_edit",
+            "returns a deterministic matching error",
+            json!({"type": "object"}),
+            move |_input, _ctx| {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(ToolError::msg("`old` occurs 4 times"))
+                }
+            },
+        )
+    };
+    let model = Arc::new(ScriptedModel::tool_round(
+        vec![call("c0", "multi_edit", json!({}))],
+        "done",
+    ));
+    let agent = Agent::new(model.clone()).tool(deterministic).extension(
+        ToolRetry::new(3)
+            .backoff(Duration::from_secs(1))
+            .retry_error_when(|call, _error| call.name != "multi_edit"),
+    );
+
+    timeout(RUN_TIMEOUT, agent.run("retry"))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    let results = last_tool_results(&model.observed_contexts());
+    assert!(results[0].is_error);
+    assert!(results[0].output["error"]
+        .as_str()
+        .unwrap()
+        .contains("occurs 4 times"));
+}
+
+#[tokio::test]
 async fn tool_retry_retries_data_failures_and_reports_last_output() {
     // A tool whose failures are *data*: it reports `success: false`
     // instead of returning Err. This is what shell/web_fetch do for

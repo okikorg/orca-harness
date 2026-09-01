@@ -9,33 +9,40 @@ use crate::view::{self, theme};
 use super::super::format::fmt_tokens;
 use super::super::{App, EffortPicker, ModelPicker, ToolActivity};
 use super::pickers::command_picker_row;
-/// Exact, source-preserving edit context beneath an `edit_file` row. Small
-/// edits remain fully visible; large replacements stay bounded so one call
+/// Exact, source-preserving mutation context beneath edit and patch rows.
+/// Small changes remain fully visible; large batches stay bounded so one call
 /// cannot take over the live rail.
-pub(crate) fn edit_diff_preview_lines(
+pub(crate) fn mutation_diff_preview_lines(
     tool: &ToolActivity,
     width: usize,
     continuation: &str,
 ) -> Vec<Line<'static>> {
     const MAX_EDIT_DIFF_ROWS: usize = 6;
 
-    let old = tool
-        .input
-        .get("old")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let new = tool
-        .input
-        .get("new")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let mut changed = old
-        .lines()
-        .map(|line| ('-', line, theme().dim))
-        .chain(new.lines().map(|line| ('+', line, theme().success)))
-        .collect::<Vec<_>>();
-    if changed.is_empty() && (!old.is_empty() || !new.is_empty()) {
-        changed.push((if old.is_empty() { '+' } else { '-' }, "", theme().dim));
+    let mut changed = Vec::new();
+    match tool.tool_name.as_str() {
+        "edit_file" => push_exact_edit(&mut changed, &tool.input),
+        "multi_edit" => {
+            if let Some(edits) = tool
+                .input
+                .get("edits")
+                .and_then(serde_json::Value::as_array)
+            {
+                for edit in edits {
+                    push_exact_edit(&mut changed, edit);
+                }
+            }
+        }
+        "apply_patch" => {
+            if let Some(patch) = tool.input.get("patch").and_then(serde_json::Value::as_str) {
+                changed.extend(patch.lines().filter_map(|line| match line.chars().next() {
+                    Some('-') => Some(('-', &line[1..], theme().dim)),
+                    Some('+') => Some(('+', &line[1..], theme().success)),
+                    _ => None,
+                }));
+            }
+        }
+        _ => {}
     }
 
     let hidden = changed.len().saturating_sub(MAX_EDIT_DIFF_ROWS);
@@ -59,6 +66,28 @@ pub(crate) fn edit_diff_preview_lines(
         )));
     }
     lines
+}
+
+fn push_exact_edit<'a>(
+    changed: &mut Vec<(char, &'a str, ratatui::style::Style)>,
+    edit: &'a serde_json::Value,
+) {
+    let old = edit
+        .get("old")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let new = edit
+        .get("new")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    changed.extend(old.lines().map(|line| ('-', line, theme().dim)));
+    changed.extend(new.lines().map(|line| ('+', line, theme().success)));
+    if old.lines().next().is_none()
+        && new.lines().next().is_none()
+        && (!old.is_empty() || !new.is_empty())
+    {
+        changed.push((if old.is_empty() { '+' } else { '-' }, "", theme().dim));
+    }
 }
 
 /// The command palette: filtered rows with the selection highlighted,

@@ -21,7 +21,11 @@ async fn event_stream_emits_full_lifecycle() {
     ]);
 
     let (stream, mut rx) = EventStream::channel();
-    let agent = Agent::new(model).tool(echo()).extension(stream);
+    let execution_marker = stream.execution_marker();
+    let agent = Agent::new(model)
+        .tool(echo())
+        .extension(stream)
+        .extension(execution_marker);
     timeout(RUN_TIMEOUT, agent.run("go"))
         .await
         .unwrap()
@@ -31,8 +35,8 @@ async fn event_stream_emits_full_lifecycle() {
     while let Ok(ev) = rx.try_recv() {
         events.push(ev);
     }
-    // Expect: AgentStart, Assistant(thinking), Usage, ToolCall, ToolFinished,
-    // ToolResult, Assistant(all done), Usage, Result.
+    // Expect: AgentStart, Assistant(thinking), Usage, ToolCall, ToolStarted,
+    // ToolFinished, ToolResult, Assistant(all done), Usage, Result.
     let tags: Vec<&str> = events
         .iter()
         .map(|e| match e {
@@ -42,6 +46,7 @@ async fn event_stream_emits_full_lifecycle() {
             HarnessEvent::ToolInputDelta { .. } => "tool_input_delta",
             HarnessEvent::Assistant { .. } => "assistant",
             HarnessEvent::ToolCall { .. } => "tool_call",
+            HarnessEvent::ToolStarted { .. } => "tool_started",
             HarnessEvent::ToolFinished { .. } => "tool_finished",
             HarnessEvent::ToolResult { .. } => "tool_result",
             HarnessEvent::Usage { .. } => "usage",
@@ -56,6 +61,7 @@ async fn event_stream_emits_full_lifecycle() {
             "assistant",
             "usage",
             "tool_call",
+            "tool_started",
             "tool_finished",
             "tool_result",
             "assistant",
@@ -77,7 +83,17 @@ async fn event_stream_emits_full_lifecycle() {
         }
         other => panic!("expected tool_call, got {other:?}"),
     }
-    match &events[5] {
+    match &events[4] {
+        HarnessEvent::ToolStarted {
+            tool_call_id,
+            tool_name,
+        } => {
+            assert_eq!(tool_call_id, "c0");
+            assert_eq!(tool_name, "echo");
+        }
+        other => panic!("expected tool_started, got {other:?}"),
+    }
+    match &events[6] {
         HarnessEvent::ToolResult {
             tool_call_id,
             output,
@@ -91,6 +107,71 @@ async fn event_stream_emits_full_lifecycle() {
         other => panic!("expected tool_result, got {other:?}"),
     }
 }
+
+struct PreflightRecorder(Arc<Mutex<Vec<&'static str>>>);
+
+#[async_trait]
+impl Extension for PreflightRecorder {
+    fn name(&self) -> &str {
+        "preflight-recorder"
+    }
+
+    fn subscriptions(&self) -> Subscriptions {
+        Subscriptions::none().around_tool()
+    }
+
+    async fn around_tool<'a>(
+        &self,
+        _call: &ToolCall,
+        input: Value,
+        _ctx: &ToolContext,
+        next: Next<'a>,
+    ) -> Result<Value, ToolError> {
+        self.0.lock().unwrap().push("preflight");
+        next.run(input).await
+    }
+}
+
+#[tokio::test]
+async fn execution_marker_respects_host_extension_order() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let tool_order = order.clone();
+    let tool = FnTool::new(
+        "ordered",
+        "records execution",
+        json!({"type": "object"}),
+        move |input, _ctx| {
+            let order = tool_order.clone();
+            async move {
+                order.lock().unwrap().push("tool");
+                Ok(input)
+            }
+        },
+    );
+    let event_order = order.clone();
+    let stream = EventStream::from_fn(move |event| {
+        if matches!(event, HarnessEvent::ToolStarted { .. }) {
+            event_order.lock().unwrap().push("tool_started");
+        }
+    });
+    let execution_marker = stream.execution_marker();
+    let model = ScriptedModel::tool_round(vec![call("c0", "ordered", json!({}))], "done");
+
+    Agent::new(model)
+        .tool(tool)
+        .extension(stream)
+        .extension(PreflightRecorder(order.clone()))
+        .extension(execution_marker)
+        .run("go")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *order.lock().unwrap(),
+        ["preflight", "tool_started", "tool"]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn event_stream_emits_live_completion_before_slow_sibling_finishes() {
     let sleeper = FnTool::new(
@@ -205,6 +286,14 @@ async fn event_stream_emits_completion_for_calls_cancelled_before_execution() {
 #[tokio::test]
 async fn event_stream_serializes_to_platform_ndjson_tags() {
     // The tag names must match the platform NDJSON union.
+    let ev = HarnessEvent::ToolStarted {
+        tool_call_id: "c0".into(),
+        tool_name: "echo".into(),
+    };
+    let s = serde_json::to_value(&ev).unwrap();
+    assert_eq!(s["type"], json!("tool_started"));
+    assert_eq!(s["tool_call_id"], json!("c0"));
+
     let ev = HarnessEvent::ToolFinished {
         tool_call_id: "c0".into(),
         tool_name: "echo".into(),
