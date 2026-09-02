@@ -3,16 +3,16 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use super::tree::{finish_row, row_budget, Connector, TreeBranch};
 use crate::view;
 
 pub struct SubagentRow<'a> {
-    pub last: bool,
-    pub prefix: &'a str,
+    pub branch: TreeBranch<'a>,
     pub glyph: &'a str,
     pub identity: &'a str,
     pub task: &'a str,
     pub elapsed: &'a str,
-    pub selected: bool,
+    pub connector: Connector,
     pub width: usize,
     pub branch_style: Style,
     pub glyph_style: Style,
@@ -23,25 +23,18 @@ pub struct SubagentRow<'a> {
 
 impl SubagentRow<'_> {
     pub fn continuation(&self) -> &'static str {
-        if self.last {
-            "  "
-        } else {
-            "│ "
-        }
+        self.branch.continuation()
     }
 
     pub fn line(&self) -> Line<'static> {
-        let branch = if self.last { "└─" } else { "├─" };
-        let prefix = format!("{}{branch} ", self.prefix);
-        let row_width = self.width.min(132);
-        let connector_reserve = if self.selected { 10 } else { 0 };
-        let fixed = prefix.chars().count()
-            + self.glyph.chars().count()
-            + " subagent ·  · ".chars().count()
-            + self.elapsed.chars().count()
-            + connector_reserve;
+        let prefix = self.branch.prefix();
+        let row_width = row_budget(self.width, self.connector);
+        let fixed = view::cell_width(&prefix)
+            + view::cell_width(self.glyph)
+            + view::cell_width(" subagent ·  · ")
+            + view::cell_width(self.elapsed);
         let content_width = row_width.saturating_sub(fixed).max(8);
-        let identity_width = self.identity.chars().count().min(content_width);
+        let identity_width = view::cell_width(self.identity).min(content_width);
         let task_width = content_width.saturating_sub(identity_width + 3);
         let identity = view::truncate_line(self.identity, identity_width.max(8));
         let task = (task_width >= 8).then(|| view::truncate_line(self.task, task_width));
@@ -57,22 +50,13 @@ impl SubagentRow<'_> {
             spans.push(Span::styled(" · ", self.branch_style));
             spans.push(Span::styled(task, self.task_style));
         }
-        spans.push(Span::styled(
-            format!(" · {}", self.elapsed),
-            self.glyph_style,
-        ));
-        if self.selected {
-            let used = spans
-                .iter()
-                .map(|span| span.content.chars().count())
-                .sum::<usize>();
-            let dots = self.width.saturating_sub(used + 1);
+        if !self.elapsed.is_empty() {
             spans.push(Span::styled(
-                format!(" {}○", "·".repeat(dots.saturating_sub(1).max(1))),
-                self.branch_style,
+                format!(" · {}", self.elapsed),
+                self.glyph_style,
             ));
         }
-        Line::from(spans)
+        finish_row(spans, self.width, self.connector, self.branch_style)
     }
 }
 
@@ -89,13 +73,15 @@ mod tests {
 
     fn row(width: usize) -> SubagentRow<'static> {
         SubagentRow {
-            last: true,
-            prefix: "    ",
+            branch: TreeBranch {
+                indent: "    ",
+                last: true,
+            },
             glyph: "✓",
             identity: "openrouter:anthropic/claude-sonnet-5",
             task: "Explore the benchmarks directory",
             elapsed: "37.0s",
-            selected: false,
+            connector: Connector::None,
             width,
             branch_style: Style::default(),
             glyph_style: Style::default(),

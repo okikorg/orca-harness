@@ -181,10 +181,11 @@
             },
             180,
         );
+        app.activity_tools[0].started = Instant::now() - Duration::from_secs(2);
 
         let joined = flat_lines(&activity_lines_selected(&app, 180, true, Some(0)));
         assert!(
-            joined.contains("shell $ cargo test --workspace · "),
+            joined.contains("shell $ cargo test --workspace · 2.0s"),
             "elapsed follows the call without an alignment gap: {joined}"
         );
     }
@@ -287,6 +288,23 @@
         );
     }
 
+    /// Whether the first cell of `needle` on screen carries the bold modifier.
+    fn rendered_cell_is_bold(app: &mut App, width: u16, height: u16, needle: &str) -> bool {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                (x..width)
+                    .map(|col| buffer[(col, y)].symbol())
+                    .collect::<String>()
+                    .starts_with(needle)
+            })
+            .is_some_and(|(x, y)| buffer[(x, y)].modifier.contains(ratatui::style::Modifier::BOLD))
+    }
+
     fn rendered_rows(app: &mut App, width: u16, height: u16) -> Vec<String> {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -348,7 +366,20 @@
             screen.contains("Describe a task to begin"),
             "welcome hint missing: {screen}"
         );
-        assert!(screen.contains("/models switch model"));
+        let rows = rendered_rows(&mut app, 90, 30);
+        let models = rows
+            .iter()
+            .position(|row| row.contains("/models    switch model"))
+            .expect("hint row");
+        assert!(
+            rows[models + 1].contains("/mode      plan"),
+            "hints share the label column: {:?}",
+            rows[models + 1]
+        );
+        // Centred in the terminal, not pushed against the composer.
+        let first = rows.iter().position(|row| row.contains("ORCACODE")).unwrap();
+        let last = rows.iter().rposition(|row| row.contains("/mode")).unwrap();
+        assert!(first >= 8 && 30 - last >= 8, "card rows {first}..{last} of 30");
     }
 
     #[test]
@@ -541,7 +572,7 @@
     }
 
     #[test]
-    fn status_line_starts_with_model_and_ends_with_workspace_name() {
+    fn status_line_starts_with_model_and_anchors_workspace_and_branch() {
         let mut app = App::new(TuiConfig {
             model_name: "gpt-oss:20b".into(),
             workspace_name: "/workspace/orca-harness".into(),
@@ -556,11 +587,12 @@
             todos: Default::default(),
             plan: Default::default(),
         });
+        app.git_branch = Some("feature/status-branch".into());
 
-        let rows = rendered_rows(&mut app, 100, 24);
+        let rows = rendered_rows(&mut app, 160, 24);
         let status = rows
             .iter()
-            .find(|row| row.contains("idle"))
+            .find(|row| row.contains("gpt-oss:20b"))
             .expect("status line");
 
         assert!(
@@ -568,8 +600,10 @@
             "model not first: {status}"
         );
         assert!(
-            status.ends_with("· orca-harness"),
-            "workspace not last: {status}"
+            status
+                .trim_end()
+                .ends_with("  orca-harness · feature/status-branch"),
+            "workspace and branch not anchored right: {status}"
         );
         assert!(
             !status.contains("cwd"),

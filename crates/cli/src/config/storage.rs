@@ -128,6 +128,15 @@ pub fn save_transcript_spacing(slug: &str) -> io::Result<PathBuf> {
     save_str(None, "transcript_spacing", slug)
 }
 
+/// The mark vocabulary last selected in `/settings` (`minimal` or `glyph`).
+pub fn stored_style() -> Option<String> {
+    stored_str(None, "style")
+}
+
+pub fn save_style(slug: &str) -> io::Result<PathBuf> {
+    save_str(None, "style", slug)
+}
+
 /// Persist the complete live subagent preference set. Keeping this as one
 /// object prevents a partially-updated picker choice from leaving related
 /// routing fields out of sync.

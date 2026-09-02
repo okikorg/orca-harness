@@ -73,6 +73,15 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
             };
             push_notice(app, note);
         }
+        After::CloseAndSetStyle(style) => {
+            finish_picker_flow(app);
+            set_ui_style(style);
+            let note = match crate::config::save_style(style.slug()) {
+                Ok(_) => format!("style set to {}", style.label()),
+                Err(err) => format!("style set to {} (not saved: {err})", style.label()),
+            };
+            push_notice(app, note);
+        }
         After::CloseAndSetInspector(mode) => {
             finish_picker_flow(app);
             app.inspector_mode = mode;

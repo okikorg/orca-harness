@@ -3,8 +3,9 @@ use ratatui::text::{Line, Span};
 use crate::msg::{Provider, ProviderAuth};
 use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
+use crate::tui::components::section::Section;
 use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
-use crate::tui::components::tray::Tray;
+use crate::view::glyphs::{ui_style, UiStyle};
 use crate::view::{self, theme};
 
 use super::super::format::age_label;
@@ -14,13 +15,18 @@ use super::super::subagents::{
 };
 use super::super::{App, InspectorMode, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
 
+/// Name, category tag, description: the tag sits by the name so the
+/// description can run to the edge instead of stopping short of a
+/// right-aligned column. Shared by the palette and `/help`.
 pub(super) fn command_picker_row(spec: &CommandSpec) -> [String; 3] {
     [
         format!("/{}", spec.name),
+        spec.category.to_lowercase(),
         spec.description.to_string(),
-        spec.category.to_string(),
     ]
 }
+
+pub(super) const COMMAND_COLUMNS: [(usize, usize); 3] = [(6, 16), (0, 10), (12, usize::MAX)];
 
 pub(crate) fn help_picker_lines(
     filter: &str,
@@ -42,7 +48,7 @@ pub(crate) fn help_picker_lines(
     picker.windowed_table_lines(
         &format!("Help · {filter_note} · ↑↓ move · →/enter use · esc close"),
         commands.into_iter().map(command_picker_row),
-        [(6, 16), (12, 64), (0, 10)],
+        COMMAND_COLUMNS,
         width,
         PICKER_ROWS,
     )
@@ -91,7 +97,7 @@ pub(crate) fn usage_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         ),
         _ => format!("~{} (window unknown)", app.context_tokens),
     };
-    let mut tray = Tray::new("Session usage · esc close", t.dim);
+    let mut tray = Section::tray("Session usage · esc close", t.dim);
     let rows = [
         ("model", app.cfg.model_name.clone()),
         ("context", context),
@@ -207,6 +213,7 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         ("api key", key_status),
         ("approvals", approvals_status),
         ("spacing", transcript_spacing().label().to_string()),
+        ("style", ui_style().label().to_string()),
     ];
     let mut lines = picker.table_lines(
         "Settings · ↑↓ move · →/enter open · esc close",
@@ -314,6 +321,24 @@ pub(crate) fn transcript_spacing_lines(picker: &ListPicker, width: usize) -> Vec
     )
 }
 
+pub(crate) fn style_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let current = ui_style();
+    let rows = UiStyle::ALL.iter().map(|style| {
+        let note = if *style == current { "current" } else { "" };
+        [
+            style.label().to_string(),
+            style.description().to_string(),
+            note.to_string(),
+        ]
+    });
+    picker.table_lines(
+        "Style · ↑↓ move · →/enter use · esc close",
+        rows,
+        [(14, 14), (42, 42), (0, usize::MAX)],
+        width,
+    )
+}
+
 /// This workspace's saved always-allowed tools; enter revokes the
 /// selected one so it prompts again.
 pub(crate) fn approvals_lines(
@@ -397,7 +422,7 @@ pub(crate) fn sessions_picker_lines(
 
 pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static>> {
     let t = theme();
-    let mut tray = Tray::new(
+    let mut tray = Section::tray(
         format!(
             "{} API key (saved for future sessions) · enter confirm · esc close",
             provider.label()

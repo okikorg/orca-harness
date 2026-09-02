@@ -90,6 +90,8 @@ use crate::tui::components::transcript::BlockSpacing;
 use crate::tui::components::transcript::{
     set_transcript_spacing, transcript_spacing, TranscriptSpacing,
 };
+#[cfg(test)]
+use crate::view::glyphs::{set_ui_style, ui_style, UiStyle};
 use crate::view::{self, theme};
 
 use self::format::elapsed_label;
@@ -115,7 +117,6 @@ use self::render::{draw, transcript_content_width};
 #[cfg(test)]
 use ratatui::layout::{Constraint, Layout};
 
-const SPINNER: &[char] = &['·', ' '];
 const EXPAND_MAX_LINES: usize = 200;
 const TRANSCRIPT_CAP: usize = 5000;
 const INSPECTOR_PREVIEW_LINES: usize = 240;
@@ -147,7 +148,7 @@ static THEME_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// `App::new` from the config file. Tests that construct an `App` while
 /// another test is mid-transition on the spacing picker race on that
 /// static, so both sides of the transition take this lock.
-static SPACING_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static PREFERENCE_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod runtime;
 

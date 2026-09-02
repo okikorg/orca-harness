@@ -5,7 +5,8 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::tui::components::inspector::{CodePreview, InspectorSection};
+use crate::tui::components::inspector::CodePreview;
+use crate::tui::components::section::Section;
 use crate::view::{self, theme};
 
 mod language;
@@ -40,7 +41,7 @@ pub(super) fn tool_inspector_header_lines(
     let duration = tool_timing_label(tool, true);
     let identity = format!("{raw_name} · {status} · {duration}");
     let mode_suffix = format!(" · {}", mode.label().to_lowercase());
-    let action_width = width.saturating_sub(2 + mode_suffix.chars().count());
+    let action_width = width.saturating_sub(2 + view::cell_width(&mode_suffix));
     let action = view::truncate_line(inspector_action_label(&tool.tool_name), action_width);
     vec![
         Line::from(Span::styled(
@@ -135,10 +136,10 @@ fn debug_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'st
     let t = theme();
     let inner = width.saturating_sub(4).max(16);
     let mut lines = Vec::new();
-    let mut input = InspectorSection::new("input", t.dim);
+    let mut input = Section::inspector("input", t.dim);
     append_inspector_input(&mut input, tool, inner);
     input.append_to(&mut lines);
-    let mut output_section = InspectorSection::new("output", t.dim);
+    let mut output_section = Section::inspector("output", t.dim);
     if let Some(output) = &tool.output {
         let language = inspector_output_language(tool, output);
         if let Some(facts) = inspector_code_facts(tool, output, language) {
@@ -175,7 +176,7 @@ fn debug_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'st
 
 fn inspector_omitted_line(width: usize, label: &str, action: &str) -> Line<'static> {
     let gap = width
-        .saturating_sub(label.chars().count() + action.chars().count())
+        .saturating_sub(view::cell_width(label) + view::cell_width(action))
         .max(2);
     Line::from(vec![
         Span::styled(format!("  {label}"), theme().dim),
@@ -184,7 +185,7 @@ fn inspector_omitted_line(width: usize, label: &str, action: &str) -> Line<'stat
     ])
 }
 
-fn append_inspector_input(section: &mut InspectorSection, tool: &ToolActivity, width: usize) {
+fn append_inspector_input(section: &mut Section, tool: &ToolActivity, width: usize) {
     let path = tool.input.get("path").and_then(serde_json::Value::as_str);
     let content = tool
         .input
@@ -584,7 +585,7 @@ pub(super) fn empty_tool_inspector_lines() -> Vec<Line<'static>> {
     ]
 }
 
-fn push_inspector_text(section: &mut InspectorSection, text: &str, width: usize, style: Style) {
+fn push_inspector_text(section: &mut Section, text: &str, width: usize, style: Style) {
     let text = view::sanitize_cells(text);
     for source in text.lines() {
         let wrapped = textwrap::wrap(source, width.saturating_sub(2).max(8));

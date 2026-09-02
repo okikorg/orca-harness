@@ -1236,6 +1236,7 @@ dependencies = [
  "textwrap",
  "tokio",
  "two-face",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

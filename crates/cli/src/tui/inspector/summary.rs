@@ -3,9 +3,10 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 
 use crate::tui::components::inspector::{
-    inspector_fields, inspector_text, CodePreview, InspectorSection, INSPECTOR_BODY_INDENT,
+    inspector_fields, inspector_text, CodePreview, INSPECTOR_BODY_INDENT,
 };
 use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
+use crate::tui::components::section::Section;
 use crate::view::{self, theme};
 
 use super::{inspector_size_label, language_for_path, limit_inspector_preview, ToolActivity};
@@ -18,8 +19,8 @@ pub(super) fn lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn section(label: impl Into<String>) -> InspectorSection {
-    InspectorSection::new(label, theme().dim)
+fn section(label: impl Into<String>) -> Section {
+    Section::inspector(label, theme().dim)
 }
 
 fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {

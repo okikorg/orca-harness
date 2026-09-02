@@ -7,10 +7,18 @@
 //! Overlays may also declare row actions (delete, rename, …): space
 //! arms the action strip for the selected row, the action's key fires
 //! [`PickerEvent::Action`], and any other key disarms.
+//!
+//! Rows are cells: a table's first column reads in the normal text
+//! colour and the columns after it are dim, so a name stands out from its
+//! description; the cursor row is painted `select` throughout.
+
+use std::cell::Cell;
 
 use crossterm::event::KeyCode;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 /// One row action an overlay offers beyond enter-to-select.
@@ -22,7 +30,7 @@ pub struct PickerAction {
 }
 
 /// Cursor state for a fixed-length list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListPicker {
     index: usize,
     len: usize,
@@ -30,6 +38,10 @@ pub struct ListPicker {
     /// Space was pressed: the action strip is showing for the selected
     /// row and action keys are live.
     armed: bool,
+    /// First row of the window a bounded catalog last showed. The window
+    /// moves only when the cursor leaves it, so ↑ does not jump a page.
+    /// Set during rendering, which only has `&self`.
+    offset: Cell<usize>,
 }
 
 /// What a key did to the picker.
@@ -45,7 +57,7 @@ pub enum PickerEvent {
 }
 
 impl ListPicker {
-    fn header(&self, header: &str) -> (String, ratatui::style::Style) {
+    fn header(&self, header: &str) -> (String, Style) {
         let t = theme();
         let header = if self.armed {
             let strip: Vec<String> = self
@@ -69,6 +81,7 @@ impl ListPicker {
             len,
             actions: &[],
             armed: false,
+            offset: Cell::new(0),
         }
     }
 
@@ -147,22 +160,13 @@ impl ListPicker {
     where
         I: IntoIterator<Item = String>,
     {
-        let t = theme();
-        let (header, header_style) = self.header(header);
-        let mut lines = vec![
-            Line::from(Span::styled(format!("  {header}"), header_style)),
-            Line::from(""),
-        ];
-        let selected = self.index();
-        for (index, row) in rows.into_iter().enumerate() {
-            let marker = if index == selected { "▸ " } else { "  " };
-            let style = if index == selected { t.select } else { t.dim };
-            lines.push(Line::from(Span::styled(
-                view::truncate_line(&format!("  {marker}{row}"), width),
-                style,
-            )));
-        }
-        lines
+        let dim = theme().dim;
+        let rows: Vec<Vec<Span<'static>>> = rows
+            .into_iter()
+            .map(|row| vec![Span::styled(row, dim)])
+            .collect();
+        let count = rows.len();
+        self.render(header, None, rows, width, 0..count)
     }
 
     /// Render structured rows as aligned columns through the standard
@@ -179,7 +183,9 @@ impl ListPicker {
     where
         I: IntoIterator<Item = [String; N]>,
     {
-        self.lines(header, table_rows(rows, column_widths), width)
+        let rows = table_rows(rows, column_widths);
+        let count = rows.len();
+        self.render(header, None, rows, width, 0..count)
     }
 
     /// A bounded version of [`Self::lines`] for catalogs larger than the
@@ -195,36 +201,13 @@ impl ListPicker {
     where
         I: IntoIterator<Item = String>,
     {
-        let t = theme();
-        let rows: Vec<String> = rows.into_iter().collect();
-        let selected = self.index().min(rows.len().saturating_sub(1));
-        let first = selected.saturating_sub(visible_rows.saturating_sub(1));
-        let last = (first + visible_rows).min(rows.len());
-        let position = if rows.is_empty() {
-            "0/0".to_string()
-        } else {
-            format!("{}/{}", selected + 1, rows.len())
-        };
-        let (header, header_style) = self.header(header);
-        let pad = width
-            .saturating_sub(header.chars().count() + position.chars().count() + 4)
-            .max(1);
-        let mut lines = vec![
-            Line::from(Span::styled(
-                format!("  {header}{}{position}", " ".repeat(pad)),
-                header_style,
-            )),
-            Line::from(""),
-        ];
-        for (index, row) in rows.into_iter().enumerate().take(last).skip(first) {
-            let marker = if index == selected { "▸ " } else { "  " };
-            let style = if index == selected { t.select } else { t.dim };
-            lines.push(Line::from(Span::styled(
-                view::truncate_line(&format!("  {marker}{row}"), width),
-                style,
-            )));
-        }
-        lines
+        let dim = theme().dim;
+        let rows: Vec<Vec<Span<'static>>> = rows
+            .into_iter()
+            .map(|row| vec![Span::styled(row, dim)])
+            .collect();
+        let window = self.window(rows.len(), visible_rows);
+        self.render(header, Some(rows.len()), rows, width, window)
     }
 
     /// The bounded catalog variant of [`Self::table_lines`]. Column
@@ -241,45 +224,118 @@ impl ListPicker {
     where
         I: IntoIterator<Item = [String; N]>,
     {
-        self.windowed_lines(header, table_rows(rows, column_widths), width, visible_rows)
+        let rows = table_rows(rows, column_widths);
+        let window = self.window(rows.len(), visible_rows);
+        self.render(header, Some(rows.len()), rows, width, window)
+    }
+
+    /// The rows a bounded catalog shows: the last window, moved just far
+    /// enough to keep the cursor inside it.
+    fn window(&self, len: usize, visible_rows: usize) -> std::ops::Range<usize> {
+        let visible_rows = visible_rows.max(1);
+        let selected = self.index().min(len.saturating_sub(1));
+        let mut first = self.offset.get().min(len.saturating_sub(visible_rows));
+        if selected < first {
+            first = selected;
+        } else if selected >= first + visible_rows {
+            first = selected + 1 - visible_rows;
+        }
+        self.offset.set(first);
+        first..(first + visible_rows).min(len)
+    }
+
+    /// Header, spacer, and the rows in `window`, each behind its marker.
+    /// `total` adds the `selected/total` position to a bounded header.
+    fn render(
+        &self,
+        header: &str,
+        total: Option<usize>,
+        rows: Vec<Vec<Span<'static>>>,
+        width: usize,
+        window: std::ops::Range<usize>,
+    ) -> Vec<Line<'static>> {
+        let t = theme();
+        let selected = self.index();
+        let (header, header_style) = self.header(header);
+        let header = match total {
+            Some(total) => {
+                let position = if total == 0 {
+                    "0/0".to_string()
+                } else {
+                    format!("{}/{total}", selected.min(total - 1) + 1)
+                };
+                let pad = width
+                    .saturating_sub(view::cell_width(&header) + view::cell_width(&position) + 4)
+                    .max(1);
+                format!("  {header}{}{position}", " ".repeat(pad))
+            }
+            None => format!("  {header}"),
+        };
+        let mut lines = vec![
+            Line::from(Span::styled(header, header_style)),
+            Line::from(""),
+        ];
+        for (index, row) in rows
+            .into_iter()
+            .enumerate()
+            .take(window.end)
+            .skip(window.start)
+        {
+            let is_selected = index == selected;
+            let marker = format!("  {} ", if is_selected { glyphs().cursor } else { " " });
+            let mut spans = vec![Span::styled(
+                marker,
+                if is_selected { t.select } else { t.dim },
+            )];
+            spans.extend(row.into_iter().map(|span| {
+                if is_selected {
+                    Span::styled(span.content, t.select)
+                } else {
+                    span
+                }
+            }));
+            lines.push(Line::from(view::truncate_styled_line(spans, width)));
+        }
+        lines
     }
 }
 
-fn table_rows<const N: usize, I>(rows: I, column_widths: [(usize, usize); N]) -> Vec<String>
+/// Aligned cells: the first column in the normal text colour, the rest
+/// dim, with two cells between columns.
+fn table_rows<const N: usize, I>(
+    rows: I,
+    column_widths: [(usize, usize); N],
+) -> Vec<Vec<Span<'static>>>
 where
     I: IntoIterator<Item = [String; N]>,
 {
+    let dim = theme().dim;
     let rows: Vec<[String; N]> = rows.into_iter().collect();
     let widths: [usize; N] = std::array::from_fn(|column| {
         let widest = rows
             .iter()
-            .map(|row| row[column].chars().count())
+            .map(|row| view::cell_width(&row[column]))
             .max()
             .unwrap_or(0);
         let (minimum, maximum) = column_widths[column];
         widest.max(minimum).min(maximum.max(minimum))
     });
     rows.into_iter()
-        .map(|row| render_table_row(row, &widths))
+        .map(|row| {
+            let mut spans = Vec::with_capacity(N);
+            for (column, cell) in row.into_iter().enumerate() {
+                let cell = view::truncate_line(&cell, widths[column]);
+                let pad = if column + 1 < N {
+                    widths[column].saturating_sub(view::cell_width(&cell)) + 2
+                } else {
+                    0
+                };
+                let style = if column == 0 { Style::default() } else { dim };
+                spans.push(Span::styled(format!("{cell}{}", " ".repeat(pad)), style));
+            }
+            spans
+        })
         .collect()
-}
-
-fn render_table_row<const N: usize>(row: [String; N], widths: &[usize; N]) -> String {
-    let mut rendered = String::new();
-    for (column, cell) in row.into_iter().enumerate() {
-        let cell = view::truncate_line(&cell, widths[column]);
-        rendered.push_str(&cell);
-        if column + 1 < N {
-            rendered.push_str(
-                &" ".repeat(
-                    widths[column]
-                        .saturating_sub(cell.chars().count())
-                        .saturating_add(2),
-                ),
-            );
-        }
-    }
-    rendered
 }
 
 #[cfg(test)]
@@ -433,6 +489,57 @@ mod tests {
         assert_eq!(text[0], "  Header · esc close");
         assert!(text[2].contains("  a"), "unselected row: {}", text[2]);
         assert!(text[3].contains("▸ b"), "selected row: {}", text[3]);
+    }
+
+    #[test]
+    fn windowed_lines_move_the_window_only_when_the_cursor_leaves_it() {
+        let mut picker = ListPicker::with_selected(20, 0);
+        let rows = || (1..=20).map(|n| format!("row {n}"));
+        let text = |lines: Vec<Line<'_>>| -> Vec<String> {
+            lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        };
+        // Moving down inside the window leaves it where it is.
+        picker.on_key(KeyCode::Down);
+        let shown = text(picker.windowed_lines("Catalog", rows(), 80, 5));
+        assert!(shown[2].contains("row 1"), "{shown:?}");
+        assert!(shown[3].contains("▸ row 2"), "{shown:?}");
+        // Leaving the window at the foot scrolls by one row, not a page.
+        for _ in 0..4 {
+            picker.on_key(KeyCode::Down);
+        }
+        let shown = text(picker.windowed_lines("Catalog", rows(), 80, 5));
+        assert!(shown[2].contains("row 2"), "{shown:?}");
+        assert!(shown[6].contains("▸ row 6"), "{shown:?}");
+        // Coming back up keeps the same window until the cursor leaves it.
+        picker.on_key(KeyCode::Up);
+        let shown = text(picker.windowed_lines("Catalog", rows(), 80, 5));
+        assert!(shown[2].contains("row 2"), "{shown:?}");
+        assert!(shown[5].contains("▸ row 5"), "{shown:?}");
+    }
+
+    #[test]
+    fn table_columns_after_the_first_are_dim_and_the_cursor_row_is_select() {
+        let picker = ListPicker::with_selected(2, 1);
+        let rows = [
+            ["name".into(), "description".into()],
+            ["other".into(), "text".into()],
+        ];
+        let lines = picker.table_lines("Catalog", rows, [(0, 10), (0, usize::MAX)], 80);
+        let t = theme();
+        // Unselected: marker dim, name plain, description dim.
+        assert_eq!(lines[2].spans[0].style, t.dim);
+        assert_eq!(lines[2].spans[1].style, Style::default());
+        assert_eq!(lines[2].spans[2].style, t.dim);
+        // Selected: everything in the select colour.
+        assert!(lines[3].spans.iter().all(|span| span.style == t.select));
     }
 
     #[test]

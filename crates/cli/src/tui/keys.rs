@@ -14,6 +14,7 @@ use crate::tui::components::transcript::{
     set_transcript_spacing, transcript_spacing, TranscriptSpacing,
 };
 use crate::view;
+use crate::view::glyphs::{set_ui_style, ui_style, UiStyle};
 
 use super::format::byte_index;
 use super::render::matching_indices;

@@ -7,9 +7,22 @@ use crate::msg::{UiMsg, WorkerCmd};
 use crate::tui::components::transcript::BlockSpacing;
 use crate::view::theme;
 
+use super::super::format::{elapsed_label, fmt_tokens, plural};
 use super::super::render::{replay_transcript, reset_conversation_ui};
 use super::super::state::{App, EffortPicker, ModelPicker, ModelPickerTarget, Overlay, RunState};
 use super::super::{push_notice, push_wrapped_lines, start_next_queued_prompt};
+
+/// The dim one-row footer under a finished turn: `done · 0.2s · 2 tools ·
+/// ↑12.0k ↓611`. It sits with the answer it describes rather than
+/// floating above the composer, so it scrolls away with the turn.
+fn push_turn_footer(app: &mut App, parts: &[String]) {
+    let mark = crate::view::glyphs::glyphs().footer;
+    let line = Line::from(Span::styled(
+        format!("  {mark}{}", parts.join(" · ")),
+        theme().dim,
+    ));
+    app.push_transcript_block(vec![line], BlockSpacing::Tight);
+}
 
 pub(crate) fn handle_ui_msg(
     app: &mut App,
@@ -305,12 +318,19 @@ pub(crate) fn handle_ui_msg(
             }
             if completed {
                 if let Some(elapsed) = turn_elapsed {
-                    let calls = app.turn_tool_calls;
-                    let plural = if calls == 1 { "" } else { "s" };
-                    app.last_turn_summary = Some(format!(
-                        "Turn took {:.1}s and took {calls} tool call{plural}",
-                        elapsed.as_secs_f64(),
-                    ));
+                    let mut parts = vec![
+                        "done".to_string(),
+                        elapsed_label(elapsed),
+                        plural(app.turn_tool_calls, "tool"),
+                    ];
+                    if app.turn_tokens_in > 0 || app.turn_tokens_out > 0 {
+                        parts.push(format!(
+                            "↑{} ↓{}",
+                            fmt_tokens(app.turn_tokens_in),
+                            fmt_tokens(app.turn_tokens_out)
+                        ));
+                    }
+                    push_turn_footer(app, &parts);
                 }
                 start_next_queued_prompt(app, worker, width);
             }
@@ -325,8 +345,7 @@ pub(crate) fn handle_ui_msg(
             app.approval = None;
             app.ask = None;
             if let Some(elapsed) = elapsed {
-                app.last_turn_summary =
-                    Some(format!("Shell command took {:.1}s", elapsed.as_secs_f64()));
+                push_turn_footer(app, &["shell".to_string(), elapsed_label(elapsed)]);
             }
             start_next_queued_prompt(app, worker, width);
         }

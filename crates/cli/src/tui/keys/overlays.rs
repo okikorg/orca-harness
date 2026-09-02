@@ -29,6 +29,7 @@ pub(crate) fn handle_overlay_key(
     let current_view = app.view_mode;
     let current_inspector = app.inspector_mode;
     let current_spacing = transcript_spacing();
+    let current_style = ui_style();
     let workspace_root = app.cfg.workspace_root.clone();
     let current_session = app.cfg.session_id.clone();
     let Some(overlay) = app.overlay.as_mut() else {
@@ -101,6 +102,10 @@ pub(crate) fn handle_overlay_key(
             PickerEvent::Activated(index) => {
                 After::CloseAndSetTranscriptSpacing(TranscriptSpacing::ALL[index])
             }
+            _ => After::Nothing,
+        },
+        Overlay::Style { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => After::CloseAndSetStyle(UiStyle::ALL[index]),
             _ => After::Nothing,
         },
         Overlay::Inspector { picker } => match picker.on_key(key.code) {
@@ -207,13 +212,22 @@ pub(crate) fn handle_overlay_key(
                         })
                     }
                 }
-                _ => {
+                7 => {
                     let selected = TranscriptSpacing::ALL
                         .iter()
                         .position(|spacing| *spacing == current_spacing)
                         .unwrap_or(1);
                     After::Push(Overlay::TranscriptSpacing {
                         picker: ListPicker::with_selected(TranscriptSpacing::ALL.len(), selected),
+                    })
+                }
+                _ => {
+                    let selected = UiStyle::ALL
+                        .iter()
+                        .position(|style| *style == current_style)
+                        .unwrap_or(0);
+                    After::Push(Overlay::Style {
+                        picker: ListPicker::with_selected(UiStyle::ALL.len(), selected),
                     })
                 }
             },

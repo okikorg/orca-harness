@@ -79,7 +79,7 @@
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            text.contains("working · 3m 19s · ↑4k ↓178 · esc to interrupt"),
+            text.contains("working · 3m 19s · ↑4.0k ↓178 · esc to interrupt"),
             "{text}"
         );
     }
@@ -105,7 +105,7 @@
         let screen = rendered_rows(&mut app, 100, 24).join("\n");
         assert!(screen.contains("queue paused · enter to resume"));
         assert!(screen.contains("queued · 1"));
-        assert!(screen.contains("queued 1 · enter resume · /queue clear"));
+        assert!(screen.contains("q 1 · enter resume · /queue clear"));
     }
 
     #[test]
@@ -240,9 +240,11 @@
 
     #[test]
     fn context_segment_shows_percentage_when_the_window_is_known() {
-        assert_eq!(context_segment(41_881, Some(128_000)), "ctx 32%");
-        assert_eq!(context_segment(500, None), "ctx ~500");
-        assert_eq!(context_segment(2_350, Some(0)), "ctx ~2.4k");
+        assert_eq!(context_segment(41_881, Some(128_000), true), "ctx 32%");
+        assert_eq!(context_segment(500, None, true), "ctx ~500");
+        assert_eq!(context_segment(2_350, Some(0), true), "ctx ~2.4k");
+        // Minimal has no meter, so the full form is the compact one.
+        assert_eq!(context_segment(41_881, Some(128_000), false), "ctx 32%");
     }
 
     #[test]

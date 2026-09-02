@@ -187,7 +187,7 @@
             "completed call missing: {joined}"
         );
         assert!(
-            joined.contains("✓ read_file src/tui.rs · read 2048 bytes"),
+            joined.contains("✓ read_file src/tui.rs · read 2.0 kB"),
             "result missing: {joined}"
         );
         assert!(

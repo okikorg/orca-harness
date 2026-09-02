@@ -423,7 +423,7 @@
         // Transcript spacing is a persisted picker and applies immediately.
         // The preference is process-global and seeded by every `App::new`,
         // so hold the guard while we transition it live.
-        let _spacing = SPACING_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+        let _spacing = PREFERENCE_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         set_transcript_spacing(TranscriptSpacing::Comfortable);
         app.overlay = Some(Overlay::Settings {
             picker: ListPicker::with_selected(SETTINGS_ROWS, 7),
@@ -442,4 +442,22 @@
         );
         set_transcript_spacing(TranscriptSpacing::Comfortable);
         let _ = crate::config::save_transcript_spacing("comfortable");
+
+        // The style row is the last one; it flips the glyph table live.
+        set_ui_style(UiStyle::Minimal);
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 8),
+        });
+        press(&mut app, &tx, KeyCode::Enter);
+        match &app.overlay {
+            Some(Overlay::Style { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the style overlay"),
+        }
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert_eq!(ui_style(), UiStyle::Glyph);
+        assert_eq!(crate::config::stored_style().as_deref(), Some("glyph"));
+        assert_eq!(UiStyle::stored(), UiStyle::Glyph);
+        set_ui_style(UiStyle::Minimal);
+        let _ = crate::config::save_style("minimal");
     }

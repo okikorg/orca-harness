@@ -23,6 +23,7 @@ pub(super) enum After {
     CloseAndSetMode(crate::mode::Mode),
     /// Close, persist, and activate transcript section spacing.
     CloseAndSetTranscriptSpacing(TranscriptSpacing),
+    CloseAndSetStyle(UiStyle),
     /// Close, persist, and activate split inspector rendering.
     CloseAndSetInspector(InspectorMode),
     /// Close and drop a dim status line into the history.

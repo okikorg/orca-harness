@@ -3,7 +3,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::rail::Rail;
+use super::section::Section;
 
 #[derive(Clone, Copy)]
 pub enum ActivityRailKind {
@@ -21,7 +21,7 @@ impl ActivityRailKind {
 }
 
 pub struct ActivityRail {
-    rail: Rail,
+    rail: Section,
 }
 
 impl ActivityRail {
@@ -33,7 +33,7 @@ impl ActivityRail {
     ) -> Self {
         let header = format!("  {marker} {} · {}", kind.label(), summary.into());
         Self {
-            rail: Rail::new(Line::from(Span::styled(header, style))),
+            rail: Section::rail(Line::from(Span::styled(header, style))),
         }
     }
 

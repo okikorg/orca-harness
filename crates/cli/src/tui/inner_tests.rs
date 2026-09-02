@@ -9,6 +9,7 @@ mod tests {
     include!("tests/core_4.rs");
     include!("tests/core_5.rs");
     include!("tests/core_6.rs");
+    include!("tests/render_frames.rs");
 }
 
 include!("tests/theme_subagent_mode.rs");

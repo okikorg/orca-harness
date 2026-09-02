@@ -4,23 +4,26 @@
 // returns `Vec<Line>`; the terminal loop in the parent `run`/`draw`
 // drives the actual frames.
 
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
+use crate::tui::components::approval::ApprovalPrompt;
 use crate::tui::components::composer::Composer;
-use crate::tui::components::status_bar::StatusBar;
+use crate::tui::components::status_bar::{self, Segment, StatusBar};
+use crate::tui::components::tree::TreeBranch;
 use crate::tui::components::welcome::Welcome;
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
-use super::super::format::{elapsed_label, fmt_turn_tokens, workspace_status_name};
+use super::super::format::{elapsed_label, fmt_tokens, workspace_status_name};
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
 use super::super::{
     App, InspectorBodyCache, Overlay, RunState, ViewMode, PALETTE_ROWS, PICKER_ROWS,
-    QUEUE_PREVIEW_ROWS, SPINNER,
+    QUEUE_PREVIEW_ROWS,
 };
 use super::overlays::*;
 use super::pickers::*;
@@ -31,45 +34,122 @@ use super::transcript::*;
 /// renderer asks the padded block for its inner width, so previews wrap to
 /// the real content box rather than compensating with scattered subtraction.
 const INSPECTOR_PADDING: Padding = Padding::right(1);
+/// Narrowest terminal that fits the inspector beside the transcript.
+pub(crate) const SPLIT_MIN_WIDTH: usize = 100;
+/// Shortest terminal that fits the inspector under the transcript.
+const STACK_MIN_HEIGHT: usize = 18;
 
-fn inspector_block(border_style: ratatui::style::Style) -> Block<'static> {
-    Block::default()
-        .borders(Borders::LEFT)
-        .border_style(border_style)
-        .padding(INSPECTOR_PADDING)
+/// Where the inspector goes in split view. Geometry is decided here once;
+/// the transcript wrap width and the wheel routing both follow it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SplitKind {
+    Off,
+    /// Inspector on the right, 42% of the width.
+    SideBySide,
+    /// Too narrow for a second column: inspector under the transcript.
+    Stacked,
 }
 
-fn inspector_content_width(area: ratatui::layout::Rect) -> usize {
-    inspector_block(ratatui::style::Style::default())
-        .inner(area)
-        .width as usize
+impl SplitKind {
+    pub(crate) fn side_by_side(mode: ViewMode, width: usize) -> bool {
+        mode == ViewMode::Split && width >= SPLIT_MIN_WIDTH
+    }
+
+    pub(crate) fn for_area(mode: ViewMode, width: usize, height: usize) -> Self {
+        if Self::side_by_side(mode, width) {
+            Self::SideBySide
+        } else if mode == ViewMode::Split && height >= STACK_MIN_HEIGHT {
+            Self::Stacked
+        } else {
+            Self::Off
+        }
+    }
+
+    /// `[conversation, inspector]`; both are the whole area when off.
+    fn areas(self, area: Rect) -> [Rect; 2] {
+        match self {
+            Self::SideBySide => {
+                Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+                    .areas(area)
+            }
+            Self::Stacked => {
+                Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(area)
+            }
+            Self::Off => [area, area],
+        }
+    }
+
+    fn block(self, border_style: ratatui::style::Style) -> Block<'static> {
+        let borders = match self {
+            Self::Stacked => Borders::TOP,
+            Self::SideBySide | Self::Off => Borders::LEFT,
+        };
+        Block::default()
+            .borders(borders)
+            .border_style(border_style)
+            .padding(INSPECTOR_PADDING)
+    }
+
+    fn content_width(self, area: Rect) -> usize {
+        self.block(ratatui::style::Style::default())
+            .inner(area)
+            .width as usize
+    }
 }
+
+/// Rows the layout keeps for the conversation around the live region:
+/// three transcript rows, the composer gap and the status line.
+const RESERVED_ROWS: usize = 5;
 
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let width = frame.area().width as usize;
     // Split the whole terminal first so the transcript, live rail, composer,
-    // and status share one left column and the inspector owns the full right.
-    let split_active = app.view_mode == ViewMode::Split && width >= 100;
-    let [left_root, inspector_area] = if split_active {
-        Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .areas(frame.area())
-    } else {
-        [frame.area(), frame.area()]
-    };
+    // and status share one column and the inspector owns the rest.
+    let split = SplitKind::for_area(app.view_mode, width, frame.area().height as usize);
+    let split_active = split != SplitKind::Off;
+    let [left_root, inspector_area] = split.areas(frame.area());
+    app.inspector_area = split_active.then_some(inspector_area);
     let left_width = left_root.width as usize;
-    let live = live_lines(app, left_width);
+
+    let placeholder = if app.approval.is_some() {
+        "answering approval above"
+    } else if app.ask.is_some() {
+        "answering agent clarification above"
+    } else if app.running() {
+        "type another prompt to queue"
+    } else if !app.prompt_queue.is_empty() {
+        "queue paused · enter to resume"
+    } else {
+        "ask anything · @ add files · /help commands"
+    };
+    let pill_spans = super::super::input::image_marker_spans(&app.pastes, &app.composer);
+    let composer = Composer::new(
+        &app.composer,
+        app.cursor,
+        placeholder,
+        left_width,
+        theme().accent,
+        theme().dim,
+        &pill_spans,
+    )
+    .render();
+    let composer_height = composer.lines.len();
+
+    let live = live_region(app, left_width);
     // Let a todo rail use the available height rather than silently
-    // clipping later steps. Preserve three transcript rows plus the gap,
-    // composer, and status rows on short terminals.
+    // clipping later steps, while keeping the reserved rows and the
+    // composer on short terminals.
     let live_height = live
+        .lines
         .len()
-        .min((left_root.height as usize).saturating_sub(6)) as u16;
+        .min((left_root.height as usize).saturating_sub(RESERVED_ROWS + composer_height));
     let [transcript_area, live_area, _composer_gap_area, composer_area, status_area] =
         Layout::vertical([
             Constraint::Min(3),
-            Constraint::Length(live_height),
+            Constraint::Length(live_height as u16),
             Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(composer_height as u16),
             Constraint::Length(1),
         ])
         .areas(left_root);
@@ -77,6 +157,25 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     // Transcript: committed history plus a render-only projection of the
     // in-progress turn. Deltas therefore appear in their final location
     // instead of streaming through the temporary area and jumping here.
+    // The committed part is read in place; only the live tail is built
+    // per frame.
+    // A split gives the transcript pane a header to balance the
+    // inspector's, so both halves read as panes.
+    let transcript_area = if split_active {
+        let [header_area, rest] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(transcript_area);
+        let turn = app.turn_count + usize::from(app.running());
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  transcript · turn {turn}"),
+                theme().dim,
+            ))),
+            header_area,
+        );
+        rest
+    } else {
+        transcript_area
+    };
     let height = transcript_area.height as usize;
     let transcript_width = transcript_area.width as usize;
     let selected_tool = (split_active && !app.activity_tools.is_empty()).then(|| {
@@ -84,33 +183,33 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .unwrap_or_else(|| app.activity_tools.len().saturating_sub(1))
             .min(app.activity_tools.len().saturating_sub(1))
     });
-    let projected = if selected_tool.is_some() {
-        projected_transcript_selected(app, transcript_width, selected_tool)
-    } else {
-        projected_transcript(app, transcript_width)
-    };
+    let tail = projected_tail(app, transcript_width, selected_tool);
+    let projected_len = committed_transcript(app, !tail.is_empty()).len() + tail.len();
     // Connector startup notices are transcript history, but they should not
     // displace the empty-state welcome before the user begins a conversation.
     // Keep them recorded in the background and reveal the transcript on the
     // first explicit command or model turn.
     if !app.welcome_dismissed && app.turn_count == 0 && !app.running() {
-        let full_height = frame.area().height as usize;
         let welcome = Welcome {
             version: env!("CARGO_PKG_VERSION"),
             model: &app.cfg.model_name,
             workspace: &app.cfg.workspace_name,
         }
-        .lines(full_height, height, transcript_width);
+        .lines(frame.area().height as usize, height, transcript_width);
         frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
     } else {
-        let max_scroll = projected.len().saturating_sub(height);
+        let max_scroll = projected_len.saturating_sub(height);
         stabilize_transcript_scroll(app, max_scroll);
-        let end = projected.len().saturating_sub(app.scroll);
+        let end = projected_len.saturating_sub(app.scroll);
         let start = end.saturating_sub(height);
-        frame.render_widget(
-            Paragraph::new(Text::from(projected[start..end].to_vec())),
-            transcript_area,
-        );
+        let window: Vec<Line<'static>> = committed_transcript(app, !tail.is_empty())
+            .iter()
+            .chain(tail.iter())
+            .skip(start)
+            .take(end - start)
+            .cloned()
+            .collect();
+        frame.render_widget(Paragraph::new(Text::from(window)), transcript_area);
     }
 
     if split_active {
@@ -118,7 +217,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .and_then(|selected| app.activity_tools.get(selected))
             .or(app.split_snapshot.as_ref());
         let border_style = theme().dim;
-        let inspector_width = inspector_content_width(inspector_area);
+        let inspector_width = split.content_width(inspector_area);
         let (header, body) = if let Some(tool) = inspected {
             let complete = tool.elapsed.is_some();
             let cache_valid = app.split_inspector_cache.as_ref().is_some_and(|cache| {
@@ -159,7 +258,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .saturating_sub(body_area.height as usize)
             .min(u16::MAX as usize) as u16;
         app.split_scroll = app.split_scroll.min(max_scroll);
-        let divider = || inspector_block(border_style);
+        let divider = || split.block(border_style);
         frame.render_widget(
             Paragraph::new(Text::from(header)).block(divider()),
             header_area,
@@ -172,44 +271,41 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
 
-    frame.render_widget(Paragraph::new(Text::from(live)), live_area);
+    frame.render_widget(
+        Paragraph::new(Text::from(live.window(live_height).to_vec())),
+        live_area,
+    );
 
-    let placeholder = if app.ask.is_some() {
-        "answering agent clarification above"
-    } else if app.running() {
-        "type another prompt to queue"
-    } else if !app.prompt_queue.is_empty() {
-        "queue paused · enter to resume"
-    } else {
-        "ask anything · @ add files · /help commands"
-    };
-    let pill_spans = super::super::input::image_marker_spans(&app.pastes, &app.composer);
-    let composer = Composer::new(
-        &app.composer,
-        app.cursor,
-        placeholder,
-        composer_area.width as usize,
-        theme().accent,
-        theme().dim,
-        &pill_spans,
-    )
-    .render();
-    frame.render_widget(Paragraph::new(composer.line), composer_area);
-    frame.set_cursor_position((composer_area.x + composer.cursor_x, composer_area.y));
+    frame.render_widget(Paragraph::new(Text::from(composer.lines)), composer_area);
+    frame.set_cursor_position((
+        composer_area.x + composer.cursor_x,
+        composer_area.y + composer.cursor_y,
+    ));
 
-    // Status line with contextual hints.
+    // Status line with contextual hints. Idle and running have live-region
+    // indicators already; approval, questions, and a paused queue need the
+    // persistent status label because they require user action.
+    let g = glyphs();
     let state = if app.approval.is_some() {
-        "awaiting approval"
+        format!("{}awaiting approval", g.status_prefix(g.attention))
     } else if app.ask.is_some() {
-        "awaiting answer"
-    } else if app.running() {
-        "running"
+        format!("{}awaiting answer", g.status_prefix(g.attention))
     } else if !app.prompt_queue.is_empty() {
-        "queue paused"
+        format!("{}queue paused", g.status_prefix(g.waiting))
     } else {
-        "idle"
+        String::new()
     };
-    let hint = if app.scroll > 0 {
+    let approval_hint = app.approval.as_ref().map(|request| {
+        ApprovalPrompt {
+            tool_name: &request.tool_name,
+            detail: &request.detail,
+            yes_no: request.yes_no,
+        }
+        .hint()
+    });
+    let hint = if let Some(hint) = approval_hint.as_deref() {
+        hint
+    } else if app.scroll > 0 {
         // Fresh scroll: name the two ways to get text out, since capture
         // means a plain drag will not select. Then it settles back to the
         // shorter form so the status line is not permanently crowded.
@@ -245,24 +341,55 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         "enter send · @ paths · ctrl+o expand · wheel scroll"
     };
-    let mode = mode_segment(&app.cfg.mode, &app.cfg.plan);
-    let context = context_segment(app.context_tokens, app.context_window);
-    let stats = stats_segments(&app.cfg.stats);
-    let todo = todo_segment(&app.cfg.todos);
-    let queue = queue_segment(app.prompt_queue.len());
-    let workspace = workspace_status_name(&app.cfg.workspace_name);
-    let status = StatusBar {
-        model: &app.cfg.model_name,
-        effort: app.reasoning_effort.as_deref(),
-        state,
-        mode: &mode,
-        context: &context,
-        stats: &stats,
-        todo: &todo,
-        queue: &queue,
-        hint,
-        workspace,
-    };
+    let mut status = StatusBar::new();
+    status
+        .push(Segment::new(&app.cfg.model_name, status_bar::MODEL))
+        .push(Segment::new(
+            app.reasoning_effort
+                .as_deref()
+                .map(str::to_string)
+                .unwrap_or_default(),
+            status_bar::EFFORT,
+        ))
+        .push(Segment::new(state, status_bar::KEEP))
+        .push(Segment::new(
+            mode_segment(&app.cfg.mode, &app.cfg.plan),
+            status_bar::KEEP,
+        ))
+        .push(
+            Segment::new(
+                context_segment(app.context_tokens, app.context_window, false),
+                status_bar::CONTEXT,
+            )
+            .with_compact(context_segment(
+                app.context_tokens,
+                app.context_window,
+                true,
+            )),
+        );
+    for stat in stats_segments(&app.cfg.stats) {
+        status.push(Segment::new(stat, status_bar::STATS));
+    }
+    status
+        .push(Segment::new(
+            todo_segment(&app.cfg.todos),
+            status_bar::COUNTS,
+        ))
+        .push(Segment::new(
+            queue_segment(app.prompt_queue.len()),
+            status_bar::COUNTS,
+        ))
+        .push(Segment::new(hint, status_bar::HINT).with_compact(shorter_hint(hint)))
+        .trailing(Segment::new(
+            match &app.git_branch {
+                Some(branch) => format!(
+                    "{} · {branch}",
+                    workspace_status_name(&app.cfg.workspace_name)
+                ),
+                None => workspace_status_name(&app.cfg.workspace_name).to_string(),
+            },
+            status_bar::WORKSPACE,
+        ));
     frame.render_widget(
         Paragraph::new(status.line(left_width, theme().dim)),
         status_area,
@@ -270,7 +397,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 pub(crate) fn transcript_content_width(app: &App, terminal_width: usize) -> usize {
-    if app.view_mode == ViewMode::Split && terminal_width >= 100 {
+    if SplitKind::side_by_side(app.view_mode, terminal_width) {
         terminal_width.saturating_mul(58) / 100
     } else {
         terminal_width
@@ -295,19 +422,19 @@ pub(crate) fn stabilize_transcript_scroll(app: &mut App, max_scroll: usize) {
 
 /// Status-line segments for live background work; empty when idle so the
 /// line stays quiet. Each persistent compute tool is unnumbered (0 or 1).
-pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> String {
-    let mut out = String::new();
+pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> Vec<String> {
+    let mut out = Vec::new();
     if stats.processes() > 0 {
-        out.push_str(&format!(" · procs {}", stats.processes()));
+        out.push(format!("procs {}", stats.processes()));
     }
     if stats.kernels() > 0 {
-        out.push_str(" · pykernel");
+        out.push("pykernel".to_string());
     }
     if stats.bun_repls() > 0 {
-        out.push_str(" · bun_repl");
+        out.push("bun".to_string());
     }
     if stats.agents() > 0 {
-        out.push_str(&format!(" · agents {}", stats.agents()));
+        out.push(format!("agents {}", stats.agents()));
     }
     out
 }
@@ -316,7 +443,7 @@ pub(crate) fn queue_segment(queued: usize) -> String {
     if queued == 0 {
         String::new()
     } else {
-        format!(" · queued {queued}")
+        format!("q {queued}")
     }
 }
 
@@ -336,14 +463,14 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
         crate::mode::Mode::Normal => {
             return String::new();
         }
-        crate::mode::Mode::Auto => return " · auto".to_string(),
-        crate::mode::Mode::Yolo => return " · yolo".to_string(),
+        crate::mode::Mode::Auto => return "auto".to_string(),
+        crate::mode::Mode::Yolo => return "yolo".to_string(),
         crate::mode::Mode::Plan => {}
     }
     match plan.written().len() {
-        0 => " · plan mode".to_string(),
-        1 => " · plan mode · 1 plan".to_string(),
-        n => format!(" · plan mode · {n} plans"),
+        0 => "plan".to_string(),
+        1 => "plan · 1 plan".to_string(),
+        n => format!("plan · {n} plans"),
     }
 }
 
@@ -351,7 +478,7 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
 pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
     match todos.progress() {
         (_, 0) => String::new(),
-        (done, total) => format!(" · todo {done}/{total}"),
+        (done, total) => format!("todo {done}/{total}"),
     }
 }
 
@@ -359,19 +486,23 @@ pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
 /// they start, so the conversation preserves its actual chronology.
 pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let t = theme();
+    let g = glyphs();
     if app.prompt_queue.is_empty() {
         return Vec::new();
     }
 
     let mut lines = vec![Line::from(vec![
-        Span::styled("  queued", t.strong),
+        Span::styled(format!("  {}", g.status_prefix(g.waiting)), t.dim),
+        Span::styled("queued", t.strong),
         Span::styled(format!(" · {}", app.prompt_queue.len()), t.dim),
     ])];
     let visible = app.prompt_queue.len().min(QUEUE_PREVIEW_ROWS);
     let overflow = app.prompt_queue.len().saturating_sub(visible);
     for (index, prompt) in app.prompt_queue.iter().take(visible).enumerate() {
-        let last = index + 1 == visible && overflow == 0;
-        let branch = if last { "└" } else { "├" };
+        let branch = TreeBranch {
+            indent: "  ",
+            last: index + 1 == visible && overflow == 0,
+        };
         let label = if index == 0 {
             "next".to_string()
         } else {
@@ -379,7 +510,7 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         };
         let available = width.saturating_sub(12).max(8);
         lines.push(Line::from(vec![
-            Span::styled(format!("  {branch} "), t.dim),
+            Span::styled(branch.prefix(), t.dim),
             Span::styled(
                 format!("{label:<4} "),
                 if index == 0 { t.accent } else { t.dim },
@@ -391,43 +522,73 @@ pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         ]));
     }
     if overflow > 0 {
+        let branch = TreeBranch {
+            indent: "  ",
+            last: true,
+        };
         lines.push(Line::from(Span::styled(
-            format!("  └      +{overflow} more"),
+            format!("{}     +{overflow} more", branch.prefix()),
             t.dim,
         )));
     }
     lines
 }
 
+/// Which end of the live region survives when it is taller than the space.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LiveAnchor {
+    /// Prompts, overlays and pickers are read from their header down.
+    Top,
+    /// While a run is in progress the spinner row at the foot is what the
+    /// user watches, so a tall queue or todo list gives up its head.
+    Bottom,
+}
+
+pub(crate) struct LiveRegion {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) anchor: LiveAnchor,
+}
+
+impl LiveRegion {
+    fn top(lines: Vec<Line<'static>>) -> Self {
+        Self {
+            lines,
+            anchor: LiveAnchor::Top,
+        }
+    }
+
+    /// The rows that fit in `height`, taken from the anchored end.
+    pub(crate) fn window(&self, height: usize) -> &[Line<'static>] {
+        let len = self.lines.len();
+        match self.anchor {
+            LiveAnchor::Top => &self.lines[..height.min(len)],
+            LiveAnchor::Bottom => &self.lines[len.saturating_sub(height)..],
+        }
+    }
+}
+
+/// The pinned live region's rows; see [`live_region`] for the anchoring.
+#[cfg(test)]
+pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    live_region(app, width).lines
+}
+
 /// The pinned live region: approval prompt beats ask form, overlays, palette,
 /// then run status. Streaming content itself is projected into the main transcript.
-pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
     let t = theme();
     if let Some(request) = &app.approval {
-        return vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  approval required: {}", request.tool_name),
-                t.warn,
-            )),
-            Line::from(Span::raw(format!(
-                "    {}",
-                view::truncate_line(&request.detail, width.saturating_sub(6))
-            ))),
-            Line::from(Span::styled(
-                match request.yes_no {
-                    true => "    [y] yes   [n] no",
-                    false => {
-                        "    [y] allow once   [a] always (this session)   \
-                         [A] always (save for workspace)   [n] deny"
-                    }
-                },
-                t.dim,
-            )),
-        ];
+        return LiveRegion::top(
+            ApprovalPrompt {
+                tool_name: &request.tool_name,
+                detail: &request.detail,
+                yes_no: request.yes_no,
+            }
+            .lines(width),
+        );
     }
     if let Some(ask) = &app.ask {
-        return ask.lines(width);
+        return LiveRegion::top(ask.lines(width));
     }
     if let Some(overlay) = &app.overlay {
         let mut lines = match overlay {
@@ -441,6 +602,7 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
             Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),
             Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
+            Overlay::Style { picker } => style_lines(picker, width),
             Overlay::Inspector { picker } => {
                 inspector_picker_lines(app.inspector_mode, picker, width)
             }
@@ -489,15 +651,15 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     .into();
             }
         }
-        return lines;
+        return LiveRegion::top(lines);
     }
     if app.palette_query().is_some() {
-        return palette_lines(app, PALETTE_ROWS + 2, width);
+        return LiveRegion::top(palette_lines(app, PALETTE_ROWS + 2, width));
     }
     if app.running() {
         let mut lines = queue_lines(app, width);
         lines.extend(todo_lines(&app.cfg.todos, width));
-        let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+        let spinner = glyphs().active_frame(app.spinner_frame);
         let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
             "writing"
         } else if !app.reasoning.is_empty() {
@@ -511,8 +673,8 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             } else {
                 format!(
                     " · ↑{} ↓{}",
-                    fmt_turn_tokens(app.turn_tokens_in),
-                    fmt_turn_tokens(app.turn_tokens_out)
+                    fmt_tokens(app.turn_tokens_in),
+                    fmt_tokens(app.turn_tokens_out)
                 )
             };
             lines.push(Line::from(vec![
@@ -526,14 +688,26 @@ pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 ),
             ]));
         }
-        return lines;
+        return LiveRegion {
+            lines,
+            anchor: LiveAnchor::Bottom,
+        };
     }
     let mut lines = queue_lines(app, width);
     lines.extend(todo_lines(&app.cfg.todos, width));
-    if let Some(summary) = &app.last_turn_summary {
-        lines.push(Line::from(Span::styled(format!("  {summary}"), t.dim)));
+    LiveRegion {
+        lines,
+        anchor: LiveAnchor::Bottom,
     }
-    lines
+}
+
+/// The hint without its last ` · piece`: a tight row gives up the least
+/// useful key before it gives up the model name.
+fn shorter_hint(hint: &str) -> String {
+    hint.rsplit_once(" · ")
+        .map(|(head, _)| head)
+        .unwrap_or(hint)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -541,13 +715,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_shorter_hint_drops_its_last_piece_only() {
+        assert_eq!(shorter_hint("a · b · c"), "a · b");
+        assert_eq!(shorter_hint("alone"), "alone");
+    }
+
+    #[test]
     fn inspector_content_width_comes_from_the_padded_block() {
-        let area = ratatui::layout::Rect::new(0, 0, 50, 20);
-        let block = inspector_block(ratatui::style::Style::default());
+        let area = Rect::new(0, 0, 50, 20);
+        let block = SplitKind::SideBySide.block(ratatui::style::Style::default());
         assert_eq!(
-            inspector_content_width(area),
+            SplitKind::SideBySide.content_width(area),
             block.inner(area).width as usize
         );
         assert_eq!(block.inner(area).right(), area.right() - 1);
+    }
+
+    #[test]
+    fn split_falls_back_to_stacking_on_narrow_terminals() {
+        assert_eq!(
+            SplitKind::for_area(ViewMode::Split, 120, 24),
+            SplitKind::SideBySide
+        );
+        assert_eq!(
+            SplitKind::for_area(ViewMode::Split, 90, 30),
+            SplitKind::Stacked
+        );
+        assert_eq!(SplitKind::for_area(ViewMode::Split, 90, 12), SplitKind::Off);
+        assert_eq!(
+            SplitKind::for_area(ViewMode::Classic, 200, 60),
+            SplitKind::Off
+        );
+        let [top, bottom] = SplitKind::Stacked.areas(Rect::new(0, 0, 90, 30));
+        assert_eq!(top.width, 90);
+        assert_eq!(top.height + bottom.height, 30);
+    }
+
+    #[test]
+    fn a_running_live_region_keeps_its_foot() {
+        let region = LiveRegion {
+            lines: (0..5).map(|n| Line::from(n.to_string())).collect(),
+            anchor: LiveAnchor::Bottom,
+        };
+        let shown: Vec<String> = region
+            .window(2)
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert_eq!(shown, ["3", "4"]);
+        let region = LiveRegion::top(region.lines);
+        assert_eq!(region.window(2).len(), 2);
+        assert_eq!(region.window(2)[0].to_string(), "0");
+        assert_eq!(region.window(9).len(), 5);
     }
 }

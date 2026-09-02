@@ -36,26 +36,56 @@ pub(super) fn elapsed_label(elapsed: Duration) -> String {
 }
 
 /// Tool calls can spend most of their wall time in approval, scheduling, or
-/// sandbox preflight. Keep compact rows compact for negligible preflight, but
-/// expose meaningful pre-execution latency instead of attributing it to the
-/// underlying tool.
+/// sandbox preflight. The compact label is one number a reader can act
+/// on: the tool's own run time once it is executing, the wait before
+/// that, and nothing at all under a millisecond. The detailed label (the
+/// inspector) splits preflight from run so latency is attributed to the
+/// right side.
 pub(super) fn tool_timing_label(tool: &ToolActivity, detailed: bool) -> String {
     let total = tool.elapsed.unwrap_or_else(|| tool.started.elapsed());
     let Some(execution_started) = tool.execution_started else {
-        return format!("preflight {}", elapsed_label(total));
+        return if detailed {
+            format!("preflight {}", elapsed_label(total))
+        } else {
+            compact_elapsed(total)
+        };
     };
     let preflight = execution_started.duration_since(tool.started);
     let execution = tool
         .execution_elapsed
         .unwrap_or_else(|| execution_started.elapsed());
-    if detailed || preflight >= Duration::from_millis(10) {
+    if detailed {
         format!(
             "preflight {} · run {}",
             elapsed_label(preflight),
             elapsed_label(execution)
         )
+    } else if execution >= Duration::from_millis(1) {
+        elapsed_label(execution)
     } else {
-        elapsed_label(total)
+        // An instant tool after a long wait: the wait is what the reader felt.
+        compact_elapsed(total)
+    }
+}
+
+/// [`elapsed_label`] for rows: empty under a millisecond, since `312µs`
+/// next to a file name is noise.
+fn compact_elapsed(elapsed: Duration) -> String {
+    if elapsed < Duration::from_millis(1) {
+        String::new()
+    } else {
+        elapsed_label(elapsed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_rows_hide_sub_millisecond_noise() {
+        assert_eq!(compact_elapsed(Duration::from_micros(312)), "");
+        assert_eq!(compact_elapsed(Duration::from_millis(12)), "12ms");
     }
 }
 
@@ -127,29 +157,6 @@ pub(super) fn fmt_tokens(n: u64) -> String {
         0..=999 => n.to_string(),
         1_000..=999_999 => format!("{:.1}k", n as f64 / 1_000.0),
         _ => format!("{:.1}m", n as f64 / 1_000_000.0),
-    }
-}
-
-/// FX-style live token count: exact below 1k, one decimal below 10k
-/// only when useful, then whole thousands.
-pub(super) fn fmt_turn_tokens(tokens: u64) -> String {
-    if tokens < 1_000 {
-        return tokens.to_string();
-    }
-    let whole = tokens / 1_000;
-    let tenths = (tokens % 1_000) / 100;
-    if whole < 10 && tenths > 0 {
-        format!("{whole}.{tenths}k")
-    } else {
-        format!("{whole}k")
-    }
-}
-
-/// Compact byte count: `512b`, `4.2k`.
-pub(super) fn size(bytes: u64) -> String {
-    match bytes {
-        0..=1023 => format!("{bytes}b"),
-        _ => format!("{:.1}k", bytes as f64 / 1024.0),
     }
 }
 

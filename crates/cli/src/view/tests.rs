@@ -106,7 +106,9 @@ mod tests {
     #[test]
     fn grep_shows_the_query() {
         let line = tool_call_line("grep", &json!({"query": "fn main", "path": "."}));
-        assert_eq!(line, "grep 'fn main'");
+        assert_eq!(line, "grep 'fn main'", "the workspace root is implied");
+        let line = tool_call_line("grep", &json!({"query": "fn main", "path": "src/tui"}));
+        assert_eq!(line, "grep 'fn main' in src/tui");
     }
 
     #[test]
@@ -178,9 +180,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tools_fall_back_to_compact_json() {
+    fn unknown_tools_show_their_first_text_field_not_json() {
         let line = tool_call_line("deploy", &json!({"env": "prod"}));
-        assert_eq!(line, "deploy {\"env\":\"prod\"}");
+        assert_eq!(line, "deploy prod");
+        let line = tool_call_line("deploy", &json!({"replicas": 3, "wait": true}));
+        assert_eq!(line, "deploy replicas wait");
+        assert_eq!(tool_result_summary("deploy", &json!({"ok": true}), false), "ok");
     }
 
     #[test]
@@ -214,7 +219,7 @@ mod tests {
         let out = json!({"path": "a.rs", "replacements": 2});
         assert_eq!(
             tool_result_summary("edit_file", &out, false),
-            "2 replacement(s)"
+            "2 replacements"
         );
         assert_eq!(
             tool_result_summary(
@@ -488,11 +493,13 @@ mod tests {
     fn markdown_bullets_and_headers() {
         let lines = markdown_lines("## Title\n- item one\n* item two", 80, "  ");
         let texts: Vec<String> = lines.iter().map(flat).collect();
-        assert!(texts.contains(&"  Title".to_string()), "{texts:?}");
+        assert!(texts.contains(&"  ## Title".to_string()), "{texts:?}");
         assert!(texts.contains(&"  • item one".to_string()), "{texts:?}");
         assert!(texts.contains(&"  • item two".to_string()), "{texts:?}");
         let title = lines.iter().find(|l| flat(l).contains("Title")).unwrap();
-        assert!(title.spans[1].style.add_modifier.contains(Modifier::BOLD));
+        assert!(title.spans[2].style.add_modifier.contains(Modifier::BOLD));
+        let deep = markdown_lines("#### Deep", 80, "");
+        assert_eq!(flat(&deep[0]), "### Deep", "levels past three share h3");
     }
 
     #[test]

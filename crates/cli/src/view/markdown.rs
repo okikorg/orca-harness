@@ -287,13 +287,21 @@ pub fn markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'stati
                 .position(|line| line.trim_start().starts_with("```"))
                 .map(|offset| code_start + offset)
                 .unwrap_or(raw_lines.len());
-            out.extend(render_code_block(
-                &raw_lines[code_start..code_end],
-                language,
-                width,
-                indent,
-                &theme(),
-            ));
+            let block = &raw_lines[code_start..code_end];
+            let selected_theme = theme();
+            let mermaid = language.eq_ignore_ascii_case("mermaid");
+            let closed = code_end < raw_lines.len();
+            let rendered = if mermaid && !closed {
+                vec![super::mermaid::pending(indent, &selected_theme)]
+            } else {
+                mermaid
+                    .then(|| super::mermaid::render(block, width, indent, &selected_theme))
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        render_code_block(block, language, width, indent, &selected_theme)
+                    })
+            };
+            out.extend(rendered);
             index = if code_end < raw_lines.len() {
                 code_end + 1
             } else {
@@ -336,12 +344,15 @@ pub fn markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'stati
             index += 1;
             continue;
         }
-        if let Some(header) = trimmed
-            .strip_prefix('#')
-            .map(|h| h.trim_start_matches('#').trim_start())
-        {
+        if let Some(header) = trimmed.strip_prefix('#') {
+            let level = 1 + header.chars().take_while(|c| *c == '#').count();
+            let header = header.trim_start_matches('#').trim_start();
+            // Bold alone vanishes on terminals with a weak bold face, so
+            // the level also carries a visible prefix from the style table.
+            let prefix = super::glyphs::glyphs().heading[level.min(3) - 1];
             out.push(Line::from(vec![
                 Span::raw(indent.to_string()),
+                Span::styled(prefix.to_string(), dim),
                 Span::styled(
                     header.to_string(),
                     Style::default().add_modifier(Modifier::BOLD),

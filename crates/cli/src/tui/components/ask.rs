@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 
 use orca_harness_tools::{AskAnswer, AskRequest, AskResponse, AskTopic, AskTopicAnswer};
 
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 #[derive(Debug, Clone, Default)]
@@ -187,10 +188,11 @@ impl AskForm {
 
     pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
         let t = theme();
+        let g = glyphs();
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
-                Span::styled("  ? ", t.accent),
+                Span::styled(format!("  {} ", g.attention), t.accent),
                 Span::styled("Clarification needed", t.strong),
                 Span::styled(
                     format!(
@@ -209,9 +211,9 @@ impl AskForm {
                 topic_line.push(Span::styled("  ───  ", t.dim));
             }
             let glyph = if self.topic_complete_at(index) {
-                "✓"
+                g.done
             } else {
-                "□"
+                g.waiting
             };
             let style = if index == self.topic { t.select } else { t.dim };
             topic_line.push(Span::styled(format!("{glyph} {}", topic.title), style));
@@ -227,7 +229,7 @@ impl AskForm {
             let active = question_index == self.focus;
             lines.push(Line::from(vec![
                 Span::styled(
-                    if active { "  ▸ " } else { "    " },
+                    format!("  {} ", if active { g.cursor } else { " " }),
                     if active { t.accent } else { t.dim },
                 ),
                 Span::styled(
@@ -257,10 +259,10 @@ impl AskForm {
                 for (option_index, option) in question.options.iter().enumerate() {
                     let selected = answer.values.iter().any(|value| value == &option.label);
                     let cursor = active && answer.option == option_index;
-                    let marker = if selected { "✓" } else { "□" };
+                    let marker = if selected { g.done } else { g.waiting };
                     lines.push(Line::from(vec![
                         Span::styled(
-                            if cursor { "      ▸ " } else { "        " },
+                            format!("      {} ", if cursor { g.cursor } else { " " }),
                             if cursor { t.accent } else { t.dim },
                         ),
                         Span::styled(
@@ -269,13 +271,15 @@ impl AskForm {
                         ),
                     ]));
                     if let Some(description) = &option.description {
-                        lines.push(Line::from(Span::styled(
-                            format!(
-                                "            {}",
-                                view::truncate_line(description, width.saturating_sub(12))
-                            ),
-                            t.dim,
-                        )));
+                        // The explanation the agent wrote is the point of
+                        // the option: wrap it rather than cut it.
+                        let description = view::sanitize_cells(description);
+                        for part in textwrap::wrap(&description, width.saturating_sub(12).max(16)) {
+                            lines.push(Line::from(Span::styled(
+                                format!("            {part}"),
+                                t.dim,
+                            )));
+                        }
                     }
                 }
             }
@@ -285,11 +289,17 @@ impl AskForm {
         let active = self.focus == topic.questions.len();
         lines.push(Line::from(vec![
             Span::styled(
-                if active { "  ▸ " } else { "    " },
+                format!("  {} ", if active { g.cursor } else { " " }),
                 if active { t.accent } else { t.dim },
             ),
             Span::styled("Other", if active { t.strong } else { t.dim }),
-            Span::styled(" · optional answer outside these choices", t.dim),
+            Span::styled(
+                view::truncate_line(
+                    " · optional answer outside these choices",
+                    width.saturating_sub(9),
+                ),
+                t.dim,
+            ),
         ]));
         let additional = if draft.additional_context.is_empty() {
             "Type another answer or requirement…"
@@ -308,7 +318,10 @@ impl AskForm {
             ),
         ]));
         lines.push(Line::from(Span::styled(
-            "    ↑↓ question · ←→ option · space choose · tab next topic · enter send · esc cancel",
+            view::truncate_line(
+                "    ↑↓ question · ←→ option · space choose · tab next topic · enter send · esc cancel",
+                width,
+            ),
             t.dim,
         )));
         lines
@@ -375,5 +388,24 @@ mod tests {
         assert!(text.contains("□ Scope"));
         assert!(text.contains("Other · optional answer outside these choices"));
         assert!(text.contains("Type another answer"));
+    }
+
+    #[test]
+    fn long_option_descriptions_wrap_instead_of_truncating() {
+        let lines = form().lines(40);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert!(lines.iter().all(|line| line.width() <= 40), "{text:?}");
+        assert!(
+            text.iter().any(|line| line.contains("production support")),
+            "the end of the description is still there: {text:?}"
+        );
     }
 }

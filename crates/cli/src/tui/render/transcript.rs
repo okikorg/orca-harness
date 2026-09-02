@@ -8,8 +8,10 @@ use crate::tui::components::activity_rail::{ActivityRail, ActivityRailKind};
 use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
 use crate::tui::components::subagent_row::SubagentRow;
 use crate::tui::components::tool_row::ToolRow;
-use crate::tui::components::transcript::{append_block, BlockSpacing};
-use crate::tui::state::SubagentDisplay;
+use crate::tui::components::transcript::{append_block, line_is_blank, BlockSpacing};
+use crate::tui::components::tree::{Connector, TreeBranch};
+use crate::tui::state::{SubagentDisplay, ToolStatus};
+use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
 use super::super::format::{elapsed_label, plural, tool_timing_label};
@@ -95,20 +97,53 @@ pub(crate) fn skill_mention_picker_lines(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn projected_transcript(app: &App, width: usize) -> Vec<Line<'static>> {
     projected_transcript_selected(app, width, None)
 }
 
+/// The whole projection as one vector: committed history plus the live
+/// tail. The renderer reads the two parts separately so the history is
+/// not copied on every frame; tests want the joined view.
+#[cfg(test)]
 pub(crate) fn projected_transcript_selected(
     app: &App,
     width: usize,
     selected_tool: Option<usize>,
 ) -> Vec<Line<'static>> {
-    let mut lines = app.transcript.clone();
-    if !app.running() {
+    let tail = projected_tail(app, width, selected_tool);
+    let mut lines = committed_transcript(app, !tail.is_empty()).to_vec();
+    lines.extend(tail);
+    lines
+}
+
+/// The committed transcript as the renderer reads it. When a live tail
+/// follows, trailing blank rows are left off so the tail's own spacing
+/// rule sets the gap, exactly as `append_block` would have popped them.
+pub(crate) fn committed_transcript(app: &App, tail_follows: bool) -> &[Line<'static>] {
+    let lines = app.transcript.as_slice();
+    if !tail_follows {
         return lines;
     }
+    let end = lines
+        .iter()
+        .rposition(|line| !line_is_blank(line))
+        .map_or(0, |index| index + 1);
+    &lines[..end]
+}
 
+/// The render-only projection of the in-progress turn: live activity and
+/// the streaming answer, spaced as if appended after the committed
+/// transcript. Empty when nothing is running or nothing has arrived yet.
+pub(crate) fn projected_tail(
+    app: &App,
+    width: usize,
+    selected_tool: Option<usize>,
+) -> Vec<Line<'static>> {
+    let mut tail = Vec::new();
+    if !app.running() {
+        return tail;
+    }
     let activity = activity_lines_selected(app, width, true, selected_tool);
     let answer = if !app.text.is_empty() {
         Some(app.text.as_str())
@@ -117,20 +152,23 @@ pub(crate) fn projected_transcript_selected(
             .as_deref()
             .filter(|text| !text.is_empty())
     };
-    if activity.is_empty() && answer.is_none() {
-        return lines;
-    }
-
-    append_block(&mut lines, activity, BlockSpacing::Section, None);
+    // What the committed transcript ends with, once its trailing blank
+    // rows are ignored: a row of content, or nothing at all.
+    let prior = (!committed_transcript(app, true).is_empty()).then_some(false);
+    append_block(&mut tail, activity, BlockSpacing::Section, prior);
     if let Some(answer) = answer {
-        append_block(
-            &mut lines,
-            view::markdown_lines(answer, width, "  "),
-            BlockSpacing::Section,
-            None,
-        );
+        let mut lines = view::markdown_lines(answer, width, "  ");
+        // The caret marks where the stream is; only while text is still
+        // arriving, never on a message waiting for its result.
+        let caret = glyphs().caret;
+        if !caret.is_empty() && !app.text.is_empty() {
+            if let Some(last) = lines.iter_mut().rev().find(|line| !line_is_blank(line)) {
+                last.spans.push(Span::styled(caret, theme().accent));
+            }
+        }
+        append_block(&mut tail, lines, BlockSpacing::Section, prior);
     }
-    lines
+    tail
 }
 
 fn identity_label(identity: &orca_harness_tools::SubagentIdentity) -> String {
@@ -186,9 +224,33 @@ pub(crate) fn nested_subagent_lines(
         .max()
         .into_iter()
         .collect();
-    let prefix = format!("    {continuation} ");
+    let indent = format!("    {continuation}");
     for id in roots {
-        nested_spawn_rows(app, id, width, &prefix, lines);
+        nested_spawn_rows(app, id, width, &indent, lines);
+    }
+}
+
+/// The mark and color for a tool row, from the style table. Nested and
+/// top-level rows read the same function so they cannot drift apart.
+fn tool_mark(tool: &ToolActivity, live: bool, frame: usize) -> (String, ratatui::style::Style) {
+    let t = theme();
+    let g = glyphs();
+    match tool.status(live) {
+        ToolStatus::Running => (g.running_frame(frame).to_string(), t.dim),
+        ToolStatus::Done => (g.done.to_string(), t.success),
+        ToolStatus::Failed => (g.failed.to_string(), t.error),
+        ToolStatus::Abandoned => (g.failed.to_string(), t.warn),
+    }
+}
+
+/// The section label mark: the live frame while the run goes, the rest
+/// mark once it is committed.
+fn section_mark(live: bool, frame: usize) -> String {
+    let g = glyphs();
+    if live {
+        g.active_frame(frame).to_string()
+    } else {
+        g.section.to_string()
     }
 }
 
@@ -196,7 +258,7 @@ pub(crate) fn nested_spawn_rows(
     app: &App,
     id: u64,
     width: usize,
-    prefix: &str,
+    indent: &str,
     lines: &mut Vec<Line<'static>>,
 ) {
     let Some(spawn) = app.subagent_activity.get(&id) else {
@@ -205,27 +267,17 @@ pub(crate) fn nested_spawn_rows(
     let t = theme();
     let hidden = spawn.tools.len().saturating_sub(NESTED_TOOL_ROWS);
     if hidden > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("{prefix}… {hidden} earlier tools"),
-            t.dim,
-        )));
+        lines.push(hidden_tools_line(indent, hidden));
     }
     let visible: Vec<&ToolActivity> = spawn.tools.iter().skip(hidden).collect();
     for (position, tool) in visible.iter().enumerate() {
-        let last = position + 1 == visible.len();
-        let elapsed = tool_timing_label(tool, false);
-        let branch = if last { "└─" } else { "├─" };
-        let (glyph, style) = match (&tool.output, tool.elapsed) {
-            (Some(_), _) if tool.is_error => ("×", t.error),
-            (Some(_), _) => ("✓", t.dim),
-            (None, Some(_)) if tool.is_error => ("×", t.error),
-            (None, Some(_)) => ("✓", t.dim),
-            (None, None) => ("□", t.dim),
+        let branch = TreeBranch {
+            indent,
+            last: position + 1 == visible.len(),
         };
-        let call = view::truncate_line(
-            &tool.call_line,
-            width.saturating_sub(prefix.len() + 20).max(8),
-        );
+        let elapsed = tool_timing_label(tool, false);
+        let (glyph, style) = tool_mark(tool, true, app.spinner_frame);
+        let glyph = glyph.as_str();
         let child = (tool.tool_name == "subagent")
             .then(|| {
                 app.subagent_activity
@@ -238,37 +290,55 @@ pub(crate) fn nested_spawn_rows(
             .flatten();
         if let Some((_, child)) = child.filter(|(_, child)| child.identity.is_some()) {
             let identity = identity_label(child.identity.as_ref().unwrap());
-            let row = SubagentRow {
-                last,
-                prefix,
-                glyph,
-                identity: &identity,
-                task: &child.task,
-                elapsed: &elapsed,
-                selected: false,
-                width,
-                branch_style: t.dim,
-                glyph_style: style,
-                label_style: t.accent,
-                identity_style: t.accent,
-                task_style: t.accent,
-            };
-            lines.push(row.line());
+            lines.push(
+                SubagentRow {
+                    branch,
+                    glyph,
+                    identity: &identity,
+                    task: &child.task,
+                    elapsed: &elapsed,
+                    connector: Connector::None,
+                    width,
+                    branch_style: t.dim,
+                    glyph_style: style,
+                    label_style: t.accent,
+                    identity_style: t.accent,
+                    task_style: t.accent,
+                }
+                .line(),
+            );
         } else {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{prefix}{branch} "), t.dim),
-                Span::styled(format!("{glyph} "), style),
-                Span::styled(call, t.accent),
-                Span::styled(format!(" · {elapsed}"), t.dim),
-            ]));
+            lines.push(
+                ToolRow {
+                    branch,
+                    glyph,
+                    call: &tool.call_line,
+                    detail: "",
+                    elapsed: &elapsed,
+                    connector: Connector::None,
+                    width,
+                    branch_style: t.dim,
+                    glyph_style: style,
+                    call_style: t.accent,
+                }
+                .line(),
+            );
         }
         if tool.tool_name == "subagent" && tool.output.is_none() {
             if let Some((child_id, _)) = child {
-                let child_prefix = format!("{prefix}{}  ", if last { " " } else { "│" });
-                nested_spawn_rows(app, *child_id, width, &child_prefix, lines);
+                nested_spawn_rows(app, *child_id, width, &branch.child_indent(), lines);
             }
         }
     }
+}
+
+/// The "… n earlier tools" row a live rail shows for tools it has scrolled
+/// past; the same row at every nesting depth.
+fn hidden_tools_line(indent: &str, hidden: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{indent}… {hidden} earlier tools"),
+        theme().dim,
+    ))
 }
 
 /// Quiet, chronological rows for a completed phase. Thinking and tool work
@@ -297,7 +367,7 @@ pub(crate) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
             .sum::<Duration>();
         ActivityRail::new(
             ActivityRailKind::Thinking,
-            "•",
+            &section_mark(false, 0),
             format!(
                 "{} · {}",
                 elapsed_label(thinking_elapsed),
@@ -319,8 +389,13 @@ pub(crate) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
         } else {
             theme().dim
         };
-        ActivityRail::new(ActivityRailKind::Work, "•", parts.join(" · "), style)
-            .append_to(&mut lines);
+        ActivityRail::new(
+            ActivityRailKind::Work,
+            &section_mark(false, 0),
+            parts.join(" · "),
+            style,
+        )
+        .append_to(&mut lines);
     }
 
     lines
@@ -354,18 +429,11 @@ pub(crate) fn activity_lines_selected(
                 .reasoning_started
                 .map(|started| started.elapsed())
                 .unwrap_or_default();
-        let marker = if live {
-            if app.spinner_frame.is_multiple_of(2) {
-                "•"
-            } else {
-                " "
-            }
-        } else {
-            "•"
-        };
+        // Thinking is at rest once a tool call or answer has followed it.
+        let thinking_live = live && current_thinking;
         let mut thinking = ActivityRail::new(
             ActivityRailKind::Thinking,
-            marker,
+            &section_mark(thinking_live, app.spinner_frame),
             format!(
                 "{} · {}",
                 elapsed_label(elapsed),
@@ -400,17 +468,19 @@ pub(crate) fn activity_lines_selected(
         .filter(|tool| tool.elapsed.is_some())
         .count();
     let running = app.activity_tools.len() - complete;
+    let g = glyphs();
     let (marker, summary) = if live {
-        let dot = if app.spinner_frame.is_multiple_of(2) {
-            "•"
-        } else {
-            " "
-        };
-        (dot, format!("✓ {complete} · □ {running}"))
+        (
+            section_mark(running > 0, app.spinner_frame),
+            format!("{} {complete} · {} {running}", g.done, g.waiting),
+        )
     } else {
-        ("•", plural(app.activity_tools.len(), "tool"))
+        (
+            section_mark(false, 0),
+            plural(app.activity_tools.len(), "tool"),
+        )
     };
-    let mut work = ActivityRail::new(ActivityRailKind::Work, marker, summary, t.dim);
+    let mut work = ActivityRail::new(ActivityRailKind::Work, &marker, summary, t.dim);
 
     let visible_indices = if live && app.activity_tools.len() > LIVE_TOOL_ROWS {
         let mut selected: Vec<usize> = app
@@ -442,31 +512,22 @@ pub(crate) fn activity_lines_selected(
         .len()
         .saturating_sub(visible_indices.len());
     if hidden > 0 {
-        work.push(Line::from(Span::styled(
-            format!("    … {hidden} earlier tools"),
-            t.dim,
-        )));
+        work.push(hidden_tools_line("    ", hidden));
     }
 
     for (position, index) in visible_indices.iter().copied().enumerate() {
         let tool = &app.activity_tools[index];
-        let last = position + 1 == visible_indices.len();
-        let (glyph, mut detail, status_style) = match &tool.output {
-            Some(output) if tool.is_error => (
-                "×",
-                view::tool_result_summary(&tool.tool_name, output, true),
-                t.error,
-            ),
-            Some(output) => (
-                "✓",
-                view::tool_result_summary(&tool.tool_name, output, false),
-                t.dim,
-            ),
-            None if tool.elapsed.is_some() && tool.is_error => ("×", String::new(), t.error),
-            None if tool.elapsed.is_some() => ("✓", String::new(), t.dim),
-            None if live => ("□", String::new(), t.dim),
-            None => ("×", String::new(), t.warn),
+        let branch = TreeBranch {
+            indent: "    ",
+            last: position + 1 == visible_indices.len(),
         };
+        let (glyph, status_style) = tool_mark(tool, live, app.spinner_frame);
+        let glyph = glyph.as_str();
+        let mut detail = tool
+            .output
+            .as_ref()
+            .map(|output| view::tool_result_summary(&tool.tool_name, output, tool.is_error))
+            .unwrap_or_default();
         if let Some(approval) = &tool.approval {
             detail = if detail.is_empty() {
                 approval.clone()
@@ -476,18 +537,18 @@ pub(crate) fn activity_lines_selected(
         }
         let elapsed = tool_timing_label(tool, false);
         let selected = selected_tool == Some(index);
+        let connector = Connector::for_row(selected_tool.is_some(), selected);
         let row_style = if selected { t.select } else { t.accent };
         let continuation = if tool.tool_name == "subagent" {
             if let Some(display) = subagent_display(app, tool) {
                 let identity = identity_label(&display.identity);
                 let row = SubagentRow {
-                    last,
-                    prefix: "    ",
+                    branch,
                     glyph,
                     identity: &identity,
                     task: &display.task,
                     elapsed: &elapsed,
-                    selected,
+                    connector,
                     width,
                     branch_style: t.dim,
                     glyph_style: status_style,
@@ -500,12 +561,12 @@ pub(crate) fn activity_lines_selected(
                 continuation
             } else {
                 let row = ToolRow {
-                    last,
+                    branch,
                     glyph,
                     call: &tool.call_line,
                     detail: &detail,
                     elapsed: &elapsed,
-                    selected,
+                    connector,
                     width,
                     branch_style: t.dim,
                     glyph_style: status_style,
@@ -517,12 +578,12 @@ pub(crate) fn activity_lines_selected(
             }
         } else {
             let row = ToolRow {
-                last,
+                branch,
                 glyph,
                 call: &tool.call_line,
                 detail: &detail,
                 elapsed: &elapsed,
-                selected,
+                connector,
                 width,
                 branch_style: t.dim,
                 glyph_style: status_style,
