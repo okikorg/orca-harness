@@ -2,9 +2,9 @@
 //!
 //! Renderers never spell a state mark inline: they read the table so both
 //! styles fill every slot and the marks stay one family. The Glyph style
-//! uses same-size geometric squares for state, box-drawing strokes for
-//! structure, and heavy/light rules for measure; the logo's `▀▄` stays
-//! the only block element on screen.
+//! uses compact geometric state marks, box-drawing strokes for structure,
+//! and heavy/light rules for measure; the logo's `▀▄` stays the only block
+//! element on screen.
 
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -179,20 +179,18 @@ pub static MINIMAL: Glyphs = Glyphs {
 
 pub static GLYPH: Glyphs = Glyphs {
     waiting: '□',
-    // Tool rows keep the Minimal marks: a tick and a cross read at a
-    // glance, and the squares stay for sections, the run state, and rails.
-    running: &['□'],
-    active: &['◧', '◨'],
+    running: &['⬚'],
+    active: &['□', '■'],
     done: '✓',
     failed: '×',
     section: '□',
-    attention: '◫',
+    attention: '!',
     status_marks: true,
     rail: "┃",
     caret: "▏",
     meter: Some(('━', '─')),
     heading: ["┃ ", "│ ", ""],
-    cursor: "┃",
+    cursor: "›",
     footer: "",
 };
 
@@ -244,10 +242,6 @@ mod tests {
                 include_str!("../tui/render/overlays.rs"),
             ),
             (
-                "components/tool_row.rs",
-                include_str!("../tui/components/tool_row.rs"),
-            ),
-            (
                 "components/section.rs",
                 include_str!("../tui/components/section.rs"),
             ),
@@ -276,7 +270,11 @@ mod tests {
                 include_str!("../tui/components/progress_list.rs"),
             ),
         ];
-        let marks = ['◧', '◨', '■', '◫', '▏', '━'];
+        // `tool_row.rs` receives its glyph from callers; it never chooses a
+        // state mark. Its test fixture also uses `○` as a connector.
+        // `!` is ordinary Rust syntax and `□` is the shared Minimal waiting
+        // mark, so the table-level tests cover their assigned values.
+        let marks = ['⬚', '■', '›', '▏', '━'];
         for (name, source) in sources {
             for mark in marks {
                 assert!(

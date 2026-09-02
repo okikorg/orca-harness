@@ -342,8 +342,12 @@ fn glyph_style_reads_every_mark_from_the_table() {
             screen.contains(&format!("└─ {} shell $ true", g.running[0])),
             "{screen}"
         );
-        assert_eq!(g.running, UiStyle::Minimal.glyphs().running);
+        assert_eq!(g.running, &['⬚']);
+        assert_eq!(g.active, &['□', '■']);
+        assert_eq!(g.section, '□');
+        assert_eq!(g.attention, '!');
+        assert_eq!(g.cursor, "›");
         assert_eq!(g.done, UiStyle::Minimal.glyphs().done);
-        assert!(screen.contains("working"), "{screen}");
+        assert!(screen.contains("writing"), "{screen}");
     });
 }
