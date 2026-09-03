@@ -1,0 +1,282 @@
+name: release-orcacode
+
+# Release pipeline for the orcacode CLI (crates/cli). Pushing a tag that
+# matches orcacode-v* builds the binary for five targets, attaches the
+# archives plus SHA256SUMS to the GitHub Release for that tag, and pushes
+# the same files to the Orca release server. Re-run for an existing tag
+# with workflow_dispatch and the tag name: the release step updates the
+# existing release and replaces its assets.
+#
+# Asset names are the contract with the landing installer (orcacode.sh in
+# agent-orc) and the release server, so they match orcacode-v0.1.0 exactly:
+#   orcacode-darwin-arm64.tar.gz  aarch64-apple-darwin        macos-14
+#   orcacode-darwin-x64.tar.gz    x86_64-apple-darwin         macos-14, rustup target
+#   orcacode-linux-x64.tar.gz     x86_64-unknown-linux-musl   ubuntu, cargo-zigbuild
+#   orcacode-linux-arm64.tar.gz   aarch64-unknown-linux-musl  ubuntu, cargo-zigbuild
+#   orcacode-windows-x64.zip      x86_64-pc-windows-gnu       ubuntu, cargo-zigbuild
+# Each tar.gz holds the single file `orcacode` at the archive root; the zip
+# holds `orcacode.exe` at its root. The musl builds are fully static.
+#
+# The release profile in Cargo.toml already sets lto = "fat", opt-level = "z"
+# and strip = true, so nothing here strips or shrinks the binary. The size
+# gate (ci/check-binary-size.sh, under 6,000,000 bytes) runs on the linux
+# x64 and darwin arm64 binaries. The only outside input is the dispatch tag
+# name, which is validated before it reaches a shell or a URL.
+
+on:
+  push:
+    tags:
+      - "orcacode-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing orcacode-v* tag to rebuild and republish"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: resolve tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # The tag names the version (orcacode-v0.1.0 releases 0.1.0) and has to
+      # agree with the workspace version the binary reports via --version,
+      # which the installer prints after installing. Fail here, before any
+      # build, when they disagree.
+      - name: resolve tag and version
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            tag="$REF_NAME"
+          else
+            echo "no tag: push an orcacode-v* tag or dispatch with the tag input" >&2
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^orcacode-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "tag '$tag' is not of the form orcacode-vX.Y.Z" >&2
+            exit 1
+          fi
+          version="${tag#orcacode-v}"
+          crate_version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "orcacode") | .version')"
+          if [[ "$crate_version" != "$version" ]]; then
+            echo "tag version $version does not match the orcacode crate version $crate_version" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "releasing orcacode $version from tag $tag"
+
+  build:
+    name: build ${{ matrix.asset }}
+    needs: tag
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: orcacode-darwin-arm64.tar.gz
+            bin: orcacode
+            zigbuild: false
+            size_gate: true
+          - os: macos-14
+            target: x86_64-apple-darwin
+            asset: orcacode-darwin-x64.tar.gz
+            bin: orcacode
+            zigbuild: false
+            size_gate: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: orcacode-linux-x64.tar.gz
+            bin: orcacode
+            zigbuild: true
+            size_gate: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            asset: orcacode-linux-arm64.tar.gz
+            bin: orcacode
+            zigbuild: true
+            size_gate: false
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            asset: orcacode-windows-x64.zip
+            bin: orcacode.exe
+            zigbuild: true
+            size_gate: false
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+
+      # `targets` runs rustup target add, which is how the x86_64 darwin
+      # build gets its std on the arm64 macos-14 runner.
+      - name: rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Zig is the C toolchain and linker for the cross builds: static musl
+      # for linux, mingw for windows, no cross compilers to apt-get. Pinned
+      # because a new Zig release can run ahead of cargo-zigbuild.
+      - name: zig
+        if: matrix.zigbuild
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
+
+      - name: cargo-zigbuild
+        if: matrix.zigbuild
+        run: cargo install --locked cargo-zigbuild
+
+      - name: build
+        env:
+          TARGET: ${{ matrix.target }}
+          ZIGBUILD: ${{ matrix.zigbuild }}
+        run: |
+          set -euo pipefail
+          if [[ "$ZIGBUILD" == "true" ]]; then
+            cargo zigbuild --release -p orcacode --target "$TARGET"
+          else
+            cargo build --release -p orcacode --target "$TARGET"
+          fi
+
+      - name: release binary size
+        if: matrix.size_gate
+        run: ./ci/check-binary-size.sh "target/${{ matrix.target }}/release/orcacode"
+
+      # One file at the archive root, which is what orcacode.sh expects after
+      # tar -xzf. COPYFILE_DISABLE keeps macOS tar from adding AppleDouble
+      # (._orcacode) entries; zip -j drops the directory prefix.
+      - name: package
+        env:
+          ASSET: ${{ matrix.asset }}
+          BIN: ${{ matrix.bin }}
+          OUT_DIR: target/${{ matrix.target }}/release
+          COPYFILE_DISABLE: "1"
+        run: |
+          set -euo pipefail
+          case "$ASSET" in
+            *.tar.gz) tar -C "$OUT_DIR" -czf "$ASSET" "$BIN" ;;
+            *.zip) (cd "$OUT_DIR" && zip -j "$GITHUB_WORKSPACE/$ASSET" "$BIN") ;;
+            *) echo "unknown asset type: $ASSET" >&2; exit 1 ;;
+          esac
+          ls -l "$ASSET"
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish ${{ needs.tag.outputs.tag }}
+    needs: [tag, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # sha256sum format (hash, two spaces, filename), sorted by filename:
+      # what orcacode.sh greps and what the release server verifies against.
+      - name: checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          LC_ALL=C sha256sum orcacode-*.tar.gz orcacode-*.zip | LC_ALL=C sort -k 2 > SHA256SUMS
+          if [[ "$(wc -l < SHA256SUMS)" -ne 5 ]]; then
+            echo "expected 5 assets, got:" >&2
+            cat SHA256SUMS >&2
+            exit 1
+          fi
+          cat SHA256SUMS
+
+      - name: github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.tag }}
+          name: orcacode v${{ needs.tag.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/orcacode-darwin-arm64.tar.gz
+            dist/orcacode-darwin-x64.tar.gz
+            dist/orcacode-linux-x64.tar.gz
+            dist/orcacode-linux-arm64.tar.gz
+            dist/orcacode-windows-x64.zip
+            dist/SHA256SUMS
+
+      # The release server also polls GitHub Releases every few minutes, so
+      # this push only makes the new version available immediately. Each
+      # file is PUT on its own, then verify has the server re-hash what it
+      # holds against SHA256SUMS; it answers 409 when a file is missing or
+      # mismatched, which fails this step (the JSON body is kept in the log).
+      - name: push to release server
+        working-directory: dist
+        env:
+          RELEASES_URL: ${{ vars.RELEASES_URL }}
+          RELEASES_ADMIN_TOKEN: ${{ secrets.RELEASES_ADMIN_TOKEN }}
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASES_ADMIN_TOKEN" || -z "$RELEASES_URL" ]]; then
+            echo "::notice::RELEASES_URL or RELEASES_ADMIN_TOKEN is not set; skipping the release server push. The server picks $TAG up from GitHub Releases on its next poll."
+            exit 0
+          fi
+          for file in orcacode-*.tar.gz orcacode-*.zip SHA256SUMS; do
+            echo "PUT $RELEASES_URL/admin/orcacode/$TAG/$file"
+            curl -fsS -X PUT \
+              -H "Authorization: Bearer $RELEASES_ADMIN_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$file" \
+              "$RELEASES_URL/admin/orcacode/$TAG/$file"
+            echo
+          done
+          echo "POST $RELEASES_URL/admin/orcacode/$TAG/verify"
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $RELEASES_ADMIN_TOKEN" \
+            "$RELEASES_URL/admin/orcacode/$TAG/verify"
+          echo
