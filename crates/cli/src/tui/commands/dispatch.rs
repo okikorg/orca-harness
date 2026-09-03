@@ -333,7 +333,7 @@ pub(crate) fn slash_command(
             }
             None => {
                 push_error(app, format!(
-                        "unknown theme: {arg} — valid themes: default, mono, dracula, solarized-dark, one-dark, monokai, nord"
+                        "unknown theme: {arg} — valid themes: default, mono, dracula, solarized-dark, one-dark, monokai, nord, orca"
                     ));
             }
         }

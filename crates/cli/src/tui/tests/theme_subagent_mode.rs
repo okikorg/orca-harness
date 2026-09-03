@@ -34,6 +34,7 @@ mod theme_command_tests {
             ("theme one-dark", view::ThemeName::OneDark),
             ("theme monokai", view::ThemeName::Monokai),
             ("theme nord", view::ThemeName::Nord),
+            ("theme orca", view::ThemeName::Orca),
             ("theme default", view::ThemeName::Default),
             ("theme mono", view::ThemeName::Mono),
         ] {

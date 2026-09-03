@@ -21,7 +21,7 @@ cargo run --release -p orcacode -- --plan -p "design the change"
 
 Common options include `--model`, `--base-url`, `--api-key`, `--openrouter`, `--workspace`, `--tools`, `--bare`, `--max-steps`, `--continue`, `--resume`, and `--no-session`. Run `orcacode --help` for the complete list.
 
-Provider settings, themes, API keys, approval rules, and selected models are persisted under `~/.config/orcacode`; flags and environment variables take precedence. Sessions are stored per workspace and can be listed, resumed, rewound, or forked from the TUI. OpenAI Codex can use the device-login flow and does not require an API key.
+Provider settings, themes, API keys, approval rules, and selected models are persisted under `~/.config/orcacode`; flags and environment variables take precedence. Vercel AI Gateway uses `AI_GATEWAY_API_KEY` and its OpenAI-compatible endpoint. Sessions are stored per workspace and can be listed, resumed, rewound, or forked from the TUI. OpenAI Codex can use the device-login flow and does not require an API key.
 
 ```bash
 cargo test -p orcacode

@@ -15,6 +15,15 @@ mod tests {
     }
 
     #[test]
+    fn orca_theme_uses_the_mint_and_paper_palette() {
+        let t = theme_for(ThemeName::Orca);
+        assert_eq!(t.dim.fg, Some(Color::Rgb(127, 127, 127)));
+        assert_eq!(t.accent.fg, Some(Color::Rgb(89, 224, 154)));
+        assert_eq!(t.strong.fg, Some(Color::Rgb(244, 244, 244)));
+        assert_eq!(t.success.fg, Some(Color::Rgb(89, 224, 154)));
+    }
+
+    #[test]
     fn truncate_flattens_and_cuts_with_ellipsis() {
         assert_eq!(truncate_line("hello", 10), "hello");
         assert_eq!(truncate_line("hello world", 8), "hello w…");

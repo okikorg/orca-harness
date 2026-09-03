@@ -40,22 +40,75 @@ async fn write_then_read_roundtrips() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A model that guesses a path (`tests/mod.rs` in a crate that wires tests
+/// with `include!`) should be redirected, not just refused: the error names
+/// the nearest directory that does exist and what it holds.
+#[tokio::test]
+async fn read_of_a_missing_file_lists_the_nearest_existing_directory() {
+    let (ws, dir) = temp_ws();
+    std::fs::create_dir_all(dir.join("tui/tests/inner")).unwrap();
+    std::fs::write(dir.join("tui/tests/core_2.rs"), "").unwrap();
+    std::fs::write(dir.join("tui/tests/paste.rs"), "").unwrap();
+    std::fs::write(dir.join("tui/inner_tests.rs"), "").unwrap();
+    let read = ReadFileTool::new(ws.clone());
+
+    // Parent exists: list it.
+    let err = read
+        .call(json!({"path": "tui/tests/mod.rs"}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(err.message.starts_with("read failed: "), "{}", err.message);
+    assert!(
+        err.message
+            .contains("`tui/tests` contains: core_2.rs, inner/, paste.rs"),
+        "{}",
+        err.message
+    );
+
+    // Parent is missing too: climb to the nearest ancestor that exists.
+    let err = read
+        .call(json!({"path": "tui/nope/deeper/x.rs"}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(
+        err.message.contains("`tui` contains: inner_tests.rs, tests/"),
+        "{}",
+        err.message
+    );
+
+    // Nothing but the root exists: say so in workspace-relative terms.
+    let err = read
+        .call(json!({"path": "package.json"}), &ctx())
+        .await
+        .unwrap_err();
+    assert!(
+        err.message.contains("workspace root contains: tui/"),
+        "{}",
+        err.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn edit_requires_unique_match_unless_replace_all() {
     let (ws, dir) = temp_ws();
     let write = WriteFileTool::new(ws.clone());
     let edit = EditFileTool::new(ws.clone());
     write
-        .call(json!({"path": "f.txt", "content": "a a a"}), &ctx())
+        .call(json!({"path": "f.txt", "content": "a\na\n\na"}), &ctx())
         .await
         .unwrap();
 
-    // Ambiguous single replace is rejected.
+    // Ambiguous single replace is rejected, and the error says where each
+    // occurrence is so the retry can add the right context.
     let err = edit
         .call(json!({"path": "f.txt", "old": "a", "new": "b"}), &ctx())
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("occurs 3 times"));
+    assert!(
+        err.to_string().contains("occurs 3 times (lines 1, 2, 4)"),
+        "{err}"
+    );
 
     // replaceAll succeeds.
     let out = edit
@@ -66,7 +119,29 @@ async fn edit_requires_unique_match_unless_replace_all() {
         .await
         .unwrap();
     assert_eq!(out["replacements"], json!(3));
-    assert_eq!(std::fs::read_to_string(dir.join("f.txt")).unwrap(), "b b b");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f.txt")).unwrap(),
+        "b\nb\n\nb"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn multi_edit_ambiguity_names_the_occurrence_lines() {
+    let (ws, dir) = temp_ws();
+    std::fs::write(dir.join("f.rs"), "fn a() {\n    x\n}\nfn b() {\n    x\n}\n").unwrap();
+    let err = MultiEditTool::new(ws)
+        .call(
+            json!({"edits": [{"path": "f.rs", "old": "    x\n", "new": "    y\n"}]}),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("`old` occurs 2 times (lines 2, 5)"),
+        "{err}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

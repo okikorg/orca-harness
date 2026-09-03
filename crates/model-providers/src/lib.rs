@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod openai;
 pub mod openai_codex;
 pub mod openrouter;
+pub mod vercel;
 
 pub use catalog::{ModelInfo, Pricing, ReasoningCapabilities, SupportedEfforts};
 pub use openai::OpenAiModel;

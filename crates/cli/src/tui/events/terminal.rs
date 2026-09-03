@@ -65,11 +65,14 @@ pub(crate) fn handle_terminal_event(
             }
             return;
         }
-        // A paste is composer input only: an open approval or overlay is
-        // a keystroke menu with nowhere to put the text.
+        // Most overlays are keystroke menus with nowhere to put pasted text.
+        // The API-key overlay is the exception: it is a text field and must
+        // accept bracketed paste just like individually typed characters.
         CtEvent::Paste(text) => {
             if let Some(ask) = app.ask.as_mut() {
                 ask.handle_paste(&text);
+            } else if let Some(Overlay::ApiKey { input, .. }) = app.overlay.as_mut() {
+                input.push_str(&text);
             } else if app.approval.is_none() && app.overlay.is_none() {
                 insert_paste(app, &text);
             }

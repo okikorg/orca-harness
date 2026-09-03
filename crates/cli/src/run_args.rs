@@ -123,6 +123,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let firecrawl_key = firecrawl_key.or_else(|| std::env::var("FIRECRAWL_API_KEY").ok());
     let base_url = base_url.unwrap_or_else(|| match provider {
         Provider::OpenRouter => openrouter::OPENROUTER_BASE_URL.into(),
+        Provider::Vercel => Provider::Vercel.base_url().into(),
         Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL.into(),
         Provider::OpenAi if api_key.is_some() => "https://api.openai.com/v1".into(),
         Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),

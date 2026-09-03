@@ -130,7 +130,7 @@ impl OpenAiModel {
     }
 
     /// Set OpenRouter's normalized nested reasoning parameter.
-    pub(crate) fn nested_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+    pub fn nested_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
         self.nested_reasoning = true;
         self

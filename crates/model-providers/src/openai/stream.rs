@@ -183,6 +183,17 @@ impl ChunkAccumulator {
             });
         }
 
+        // A gateway can occasionally close a syntactically complete stream
+        // without returning content or a tool call. Treat that as incomplete
+        // rather than a successful blank answer so RetryModel can try another
+        // routed provider.
+        if self.text.is_empty() && self.tool_calls.is_empty() {
+            return Err(ModelError::IncompleteResponse {
+                message: "stream completed without content or tool calls".into(),
+                usage: self.usage,
+            });
+        }
+
         if self.tool_calls.is_empty() {
             return Ok(ModelResponse::Final {
                 text: self.text,
@@ -372,6 +383,25 @@ mod tests {
                 assert!(usage.is_none());
             }
             other => panic!("expected Final, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completed_empty_stream_is_retryable_instead_of_a_blank_answer() {
+        let mut acc = ChunkAccumulator::new();
+        apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":0}}"#,
+            ],
+        );
+
+        match acc.finish(true) {
+            Err(ModelError::IncompleteResponse { message, usage }) => {
+                assert!(message.contains("without content or tool calls"));
+                assert_eq!(usage.expect("usage retained").output_tokens, 0);
+            }
+            other => panic!("expected retryable incomplete response, got {other:?}"),
         }
     }
 

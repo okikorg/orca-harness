@@ -30,7 +30,7 @@ pub(crate) async fn entrypoint() -> ExitCode {
         Some(name) => view::set_theme(name),
         None => {
             eprintln!(
-                "unknown theme: {} (expected default, mono, dracula, solarized-dark, one-dark, monokai, or nord)",
+                "unknown theme: {} (expected default, mono, dracula, solarized-dark, one-dark, monokai, nord, or orca)",
                 cfg.theme
             );
             return ExitCode::FAILURE;

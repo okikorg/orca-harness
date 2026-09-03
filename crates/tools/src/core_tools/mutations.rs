@@ -289,8 +289,9 @@ impl Tool for MultiEditTool {
                     }
                     Err(count) => {
                         return Err(ToolError::msg(format!(
-                            "edit {index} for {}: `old` occurs {count} times; set replaceAll or make it unique",
-                            spec.path
+                            "edit {index} for {}: `old` occurs {count} times ({}); set replaceAll or make it unique",
+                            spec.path,
+                            super::files::occurrence_lines(content, old)
                         )))
                     }
                 },
@@ -372,7 +373,7 @@ impl Tool for ApplyPatchTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "apply_patch".into(),
-            description: "Apply one validated multi-file patch using `*** Begin Patch` with `*** Add File`, `*** Update File`, and `*** Delete File` sections. Update hunks start with `@@`; context, added, and removed lines start with space, `+`, and `-`.".into(),
+            description: "Apply one validated multi-file patch using `*** Begin Patch` with `*** Add File`, `*** Update File`, and `*** Delete File` sections. Update hunks start with `@@`; context, added, and removed lines start with space, `+`, and `-`. Hunks apply in order: a file's first hunk must match uniquely, and each later hunk takes the nearest match after the previous one. A hunk with only context lines is a position anchor: it changes nothing and scopes the next hunk to after its first match.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {

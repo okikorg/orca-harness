@@ -87,8 +87,8 @@ OPTIONS:
   --base-url URL     OpenAI-compatible endpoint (env ORCA_BASE_URL;
                      default: api.openai.com if OPENAI_API_KEY is set,
                      otherwise http://localhost:11434/v1)
-  --api-key KEY      bearer token (env OPENAI_API_KEY, or
-                     OPENROUTER_API_KEY with --openrouter)
+  --api-key KEY      bearer token (provider environment variable, including
+                     AI_GATEWAY_API_KEY for Vercel AI Gateway)
   --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
                      web_search and web_crawl tools
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
@@ -107,7 +107,7 @@ OPTIONS:
   --subagent-depth N subagent nesting levels, 1-5 (env ORCA_SUBAGENT_DEPTH;
                      default 1; /subagents adjusts it live in the TUI)
   --theme NAME       theme: default, mono, dracula,
-                     solarized-dark, one-dark, monokai, nord
+                     solarized-dark, one-dark, monokai, nord, orca
   --plan             start in plan mode: read-only tools, and docs/plan/
                      the only writable directory — the agent decides
                      whether to write a plan (/mode opens a picker)
@@ -128,7 +128,7 @@ OPTIONS:
   -h, --help         show this help
   -V, --version      print the version and exit
 
-In the TUI, /provider selects local, OpenAI API, OpenRouter, or the
+In the TUI, /provider selects local, OpenAI API, OpenRouter, Vercel AI Gateway, or the
 OpenAI Codex ChatGPT-subscription provider. Selecting openai-codex starts
 Orcacode's device login; an existing official Codex login is also imported.
 No API key is required. /models [filter] opens the model catalog,
@@ -374,6 +374,9 @@ impl Endpoint {
                 ))
                 .await
             }
+            Provider::Vercel => {
+                orca_harness_model_providers::vercel::list_models(self.api_key.as_deref()).await
+            }
             Provider::OpenRouter | Provider::OpenAi | Provider::Local => {
                 openrouter::list_models(&self.base_url, self.api_key.as_deref()).await
             }
@@ -414,7 +417,7 @@ impl Endpoint {
                 }
                 Arc::new(model)
             }
-            Provider::OpenAi | Provider::Local => {
+            Provider::Vercel | Provider::OpenAi | Provider::Local => {
                 let mut model = OpenAiModel::new(self.model.as_str())
                     .base_url(self.base_url.clone())
                     .user_agent(ORCACODE_USER_AGENT);
@@ -422,7 +425,11 @@ impl Endpoint {
                     model = model.api_key(key.clone());
                 }
                 if let Some(effort) = &self.reasoning_effort {
-                    model = model.reasoning_effort(effort.clone());
+                    model = if self.provider == Provider::Vercel {
+                        model.nested_reasoning_effort(effort.clone())
+                    } else {
+                        model.reasoning_effort(effort.clone())
+                    };
                 }
                 if let Some(max_tokens) = self.max_output_tokens {
                     model = model.max_tokens(max_tokens);
@@ -490,7 +497,7 @@ fn spawn_window_probe(
     let endpoint = endpoint.clone();
     tokio::spawn(async move {
         let window = match endpoint.provider {
-            Provider::OpenAiCodex | Provider::OpenRouter => endpoint
+            Provider::OpenAiCodex | Provider::OpenRouter | Provider::Vercel => endpoint
                 .list_models()
                 .await
                 .ok()

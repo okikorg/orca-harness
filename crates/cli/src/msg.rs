@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     OpenRouter,
+    Vercel,
     OpenAi,
     OpenAiCodex,
     Local,
@@ -24,8 +25,9 @@ pub enum ProviderAuth {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 4] = [
+    pub const ALL: [Provider; 5] = [
         Provider::OpenRouter,
+        Provider::Vercel,
         Provider::OpenAi,
         Provider::OpenAiCodex,
         Provider::Local,
@@ -34,6 +36,7 @@ impl Provider {
     pub fn label(self) -> &'static str {
         match self {
             Provider::OpenRouter => "openrouter",
+            Provider::Vercel => "vercel",
             Provider::OpenAi => "openai",
             Provider::OpenAiCodex => "openai-codex",
             Provider::Local => "local",
@@ -48,6 +51,7 @@ impl Provider {
     pub fn base_url(self) -> &'static str {
         match self {
             Provider::OpenRouter => orca_harness_model_providers::openrouter::OPENROUTER_BASE_URL,
+            Provider::Vercel => orca_harness_model_providers::vercel::VERCEL_GATEWAY_BASE_URL,
             Provider::OpenAi => "https://api.openai.com/v1",
             Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL,
             Provider::Local => "http://localhost:11434/v1",
@@ -58,6 +62,9 @@ impl Provider {
         match self {
             Provider::OpenRouter => ProviderAuth::ApiKey {
                 environment: "OPENROUTER_API_KEY",
+            },
+            Provider::Vercel => ProviderAuth::ApiKey {
+                environment: "AI_GATEWAY_API_KEY",
             },
             Provider::OpenAi => ProviderAuth::ApiKey {
                 environment: "OPENAI_API_KEY",
@@ -97,17 +104,40 @@ impl Provider {
     pub fn supports_images(self) -> bool {
         matches!(
             self,
-            Provider::OpenRouter | Provider::OpenAi | Provider::OpenAiCodex
+            Provider::OpenRouter | Provider::Vercel | Provider::OpenAi | Provider::OpenAiCodex
         )
     }
 
     pub fn default_model(self) -> &'static str {
         match self {
             Provider::OpenRouter => "openrouter/auto",
+            Provider::Vercel => "openai/gpt-4o-mini",
             Provider::OpenAi => "gpt-4o-mini",
             Provider::OpenAiCodex => "gpt-5.4",
             Provider::Local => "qwen3.5:9b",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Provider, ProviderAuth};
+
+    #[test]
+    fn vercel_gateway_provider_has_expected_configuration() {
+        assert_eq!(Provider::from_label("vercel"), Some(Provider::Vercel));
+        assert_eq!(
+            Provider::Vercel.base_url(),
+            "https://ai-gateway.vercel.sh/v1"
+        );
+        assert_eq!(
+            Provider::Vercel.auth(),
+            ProviderAuth::ApiKey {
+                environment: "AI_GATEWAY_API_KEY"
+            }
+        );
+        assert!(Provider::Vercel.supports_images());
+        assert_eq!(Provider::Vercel.default_model(), "openai/gpt-4o-mini");
     }
 }
 

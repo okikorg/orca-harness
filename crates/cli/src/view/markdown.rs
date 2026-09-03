@@ -26,10 +26,11 @@ pub enum ThemeName {
     OneDark,
     Monokai,
     Nord,
+    Orca,
 }
 
 impl ThemeName {
-    pub const ALL: [ThemeName; 7] = [
+    pub const ALL: [ThemeName; 8] = [
         Self::Default,
         Self::Mono,
         Self::Dracula,
@@ -37,6 +38,7 @@ impl ThemeName {
         Self::OneDark,
         Self::Monokai,
         Self::Nord,
+        Self::Orca,
     ];
 
     /// The CLI-facing identifier, as accepted by `from_str`.
@@ -49,6 +51,7 @@ impl ThemeName {
             Self::OneDark => "one-dark",
             Self::Monokai => "monokai",
             Self::Nord => "nord",
+            Self::Orca => "orca",
         }
     }
 
@@ -61,6 +64,7 @@ impl ThemeName {
             "one-dark" | "onedark" => Some(Self::OneDark),
             "monokai" => Some(Self::Monokai),
             "nord" => Some(Self::Nord),
+            "orca" => Some(Self::Orca),
             _ => None,
         }
     }
@@ -74,6 +78,7 @@ impl ThemeName {
             Self::OneDark => "One Dark",
             Self::Monokai => "Monokai",
             Self::Nord => "Nord",
+            Self::Orca => "Orca",
         }
     }
 }
@@ -135,6 +140,26 @@ pub fn default_theme() -> Theme {
         error: Style::default().fg(ERROR),
         success: Style::default().fg(Color::Green),
         code: Style::default().fg(PRIMARY),
+    }
+}
+
+/// Orca's signature palette: paper-white type, graphite chrome, and a single
+/// mint signal for active work. It intentionally stays restrained like the
+/// product surfaces shown in the Orca visual system.
+pub fn orca_theme() -> Theme {
+    const GRAPHITE: Color = Color::Rgb(127, 127, 127);
+    const MINT: Color = Color::Rgb(89, 224, 154);
+    const PAPER: Color = Color::Rgb(244, 244, 244);
+
+    Theme {
+        dim: Style::default().fg(GRAPHITE),
+        accent: Style::default().fg(MINT),
+        strong: Style::default().fg(PAPER).add_modifier(Modifier::BOLD),
+        select: Style::default().fg(PAPER),
+        warn: Style::default().fg(PAPER).add_modifier(Modifier::BOLD),
+        error: Style::default().fg(Color::Rgb(224, 128, 128)),
+        success: Style::default().fg(MINT),
+        code: Style::default().fg(PAPER),
     }
 }
 
@@ -237,6 +262,7 @@ pub fn theme_for(name: ThemeName) -> Theme {
         ThemeName::OneDark => one_dark_theme(),
         ThemeName::Monokai => monokai_theme(),
         ThemeName::Nord => nord_theme(),
+        ThemeName::Orca => orca_theme(),
     }
 }
 

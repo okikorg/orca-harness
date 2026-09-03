@@ -11,8 +11,8 @@ use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{Agent, CancellationToken, Message, ModelResponse, Tool, ToolContext};
 use orca_harness_tools::{
     core_tools, BackgroundStats, CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool,
-    FileGuard, FileInfoTool, GlobTool, GrepTool, ListDirTool, ProcessTool, ReadFileTool,
-    RenameFileTool, ShellTool, Workspace, WriteFileTool,
+    FileGuard, FileInfoTool, GlobTool, GrepTool, ListDirTool, MultiEditTool, ProcessTool,
+    ReadFileTool, RenameFileTool, ShellTool, Workspace, WriteFileTool,
 };
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);

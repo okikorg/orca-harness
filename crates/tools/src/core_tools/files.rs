@@ -146,6 +146,89 @@ fn take_string_arg(input: &mut Value, key: &str) -> Result<String, ToolError> {
     }
 }
 
+/// Entries shown when a read misses. Enough to cover a typical source
+/// directory without turning the error into a listing.
+const NOT_FOUND_HINT_ENTRIES: usize = 40;
+
+/// Occurrences named when an edit is ambiguous. Past this the model is
+/// better served by `replaceAll` than by a list.
+pub(super) const AMBIGUOUS_LINES_SHOWN: usize = 8;
+
+/// `a, b, c` for short lists, `a, b, c (7 more)` past `cap`. Error hints
+/// list things for the model to choose from; the tail count says the
+/// list was cut without pretending it is complete.
+pub(super) fn capped_list<T: std::fmt::Display>(items: &[T], cap: usize) -> String {
+    let shown = items.len().min(cap);
+    let mut rendered = items[..shown]
+        .iter()
+        .map(T::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > shown {
+        rendered.push_str(&format!(" ({} more)", items.len() - shown));
+    }
+    rendered
+}
+
+/// The 1-based line of each non-overlapping occurrence of `needle`,
+/// rendered for an ambiguity error (`lines 12, 40, 71`). An edit refused
+/// for matching more than once should say where, so the retry can pick
+/// the right one and add context from around it instead of guessing.
+pub(super) fn occurrence_lines(content: &str, needle: &str) -> String {
+    // One pass: count newlines only between consecutive matches.
+    let mut line = 1;
+    let mut scanned = 0;
+    let lines: Vec<usize> = content
+        .match_indices(needle)
+        .map(|(offset, _)| {
+            line += content[scanned..offset].matches('\n').count();
+            scanned = offset;
+            line
+        })
+        .collect();
+    format!("lines {}", capped_list(&lines, AMBIGUOUS_LINES_SHOWN))
+}
+
+/// Turn a not-found read into a redirect. A missing path is almost always
+/// a guess at a convention the tree does not follow (`tests/mod.rs` where
+/// tests are `include!`d), so name the nearest existing ancestor and what
+/// it holds: the next call can then be right instead of another guess.
+async fn not_found_hint(ws: &Workspace, path: &Path) -> Option<String> {
+    let mut dir = path.parent()?;
+    loop {
+        if fs::metadata(dir).await.is_ok_and(|meta| meta.is_dir()) {
+            break;
+        }
+        if dir == ws.root() {
+            return None;
+        }
+        dir = dir.parent()?;
+    }
+    let mut entries = fs::read_dir(dir).await.ok()?;
+    let mut names = Vec::new();
+    while let Some(entry) = entries.next_entry().await.ok()? {
+        let mut name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type().await.is_ok_and(|kind| kind.is_dir()) {
+            name.push('/');
+        }
+        names.push(name);
+    }
+    names.sort();
+    let rel = ws.display_rel(dir).to_string_lossy();
+    let place = if rel.is_empty() {
+        "the workspace root".to_owned()
+    } else {
+        format!("nearest existing directory `{rel}`")
+    };
+    if names.is_empty() {
+        return Some(format!("; {place} is empty"));
+    }
+    Some(format!(
+        "; {place} contains: {}",
+        capped_list(&names, NOT_FOUND_HINT_ENTRIES)
+    ))
+}
+
 /// `read_file` — return a text file's contents.
 pub struct ReadFileTool {
     ws: Workspace,
@@ -202,9 +285,18 @@ impl Tool for ReadFileTool {
             Some(_) => fs::metadata(&path).await.ok().map(|meta| Stamp::of(&meta)),
             None => None,
         };
-        let bytes = fs::read(&path)
-            .await
-            .map_err(|e| ToolError::msg(format!("read failed: {e}")))?;
+        let bytes = match fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let mut message = format!("read failed: {e}");
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    if let Some(hint) = not_found_hint(&self.ws, &path).await {
+                        message.push_str(&hint);
+                    }
+                }
+                return Err(ToolError::msg(message));
+            }
+        };
         if let (Some(guard), Some(stamp)) = (&self.guard, stamp) {
             guard.record(&path, stamp);
         }
@@ -368,7 +460,8 @@ impl Tool for EditFileTool {
         }
         if count > 1 && !replace_all {
             return Err(ToolError::msg(format!(
-                "`old` occurs {count} times; pass replaceAll or make it unique"
+                "`old` occurs {count} times ({}); pass replaceAll or make it unique",
+                occurrence_lines(&content, old)
             )));
         }
         let updated = if replace_all {
@@ -444,7 +537,7 @@ impl Tool for ListDirTool {
 // `items_after_test_module` treats anything below it as misplaced.
 #[cfg(test)]
 mod tests {
-    use super::{take_string_arg, ListDirTool, ReadFileTool};
+    use super::{capped_list, occurrence_lines, take_string_arg, ListDirTool, ReadFileTool};
     use crate::Workspace;
     use orca_harness_core::Tool;
     use serde_json::json;
@@ -482,5 +575,20 @@ mod tests {
     fn take_string_arg_rejects_missing_or_non_string() {
         assert!(take_string_arg(&mut json!({}), "content").is_err());
         assert!(take_string_arg(&mut json!({"content": 7}), "content").is_err());
+    }
+
+    #[test]
+    fn capped_list_cuts_with_a_count() {
+        assert_eq!(capped_list(&[1, 2, 3], 3), "1, 2, 3");
+        assert_eq!(capped_list(&[1, 2, 3, 4, 5], 2), "1, 2 (3 more)");
+    }
+
+    #[test]
+    fn occurrence_lines_are_one_based_and_capped() {
+        assert_eq!(occurrence_lines("x\nx\n\nx", "x"), "lines 1, 2, 4");
+        assert_eq!(
+            occurrence_lines(&"x\n".repeat(10), "x"),
+            "lines 1, 2, 3, 4, 5, 6, 7, 8 (2 more)"
+        );
     }
 }
