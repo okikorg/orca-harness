@@ -127,9 +127,16 @@ pub fn discover(roots: &[SkillRoot]) -> Discovered {
         // read_dir order is filesystem order; sort so the catalog — and
         // therefore the tool schema, and therefore the prompt prefix —
         // is stable between runs.
+        //
+        // The entry type comes with the listing; only a symlink (a skill
+        // folder linked in from a dotfiles repo, say) needs a `stat` to
+        // learn what it points at.
         let mut dirs: Vec<PathBuf> = entries
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().is_dir())
+            .filter(|entry| match entry.file_type() {
+                Ok(kind) if !kind.is_symlink() => kind.is_dir(),
+                _ => entry.path().is_dir(),
+            })
             .map(|entry| entry.path())
             .collect();
         dirs.sort();
@@ -165,8 +172,9 @@ pub fn discover(roots: &[SkillRoot]) -> Discovered {
 }
 
 fn load(dir: &Path, file: &Path, dir_name: &str, root: &str) -> Result<Skill, String> {
-    let bytes = fs::metadata(file).map(|meta| meta.len()).unwrap_or(0);
     let text = fs::read_to_string(file).map_err(|e| format!("unreadable: {e}"))?;
+    // Read whole, so the text's length is the file's size: no `stat`.
+    let bytes = text.len() as u64;
     let front = parse_frontmatter(&text)?;
     let name = front.name.unwrap_or_else(|| dir_name.to_string());
     validate_name(&name)?;
@@ -415,6 +423,26 @@ mod tests {
         assert!(discover(&roots(&temp.0.join("nowhere"), None, None))
             .skills
             .is_empty());
+    }
+
+    /// A skill folder that is a symlink (linked in from a dotfiles repo)
+    /// is a skill folder; a symlink to a file is not.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_skill_folders_are_discovered() {
+        let temp = Temp::new("symlink");
+        let ws = temp.0.join("repo");
+        temp.write("elsewhere/linked/SKILL.md", &skill_md("linked"));
+        temp.write("elsewhere/stray.md", "not a folder\n");
+        let root = ws.join(".orca/skills");
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(temp.0.join("elsewhere/linked"), root.join("linked")).unwrap();
+        std::os::unix::fs::symlink(temp.0.join("elsewhere/stray.md"), root.join("stray")).unwrap();
+
+        let found = discover(&roots(&ws, None, None));
+        let names: Vec<&str> = found.skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["linked"]);
+        assert!(found.failures.is_empty());
     }
 
     #[test]

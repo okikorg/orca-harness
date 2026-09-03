@@ -13,6 +13,13 @@
 //! round-trips — model invocation, context appends (assistant tool calls +
 //! tool results), concurrent execution, and extension hooks — as a team
 //! would actually run it, not a one-shot drain.
+//!
+//! No tool here touches a timer. Tokio's timer wheel rounds every
+//! deadline up to its 1ms tick, so even `sleep(Duration::ZERO)` costs a
+//! park-and-wake of about a millisecond — three hundred times the harness
+//! round-trip it was meant to expose — and its jitter is the OS's, not
+//! ours. A tool either completes on its first poll or suspends once and
+//! is rescheduled, which is the shape of real I/O without the clock.
 
 use std::sync::atomic::AtomicUsize;
 
@@ -59,17 +66,26 @@ impl Model for ReproducingModel {
     }
 }
 
-/// A tool with real (tiny) work and a per-call latency mask, so the
-/// harness overhead is measured against a latency curve rather than
-/// against zero. `latency` lets us show what fan-out buys us: `n`
-/// serialized `latency`-length calls collapse to ~`latency` total.
-fn fetch(latency: std::time::Duration) -> FnTool {
+/// How a benched tool's future behaves.
+#[derive(Clone, Copy)]
+enum Work {
+    /// Ready on the first poll: the floor, pure harness overhead.
+    Immediate,
+    /// Returns `Pending` once and is woken again, so every call really
+    /// crosses the scheduler — spawn, park, wake, join — the way an I/O
+    /// tool does.
+    Suspend,
+}
+
+fn fetch(work: Work) -> FnTool {
     FnTool::new(
         "fetch",
         "Fetch a data source concurrently",
         json!({"type": "object", "properties": {"source": {"type": "integer"}}}),
         move |_input, _ctx| async move {
-            tokio::time::sleep(latency).await;
+            if let Work::Suspend = work {
+                tokio::task::yield_now().await;
+            }
             Ok(Value::Null)
         },
     )
@@ -167,11 +183,11 @@ fn script(n: usize) -> Vec<ModelResponse> {
     ]
 }
 
-fn build_agent(latency: std::time::Duration, n: usize) -> (Agent<ReproducingModel>, String) {
+fn build_agent(work: Work, n: usize) -> (Agent<ReproducingModel>, String) {
     (
         Agent::new(ReproducingModel::new(script(n)))
             .system_prompt("You are a concurrent fetcher.")
-            .tool(fetch(latency))
+            .tool(fetch(work))
             .extension(BusyExtension)
             .limits(Limits {
                 max_parallel_tools: 64,
@@ -185,30 +201,41 @@ fn bench_full_loop(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     // Full agent round-trip across a single parallel tool batch at
-    // increasing fan-out, with zero tool latency, so we measure pure
-    // harness overhead on the model→tools→model path.
+    // increasing fan-out, with tools that complete on their first poll,
+    // so we measure pure harness overhead on the model→tools→model path.
     let mut group = c.benchmark_group("harness_loop");
     for n in [1usize, 4, 16, 64] {
-        let (agent, prompt) = build_agent(std::time::Duration::ZERO, n);
+        let (agent, prompt) = build_agent(Work::Immediate, n);
         group.bench_with_input(BenchmarkId::new("round_trip_n_calls", n), &n, |b, &_n| {
             b.to_async(&rt).iter(|| agent.run(&prompt));
         });
     }
     group.finish();
 
-    // Fan-out with real per-call latency: show that `latency`-length work
-    // spread across `n` parallel calls collapses to ~`latency` + harness
-    // overhead — the headline property of the kernel.
-    let latency = std::time::Duration::from_micros(200);
+    // The same round trip with tools that suspend: every call now pays
+    // the scheduler hand-off an I/O tool pays, and the whole batch has to
+    // be woken and joined. This is the fan-out cost the kernel is judged
+    // on; the wall-clock collapse of `n` slow calls into one is asserted
+    // by the concurrency tests and measured by the `fanout_probe` example.
     let mut group = c.benchmark_group("harness_loop_fanout");
     for n in [1usize, 8, 64] {
-        let (agent, prompt) = build_agent(latency, n);
-        group.bench_with_input(BenchmarkId::new("parallel_200us_calls", n), &n, |b, &_n| {
+        let (agent, prompt) = build_agent(Work::Suspend, n);
+        group.bench_with_input(BenchmarkId::new("suspending_calls", n), &n, |b, &_n| {
             b.to_async(&rt).iter(|| agent.run(&prompt))
         });
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_full_loop);
+/// Same reasoning as `dispatch.rs`: 1% is under the run-to-run drift of
+/// these microsecond-scale numbers, so unchanged code would be flagged.
+fn config() -> Criterion {
+    Criterion::default().noise_threshold(0.03)
+}
+
+criterion_group! {
+    name = benches;
+    config = config();
+    targets = bench_full_loop
+}
 criterion_main!(benches);

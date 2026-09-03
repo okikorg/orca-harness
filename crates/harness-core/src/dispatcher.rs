@@ -42,6 +42,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::task::Poll;
 
 use serde_json::Value;
 use tokio::sync::{RwLock, Semaphore};
@@ -336,13 +337,20 @@ impl SharedExecution {
             cancellation: self.cancellation.clone(),
             deadline: self.deadline,
         };
-        let next = Next {
-            chain: &self.around_chain,
-            call,
-            tool: job.tool.as_ref(),
-            ctx: &ctx,
+        // With no `around_tool` wrapper the continuation would only box
+        // the tool's own (already boxed) future and call it; go direct.
+        let outcome = if self.around_chain.is_empty() {
+            self.guarded(job.tool.call(job.input, &ctx)).await
+        } else {
+            let next = Next {
+                chain: &self.around_chain,
+                call,
+                tool: job.tool.as_ref(),
+                ctx: &ctx,
+            };
+            self.guarded(next.run(job.input)).await
         };
-        let result = match self.guarded(next.run(job.input)).await {
+        let result = match outcome {
             Ok(Ok(output)) => ToolResult::ok(call, output),
             Ok(Err(err)) => ToolResult::error(call, err.message),
             Err(err) => ToolResult::error(call, interrupted(&err, "during execution")),
@@ -359,7 +367,25 @@ impl SharedExecution {
     }
 
     /// Race a future against cancellation and the run deadline.
+    ///
+    /// Waiting on the token means registering (and later removing) a
+    /// waiter on a mutex every job in the batch shares, which is where a
+    /// wide fan-out of cheap tools spends its time. So the first poll is
+    /// optimistic: a future that is ready straight away never touches the
+    /// waiter list. Ordering is preserved — a token already cancelled
+    /// wins before the future is polled at all, exactly as the biased
+    /// select below would decide, and the deadline race polls the work
+    /// first too. Anything still pending falls through to that select.
     async fn guarded<F: Future>(&self, fut: F) -> Result<F::Output, HarnessError> {
+        let mut fut = std::pin::pin!(fut);
+        if self.cancellation.is_cancelled() {
+            return Err(HarnessError::Cancelled);
+        }
+        if let Poll::Ready(out) =
+            std::future::poll_fn(|cx| Poll::Ready(fut.as_mut().poll(cx))).await
+        {
+            return Ok(out);
+        }
         match self.deadline {
             None => {
                 tokio::select! {
