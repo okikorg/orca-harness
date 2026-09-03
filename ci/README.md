@@ -4,17 +4,20 @@ Scripts and workflows for orca-harness.
 
 ## Releasing orcacode
 
-`ci/release.sh` runs the release in the only order that keeps GitHub the
-source of truth: notes, then the version commit, then the tag. Each step
-checks the one before it.
+The release runs in the only order that keeps GitHub the source of truth:
+notes, then the version commit, then the tag. The Makefile wraps
+`ci/release.sh`, and each step checks the one before it.
 
 ```sh
-ci/release.sh notes 0.3.0      # drafts docs/releases/0.3.0.md from the commits since the last tag
+make notes VERSION=0.3.0       # drafts docs/releases/0.3.0.md from the commits since the last tag
 $EDITOR docs/releases/0.3.0.md # write the highlights; the draft groups commits by type
-ci/release.sh prepare 0.3.0    # bumps [workspace.package] version, refreshes Cargo.lock, commits
-git push origin main
-ci/release.sh tag 0.3.0        # tags orcacode-v0.3.0 and pushes it
+make release VERSION=0.3.0     # prepare (bump, Cargo.lock, commit), push, tag
 ```
+
+`make release` is `make prepare`, `git push origin HEAD`, and `make tag`;
+run them one at a time when you want to look between steps. `make help`
+lists everything, including the development targets (`check`, `test`,
+`size`, `bench`) that mirror CI.
 
 Pushing the tag runs `.github/workflows/release-orcacode.yml`: it builds the
 five targets, writes `SHA256SUMS`, creates the GitHub Release with
@@ -35,8 +38,8 @@ On a Mac with `zig`, `cargo-zigbuild`, and the five rust targets installed
 release can be cut by hand after `tag`:
 
 ```sh
-ci/release.sh build 0.3.0      # all five targets into dist/release/0.3.0 plus SHA256SUMS
-ci/release.sh publish 0.3.0    # GitHub Release from dist, then the host if RELEASES_ADMIN_TOKEN is set
+make dist VERSION=0.3.0        # all five targets into dist/release/0.3.0 plus SHA256SUMS
+make publish VERSION=0.3.0     # GitHub Release from dist, then the host if RELEASES_ADMIN_TOKEN is set
 ```
 
 `publish` creates the GitHub Release first and pushes to the host second,

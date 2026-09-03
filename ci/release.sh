@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# orcacode release commands. Run from anywhere inside the repository.
+# orcacode release commands. Run from anywhere inside the repository, or
+# through the Makefile: make notes VERSION=0.3.0, make release VERSION=0.3.0.
 #
 #   ci/release.sh notes   <version>   draft docs/releases/<version>.md from the commits since the last tag
 #   ci/release.sh prepare <version>   bump the workspace version, refresh Cargo.lock, commit with the notes
@@ -30,7 +31,7 @@ ASSETS=(
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
 die() { printf 'release: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
 
