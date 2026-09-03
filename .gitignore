@@ -27,3 +27,6 @@ __pycache__/
 docs/external/_book/
 docs/external/node_modules/
 .empryo
+
+# Local release archives (ci/release.sh build)
+/dist/
