@@ -139,6 +139,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // Interactive: worker task owns the agent; UI owns the terminal.
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    crate::update::check_in_background(ui_tx.clone());
 
     // Session warnings surface as transcript notices; recording failures
     // must be visible but never fatal mid-run.

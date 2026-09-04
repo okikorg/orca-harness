@@ -205,6 +205,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: false,
     },
     CommandSpec {
+        name: "changelog",
+        description: "show latest release changes, or full history with `full`",
+        category: "General",
+        takes_args: true,
+    },
+    CommandSpec {
         name: "clear",
         description: "preserve this session, start fresh, and stop background work",
         category: "Session",
