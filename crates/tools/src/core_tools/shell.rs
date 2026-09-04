@@ -121,7 +121,7 @@ impl ShellTool {
     pub fn new(executor: Executor) -> Self {
         Self {
             executor,
-            timeout: Some(Duration::from_secs(120)),
+            timeout: None,
             max_output_bytes: 64 * 1024,
             working_dir: None,
         }
@@ -261,5 +261,15 @@ impl Tool for ShellTool {
             "stdoutTruncated": stdout_truncated,
             "stderrTruncated": stderr_truncated,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_has_no_default_timeout() {
+        assert_eq!(ShellTool::local().timeout, None);
     }
 }
