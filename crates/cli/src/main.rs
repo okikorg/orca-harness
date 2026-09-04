@@ -22,6 +22,7 @@ mod run_args;
 mod skills;
 mod subagent_models;
 mod tui;
+mod update;
 mod view;
 
 use std::path::PathBuf;
@@ -79,6 +80,7 @@ orcacode — terminal host for Orca Harness
 USAGE:
   orcacode [OPTIONS]                interactive session
   orcacode [OPTIONS] -p \"prompt\"    headless single run (streams to stdout)
+  orcacode update                   install the latest release
   orcacode plugin <COMMAND>         manage Agent Plugin packages
 
 OPTIONS:
@@ -126,7 +128,7 @@ OPTIONS:
                      (implied by --yolo)
   -p, --prompt TEXT  headless prompt
   -h, --help         show this help
-  -V, --version      print the version and exit
+  -v, -V, --version  print the version and exit
 
 In the TUI, /provider selects local, OpenAI API, OpenRouter, Vercel AI Gateway, or the
 OpenAI Codex ChatGPT-subscription provider. Selecting openai-codex starts
@@ -189,6 +191,7 @@ pub struct Config {
 
 pub(crate) enum Invocation {
     Run(Box<Config>),
+    Update,
     Plugin(plugin::PluginCommand),
 }
 
@@ -220,6 +223,9 @@ impl Config {
 
 fn parse_invocation() -> Result<Invocation, String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.as_slice() == ["update"] {
+        return Ok(Invocation::Update);
+    }
     if let Some(tail) = plugin::invocation_tail(&args) {
         return plugin::parse(tail).map(Invocation::Plugin);
     }
