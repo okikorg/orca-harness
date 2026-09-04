@@ -14,6 +14,15 @@ pub(crate) async fn entrypoint() -> ExitCode {
         }
     };
     let cfg = match invocation {
+        Invocation::Update => {
+            return match crate::update::run() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Invocation::Plugin(command) => {
             return match crate::plugin::run(command).await {
                 Ok(()) => ExitCode::SUCCESS,
