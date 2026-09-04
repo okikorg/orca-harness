@@ -143,6 +143,70 @@ async fn deadline_preserves_completed_sibling_results() {
     );
 }
 
+/// A token that is already cancelled when a job is first polled must keep
+/// the tool from running at all, even a tool that would complete on that
+/// very poll. The dispatcher's fast path for immediately-ready tools skips
+/// registering a cancellation waiter; it must not skip this check.
+#[tokio::test(flavor = "multi_thread")]
+async fn already_cancelled_token_never_runs_an_immediate_tool() {
+    use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
+
+    let ran = Arc::new(AtomicBool::new(false));
+    let immediate = {
+        let ran = ran.clone();
+        FnTool::new(
+            "immediate",
+            "completes on its first poll",
+            json!({"type": "object"}),
+            move |_input, _ctx| {
+                let ran = ran.clone();
+                async move {
+                    ran.store(true, Ordering::SeqCst);
+                    Ok(json!({"ok": true}))
+                }
+            },
+        )
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(immediate));
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let results = timeout(
+        RUN_TIMEOUT,
+        Dispatcher::new().execute(
+            (0..4)
+                .map(|i| call(&format!("call_{i}"), "immediate", json!({})))
+                .collect(),
+            &tools,
+            &ExtensionRegistry::new(),
+            &token,
+            None,
+            16,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "a cancelled run must not start tools"
+    );
+    assert_eq!(results.len(), 4);
+    for result in &results {
+        assert!(result.is_error, "got: {result:?}");
+        assert!(
+            result.output["error"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled"),
+            "got: {result:?}"
+        );
+    }
+}
+
 /// Duplicate or empty call ids violate call/result pairing and are
 /// rejected as InvalidToolCall.
 #[tokio::test(flavor = "multi_thread")]

@@ -210,5 +210,17 @@ fn bench_memory(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_memory);
+/// SQLite through the page cache, same reasoning as `skills.rs`: the
+/// raw-SQL control benches, which exercise no code of ours, drift ±1–2%
+/// between runs and the row-delete benches ±10%, which Criterion's
+/// default 1% threshold reports as regressions of unchanged code.
+fn config() -> Criterion {
+    Criterion::default().noise_threshold(0.05)
+}
+
+criterion_group! {
+    name = benches;
+    config = config();
+    targets = bench_memory
+}
 criterion_main!(benches);

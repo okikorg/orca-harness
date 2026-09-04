@@ -212,12 +212,17 @@ fn bench_cold_paths(c: &mut Criterion) {
     assert!(!path.join("home/.claude/skills").exists());
 }
 
-criterion_group!(
-    benches,
-    bench_discovery,
-    bench_schema,
-    bench_load,
-    bench_unload,
-    bench_cold_paths
-);
+/// These are filesystem benches, and the page cache and APFS have their
+/// own ideas: unchanged discovery code has measured ±3.5% between runs,
+/// which Criterion's default 1% threshold reports as a regression. A
+/// real change on these paths is far larger (the last one was +91%).
+fn config() -> Criterion {
+    Criterion::default().noise_threshold(0.05)
+}
+
+criterion_group! {
+    name = benches;
+    config = config();
+    targets = bench_discovery, bench_schema, bench_load, bench_unload, bench_cold_paths
+}
 criterion_main!(benches);

@@ -243,31 +243,50 @@ fn floor_boundary(text: &str, mut index: usize) -> usize {
 /// Bounded twice over — `MAX_RESOURCES` entries and `MAX_DEPTH` levels —
 /// because a skill folder can contain anything, including a vendored
 /// tree, and this walk runs inline on the call.
+///
+/// Only a symlink can point out of the folder, so only symlinks are
+/// resolved and checked against the folder's real path; a plain file or
+/// directory is inside by construction. That keeps the common case to
+/// one `read_dir` — the entry type comes with the entry — instead of a
+/// `realpath` per entry, which walks every component of the path.
 fn resources_of(dir: &Path) -> Vec<String> {
     const MAX_DEPTH: usize = 3;
-    let Ok(base) = dir.canonicalize() else {
-        return Vec::new();
-    };
+    let mut base: Option<PathBuf> = None;
     let mut out = Vec::new();
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
     while let Some((current, depth)) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&current) else {
             continue;
         };
-        let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
-        paths.sort();
-        for path in paths {
+        let mut found: Vec<(PathBuf, std::fs::FileType)> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_type().ok().map(|kind| (e.path(), kind)))
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        for (path, kind) in found {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name.starts_with('.') {
                 continue;
             }
-            let Ok(resolved) = path.canonicalize() else {
-                continue;
+            let is_dir = if kind.is_symlink() {
+                let base = match &base {
+                    Some(base) => base,
+                    None => match dir.canonicalize() {
+                        Ok(resolved) => base.insert(resolved),
+                        Err(_) => return Vec::new(),
+                    },
+                };
+                let Ok(resolved) = path.canonicalize() else {
+                    continue;
+                };
+                if !resolved.starts_with(base) {
+                    continue;
+                }
+                resolved.is_dir()
+            } else {
+                kind.is_dir()
             };
-            if !resolved.starts_with(&base) {
-                continue;
-            }
-            if resolved.is_dir() {
+            if is_dir {
                 if depth + 1 < MAX_DEPTH {
                     stack.push((path, depth + 1));
                 }
@@ -467,6 +486,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(out["resources"], json!(["checklist.md"]));
+    }
+
+    /// A file symlink that leaves the folder is not listed either, while
+    /// one that resolves inside it still is: only symlinks are followed
+    /// to decide, since a plain entry cannot leave the folder it is in.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resource_listing_follows_symlinks_only_inside_the_folder() {
+        let temp = Temp::new("listing-file-symlink");
+        release(&temp);
+        temp.write("outside/private-name.txt", "secret\n");
+        let skill_dir = temp.0.join("repo/.orca/skills/release");
+        std::os::unix::fs::symlink(
+            temp.0.join("outside/private-name.txt"),
+            skill_dir.join("leaked.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(skill_dir.join("checklist.md"), skill_dir.join("alias.md"))
+            .unwrap();
+
+        let out = tool(&temp)
+            .call(json!({"name": "release"}), &ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(out["resources"], json!(["alias.md", "checklist.md"]));
     }
 
     #[tokio::test]

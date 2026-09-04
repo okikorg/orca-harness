@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use serde_json::{json, Value};
 
 use orca_harness_core::testing::call;
@@ -60,6 +60,36 @@ fn calls(n: usize, name: &str, args: impl Fn(usize) -> Value) -> Vec<ToolCall> {
         .collect()
 }
 
+/// Time one dispatch of `batch`. The batch is built in the setup half of
+/// `iter_batched`, outside the measurement, so the number is the
+/// dispatcher's and not `n` `format!`s and `json!`s of test scaffolding.
+fn time_dispatch(
+    b: &mut criterion::Bencher<'_, criterion::measurement::WallTime>,
+    rt: &tokio::runtime::Runtime,
+    dispatcher: &Dispatcher,
+    tools: &ToolRegistry,
+    extensions: &ExtensionRegistry,
+    batch: impl Fn() -> Vec<ToolCall>,
+) {
+    b.to_async(rt).iter_batched(
+        &batch,
+        |batch| async move {
+            dispatcher
+                .execute(
+                    batch,
+                    tools,
+                    extensions,
+                    &CancellationToken::new(),
+                    None,
+                    16,
+                )
+                .await
+                .unwrap()
+        },
+        BatchSize::SmallInput,
+    );
+}
+
 fn bench_dispatch(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let dispatcher = Dispatcher::new();
@@ -69,24 +99,8 @@ fn bench_dispatch(c: &mut Criterion) {
         let tools = registry_with(noop_tool());
         let extensions = ExtensionRegistry::new();
         group.bench_with_input(BenchmarkId::new("noop_calls", n), &n, |b, &n| {
-            b.to_async(&rt).iter(|| {
-                let batch = calls(n, "noop", |_| json!({}));
-                let tools = &tools;
-                let extensions = &extensions;
-                let dispatcher = &dispatcher;
-                async move {
-                    dispatcher
-                        .execute(
-                            batch,
-                            tools,
-                            extensions,
-                            &CancellationToken::new(),
-                            None,
-                            16,
-                        )
-                        .await
-                        .unwrap()
-                }
+            time_dispatch(b, &rt, &dispatcher, &tools, &extensions, || {
+                calls(n, "noop", |_| json!({}))
             });
         });
     }
@@ -103,24 +117,8 @@ fn bench_dispatch(c: &mut Criterion) {
             BenchmarkId::new("ten_calls_with_exts", n_ext),
             &n_ext,
             |b, _| {
-                b.to_async(&rt).iter(|| {
-                    let batch = calls(10, "noop", |_| json!({}));
-                    let tools = &tools;
-                    let extensions = &extensions;
-                    let dispatcher = &dispatcher;
-                    async move {
-                        dispatcher
-                            .execute(
-                                batch,
-                                tools,
-                                extensions,
-                                &CancellationToken::new(),
-                                None,
-                                16,
-                            )
-                            .await
-                            .unwrap()
-                    }
+                time_dispatch(b, &rt, &dispatcher, &tools, &extensions, || {
+                    calls(10, "noop", |_| json!({}))
                 });
             },
         );
@@ -131,28 +129,25 @@ fn bench_dispatch(c: &mut Criterion) {
     let tools = registry_with(keyed_tool());
     let extensions = ExtensionRegistry::new();
     group.bench_function("100_calls_4_keys", |b| {
-        b.to_async(&rt).iter(|| {
-            let batch = calls(100, "keyed", |i| json!({"key": format!("k{}", i % 4)}));
-            let tools = &tools;
-            let extensions = &extensions;
-            let dispatcher = &dispatcher;
-            async move {
-                dispatcher
-                    .execute(
-                        batch,
-                        tools,
-                        extensions,
-                        &CancellationToken::new(),
-                        None,
-                        16,
-                    )
-                    .await
-                    .unwrap()
-            }
+        time_dispatch(b, &rt, &dispatcher, &tools, &extensions, || {
+            calls(100, "keyed", |i| json!({"key": format!("k{}", i % 4)}))
         });
     });
     group.finish();
 }
 
-criterion_group!(benches, bench_dispatch);
+/// Criterion's default 1% noise threshold sits below this machine's
+/// run-to-run drift: two benches with identical workloads
+/// (`dispatch/noop_calls/10` and `extensions/ten_calls_with_exts/0`)
+/// differ by ~1.5% in the same run, so 1% flags phantom regressions on
+/// unchanged code. Real changes to the dispatcher measure 5–20%.
+fn config() -> Criterion {
+    Criterion::default().noise_threshold(0.03)
+}
+
+criterion_group! {
+    name = benches;
+    config = config();
+    targets = bench_dispatch
+}
 criterion_main!(benches);
