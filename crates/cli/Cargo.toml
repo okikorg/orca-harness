@@ -29,4 +29,4 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 textwrap = "0.16"
 unicode-width = "0.2"
 syntect-tui = { version = "3.0.6", default-features = false }
-two-face = { version = "0.5.1", default-features = false, features = ["syntect-fancy"] }
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }

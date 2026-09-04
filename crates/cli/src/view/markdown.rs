@@ -8,13 +8,12 @@ use std::sync::{OnceLock, RwLock};
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use syntect_tui::into_span;
-use two_face::{
-    re_exports::syntect::{
-        easy::HighlightLines, highlighting::Theme as SyntaxTheme, parsing::SyntaxSet,
-    },
-    theme::{EmbeddedLazyThemeSet, EmbeddedThemeName},
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{Theme as SyntaxTheme, ThemeSet as SyntaxThemeSet},
+    parsing::SyntaxSet,
 };
+use syntect_tui::into_span;
 
 /// Recognised theme identifiers (plus the default colour theme).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -429,16 +428,18 @@ pub fn markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'stati
 }
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static SYNTAX_THEMES: OnceLock<EmbeddedLazyThemeSet> = OnceLock::new();
+static SYNTAX_THEMES: OnceLock<SyntaxThemeSet> = OnceLock::new();
 
 pub(super) fn syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
 pub(super) fn syntax_theme() -> &'static SyntaxTheme {
     SYNTAX_THEMES
-        .get_or_init(two_face::theme::extra)
-        .get(EmbeddedThemeName::Base16OceanDark)
+        .get_or_init(SyntaxThemeSet::load_defaults)
+        .themes
+        .get("base16-ocean.dark")
+        .expect("syntect's default themes include base16-ocean.dark")
 }
 
 pub(super) fn render_code_block(
