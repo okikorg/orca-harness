@@ -26,7 +26,7 @@ pub use files::{EditFileTool, FileGuard, ListDirTool, ReadFileTool, WriteFileToo
 pub use glob::GlobTool;
 pub use mutation_preflight::MutationPreflight;
 pub use mutations::{ApplyPatchTool, MultiEditTool};
-pub use process::ProcessTool;
+pub use process::{ProcessNotification, ProcessNotificationKind, ProcessTool};
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
 pub use stats::BackgroundStats;

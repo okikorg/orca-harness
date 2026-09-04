@@ -2,6 +2,7 @@ use super::agent::subagent_extensions;
 use super::session::open_session;
 use super::worker::worker;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -139,6 +140,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // Interactive: worker task owns the agent; UI owns the terminal.
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let process_generation = Arc::new(AtomicU64::new(0));
     crate::update::check_in_background(ui_tx.clone());
 
     // Session warnings surface as transcript notices; recording failures
@@ -223,7 +225,10 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let plan_area = plan_area.clone();
         let memory = memory.clone();
         let memory_scope = memory_scope.clone();
+        let process_generation = process_generation.clone();
+        let cmd_tx = cmd_tx.clone();
         move |endpoint: &Endpoint| {
+            let generation = process_generation.fetch_add(1, Ordering::AcqRel) + 1;
             let ws = Workspace::new(&cfg.workspace);
             build_agent(
                 endpoint.build_model_for_ui(Some(ui_tx.clone())),
@@ -247,6 +252,9 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 &plan_area,
                 &memory,
                 &memory_scope,
+                generation,
+                &process_generation,
+                &cmd_tx,
             )
         }
     };
@@ -284,6 +292,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         context,
         cmd_rx,
         worker_commands,
+        process_generation,
         ui_tx,
     ));
 
@@ -333,6 +342,9 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     plan_area: &PlanArea,
     memory: &MemoryStore,
     memory_scope: &MemoryScope,
+    process_generation: u64,
+    current_process_generation: &Arc<AtomicU64>,
+    worker: &mpsc::UnboundedSender<crate::msg::WorkerCmd>,
 ) -> Agent<Arc<dyn Model>> {
     // MCP visibility is a host-side model concern: core keeps its sacred,
     // immutable schema snapshot while this adapter filters it on each
@@ -440,7 +452,21 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     agent = agent.tool_arc(std::sync::Arc::new(
         ProcessTool::local()
             .working_dir(root.clone())
-            .stats(stats.clone()),
+            .stats(stats.clone())
+            .on_notification({
+                let worker = worker.clone();
+                let current = current_process_generation.clone();
+                let sequence = Arc::new(AtomicU64::new(0));
+                move |notification| {
+                    if current.load(Ordering::Acquire) == process_generation {
+                        let _ = worker.send(crate::msg::WorkerCmd::BackgroundProcess {
+                            generation: process_generation,
+                            sequence: sequence.fetch_add(1, Ordering::Relaxed) + 1,
+                            notification,
+                        });
+                    }
+                }
+            }),
     ));
     agent = agent.tool_arc(std::sync::Arc::new(
         PyKernelTool::new()

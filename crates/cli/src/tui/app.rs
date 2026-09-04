@@ -52,6 +52,7 @@ impl App {
             pending_assistant: None,
             assistant_started: false,
             run: RunState::Idle,
+            next_run_id: 0,
             approval: None,
             ask: None,
             composer: String::new(),

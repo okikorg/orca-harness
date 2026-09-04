@@ -87,8 +87,10 @@ pub(crate) fn start_shell(
         return false;
     }
     let cancel = CancellationToken::new();
+    let id = next_run_id(app);
     if worker
         .send(WorkerCmd::Shell {
+            id: id.clone(),
             command,
             working_dir: app.cfg.workspace_root.clone(),
             cancel: cancel.clone(),
@@ -105,6 +107,7 @@ pub(crate) fn start_shell(
     app.push_user_prompt(&prompt, width);
     app.turn_count += 1;
     app.run = RunState::Running {
+        id,
         started: Instant::now(),
         cancel,
     };
@@ -120,6 +123,7 @@ pub(crate) fn start_prompt(
     width: usize,
 ) -> bool {
     let cancel = CancellationToken::new();
+    let id = next_run_id(app);
     let images = prompt_images(&app.pastes, &prompt);
     // Text paste markers are composer affordances; image pills remain in
     // the visible/model text as references alongside their native payloads.
@@ -129,6 +133,7 @@ pub(crate) fn start_prompt(
     let prompt_tokens = estimate_tokens(&model_prompt);
     if worker
         .send(WorkerCmd::Run {
+            id: id.clone(),
             prompt: model_prompt,
             images,
             cancel: cancel.clone(),
@@ -148,10 +153,16 @@ pub(crate) fn start_prompt(
     app.push_user_prompt(&prompt, width);
     app.turn_count += 1;
     app.run = RunState::Running {
+        id,
         started: Instant::now(),
         cancel,
     };
     true
+}
+
+fn next_run_id(app: &mut App) -> crate::msg::RunId {
+    app.next_run_id = app.next_run_id.wrapping_add(1);
+    crate::msg::RunId::User(app.next_run_id)
 }
 
 /// Resume the oldest waiting prompt. A failed send leaves the item queued

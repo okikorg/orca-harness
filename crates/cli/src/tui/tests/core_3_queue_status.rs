@@ -3,6 +3,7 @@
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };
@@ -10,7 +11,7 @@
 
         handle_ui_msg(
             &mut app,
-            UiMsg::RunDone(Err("model endpoint unavailable".into())),
+            UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Err("model endpoint unavailable".into()) },
             &tx,
             80,
         );
@@ -38,6 +39,7 @@
     fn queue_rail_previews_three_prompts_and_collapses_overflow() {
         let mut app = test_app();
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };
@@ -67,6 +69,7 @@
     fn live_row_uses_minutes_and_current_turn_token_traffic() {
         let mut app = test_app();
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now() - Duration::from_secs(199),
             cancel: CancellationToken::new(),
         };
@@ -113,6 +116,7 @@
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };

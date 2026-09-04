@@ -127,12 +127,13 @@ fn queued_bang_prompt_stays_a_shell_command() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
     app.prompt_queue.push_back("!pwd".into());
 
-    handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
+    handle_ui_msg(&mut app, UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Ok(String::new()) }, &tx, 80);
 
     assert!(matches!(
         rx.try_recv(),
@@ -145,6 +146,7 @@ fn shell_done_settles_the_tool_and_resets_the_run() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -168,7 +170,7 @@ fn shell_done_settles_the_tool_and_resets_the_run() {
         80,
     );
 
-    handle_ui_msg(&mut app, UiMsg::ShellDone, &tx, 80);
+    handle_ui_msg(&mut app, UiMsg::ShellDone { id: crate::msg::RunId::User(1) }, &tx, 80);
 
     assert!(!app.running());
     assert_eq!(
@@ -182,6 +184,7 @@ fn prompts_submitted_while_running_queue_in_fifo_order() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -207,6 +210,7 @@ fn successful_run_starts_the_next_queued_prompt() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -215,7 +219,7 @@ fn successful_run_starts_the_next_queued_prompt() {
         "update the readme".to_string(),
     ]);
 
-    handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
+    handle_ui_msg(&mut app, UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Ok(String::new()) }, &tx, 80);
 
     match rx.try_recv() {
         Ok(WorkerCmd::Run { prompt, .. }) => {
@@ -243,6 +247,7 @@ fn run_done_reports_turn_duration_and_tool_calls() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -269,7 +274,7 @@ fn run_done_reports_turn_duration_and_tool_calls() {
     }
     app.turn_tokens_in = 12_004;
     app.turn_tokens_out = 611;
-    handle_ui_msg(&mut app, UiMsg::RunDone(Ok(String::new())), &tx, 80);
+    handle_ui_msg(&mut app, UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Ok(String::new()) }, &tx, 80);
     let texts = pending_texts(&app);
     let footer = texts
         .iter()
@@ -285,12 +290,13 @@ fn run_done_reports_turn_duration_and_tool_calls() {
 
     let mut failed = test_app();
     failed.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
     handle_ui_msg(
         &mut failed,
-        UiMsg::RunDone(Err("cancelled".into())),
+        UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Err("cancelled".into()) },
         &tx,
         80,
     );
@@ -298,4 +304,51 @@ fn run_done_reports_turn_duration_and_tool_calls() {
         !pending_texts(&failed).iter().any(|t| t.contains("done · ")),
         "no footer on an interrupted run"
     );
+}
+
+#[test]
+fn background_run_start_is_hidden_and_stale_completion_is_ignored() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    app.run = RunState::Running {
+        id: crate::msg::RunId::User(9),
+        started: Instant::now(),
+        cancel: CancellationToken::new(),
+    };
+    let background = crate::msg::RunId::BackgroundProcess {
+        generation: 2,
+        sequence: 1,
+    };
+
+    handle_ui_msg(
+        &mut app,
+        UiMsg::RunStarted {
+            id: background.clone(),
+            cancel: CancellationToken::new(),
+        },
+        &tx,
+        80,
+    );
+    assert!(matches!(
+        &app.run,
+        RunState::Running { id, .. } if id == &background
+    ));
+    assert!(
+        pending_texts(&app).is_empty(),
+        "background context stays out of the transcript"
+    );
+
+    handle_ui_msg(
+        &mut app,
+        UiMsg::RunDone {
+            id: crate::msg::RunId::User(9),
+            result: Ok(String::new()),
+        },
+        &tx,
+        80,
+    );
+    assert!(matches!(
+        &app.run,
+        RunState::Running { id, .. } if id == &background
+    ));
 }

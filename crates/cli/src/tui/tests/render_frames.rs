@@ -111,6 +111,7 @@ fn streaming_mermaid_holds_a_stable_placeholder_until_the_fence_closes() {
     app.transcript.clear();
     app.pending_history.clear();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -201,6 +202,7 @@ fn narrow_status_bar_keeps_the_hint() {
 fn a_running_live_region_keeps_the_spinner_row_when_it_overflows() {
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -294,6 +296,7 @@ fn streaming_app() -> App {
     let mut app = test_app();
     app.welcome_dismissed = true;
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };

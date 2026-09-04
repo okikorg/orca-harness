@@ -119,6 +119,205 @@ async fn process_polls_a_background_command_until_output_arrives() {
 }
 
 #[tokio::test]
+async fn process_spawn_can_wait_for_exit_despite_intermediate_output() {
+    let tool = ProcessTool::local();
+    let started = std::time::Instant::now();
+    let out = tool
+        .call(
+            json!({
+                "action": "spawn",
+                "command": "echo refreshing; sleep 0.7; echo done",
+                "waitForExit": true
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        started.elapsed() >= Duration::from_millis(600),
+        "intermediate output must not complete the call"
+    );
+    assert_eq!(out["running"], json!(false));
+    assert_eq!(out["exitCode"], json!(0));
+    assert_eq!(out["output"], json!("refreshing\ndone\n"));
+}
+
+#[tokio::test]
+async fn cancelling_spawn_wait_leaves_the_background_process_running() {
+    let tool = ProcessTool::local();
+    let cancellation = CancellationToken::new();
+    let context = ToolContext {
+        cancellation: cancellation.clone(),
+        ..ctx()
+    };
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancellation.cancel();
+    });
+
+    let err = tool
+        .call(
+            json!({
+                "action": "spawn",
+                "command": "sleep 10",
+                "waitForExit": true
+            }),
+            &context,
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("cancelled"));
+
+    let listed = tool.call(json!({"action": "list"}), &ctx()).await.unwrap();
+    let process = &listed["processes"][0];
+    assert_eq!(process["running"], json!(true));
+    tool.call(
+        json!({"action": "kill", "id": process["id"]}),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn detached_process_notifies_on_match_and_exit_without_polling() {
+    let (notifications, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let tool = ProcessTool::local().on_notification(move |event| {
+        let _ = notifications.send(event);
+    });
+    let out = tool
+        .call(
+            json!({
+                "action": "spawn",
+                "command": "sleep 0.7; printf ready; sleep 0.3; printf finished",
+                "notifyOnMatch": "ready"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["running"], json!(true));
+
+    let matched = timeout(Duration::from_secs(2), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        matched.kind,
+        ProcessNotificationKind::OutputMatch { ref pattern } if pattern == "ready"
+    ));
+    assert_eq!(matched.output, "ready");
+
+    let exited = timeout(Duration::from_secs(2), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        exited.kind,
+        ProcessNotificationKind::Exit { exit_code: Some(0) }
+    ));
+    assert_eq!(exited.output, "finished", "already-notified logs are not repeated");
+}
+
+#[tokio::test]
+async fn output_returned_by_spawn_does_not_also_wake_the_model() {
+    let (notifications, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let tool = ProcessTool::local().on_notification(move |event| {
+        let _ = notifications.send(event);
+    });
+    let spawned = tool
+        .call(
+            json!({
+                "action": "spawn",
+                "command": "printf ready; sleep 0.7; printf finished",
+                "notifyOnMatch": "ready"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spawned["output"], json!("ready"));
+
+    let event = timeout(Duration::from_secs(2), received.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        event.kind,
+        ProcessNotificationKind::Exit { exit_code: Some(0) }
+    ));
+    assert_eq!(event.output, "finished");
+    assert!(received.try_recv().is_err(), "no redundant match wake");
+}
+
+#[tokio::test]
+async fn detached_process_can_disable_exit_notifications() {
+    let (notifications, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let tool = ProcessTool::local().on_notification(move |event| {
+        let _ = notifications.send(event);
+    });
+    tool.call(
+        json!({
+            "action": "spawn",
+            "command": "sleep 0.7",
+            "notifyOnExit": false
+        }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        timeout(Duration::from_millis(500), received.recv())
+            .await
+            .is_err(),
+        "disabled exit notification must stay silent"
+    );
+}
+
+#[tokio::test]
+async fn explicit_process_kill_does_not_duplicate_its_result_with_a_notification() {
+    let (notifications, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let tool = ProcessTool::local().on_notification(move |event| {
+        let _ = notifications.send(event);
+    });
+    let spawned = tool
+        .call(
+            json!({"action": "spawn", "command": "sleep 10"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    tool.call(
+        json!({"action": "kill", "id": spawned["id"]}),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        timeout(Duration::from_millis(100), received.recv())
+            .await
+            .is_err(),
+        "the kill result already informs the model"
+    );
+}
+
+#[tokio::test]
+async fn process_spawn_rejects_an_empty_notification_match() {
+    let tool = ProcessTool::local();
+    let err = tool
+        .call(
+            json!({"action": "spawn", "command": "sleep 1", "notifyOnMatch": ""}),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("notifyOnMatch"));
+}
+
+#[tokio::test]
 async fn process_spawn_rejects_an_empty_command() {
     let tool = ProcessTool::local();
     let err = tool

@@ -4,7 +4,7 @@
 use orca_harness_core::{CancellationToken, Image};
 use orca_harness_extensions::{CompactReport, HarnessEvent};
 use orca_harness_model_providers::openrouter::ModelInfo;
-use orca_harness_tools::AskRequest;
+use orca_harness_tools::{AskRequest, ProcessNotification};
 use tokio::sync::oneshot;
 
 /// A selectable endpoint preset.
@@ -166,17 +166,34 @@ pub struct ApprovalRequest {
     pub respond: oneshot::Sender<ApprovalResponse>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunId {
+    User(u64),
+    BackgroundProcess { generation: u64, sequence: u64 },
+}
+
 /// Everything the UI task can receive.
 pub enum UiMsg {
     Event(HarnessEvent),
     Approval(ApprovalRequest),
     /// Structured clarification requested by the running agent.
     Ask(AskRequest),
+    /// The worker accepted a run. Background process context remains hidden
+    /// from the transcript; only the model's response is user-facing.
+    RunStarted {
+        id: RunId,
+        cancel: CancellationToken,
+    },
     /// The worker finished a run: final answer or error text.
-    RunDone(Result<String, String>),
+    RunDone {
+        id: RunId,
+        result: Result<String, String>,
+    },
     /// A user-invoked `!` shell command finished. Its tool result has
     /// already been appended to the model context by the worker.
-    ShellDone,
+    ShellDone {
+        id: RunId,
+    },
     /// The endpoint's model catalog (already filtered), or the fetch error.
     Models {
         request_id: u64,
@@ -249,6 +266,7 @@ pub enum UiMsg {
 /// Commands the UI sends to the agent worker.
 pub enum WorkerCmd {
     Run {
+        id: RunId,
         prompt: String,
         images: Vec<Image>,
         cancel: CancellationToken,
@@ -256,9 +274,17 @@ pub enum WorkerCmd {
     /// Run a user-entered `!` command as a synthetic shell tool call and
     /// retain the paired call/result in model-visible context.
     Shell {
+        id: RunId,
         command: String,
         working_dir: String,
         cancel: CancellationToken,
+    },
+    /// A detached process reached a requested lifecycle condition. Generation
+    /// filtering happens in the context-owning worker before any model wake.
+    BackgroundProcess {
+        generation: u64,
+        sequence: u64,
+        notification: ProcessNotification,
     },
     /// Reset the conversation to just the system prompt.
     Clear,

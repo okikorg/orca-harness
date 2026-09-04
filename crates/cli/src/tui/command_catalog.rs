@@ -392,8 +392,11 @@ mod tests {
 
     #[test]
     fn prefix_matches_rank_before_substring_matches() {
-        // "el" prefixes nothing but appears inside "help" and "models".
-        assert_eq!(names(&filter_commands("el")), vec!["help", "models"]);
+        // "el" prefixes nothing but appears inside these commands.
+        assert_eq!(
+            names(&filter_commands("el")),
+            vec!["help", "changelog", "models"]
+        );
         // "m" prefixes "models", "mcp", and "mode"; appears
         // inside "compact" and "theme", and inside "settings".
         assert_eq!(
@@ -410,6 +413,7 @@ mod tests {
                 "extensions",
                 "help",
                 "hotkeys",
+                "changelog",
                 "clear",
                 "rewind",
                 "refine",

@@ -15,6 +15,7 @@
             plan: Default::default(),
         });
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };
@@ -83,6 +84,7 @@
             plan: Default::default(),
         });
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };
@@ -124,6 +126,7 @@
             plan: Default::default(),
         });
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };
