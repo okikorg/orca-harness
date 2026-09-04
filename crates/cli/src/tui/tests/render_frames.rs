@@ -257,9 +257,21 @@ fn a_tight_status_row_shortens_the_hint_before_dropping_the_model() {
     let mut app = test_app();
     let rows = rendered_rows(&mut app, 70, 20);
     let status = last_row(&rows);
-    assert!(status.starts_with(" test ·"), "{status}");
+    assert!(status.starts_with(" local:test ·"), "{status}");
     assert!(!status.contains("wheel scroll"), "{status}");
     assert!(status.contains("ctrl+o expand"), "{status}");
+}
+
+/// The model name alone reads the same on every provider that serves it;
+/// the provider leads it, spelled out in both styles.
+#[test]
+fn status_row_leads_the_model_with_its_provider() {
+    let mut app = test_app();
+    with_style(UiStyle::Glyph, &mut app, |app| {
+        let rows = rendered_rows(app, 120, 20);
+        let status = last_row(&rows);
+        assert!(status.starts_with(" local:test ·"), "{status}");
+    });
 }
 
 #[test]

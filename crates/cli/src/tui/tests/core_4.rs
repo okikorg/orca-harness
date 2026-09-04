@@ -596,7 +596,7 @@
             .expect("status line");
 
         assert!(
-            status.starts_with(" gpt-oss:20b ·"),
+            status.starts_with(" local:gpt-oss:20b ·"),
             "model not first: {status}"
         );
         assert!(

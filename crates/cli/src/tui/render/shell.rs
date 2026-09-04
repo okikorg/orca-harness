@@ -343,7 +343,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     };
     let mut status = StatusBar::new();
     status
-        .push(Segment::new(&app.cfg.model_name, status_bar::MODEL))
+        .push(Segment::new(
+            format!("{}:{}", app.cfg.provider.label(), app.cfg.model_name),
+            status_bar::MODEL,
+        ))
         .push(Segment::new(
             app.reasoning_effort
                 .as_deref()
