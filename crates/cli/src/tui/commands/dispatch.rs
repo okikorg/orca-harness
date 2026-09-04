@@ -43,6 +43,16 @@ pub(crate) fn slash_command(
         app.push_line(Line::from(Span::styled(message, dim)));
         return;
     }
+    if let Some(rest) = command.strip_prefix("changelog") {
+        let arg = rest.trim();
+        if rest.is_empty() || arg == "full" {
+            let lines = view::markdown_lines(&crate::changelog::notes(arg == "full"), width, "  ");
+            app.push_transcript_block(lines, BlockSpacing::Section);
+        } else {
+            push_error(app, "usage: /changelog [full]");
+        }
+        return;
+    }
     if let Some(rest) = command.strip_prefix("queue ") {
         if rest.trim() == "clear" {
             let cleared = app.prompt_queue.len();

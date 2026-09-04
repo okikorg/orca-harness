@@ -6,6 +6,7 @@
 mod approval;
 mod auth;
 mod auto_approval;
+mod changelog;
 mod config;
 mod extensions;
 mod headless;
