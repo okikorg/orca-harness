@@ -46,7 +46,7 @@ pub(crate) fn slash_command(
     if let Some(rest) = command.strip_prefix("changelog") {
         let arg = rest.trim();
         if rest.is_empty() || arg == "full" {
-            let lines = view::markdown_lines(&crate::changelog::notes(arg == "full"), width, "  ");
+            let lines = view::markdown_lines(&crate::changelog::notes(arg == "full"), width, "");
             app.push_transcript_block(lines, BlockSpacing::Section);
         } else {
             push_error(app, "usage: /changelog [full]");
