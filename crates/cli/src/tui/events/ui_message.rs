@@ -220,6 +220,27 @@ pub(crate) fn handle_ui_msg(
         UiMsg::Notice(text) => {
             push_notice(app, text);
         }
+        UiMsg::RunStarted { id, cancel } => match &app.run {
+            RunState::Running {
+                id: active_id,
+                started,
+                ..
+            } if active_id == &id => {
+                app.run = RunState::Running {
+                    id,
+                    started: *started,
+                    cancel,
+                };
+            }
+            _ => {
+                app.reset_activity();
+                app.run = RunState::Running {
+                    id,
+                    started: std::time::Instant::now(),
+                    cancel,
+                };
+            }
+        },
         UiMsg::SessionCleared { id } => {
             reset_conversation_ui(app);
             if let Some(id) = id {
@@ -281,7 +302,10 @@ pub(crate) fn handle_ui_msg(
                 theme().dim,
             )));
         }
-        UiMsg::RunDone(result) => {
+        UiMsg::RunDone { id, result } => {
+            if !matches!(&app.run, RunState::Running { id: active_id, .. } if active_id == &id) {
+                return;
+            }
             let completed = result.is_ok();
             let turn_elapsed = match &app.run {
                 RunState::Running { started, .. } => Some(started.elapsed()),
@@ -335,7 +359,10 @@ pub(crate) fn handle_ui_msg(
                 start_next_queued_prompt(app, worker, width);
             }
         }
-        UiMsg::ShellDone => {
+        UiMsg::ShellDone { id } => {
+            if !matches!(&app.run, RunState::Running { id: active_id, .. } if active_id == &id) {
+                return;
+            }
             app.commit_activity(width);
             let elapsed = match &app.run {
                 RunState::Running { started, .. } => Some(started.elapsed()),

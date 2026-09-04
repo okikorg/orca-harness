@@ -486,7 +486,10 @@ results to the model:
   model drives that target through the same contract. Kills the child on
   cancellation, caps output, enforces a timeout.
 - `process` — keep background processes and interactive stdin/stdout sessions
-  alive across calls.
+  alive across calls, or wait for a finite long-running command to exit in one
+  call so intermediate progress does not require model-driven polling. In the
+  interactive CLI, detached processes wake the model once on exit; use
+  `notifyOnMatch` at spawn time for a one-shot readiness or important-log wake.
 - `pykernel` and `bun_repl` — persistent Python and JavaScript/TypeScript
   compute. Both preserve state across calls, serialize only against themselves,
   and restart explicitly after a timeout. `bun_repl` uses the `bun` executable

@@ -283,6 +283,7 @@ fn flat_lines(lines: &[Line]) -> String {
 fn streaming_reasoning_renders_inside_the_thinking_group() {
     let mut app = test_app();
     app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
         started: Instant::now(),
         cancel: CancellationToken::new(),
     };
@@ -350,12 +351,17 @@ fn thinking_joins_the_rail_and_the_expand_log() {
 fn interrupted_thinking_still_lands_in_the_rail() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();
+    app.run = RunState::Running {
+        id: crate::msg::RunId::User(1),
+        started: Instant::now(),
+        cancel: CancellationToken::new(),
+    };
     handle_harness_event(
         &mut app,
         HarnessEvent::ReasoningDelta { text: "hmm".into() },
         80,
     );
-    handle_ui_msg(&mut app, UiMsg::RunDone(Err("cancelled".into())), &tx, 80);
+    handle_ui_msg(&mut app, UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Err("cancelled".into()) }, &tx, 80);
     let texts = pending_texts(&app);
     assert!(
         texts.iter().any(|t| t.contains("Thinking ·")),

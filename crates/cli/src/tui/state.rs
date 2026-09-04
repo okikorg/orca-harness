@@ -491,6 +491,7 @@ pub(crate) struct SpawnActivity {
 pub(crate) enum RunState {
     Idle,
     Running {
+        id: crate::msg::RunId,
         started: Instant,
         cancel: CancellationToken,
     },
@@ -542,6 +543,7 @@ pub(crate) struct App {
     pub(crate) pending_assistant: Option<String>,
     pub(crate) assistant_started: bool,
     pub(crate) run: RunState,
+    pub(crate) next_run_id: u64,
     pub(crate) approval: Option<ApprovalRequest>,
     /// Active structured clarification form requested by the `ask` tool.
     pub(crate) ask: Option<AskForm>,

@@ -129,6 +129,7 @@
     fn live_activity_groups_thinking_and_parallel_tools() {
         let mut app = test_app();
         app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
             started: Instant::now(),
             cancel: CancellationToken::new(),
         };

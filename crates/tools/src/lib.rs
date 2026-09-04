@@ -57,7 +57,8 @@ pub use bun_repl::BunReplTool;
 pub use core_tools::{
     core_tools, core_tools_with_executor, core_tools_with_guard, ApplyPatchTool, BackgroundStats,
     EditFileTool, Executor, FileGuard, GlobTool, GrepTool, ListDirTool, MultiEditTool,
-    MutationPreflight, ProcessTool, ReadFileTool, ShellTool, Workspace, WriteFileTool,
+    MutationPreflight, ProcessNotification, ProcessNotificationKind, ProcessTool, ReadFileTool,
+    ShellTool, Workspace, WriteFileTool,
 };
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use kernel::PyKernelTool;

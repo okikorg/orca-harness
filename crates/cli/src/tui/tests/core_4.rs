@@ -274,9 +274,14 @@
     fn immediate_model_failure_renders_without_assistant_label() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
+        app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
         handle_ui_msg(
             &mut app,
-            UiMsg::RunDone(Err("model endpoint unavailable".into())),
+            UiMsg::RunDone { id: crate::msg::RunId::User(1), result: Err("model endpoint unavailable".into()) },
             &tx,
             80,
         );
@@ -588,6 +593,7 @@
             plan: Default::default(),
         });
         app.git_branch = Some("feature/status-branch".into());
+        app.turn_count = 1;
 
         let rows = rendered_rows(&mut app, 160, 24);
         let status = rows

@@ -59,13 +59,19 @@ mod tests {
 
     #[test]
     fn latest_is_one_release_and_full_is_newest_first() {
+        let latest_version = RELEASES.first().expect("embedded release notes").0;
         let latest = notes(false);
-        assert!(latest.starts_with("# What's new in v0.2.2"));
-        assert!(!latest.contains("## v0.2.1"));
+        assert!(latest.starts_with(&format!("# What's new in v{latest_version}")));
+        assert_eq!(latest.matches("# What's new in v").count(), 1);
         assert!(!latest.contains("## Install"));
         assert!(!latest.contains("SHA256SUMS"));
         let full = notes(true);
-        assert!(full.find("0.2.2").unwrap() < full.find("0.2.1").unwrap());
+        for releases in RELEASES.windows(2) {
+            assert!(
+                full.find(&format!("## v{}", releases[0].0)).unwrap()
+                    < full.find(&format!("## v{}", releases[1].0)).unwrap()
+            );
+        }
         assert!(full.contains("## v0.1.0"));
         assert!(!full.contains("## Assets"));
         assert!(!full.contains("curl -fsSL"));

@@ -35,21 +35,101 @@ use crate::pgroup;
 use crate::shell::Executor;
 use crate::BackgroundStats;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessNotificationKind {
+    OutputMatch { pattern: String },
+    Exit { exit_code: Option<i32> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessNotification {
+    pub id: String,
+    pub command: String,
+    pub kind: ProcessNotificationKind,
+    pub output: String,
+    pub dropped_bytes: u64,
+    pub more_output: bool,
+}
+
+type ProcessNotifier = Arc<dyn Fn(ProcessNotification) + Send + Sync>;
+
+struct MatchState {
+    pattern: String,
+    needle: Vec<u8>,
+    tail: Vec<u8>,
+    armed: bool,
+    notified: bool,
+}
+
+impl MatchState {
+    fn new(pattern: String) -> Self {
+        Self {
+            needle: pattern.as_bytes().to_vec(),
+            pattern,
+            tail: Vec::new(),
+            armed: false,
+            notified: false,
+        }
+    }
+
+    fn observe(&mut self, chunk: &[u8]) -> bool {
+        if !self.armed || self.notified {
+            return false;
+        }
+        let mut window = Vec::with_capacity(self.tail.len() + chunk.len());
+        window.extend_from_slice(&self.tail);
+        window.extend_from_slice(chunk);
+        if window
+            .windows(self.needle.len())
+            .any(|candidate| candidate == self.needle)
+        {
+            self.notified = true;
+            return true;
+        }
+        let keep = self.needle.len().saturating_sub(1).min(window.len());
+        self.tail.clear();
+        self.tail.extend_from_slice(&window[window.len() - keep..]);
+        false
+    }
+
+    fn arm(&mut self) {
+        self.tail.clear();
+        self.armed = true;
+    }
+}
+
 /// Merged, bounded, unread output of one process.
 struct OutBuf {
     data: Vec<u8>,
     dropped: u64,
     cap: usize,
+    notification_data: Vec<u8>,
+    notification_dropped: u64,
+    notification_cap: usize,
+    notify_match: Option<MatchState>,
 }
 
 impl OutBuf {
-    fn push(&mut self, chunk: &[u8]) {
+    fn push(&mut self, chunk: &[u8]) -> Option<String> {
+        let matched = self
+            .notify_match
+            .as_mut()
+            .and_then(|state| state.observe(chunk).then(|| state.pattern.clone()));
         self.data.extend_from_slice(chunk);
         if self.data.len() > self.cap {
             let excess = self.data.len() - self.cap;
             self.data.drain(..excess);
             self.dropped += excess as u64;
         }
+        if self.notification_cap > 0 {
+            self.notification_data.extend_from_slice(chunk);
+            if self.notification_data.len() > self.notification_cap {
+                let excess = self.notification_data.len() - self.notification_cap;
+                self.notification_data.drain(..excess);
+                self.notification_dropped += excess as u64;
+            }
+        }
+        matched
     }
 
     /// Take up to `max` bytes. Cuts may split a UTF-8 sequence; the lossy
@@ -61,9 +141,24 @@ impl OutBuf {
         let more = !self.data.is_empty();
         (String::from_utf8_lossy(&chunk).into_owned(), dropped, more)
     }
+
+    fn drain_notification(&mut self) -> (String, u64) {
+        let output = String::from_utf8_lossy(&std::mem::take(&mut self.notification_data)).into();
+        let dropped = std::mem::take(&mut self.notification_dropped);
+        (output, dropped)
+    }
+
+    fn arm_notifications(&mut self) {
+        self.notification_data.clear();
+        self.notification_dropped = 0;
+        if let Some(state) = &mut self.notify_match {
+            state.arm();
+        }
+    }
 }
 
 struct Proc {
+    id: String,
     command: String,
     /// Process-group id (== child pid, since each child leads its group).
     pgid: Option<u32>,
@@ -81,6 +176,8 @@ struct Proc {
     kill: CancellationToken,
     /// Fires after exit, once the readers have (briefly) drained.
     done: CancellationToken,
+    notify_on_exit: AtomicBool,
+    notifier: Option<ProcessNotifier>,
 }
 
 impl Proc {
@@ -89,6 +186,32 @@ impl Proc {
     }
     fn exit_code(&self) -> Option<i32> {
         self.exit.lock().unwrap().flatten()
+    }
+
+    fn notification(&self, kind: ProcessNotificationKind) -> ProcessNotification {
+        let (output, dropped_bytes) = self.buf.lock().unwrap().drain_notification();
+        ProcessNotification {
+            id: self.id.clone(),
+            command: self.command.clone(),
+            kind,
+            output,
+            dropped_bytes,
+            more_output: false,
+        }
+    }
+
+    fn emit(&self, kind: ProcessNotificationKind) {
+        if let Some(notifier) = &self.notifier {
+            notifier(self.notification(kind));
+        }
+    }
+
+    fn append_output(&self, chunk: &[u8]) {
+        let matched = self.buf.lock().unwrap().push(chunk);
+        if let Some(pattern) = matched {
+            self.emit(ProcessNotificationKind::OutputMatch { pattern });
+        }
+        self.output_ready.notify_waiters();
     }
 }
 
@@ -131,6 +254,7 @@ pub struct ProcessTool {
     max_wait: Duration,
     max_processes: usize,
     manager: Arc<Manager>,
+    notifier: Option<ProcessNotifier>,
 }
 
 impl Default for ProcessTool {
@@ -155,6 +279,7 @@ impl ProcessTool {
                 shutdown: CancellationToken::new(),
                 stats: BackgroundStats::default(),
             }),
+            notifier: None,
         }
     }
 
@@ -189,6 +314,14 @@ impl ProcessTool {
         self
     }
 
+    pub fn on_notification(
+        mut self,
+        notify: impl Fn(ProcessNotification) + Send + Sync + 'static,
+    ) -> Self {
+        self.notifier = Some(Arc::new(notify));
+        self
+    }
+
     fn get(&self, input: &Value) -> Result<(String, Arc<Proc>), ToolError> {
         let id = input
             .get("id")
@@ -205,14 +338,26 @@ impl ProcessTool {
         Ok((id.to_string(), proc))
     }
 
-    fn snapshot(&self, id: &str, proc: &Proc) -> Value {
+    fn snapshot(&self, id: &str, proc: &Proc, arm_exit: bool, arm_match: bool) -> Value {
         // Read the exit slot once, and before draining: `running` and
         // `exitCode` must describe the same instant, and reading liveness
         // first means an exit racing this snapshot shows up as "still
         // running, output partial" (the next poll completes the story)
         // rather than "exited" with output still in flight.
-        let exit = *proc.exit.lock().unwrap();
-        let (output, dropped, more) = proc.buf.lock().unwrap().drain(self.max_output_bytes);
+        let exit_guard = proc.exit.lock().unwrap();
+        let exit = *exit_guard;
+        let mut buf = proc.buf.lock().unwrap();
+        let (output, dropped, more) = buf.drain(self.max_output_bytes);
+        if arm_match {
+            // The spawn result already carries everything drained above.
+            // Start autonomous delivery after that exact boundary so output
+            // cannot both complete spawn and wake the model again.
+            buf.arm_notifications();
+        }
+        if arm_exit && exit.is_none() {
+            proc.notify_on_exit.store(true, Ordering::Release);
+        }
+        drop(exit_guard);
         let mut out = json!({
             "id": id,
             "output": output,
@@ -226,7 +371,7 @@ impl ProcessTool {
         out
     }
 
-    async fn spawn(&self, input: &Value) -> Result<Value, ToolError> {
+    async fn spawn(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         let command_str = input
             .get("command")
             .and_then(Value::as_str)
@@ -234,6 +379,22 @@ impl ProcessTool {
         if command_str.trim().is_empty() {
             return Err(ToolError::msg("`command` must not be empty"));
         }
+        let wait_for_exit = input
+            .get("waitForExit")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let notify_match = input
+            .get("notifyOnMatch")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if notify_match.as_deref() == Some("") {
+            return Err(ToolError::msg("`notifyOnMatch` must not be empty"));
+        }
+        let notify_on_exit = !wait_for_exit
+            && input
+                .get("notifyOnExit")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
 
         if self.manager.procs.lock().unwrap().len() >= self.max_processes {
             return Err(ToolError::msg(format!(
@@ -260,6 +421,7 @@ impl ProcessTool {
 
         let id = format!("p{}", self.manager.seq.fetch_add(1, Ordering::SeqCst) + 1);
         let proc = Arc::new(Proc {
+            id: id.clone(),
             command: command_str.to_string(),
             pgid,
             counted: AtomicBool::new(true),
@@ -267,12 +429,25 @@ impl ProcessTool {
                 data: Vec::new(),
                 dropped: 0,
                 cap: self.buffer_cap,
+                notification_data: Vec::new(),
+                notification_dropped: 0,
+                notification_cap: usize::from(
+                    self.notifier.is_some()
+                        && !wait_for_exit
+                        && (notify_on_exit || notify_match.is_some()),
+                ) * self.max_output_bytes,
+                notify_match: (!wait_for_exit)
+                    .then_some(notify_match)
+                    .flatten()
+                    .map(MatchState::new),
             }),
             output_ready: Notify::new(),
             stdin: tokio::sync::Mutex::new(stdin),
             exit: Mutex::new(None),
             kill: self.manager.shutdown.child_token(),
             done: CancellationToken::new(),
+            notify_on_exit: AtomicBool::new(false),
+            notifier: self.notifier.clone(),
         });
 
         let mut readers = Vec::new();
@@ -286,8 +461,7 @@ impl ProcessTool {
                         match out.read(&mut chunk).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
-                                p.buf.lock().unwrap().push(&chunk[..n]);
-                                p.output_ready.notify_waiters();
+                                p.append_output(&chunk[..n]);
                             }
                         }
                     },
@@ -295,8 +469,7 @@ impl ProcessTool {
                         match err.read(&mut chunk).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
-                                p.buf.lock().unwrap().push(&chunk[..n]);
-                                p.output_ready.notify_waiters();
+                                p.append_output(&chunk[..n]);
                             }
                         }
                     },
@@ -333,6 +506,11 @@ impl ProcessTool {
             })
             .await;
             p.done.cancel();
+            if p.notify_on_exit.load(Ordering::Acquire) {
+                p.emit(ProcessNotificationKind::Exit {
+                    exit_code: p.exit_code(),
+                });
+            }
             p.output_ready.notify_waiters();
         });
 
@@ -342,10 +520,18 @@ impl ProcessTool {
             .unwrap()
             .insert(id.clone(), proc.clone());
 
-        // Give fast-failing commands a chance to report immediately.
-        let _ = tokio::time::timeout(self.settle, proc.done.cancelled()).await;
+        if wait_for_exit {
+            tokio::select! {
+                biased;
+                _ = ctx.cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
+                _ = proc.done.cancelled() => {}
+            }
+        } else {
+            // Give fast-failing commands a chance to report immediately.
+            let _ = tokio::time::timeout(self.settle, proc.done.cancelled()).await;
+        }
         settle_exit(&proc).await;
-        Ok(self.snapshot(&id, &proc))
+        Ok(self.snapshot(&id, &proc, notify_on_exit, !wait_for_exit))
     }
 
     async fn poll(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
@@ -371,7 +557,7 @@ impl ProcessTool {
             }
         }
         settle_exit(&proc).await;
-        Ok(self.snapshot(&id, &proc))
+        Ok(self.snapshot(&id, &proc, false, false))
     }
 
     async fn write(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
@@ -419,7 +605,7 @@ impl ProcessTool {
             _ = tokio::time::sleep(self.settle) => {}
         }
         settle_exit(&proc).await;
-        Ok(self.snapshot(&id, &proc))
+        Ok(self.snapshot(&id, &proc, false, false))
     }
 
     async fn kill(&self, input: &Value) -> Result<Value, ToolError> {
@@ -434,9 +620,12 @@ impl ProcessTool {
             .unwrap()
             .remove(id)
             .ok_or_else(|| ToolError::msg(format!("unknown process id: {id}")))?;
+        // The caller receives this termination through the `kill` result;
+        // an autonomous exit wake would tell the model the same thing twice.
+        proc.notify_on_exit.store(false, Ordering::Release);
         proc.kill.cancel();
         let _ = tokio::time::timeout(Duration::from_secs(5), proc.done.cancelled()).await;
-        Ok(self.snapshot(id, &proc))
+        Ok(self.snapshot(id, &proc, false, false))
     }
 
     fn list(&self) -> Value {
@@ -484,17 +673,22 @@ impl Tool for ProcessTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "process".into(),
-            description: "Manage long-lived processes: `spawn` starts a command that keeps \
-                running across calls (dev server, watcher, or an interactive REPL like \
-                `python3 -i`), `poll` reads new output, `write` sends a line to its stdin, \
-                `kill` stops it, `list` shows live processes. Prefer `shell` for quick \
-                one-shot commands."
+            description: "Manage processes: `spawn` starts a command; set `waitForExit` for a \
+                finite long-running command so its final result arrives in that same tool call \
+                without polling. Leave it false for a server, watcher, or interactive REPL like \
+                `python3 -i`; detached processes notify the host on exit by default, and \
+                `notifyOnMatch` can wake it once when readiness or important output appears. \
+                Use `poll` only for manual log checks, `write` for stdin, or `kill` to stop it. \
+                `list` shows processes. Prefer `shell` for quick one-shot commands."
                 .into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["spawn", "poll", "write", "kill", "list"]},
                     "command": {"type": "string", "description": "spawn: the command line to start."},
+                    "waitForExit": {"type": "boolean", "default": false, "description": "spawn: wait for process exit and return its final result in this call, ignoring intermediate output. Use for finite long-running commands to avoid repeated polls."},
+                    "notifyOnExit": {"type": "boolean", "default": true, "description": "spawn: for a detached process, notify the host once when it exits."},
+                    "notifyOnMatch": {"type": "string", "description": "spawn: for a detached process, notify the host once when this literal text first appears in output. Use for server readiness or important log text."},
                     "id": {"type": "string", "description": "poll/write/kill: target process id."},
                     "input": {"type": "string", "description": "write: text to send to stdin."},
                     "newline": {"type": "boolean", "default": true, "description": "write: append a newline."},
@@ -524,7 +718,7 @@ impl Tool for ProcessTool {
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`action` (string) is required"))?;
         match action {
-            "spawn" => self.spawn(&input).await,
+            "spawn" => self.spawn(&input, ctx).await,
             "poll" => self.poll(&input, ctx).await,
             "write" => self.write(&input, ctx).await,
             "kill" => self.kill(&input).await,
@@ -533,5 +727,30 @@ impl Tool for ProcessTool {
                 "unknown action `{other}`; expected spawn|poll|write|kill|list"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MatchState;
+
+    #[test]
+    fn output_match_spans_chunks_and_notifies_once() {
+        let mut state = MatchState::new("server ready".into());
+        state.arm();
+
+        assert!(!state.observe(b"server rea"));
+        assert!(state.observe(b"dy on :3000"));
+        assert!(!state.observe(b" server ready again"));
+    }
+
+    #[test]
+    fn output_match_ignores_everything_before_it_is_armed() {
+        let mut state = MatchState::new("ready".into());
+
+        assert!(!state.observe(b"ready"));
+        state.arm();
+        assert!(!state.observe(b"ady"), "pre-arm tail is discarded");
+        assert!(state.observe(b"ready"));
     }
 }
