@@ -211,11 +211,12 @@ impl OpenAiCodexModel {
                 .refresh_codex(&rejected_token)
                 .await
                 .map_err(auth_error)?;
-            return self
-                .validate(self.send_with(context, tools, stream, renewed).await?)
-                .await;
+            return crate::http_error::check_response(
+                self.send_with(context, tools, stream, renewed).await?,
+            )
+            .await;
         }
-        self.validate(response).await
+        crate::http_error::check_response(response).await
     }
 
     async fn send_with(
@@ -255,30 +256,6 @@ impl OpenAiCodexModel {
             .send()
             .await
             .map_err(|e| ModelError::Request(e.to_string()))
-    }
-
-    async fn validate(&self, response: reqwest::Response) -> Result<reqwest::Response, ModelError> {
-        if !response.status().is_success() {
-            let status = response.status();
-            let bytes = response.bytes().await.unwrap_or_default();
-            let body = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)])
-                .chars()
-                .map(|ch| {
-                    if ch.is_control() && !ch.is_whitespace() {
-                        ' '
-                    } else {
-                        ch
-                    }
-                })
-                .collect::<String>();
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                return Err(ModelError::Authentication(format!(
-                    "Codex login was rejected after refresh: {body}"
-                )));
-            }
-            return Err(ModelError::Request(format!("Codex HTTP {status}: {body}")));
-        }
-        Ok(response)
     }
 }
 

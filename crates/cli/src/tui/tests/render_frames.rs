@@ -357,7 +357,7 @@ fn glyph_style_reads_every_mark_from_the_table() {
             screen.contains(&format!("└─ {} shell $ true", g.running[0])),
             "{screen}"
         );
-        assert_eq!(g.running, &['⬚']);
+        assert_eq!(g.running, &['□']);
         assert_eq!(g.active, &['□', '■']);
         assert_eq!(g.section, '□');
         assert_eq!(g.attention, '!');

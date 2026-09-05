@@ -111,13 +111,19 @@ fn settings_handle_clamps_live_governance() {
     let settings = SubagentDepth::new(1);
     assert_eq!(settings.set_max_steps(0), 1);
     assert_eq!(settings.set_max_steps(99), 99);
-    assert_eq!(settings.set_timeout_secs(1), 30);
+    assert_eq!(settings.set_timeout_secs(1), 1);
     assert_eq!(settings.set_timeout_secs(99_999), 99_999);
-    assert_eq!(settings.set_output_chars(1), 1_000);
+    assert_eq!(settings.set_output_chars(1), 1);
     assert_eq!(settings.set_output_chars(99_999), 99_999);
     assert_eq!(settings.set_tool_attempts(0), 1);
     assert_eq!(settings.set_tool_attempts(99), 99);
     assert_eq!(settings.set_retry_backoff_ms(99_999), 99_999);
+    assert_eq!(
+        settings.background_limit(),
+        orca_harness_tools::DEFAULT_BACKGROUND_SUBAGENT_LIMIT
+    );
+    assert_eq!(settings.set_background_limit(0), 0);
+    assert_eq!(settings.set_background_limit(u32::MAX), u32::MAX);
     settings.ensure_retry_defaults(3, 250);
     assert_eq!(
         settings.tool_attempts(),
@@ -231,8 +237,12 @@ fn model_chosen_routes_survive_catalog_changes() {
 async fn preference_route_only_accepts_saved_preferred_models() {
     let default = Arc::new(ScriptedModel::new(vec![]));
     let local_a = Arc::new(ScriptedModel::new(vec![]));
-    let local_b = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("local b")]));
-    let flash_a = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("flash a")]));
+    let local_b = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
+        "local b",
+    )]));
+    let flash_a = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
+        "flash a",
+    )]));
     let settings = SubagentDepth::new(1);
     let (ws, _dir) = temp_ws();
     let tool = SubagentTool::new(default.clone(), &ws)
@@ -354,11 +364,11 @@ async fn configured_default_model_applies_when_call_omits_model() {
 }
 
 #[test]
-fn depth_handle_clamps_to_permitted_range() {
+fn depth_handle_requires_positive_depth_without_a_ceiling() {
     let depth = SubagentDepth::new(0);
     assert_eq!(depth.get(), 1);
-    assert_eq!(depth.set(99), 5);
-    assert_eq!(depth.get(), 5);
+    assert_eq!(depth.set(99), 99);
+    assert_eq!(depth.get(), 99);
     assert_eq!(depth.set(3), 3);
 }
 

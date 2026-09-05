@@ -1,0 +1,1180 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.43
+   Compiling rustls-webpki v0.103.14
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling orca-harness-model-providers v0.3.0 (/Users/akashswamy/Workspace/orca-harness/crates/model-providers)
+   Compiling orca-harness-tool-extensions v0.3.0 (/Users/akashswamy/Workspace/orca-harness/crates/tool-extensions)
+   Compiling orca-harness-extensions v0.3.0 (/Users/akashswamy/Workspace/orca-harness/crates/extensions)
+   Compiling orca-harness-tools v0.3.0 (/Users/akashswamy/Workspace/orca-harness/crates/tools)
+   Compiling orcacode v0.3.0 (/Users/akashswamy/Workspace/orca-harness/crates/cli)
+   Compiling orca-harness-sdk v0.3.0 (/Users/akashswamy/Workspace/orca-harness/crates/sdk)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 1m 19s
+     Running unittests src/lib.rs (target/release/deps/orca_harness_core-aba3e641123b991c)
+
+running 2 tests
+test context::tests::push_user_with_images_preserves_image_data ... ignored
+test context::tests::text_only_user_messages_omit_images_and_deserialize_legacy_data ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/dispatch.rs (target/release/deps/dispatch-675f36a4053940ef)
+Benchmarking dispatch/noop_calls/1
+Benchmarking dispatch/noop_calls/1: Warming up for 3.0000 s
+Benchmarking dispatch/noop_calls/1: Collecting 100 samples in estimated 5.0012 s (5.7M iterations)
+Benchmarking dispatch/noop_calls/1: Analyzing
+dispatch/noop_calls/1   time:   [763.25 ns 767.11 ns 770.92 ns]
+                        change: [+4.1800% +4.6098% +5.0487%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 10 outliers among 100 measurements (10.00%)
+  4 (4.00%) low mild
+  6 (6.00%) high mild
+Benchmarking dispatch/noop_calls/10
+Benchmarking dispatch/noop_calls/10: Warming up for 3.0000 s
+Benchmarking dispatch/noop_calls/10: Collecting 100 samples in estimated 5.0346 s (207k iterations)
+Benchmarking dispatch/noop_calls/10: Analyzing
+dispatch/noop_calls/10  time:   [22.203 µs 27.787 µs 34.238 µs]
+                        change: [+16.771% +27.748% +40.359%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) high severe
+Benchmarking dispatch/noop_calls/100
+Benchmarking dispatch/noop_calls/100: Warming up for 3.0000 s
+Benchmarking dispatch/noop_calls/100: Collecting 100 samples in estimated 5.7632 s (30k iterations)
+Benchmarking dispatch/noop_calls/100: Analyzing
+dispatch/noop_calls/100 time:   [179.93 µs 180.62 µs 181.31 µs]
+                        change: [-5.2755% -4.4977% -3.3072%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking extensions/ten_calls_with_exts/0
+Benchmarking extensions/ten_calls_with_exts/0: Warming up for 3.0000 s
+Benchmarking extensions/ten_calls_with_exts/0: Collecting 100 samples in estimated 5.0733 s (252k iterations)
+Benchmarking extensions/ten_calls_with_exts/0: Analyzing
+extensions/ten_calls_with_exts/0
+                        time:   [18.619 µs 18.854 µs 19.073 µs]
+                        change: [-0.3643% +0.4758% +1.3104%] (p = 0.29 > 0.05)
+                        No change in performance detected.
+Found 11 outliers among 100 measurements (11.00%)
+  7 (7.00%) low severe
+  2 (2.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking extensions/ten_calls_with_exts/1
+Benchmarking extensions/ten_calls_with_exts/1: Warming up for 3.0000 s
+Benchmarking extensions/ten_calls_with_exts/1: Collecting 100 samples in estimated 5.0837 s (227k iterations)
+Benchmarking extensions/ten_calls_with_exts/1: Analyzing
+extensions/ten_calls_with_exts/1
+                        time:   [19.869 µs 20.059 µs 20.279 µs]
+                        change: [+4.5282% +5.7557% +6.9773%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking extensions/ten_calls_with_exts/10
+Benchmarking extensions/ten_calls_with_exts/10: Warming up for 3.0000 s
+Benchmarking extensions/ten_calls_with_exts/10: Collecting 100 samples in estimated 5.0662 s (157k iterations)
+Benchmarking extensions/ten_calls_with_exts/10: Analyzing
+extensions/ten_calls_with_exts/10
+                        time:   [30.730 µs 31.060 µs 31.482 µs]
+                        change: [-12.949% -12.131% -11.127%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) low mild
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking keyed/100_calls_4_keys
+Benchmarking keyed/100_calls_4_keys: Warming up for 3.0000 s
+Benchmarking keyed/100_calls_4_keys: Collecting 100 samples in estimated 5.5493 s (40k iterations)
+Benchmarking keyed/100_calls_4_keys: Analyzing
+keyed/100_calls_4_keys  time:   [114.92 µs 116.23 µs 117.54 µs]
+                        change: [-5.0562% -4.2379% -3.3372%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+     Running benches/harness_loop.rs (target/release/deps/harness_loop-763662ef12237012)
+Benchmarking harness_loop/round_trip_n_calls/1
+Benchmarking harness_loop/round_trip_n_calls/1: Warming up for 3.0000 s
+Benchmarking harness_loop/round_trip_n_calls/1: Collecting 100 samples in estimated 5.0036 s (2.1M iterations)
+Benchmarking harness_loop/round_trip_n_calls/1: Analyzing
+harness_loop/round_trip_n_calls/1
+                        time:   [2.3624 µs 2.3682 µs 2.3736 µs]
+                        change: [+7.6991% +8.0036% +8.3172%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking harness_loop/round_trip_n_calls/4
+Benchmarking harness_loop/round_trip_n_calls/4: Warming up for 3.0000 s
+Benchmarking harness_loop/round_trip_n_calls/4: Collecting 100 samples in estimated 5.0123 s (394k iterations)
+Benchmarking harness_loop/round_trip_n_calls/4: Analyzing
+harness_loop/round_trip_n_calls/4
+                        time:   [12.690 µs 13.148 µs 13.631 µs]
+                        change: [-24.974% -23.997% -22.374%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 13 outliers among 100 measurements (13.00%)
+  4 (4.00%) high mild
+  9 (9.00%) high severe
+Benchmarking harness_loop/round_trip_n_calls/16
+Benchmarking harness_loop/round_trip_n_calls/16: Warming up for 3.0000 s
+Benchmarking harness_loop/round_trip_n_calls/16: Collecting 100 samples in estimated 5.0049 s (126k iterations)
+Benchmarking harness_loop/round_trip_n_calls/16: Analyzing
+harness_loop/round_trip_n_calls/16
+                        time:   [38.749 µs 39.096 µs 39.440 µs]
+                        change: [+5.2856% +6.2287% +7.0539%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+Benchmarking harness_loop/round_trip_n_calls/64
+Benchmarking harness_loop/round_trip_n_calls/64: Warming up for 3.0000 s
+Benchmarking harness_loop/round_trip_n_calls/64: Collecting 100 samples in estimated 5.6196 s (35k iterations)
+Benchmarking harness_loop/round_trip_n_calls/64: Analyzing
+harness_loop/round_trip_n_calls/64
+                        time:   [158.65 µs 159.29 µs 160.07 µs]
+                        change: [-5.9250% -5.5418% -5.1855%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low severe
+  2 (2.00%) low mild
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking harness_loop_fanout/suspending_calls/1
+Benchmarking harness_loop_fanout/suspending_calls/1: Warming up for 3.0000 s
+Benchmarking harness_loop_fanout/suspending_calls/1: Collecting 100 samples in estimated 5.0079 s (2.0M iterations)
+Benchmarking harness_loop_fanout/suspending_calls/1: Analyzing
+harness_loop_fanout/suspending_calls/1
+                        time:   [2.4182 µs 2.4237 µs 2.4291 µs]
+                        change: [+5.9910% +6.4003% +6.7829%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking harness_loop_fanout/suspending_calls/8
+Benchmarking harness_loop_fanout/suspending_calls/8: Warming up for 3.0000 s
+Benchmarking harness_loop_fanout/suspending_calls/8: Collecting 100 samples in estimated 5.0807 s (217k iterations)
+Benchmarking harness_loop_fanout/suspending_calls/8: Analyzing
+harness_loop_fanout/suspending_calls/8
+                        time:   [21.773 µs 22.045 µs 22.366 µs]
+                        change: [-4.2458% -3.1389% -1.8771%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+Benchmarking harness_loop_fanout/suspending_calls/64
+Benchmarking harness_loop_fanout/suspending_calls/64: Warming up for 3.0000 s
+Benchmarking harness_loop_fanout/suspending_calls/64: Collecting 100 samples in estimated 5.6787 s (30k iterations)
+Benchmarking harness_loop_fanout/suspending_calls/64: Analyzing
+harness_loop_fanout/suspending_calls/64
+                        time:   [188.41 µs 189.20 µs 189.88 µs]
+                        change: [+0.0761% +0.5450% +1.0314%] (p = 0.03 < 0.05)
+                        Change within noise threshold.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) low severe
+  4 (4.00%) low mild
+  1 (1.00%) high severe
+
+     Running unittests src/lib.rs (target/release/deps/orca_harness_extensions-b38531ad55b36fc2)
+
+running 42 tests
+test compact::tests::a_short_context_is_not_compacted ... ignored
+test compact::tests::compact_rebuilds_system_summary_tail_with_recovery_index ... ignored
+test compact::tests::eliding_stores_the_full_output_and_leaves_small_results_alone ... ignored
+test compact::tests::summary_respects_hard_caps ... ignored
+test compact::tests::tail_cut_never_starts_at_a_tool_message ... ignored
+test memory::public_id::tests::validates_only_canonical_ids ... ignored
+test memory::tests::bounded_context_keeps_each_injected_record_valid_json ... ignored
+test memory::tests::bounded_record_stops_when_metadata_alone_exceeds_budget ... ignored
+test memory::tests::concurrent_first_open_initializes_schema_once ... ignored
+test memory::tests::database_is_owner_only ... ignored
+test memory::tests::database_wal_and_shared_memory_are_owner_only_in_existing_directory ... ignored
+test memory::tests::extension_prepares_bounded_user_authority_context_without_mutating_source ... ignored
+test memory::tests::global_and_workspace_records_are_scoped_before_retrieval ... ignored
+test memory::tests::management_tool_rejects_guessable_ids_and_cross_workspace_mutations ... ignored
+test memory::tests::management_tool_requires_boolean_scope_and_uses_trusted_workspace ... ignored
+test memory::tests::model_overlay_is_transient_not_persisted_and_forget_removes_influence ... ignored
+test memory::tests::opening_v1_backfills_opaque_ids_without_losing_fts_records ... ignored
+test memory::tests::reopening_preserves_records_and_rejects_unknown_schema_versions ... ignored
+test memory::tests::search_tool_lists_or_searches_only_accessible_records ... ignored
+test memory::tests::short_search_terms_are_supported_when_no_longer_term_is_present ... ignored
+test memory::tests::updates_and_deletes_follow_scope_and_keep_fts_in_sync ... ignored
+test memory::tests::validation_handles_blank_content_and_fts_syntax_as_data ... ignored
+test session::tests::assistant_tool_calls_with_results_survive_load ... ignored
+test session::tests::corrupt_middle_line_is_an_error ... ignored
+test session::tests::dangling_trailing_assistant_tool_calls_are_dropped ... ignored
+test session::tests::fork_branches_without_disturbing_the_original ... ignored
+test session::tests::headers_without_a_parent_still_load ... ignored
+test session::tests::list_is_newest_first_and_skips_non_sessions ... ignored
+test session::tests::load_round_trips_header_and_messages ... ignored
+test session::tests::reset_empties_the_session_in_place ... ignored
+test session::tests::resume_continues_appending_to_the_same_file ... ignored
+test session::tests::session_ids_sort_chronologically_and_never_collide ... ignored
+test session::tests::start_new_rotates_to_a_fresh_file ... ignored
+test session::tests::start_new_with_context_creation_failure_keeps_old_recorder_active ... ignored
+test session::tests::start_new_with_context_preserves_old_file_and_records_initial_context ... ignored
+test session::tests::switch_to_adopts_another_session ... ignored
+test session::tests::sync_appends_only_new_messages ... ignored
+test session::tests::sync_rewrites_after_context_shrinks ... ignored
+test session::tests::truncated_final_line_is_dropped_with_warning ... ignored
+test session::tests::unsupported_version_is_an_error ... ignored
+test session::tests::workspace_key_is_stable_and_filesystem_safe ... ignored
+test session::tests::write_error_disables_recording_and_warns_once ... ignored
+
+test result: ok. 0 passed; 0 failed; 42 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/memory.rs (target/release/deps/memory-732401a509c7cde8)
+Benchmarking memory_fts_50k/raw_sql/exact
+Benchmarking memory_fts_50k/raw_sql/exact: Warming up for 3.0000 s
+Benchmarking memory_fts_50k/raw_sql/exact: Collecting 100 samples in estimated 3.0230 s (30k iterations)
+Benchmarking memory_fts_50k/raw_sql/exact: Analyzing
+memory_fts_50k/raw_sql/exact
+                        time:   [97.523 µs 97.735 µs 97.961 µs]
+                        change: [-16.612% -10.519% -4.8634%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) low mild
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+Benchmarking memory_fts_50k/orcacode_store/exact
+Benchmarking memory_fts_50k/orcacode_store/exact: Warming up for 3.0000 s
+Benchmarking memory_fts_50k/orcacode_store/exact: Collecting 100 samples in estimated 3.0011 s (30k iterations)
+Benchmarking memory_fts_50k/orcacode_store/exact: Analyzing
+memory_fts_50k/orcacode_store/exact
+                        time:   [97.272 µs 97.844 µs 98.475 µs]
+                        change: [+1.4090% +2.1986% +3.0191%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking memory_fts_50k/orcacode_context/exact
+Benchmarking memory_fts_50k/orcacode_context/exact: Warming up for 3.0000 s
+Benchmarking memory_fts_50k/orcacode_context/exact: Collecting 100 samples in estimated 3.4648 s (35k iterations)
+Benchmarking memory_fts_50k/orcacode_context/exact: Analyzing
+memory_fts_50k/orcacode_context/exact
+                        time:   [96.160 µs 96.400 µs 96.696 µs]
+                        change: [-1.3770% -1.0336% -0.7024%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 8 outliers among 100 measurements (8.00%)
+  5 (5.00%) high mild
+  3 (3.00%) high severe
+Benchmarking memory_fts_50k/raw_sql/broad
+Benchmarking memory_fts_50k/raw_sql/broad: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 3.0s. You may wish to increase target time to 3.4s, or reduce sample count to 80.
+Benchmarking memory_fts_50k/raw_sql/broad: Collecting 100 samples in estimated 3.3744 s (100 iterations)
+Benchmarking memory_fts_50k/raw_sql/broad: Analyzing
+memory_fts_50k/raw_sql/broad
+                        time:   [33.131 ms 33.261 ms 33.411 ms]
+                        change: [-2.0316% -1.2762% -0.5648%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking memory_fts_50k/orcacode_store/broad
+Benchmarking memory_fts_50k/orcacode_store/broad: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 3.0s. You may wish to increase target time to 3.3s, or reduce sample count to 80.
+Benchmarking memory_fts_50k/orcacode_store/broad: Collecting 100 samples in estimated 3.3427 s (100 iterations)
+Benchmarking memory_fts_50k/orcacode_store/broad: Analyzing
+memory_fts_50k/orcacode_store/broad
+                        time:   [33.465 ms 33.800 ms 34.194 ms]
+                        change: [+0.2981% +1.3545% +2.5606%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 11 outliers among 100 measurements (11.00%)
+  7 (7.00%) high mild
+  4 (4.00%) high severe
+Benchmarking memory_fts_50k/orcacode_context/broad
+Benchmarking memory_fts_50k/orcacode_context/broad: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 3.0s. You may wish to increase target time to 3.4s, or reduce sample count to 80.
+Benchmarking memory_fts_50k/orcacode_context/broad: Collecting 100 samples in estimated 3.3905 s (100 iterations)
+Benchmarking memory_fts_50k/orcacode_context/broad: Analyzing
+memory_fts_50k/orcacode_context/broad
+                        time:   [36.035 ms 36.560 ms 37.096 ms]
+                        change: [+8.8793% +10.491% +12.097%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking memory_fts_50k/raw_sql/forget
+Benchmarking memory_fts_50k/raw_sql/forget: Warming up for 3.0000 s
+Benchmarking memory_fts_50k/raw_sql/forget: Collecting 100 samples in estimated 3.7627 s (20k iterations)
+Benchmarking memory_fts_50k/raw_sql/forget: Analyzing
+memory_fts_50k/raw_sql/forget
+                        time:   [68.457 µs 79.893 µs 100.92 µs]
+                        change: [-8.2686% +66.626% +195.37%] (p = 0.27 > 0.05)
+                        No change in performance detected.
+Found 10 outliers among 100 measurements (10.00%)
+  6 (6.00%) high mild
+  4 (4.00%) high severe
+Benchmarking memory_fts_50k/memory_manage/forget_no_approval
+Benchmarking memory_fts_50k/memory_manage/forget_no_approval: Warming up for 3.0000 s
+Benchmarking memory_fts_50k/memory_manage/forget_no_approval: Collecting 100 samples in estimated 3.5877 s (20k iterations)
+Benchmarking memory_fts_50k/memory_manage/forget_no_approval: Analyzing
+memory_fts_50k/memory_manage/forget_no_approval
+                        time:   [71.386 µs 73.347 µs 75.189 µs]
+                        change: [+1.8379% +11.105% +21.181%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+     Running unittests src/lib.rs (target/release/deps/orca_harness_model_providers-73854e009c5b7163)
+
+running 48 tests
+test http_error::tests::http_retry_classification_and_timing ... ignored
+test openai::stream::tests::accompanying_text_survives_alongside_tool_calls ... ignored
+test openai::stream::tests::completed_empty_stream_is_retryable_instead_of_a_blank_answer ... ignored
+test openai::stream::tests::content_filter_is_distinct_and_not_parsed_as_tool_json ... ignored
+test openai::stream::tests::malformed_tool_json_after_tool_calls_is_not_classified_as_truncated ... ignored
+test openai::stream::tests::missing_done_is_incomplete_even_with_valid_terminal_choice ... ignored
+test openai::stream::tests::multiple_tool_calls_merge_by_index_and_empty_args_become_object ... ignored
+test openai::stream::tests::openrouter_cache_writes_are_split_out_of_cached_tokens ... ignored
+test openai::stream::tests::partial_tool_json_with_length_is_output_limit_and_keeps_usage ... ignored
+test openai::stream::tests::reasoning_deltas_pass_through_but_stay_out_of_final_text ... ignored
+test openai::stream::tests::sse_buffer_consumes_final_frame_without_newline ... ignored
+test openai::stream::tests::sse_buffer_preserves_unicode_at_every_network_split ... ignored
+test openai::stream::tests::sse_buffer_reassembles_payloads_split_at_arbitrary_boundaries ... ignored
+test openai::stream::tests::stream_errors_preserve_provider_retry_policy ... ignored
+test openai::stream::tests::text_stream_emits_deltas_and_accumulates_final_text ... ignored
+test openai::stream::tests::tool_call_arguments_assemble_across_chunks ... ignored
+test openai::stream::tests::usage_only_chunk_with_empty_choices_is_captured ... ignored
+test openai::tests::nested_reasoning_effort_uses_openrouter_shape ... ignored
+test openai::tests::parallel_tool_calls_is_omitted_when_unset ... ignored
+test openai::tests::parallel_tool_calls_is_omitted_without_tools ... ignored
+test openai::tests::parallel_tool_calls_is_sent_when_set ... ignored
+test openai::tests::prompt_cache_and_session_are_opt_in ... ignored
+test openai::tests::reasoning_effort_uses_openai_chat_completions_shape ... ignored
+test openai::tests::text_only_user_content_remains_a_string ... ignored
+test openai::tests::user_images_follow_text_as_data_urls ... ignored
+test openai_codex::catalog_tests::catalog_identifies_the_client_version ... ignored
+test openai_codex::catalog_tests::catalog_maps_supported_and_default_reasoning_levels ... ignored
+test openai_codex::request::tests::encrypted_reasoning_replays_before_tool_output ... ignored
+test openai_codex::request::tests::maps_context_and_tools_to_responses_items ... ignored
+test openai_codex::request::tests::selected_effort_uses_responses_reasoning_shape ... ignored
+test openai_codex::request::tests::user_images_append_data_url_parts ... ignored
+test openai_codex::stream::tests::accumulates_text_tool_and_usage ... ignored
+test openai_codex::stream::tests::captures_encrypted_reasoning_and_rejects_incomplete_tool_calls ... ignored
+test openai_codex::stream::tests::incomplete_terminal_event_is_an_error ... ignored
+test openai_codex::stream::tests::rejects_incomplete_stream ... ignored
+test openai_codex::stream::tests::sse_buffer_accepts_crlf_and_split_frames ... ignored
+test openai_codex::stream::tests::sse_buffer_preserves_utf8_split_at_every_byte ... ignored
+test openai_codex::stream::tests::sse_buffer_uses_the_earliest_mixed_line_ending_delimiter ... ignored
+test openai_codex::stream::tests::stream_errors_preserve_provider_retry_policy ... ignored
+test openrouter::tests::catalog_retains_provider_reasoning_capabilities ... ignored
+test openrouter::tests::free_models_say_free ... ignored
+test openrouter::tests::million_token_contexts_use_m ... ignored
+test openrouter::tests::null_supported_efforts_expands_to_openrouter_gateway_values ... ignored
+test openrouter::tests::omitted_supported_efforts_does_not_invent_a_picker ... ignored
+test openrouter::tests::summary_formats_openrouter_metadata ... ignored
+test openrouter::tests::summary_survives_bare_openai_entries ... ignored
+test vercel::tests::maps_vercel_catalog_fields ... ignored
+test vercel::tests::toggle_only_reasoning_does_not_invent_effort_choices ... ignored
+
+test result: ok. 0 passed; 0 failed; 48 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/orca_harness_provider_auth-853a90f5b49d6ba9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/orca_harness_sdk-5f47070bd47ec924)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/orca_harness_tool_extensions-0170469993d16775)
+
+running 53 tests
+test agent_plugins::mcp::tests::agent_plugin_reserved_env_names_follow_platform_semantics ... ignored
+test mcp::catalog::tests::feature_actions_map_to_exact_mcp_methods ... ignored
+test mcp::catalog::tests::feature_actions_require_their_advertised_capabilities ... ignored
+test mcp::catalog::tests::interface_inputs_reject_invalid_optional_values_and_irrelevant_fields ... ignored
+test mcp::catalog::tests::search_falls_back_to_partial_matches_for_natural_language_queries ... ignored
+test mcp::catalog::tests::search_normalizes_separators_and_basic_plurals ... ignored
+test mcp::catalog::tests::search_ranks_exact_name_terms_above_description_and_plural_fallbacks ... ignored
+test mcp::catalog::tests::search_schema_and_runtime_share_a_ten_result_default ... ignored
+test mcp::client::tests::call_output_joins_text_and_prefers_structured_content ... ignored
+test mcp::client::tests::call_output_rejects_malformed_results ... ignored
+test mcp::client::tests::call_output_surfaces_is_error_as_a_tool_error ... ignored
+test mcp::client::tests::duplicate_tool_names_are_rejected ... ignored
+test mcp::client::tests::initialize_requires_the_supported_version_and_valid_capabilities ... ignored
+test mcp::client::tests::sanitized_launch_environment_allows_runtime_essentials_but_not_secrets ... ignored
+test mcp::client::tests::tool_list_prefixes_names_and_requires_input_schemas ... ignored
+test mcp::client::tests::tool_list_rejects_malformed_results ... ignored
+test mcp::client::tests::tool_page_parses_and_validates_next_cursor ... ignored
+test plugin_hooks::tests::after_tool_hook_can_replace_only_output_and_error_flag ... ignored
+test plugin_hooks::tests::before_tool_hooks_can_rewrite_then_deny ... ignored
+test plugin_hooks::tests::hook_process_does_not_inherit_unrelated_environment_secrets ... ignored
+test plugin_hooks::tests::hook_timeout_is_bounded_and_terminal_for_deterministic_events ... ignored
+test skills::install::tests::checkout_of_a_local_path_is_used_in_place ... ignored
+test skills::install::tests::finds_skills_nested_in_a_source_tree ... ignored
+test skills::install::tests::install_copies_the_folder_and_refuses_to_clobber ... ignored
+test skills::install::tests::install_refuses_an_oversized_source ... ignored
+test skills::install::tests::install_skips_symlinks ... ignored
+test skills::install::tests::parses_the_shapes_the_ecosystem_cli_accepts ... ignored
+test skills::install::tests::scaffold_writes_a_loadable_template_once ... ignored
+test skills::skill::tests::a_broken_skill_is_reported_and_the_others_still_load ... ignored
+test skills::skill::tests::discovers_across_roots_in_precedence_order ... ignored
+test skills::skill::tests::later_roots_are_shadowed_not_dropped_silently ... ignored
+test skills::skill::tests::name_falls_back_to_the_directory ... ignored
+test skills::skill::tests::names_must_be_usable ... ignored
+test skills::skill::tests::reads_name_and_description ... ignored
+test skills::skill::tests::rejects_missing_or_unclosed_frontmatter ... ignored
+test skills::skill::tests::symlinked_skill_folders_are_discovered ... ignored
+test skills::skill::tests::tolerates_unknown_keys_quotes_and_block_scalars ... ignored
+test skills::tool::tests::body_reflects_an_edit_made_after_discovery ... ignored
+test skills::tool::tests::catalog_entries_are_clipped ... ignored
+test skills::tool::tests::loads_instructions_without_the_frontmatter ... ignored
+test skills::tool::tests::long_instructions_page_with_next_offset ... ignored
+test skills::tool::tests::reads_a_resource_beside_the_instructions ... ignored
+test skills::tool::tests::resource_cannot_escape_the_skill_folder ... ignored
+test skills::tool::tests::resource_listing_does_not_follow_escaping_directory_symlinks ... ignored
+test skills::tool::tests::resource_listing_follows_symlinks_only_inside_the_folder ... ignored
+test skills::tool::tests::schema_carries_the_catalog_and_the_enum ... ignored
+test skills::tool::tests::unknown_name_names_the_alternatives ... ignored
+test web::crawl::tests::clipping_respects_char_boundaries ... ignored
+test web::firecrawl::tests::missing_or_malformed_data_yields_no_hits ... ignored
+test web::firecrawl::tests::parses_the_v2_search_shape ... ignored
+test web::policy::tests::allow_private_admits_loopback ... ignored
+test web::policy::tests::strict_accepts_public_literals_and_rejects_schemes ... ignored
+test web::policy::tests::strict_rejects_non_public_literals ... ignored
+
+test result: ok. 0 passed; 0 failed; 53 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/skills.rs (target/release/deps/skills-1f7f8ef7fde269ee)
+Benchmarking skills/discover/1
+Benchmarking skills/discover/1: Warming up for 3.0000 s
+Benchmarking skills/discover/1: Collecting 100 samples in estimated 5.1472 s (121k iterations)
+Benchmarking skills/discover/1: Analyzing
+skills/discover/1       time:   [42.113 µs 42.302 µs 42.510 µs]
+                        change: [+5.6398% +6.2311% +6.7820%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+Benchmarking skills/discover/10
+Benchmarking skills/discover/10: Warming up for 3.0000 s
+Benchmarking skills/discover/10: Collecting 100 samples in estimated 5.1171 s (25k iterations)
+Benchmarking skills/discover/10: Analyzing
+skills/discover/10      time:   [200.04 µs 201.14 µs 202.88 µs]
+                        change: [+1.1662% +2.3366% +3.6400%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) high mild
+  5 (5.00%) high severe
+Benchmarking skills/discover/25
+Benchmarking skills/discover/25: Warming up for 3.0000 s
+Benchmarking skills/discover/25: Collecting 100 samples in estimated 6.7675 s (15k iterations)
+Benchmarking skills/discover/25: Analyzing
+skills/discover/25      time:   [450.37 µs 453.18 µs 457.06 µs]
+                        change: [+4.4333% +5.1307% +6.1093%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking skills/discover/100
+Benchmarking skills/discover/100: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.1s, enable flat sampling, or reduce sample count to 50.
+Benchmarking skills/discover/100: Collecting 100 samples in estimated 9.0821 s (5050 iterations)
+Benchmarking skills/discover/100: Analyzing
+skills/discover/100     time:   [1.8081 ms 1.8225 ms 1.8360 ms]
+                        change: [+9.6811% +10.613% +11.473%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking skills/schema/1
+Benchmarking skills/schema/1: Warming up for 3.0000 s
+Benchmarking skills/schema/1: Collecting 100 samples in estimated 5.0051 s (3.1M iterations)
+Benchmarking skills/schema/1: Analyzing
+skills/schema/1         time:   [1.6039 µs 1.6076 µs 1.6115 µs]
+                        change: [+5.6932% +5.9965% +6.3101%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking skills/schema/25
+Benchmarking skills/schema/25: Warming up for 3.0000 s
+Benchmarking skills/schema/25: Collecting 100 samples in estimated 5.0292 s (434k iterations)
+Benchmarking skills/schema/25: Analyzing
+skills/schema/25        time:   [11.329 µs 11.348 µs 11.366 µs]
+                        change: [+4.6602% +5.0407% +5.4221%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking skills/schema/100
+Benchmarking skills/schema/100: Warming up for 3.0000 s
+Benchmarking skills/schema/100: Collecting 100 samples in estimated 5.1861 s (126k iterations)
+Benchmarking skills/schema/100: Analyzing
+skills/schema/100       time:   [41.342 µs 41.497 µs 41.646 µs]
+                        change: [+3.8304% +4.3711% +4.9060%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking skills/load/instructions
+Benchmarking skills/load/instructions: Warming up for 3.0000 s
+Benchmarking skills/load/instructions: Collecting 100 samples in estimated 5.1288 s (136k iterations)
+Benchmarking skills/load/instructions: Analyzing
+skills/load/instructions
+                        time:   [37.707 µs 37.865 µs 38.049 µs]
+                        change: [-5.2219% -4.7986% -4.3603%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+Benchmarking skills/load/resource
+Benchmarking skills/load/resource: Warming up for 3.0000 s
+Benchmarking skills/load/resource: Collecting 100 samples in estimated 5.1660 s (116k iterations)
+Benchmarking skills/load/resource: Analyzing
+skills/load/resource    time:   [43.946 µs 44.013 µs 44.090 µs]
+                        change: [-6.6829% -6.0309% -5.3503%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 16 outliers among 100 measurements (16.00%)
+  1 (1.00%) high mild
+  15 (15.00%) high severe
+
+Benchmarking skills/unload/toggle
+Benchmarking skills/unload/toggle: Warming up for 3.0000 s
+Benchmarking skills/unload/toggle: Collecting 100 samples in estimated 6.8006 s (15k iterations)
+Benchmarking skills/unload/toggle: Analyzing
+skills/unload/toggle    time:   [452.03 µs 454.09 µs 455.93 µs]
+                        change: [+2.4797% +3.0133% +3.5070%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking skills/unload/delete
+Benchmarking skills/unload/delete: Warming up for 3.0000 s
+Benchmarking skills/unload/delete: Collecting 100 samples in estimated 5.6863 s (600 iterations)
+Benchmarking skills/unload/delete: Analyzing
+skills/unload/delete    time:   [4.7334 ms 4.8900 ms 5.0754 ms]
+                        change: [+6.6713% +10.722% +14.932%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 12 outliers among 100 measurements (12.00%)
+  3 (3.00%) high mild
+  9 (9.00%) high severe
+
+Benchmarking skills/discover/empty
+Benchmarking skills/discover/empty: Warming up for 3.0000 s
+Benchmarking skills/discover/empty: Collecting 100 samples in estimated 5.0488 s (364k iterations)
+Benchmarking skills/discover/empty: Analyzing
+skills/discover/empty   time:   [13.379 µs 13.473 µs 13.582 µs]
+                        change: [+4.8030% +5.2957% +5.7803%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 11 outliers among 100 measurements (11.00%)
+  2 (2.00%) low mild
+  6 (6.00%) high mild
+  3 (3.00%) high severe
+
+     Running unittests src/lib.rs (target/release/deps/orca_harness_tools-d1d6d2220f70ac94)
+
+running 56 tests
+test ask::tests::bare_option_labels_are_accepted_with_fallback_explanations ... ignored
+test ask::tests::clarification_is_serial ... ignored
+test ask::tests::flat_format_is_normalized_to_the_ui_model ... ignored
+test ask::tests::omitted_ids_and_title_are_generated ... ignored
+test ask::tests::rejects_more_than_three_topics ... ignored
+test ask::tests::schema_advertises_only_the_flat_format ... ignored
+test ask::tests::waits_and_returns_topic_answers ... ignored
+test bun_repl::tests::ansi_is_removed_without_losing_text ... ignored
+test bun_repl::tests::calls_serialize_only_against_the_same_repl ... ignored
+test bun_repl::tests::crash_is_reported_and_next_call_restarts ... ignored
+test bun_repl::tests::errors_are_reported_without_losing_state ... ignored
+test bun_repl::tests::high_volume_output_is_truncated_without_losing_completion ... ignored
+test bun_repl::tests::imports_resolve_from_the_working_directory ... ignored
+test bun_repl::tests::multiline_typescript_and_top_level_await_work ... ignored
+test bun_repl::tests::repl_stats_track_liveness ... ignored
+test bun_repl::tests::reset_discards_state_without_a_second_restart_notice ... ignored
+test bun_repl::tests::stderr_is_returned_separately ... ignored
+test bun_repl::tests::temporary_source_is_private_and_removed_on_drop ... ignored
+test bun_repl::tests::terminal_redraws_and_banners_are_removed ... ignored
+test bun_repl::tests::timeout_kills_repl_and_next_call_restarts_fresh ... ignored
+test bun_repl::tests::typescript_state_persists_across_calls ... ignored
+test core_tools::files::tests::capped_list_cuts_with_a_count ... ignored
+test core_tools::files::tests::occurrence_lines_are_one_based_and_capped ... ignored
+test core_tools::files::tests::read_and_list_schemas_require_workspace_relative_paths ... ignored
+test core_tools::files::tests::take_string_arg_moves_the_buffer_out_of_the_input ... ignored
+test core_tools::files::tests::take_string_arg_rejects_missing_or_non_string ... ignored
+test core_tools::glob::tests::path_matching ... ignored
+test core_tools::glob::tests::segment_matching ... ignored
+test core_tools::patch_format::tests::a_files_first_hunk_must_be_unique_and_the_error_names_the_lines ... ignored
+test core_tools::patch_format::tests::anchor_seeks_the_first_match_after_the_cursor ... ignored
+test core_tools::patch_format::tests::anchor_that_matches_nothing_is_an_error ... ignored
+test core_tools::patch_format::tests::anchor_then_append_after_closing_brace ... ignored
+test core_tools::patch_format::tests::context_only_hunk_anchors_the_following_hunk ... ignored
+test core_tools::patch_format::tests::empty_hunk_is_rejected ... ignored
+test core_tools::patch_format::tests::later_hunks_take_the_nearest_match_after_the_previous_one ... ignored
+test core_tools::patch_format::tests::patch_parser_rejects_duplicate_paths ... ignored
+test core_tools::patch_format::tests::text_document_preserves_crlf_and_final_newline ... ignored
+test core_tools::pgroup::tests::kill_group_reaches_grandchildren ... ignored
+test core_tools::process::tests::output_match_ignores_everything_before_it_is_armed ... ignored
+test core_tools::process::tests::output_match_spans_chunks_and_notifies_once ... ignored
+test core_tools::shell::tests::shell_has_no_default_timeout ... ignored
+test core_tools::workspace::tests::rejects_escape_and_absolute ... ignored
+test kernel::tests::driver_exits_on_stdin_eof ... ignored
+test subagent::background::manager::tests::abandoned_admission_releases_registration_and_completion_capacity ... ignored
+test subagent::background::manager::tests::cancel_all_preserves_live_capacity_across_notification_generations ... ignored
+test subagent::background::manager::tests::cancel_all_wakes_queued_acquisition_without_a_slot_release ... ignored
+test subagent::background::manager::tests::completion_capacity_is_released_by_consumption_or_cancellation ... ignored
+test todo::tests::a_write_replaces_the_whole_list ... ignored
+test todo::tests::an_empty_list_clears_the_plan ... ignored
+test todo::tests::malformed_input_is_refused_with_the_offending_index ... ignored
+test todo::tests::schema_limits_when_the_tool_should_be_used ... ignored
+test todo::tests::status_synonyms_are_accepted ... ignored
+test todo::tests::the_handle_is_shared_with_the_host ... ignored
+test todo::tests::the_result_carries_the_list_and_the_counts ... ignored
+test todo::tests::two_items_in_progress_is_refused ... ignored
+test todo::tests::writes_serialize_against_each_other ... ignored
+
+test result: ok. 0 passed; 0 failed; 56 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/release/deps/orcacode-31d83b001be720e2)
+
+running 552 tests
+test approval::tests::allow_always_stops_asking_for_that_tool ... ignored
+test approval::tests::auto_mode_leaves_gated_calls_to_the_automatic_reviewer ... ignored
+test approval::tests::deny_and_dropped_ui_both_deny ... ignored
+test approval::tests::gated_tool_waits_for_allow_once ... ignored
+test approval::tests::mutations_compute_subagent_and_memory_writes_are_gated ... ignored
+test approval::tests::non_yolo_modes_still_prompt ... ignored
+test approval::tests::saved_approvals_do_not_leak_across_workspaces ... ignored
+test approval::tests::saved_workspace_approval_skips_the_prompt ... ignored
+test approval::tests::ungated_tools_pass_without_asking ... ignored
+test approval::tests::yolo_mode_prompts_for_nothing ... ignored
+test auth::oauth_device::tests::only_forbidden_means_authorization_pending ... ignored
+test auth::openai_codex::tests::atomic_persistence_preserves_unknown_fields ... ignored
+test auth::openai_codex::tests::decodes_expiry_and_distinguishes_malformed_auth ... ignored
+test auth::openai_codex::tests::missing_auth_is_distinct_and_actionable ... ignored
+test auth::openai_codex::tests::refresh_contract_matches_official_codex_json_shape ... ignored
+test auth::openai_codex::tests::unauthorized_recovery_reuses_a_concurrently_rotated_token ... ignored
+test auth::store::tests::refuses_relative_credential_paths ... ignored
+test auto_approval::shell_policy::tests::admits_routine_local_development_commands ... ignored
+test auto_approval::shell_policy::tests::rejects_malformed_or_extended_shell_inputs ... ignored
+test auto_approval::shell_policy::tests::reviews_composed_external_destructive_or_path_escaping_commands ... ignored
+test auto_approval::shell_policy::tests::reviews_existing_symlink_operands_that_resolve_outside_the_workspace ... ignored
+test auto_approval::tests::auto_reviews_and_executes_the_final_rewritten_action ... ignored
+test auto_approval::tests::composed_shell_command_falls_back_to_exact_action_review ... ignored
+test auto_approval::tests::exact_cautions_are_reused_for_the_current_root_request ... ignored
+test auto_approval::tests::invalid_review_fails_closed_without_executing ... ignored
+test auto_approval::tests::real_routine_shell_command_bypasses_the_reviewer ... ignored
+test auto_approval::tests::real_workspace_edit_bypasses_the_reviewer ... ignored
+test auto_approval::tests::reviewer_accepts_only_clear_or_explained_caution ... ignored
+test auto_approval::tests::reviewer_prompt_allows_normal_intermediate_development_steps ... ignored
+test auto_approval::tests::routine_local_work_skips_review_but_egress_and_deletion_do_not ... ignored
+test auto_approval::tests::subagent_tasks_cannot_replace_root_authority ... ignored
+test changelog::tests::latest_is_one_release_and_full_is_newest_first ... ignored
+test config::storage::tests::approvals_are_scoped_per_workspace_and_removable ... ignored
+test config::storage::tests::config_file_is_written_owner_only ... ignored
+test config::storage::tests::corrupt_config_is_replaced_not_fatal ... ignored
+test config::storage::tests::enabling_a_plugin_atomically_canonicalizes_root_and_preserves_unknown_fields ... ignored
+test config::storage::tests::every_numeric_subagent_setting_round_trips_custom_values ... ignored
+test config::storage::tests::extension_overrides_round_trip_and_coexist ... ignored
+test config::storage::tests::malformed_plugin_entries_are_skipped_and_valid_entries_can_change_state ... ignored
+test config::storage::tests::mcp_servers_round_trip_and_are_removable ... ignored
+test config::storage::tests::plugin_data_directory_creation_is_explicit_and_yields_a_directory ... ignored
+test config::storage::tests::plugin_data_directory_is_created_lazily_with_owner_only_permissions ... ignored
+test config::storage::tests::plugin_data_path_is_beside_config_under_the_plugin_name ... ignored
+test config::storage::tests::plugins_round_trip_in_name_order_and_preserve_unrelated_config ... ignored
+test config::storage::tests::provider_theme_and_models_round_trip_alongside_keys ... ignored
+test config::storage::tests::save_preserves_unknown_fields ... ignored
+test config::storage::tests::save_then_load_round_trips_per_provider ... ignored
+test config::storage::tests::saved_subagent_model_chosen_routes_load_without_a_model_catalog ... ignored
+test config::storage::tests::skill_overrides_default_on_and_round_trip ... ignored
+test config::storage::tests::subagent_preferences_round_trip_and_preserve_other_config ... ignored
+test config::storage::tests::toggling_preserves_the_command_and_promotes_the_string_shape ... ignored
+test extensions::tests::defaults_apply_until_an_override_is_saved ... ignored
+test extensions::tests::mutation_errors_are_not_retryable ... ignored
+test extensions::tests::real_multi_edit_match_error_executes_once ... ignored
+test extensions::tests::real_write_guard_error_executes_once ... ignored
+test extensions::tests::unknown_names_are_never_enabled ... ignored
+test instructions::tests::a_blank_file_is_not_an_instruction ... ignored
+test instructions::tests::all_three_roots_load_in_precedence_order ... ignored
+test instructions::tests::capping_respects_char_boundaries ... ignored
+test instructions::tests::nothing_on_disk_is_silent_and_adds_no_block ... ignored
+test instructions::tests::notices_name_each_file_and_its_size ... ignored
+test instructions::tests::oversized_files_are_capped_and_reported ... ignored
+test instructions::tests::the_block_states_precedence ... ignored
+test instructions::tests::the_same_file_is_never_loaded_twice ... ignored
+test mcp::tests::changed_standalone_remains_first_in_actual_catalog_order ... ignored
+test mcp::tests::desired_id_collisions_exclude_all_affected_plugins_only ... ignored
+test mcp::tests::enabled_plugin_joins_existing_catalog_and_disabled_plugin_is_absent ... ignored
+test mcp::tests::enabled_plugin_without_stdio_is_loaded_and_never_creates_data ... ignored
+test mcp::tests::hook_tests::enabled_plugin_hooks_prepare_data_and_join_the_extension_lifecycle ... ignored
+test mcp::tests::invalid_only_plugin_reports_degraded_mcp_component ... ignored
+test mcp::tests::missing_plugin_does_not_block_a_healthy_sibling ... ignored
+test mcp::tests::ordering_tests::desired_order_is_standalone_then_sorted_plugins_and_servers ... ignored
+test mcp::tests::plugin_data_creation_failure_is_scoped_and_retained ... ignored
+test mcp::tests::plugin_mcp_inventory_exposes_provenance_and_live_server_state ... ignored
+test mcp::tests::reload_only_touches_servers_that_changed ... ignored
+test mcp::tests::reload_reports_per_server_and_replaces_the_set ... ignored
+test mcp::tests::structured_launch_identity_includes_args_env_cwd_and_environment_policy ... ignored
+test mcp::tests::unsupported_only_plugin_reports_degraded_mcp_component ... ignored
+test mcp::tests::valid_server_with_invalid_sibling_reports_degraded_live_state ... ignored
+test mode::tests::any_plan_file_is_writable_and_nothing_outside_is ... ignored
+test mode::tests::denial_names_the_tool_and_asks_for_a_plan ... ignored
+test mode::tests::handle_defaults_to_normal_and_shares_state ... ignored
+test mode::tests::labels_round_trip_and_accept_synonyms ... ignored
+test mode::tests::normal_mode_gates_nothing ... ignored
+test mode::tests::only_successful_plan_writes_are_recorded ... ignored
+test mode::tests::plan_mode_allows_only_the_read_only_set ... ignored
+test mode::tests::switching_the_handle_applies_immediately ... ignored
+test mode::tests::the_denial_points_at_the_directory_not_a_file ... ignored
+test mode::tests::unknown_tools_are_denied_in_plan_mode ... ignored
+test mode::tests::yolo_mode_gates_nothing ... ignored
+test mode::tests::yolo_mode_records_no_plans ... ignored
+test model_gates::tests::endpoint_clones_and_models_share_quota_but_credentials_and_hosts_do_not ... ignored
+test msg::tests::vercel_gateway_provider_has_expected_configuration ... ignored
+test plan::tests::an_episode_briefs_once_and_collects_what_was_written ... ignored
+test plan::tests::clones_share_one_episode ... ignored
+test plan::tests::dates_match_the_civil_calendar ... ignored
+test plan::tests::nothing_outside_the_plan_directory_is_a_plan ... ignored
+test plan::tests::plan_paths_are_markdown_files_in_the_plan_directory ... ignored
+test plan::tests::the_briefing_hands_the_decision_to_the_model ... ignored
+test prompt::skill_mentions::tests::expands_exact_known_mentions_once_in_prompt_order ... ignored
+test prompt::skill_mentions::tests::leaves_unknown_and_non_token_dollars_unchanged ... ignored
+test refine::apply::tests::apply_refuses_an_existing_folder ... ignored
+test refine::apply::tests::apply_writes_skill_md_and_scripts_then_undo_removes_them ... ignored
+test refine::proposal::tests::a_declined_run_parses_as_no_lesson_with_its_reason ... ignored
+test refine::proposal::tests::a_truncated_reply_is_diagnosed_as_out_of_budget_not_schema ... ignored
+test refine::proposal::tests::parses_a_fenced_proposal_with_scripts ... ignored
+test refine::proposal::tests::scripts_are_optional_and_schema_errors_are_reported ... ignored
+test refine::proposer::tests::a_name_collision_with_an_installed_skill_is_repaired ... ignored
+test refine::proposer::tests::a_no_lesson_reply_is_a_reasoned_decline_not_an_error ... ignored
+test refine::proposer::tests::a_valid_first_reply_needs_no_repair ... ignored
+test refine::proposer::tests::an_empty_session_refuses_to_run ... ignored
+test refine::proposer::tests::an_invalid_reply_gets_one_repair_retry_with_failures_fed_back ... ignored
+test refine::proposer::tests::an_unparseable_reply_is_repaired_not_fatal ... ignored
+test refine::proposer::tests::exhausted_repair_retries_are_an_error_not_a_loop ... ignored
+test refine::trajectory::tests::events_get_stable_host_ids_and_skip_system ... ignored
+test refine::trajectory::tests::oversized_events_are_capped_and_old_events_yield_to_the_budget ... ignored
+test refine::trajectory::tests::prompt_offers_the_decline_reply_and_lists_existing_skills ... ignored
+test refine::trajectory::tests::prompt_states_contract_and_injects_roster_not_call_ids ... ignored
+test refine::validate::tests::a_clean_proposal_passes_every_check ... ignored
+test refine::validate::tests::a_name_already_installed_fails_with_the_collision_named ... ignored
+test refine::validate::tests::allowlisted_idioms_are_not_rejected ... ignored
+test refine::validate::tests::banned_names_in_comments_do_not_fail_the_scan ... ignored
+test refine::validate::tests::empty_citations_and_empty_name_fail ... ignored
+test refine::validate::tests::failures_name_the_offending_values ... ignored
+test refine::validate::tests::non_py_non_sh_script_paths_fail ... ignored
+test refine::validate::tests::repair_feedback_lists_only_failures ... ignored
+test refine::validate::tests::shell_scripts_validate_against_their_own_allowlist ... ignored
+test refine::validate::tests::shell_structure_is_not_mistaken_for_commands ... ignored
+test refine::validate::tests::shell_violations_name_each_rejected_command ... ignored
+test runtime::completions::tests::cancelled_generation_settles_ui_without_waking_parent ... ignored
+test runtime::completions::tests::conversation_reset_discards_pending_and_late_old_results ... ignored
+test runtime::completions::tests::delivery_appends_one_user_turn_per_model_call_with_everything_ready ... ignored
+test runtime::completions::tests::drain_orders_by_spawn_and_drops_stale_generations ... ignored
+test runtime::completions::tests::parent_mid_turn_receives_the_batch_before_its_next_model_call ... ignored
+test runtime::completions::tests::prompt_carries_every_result_as_untrusted_delimited_data ... ignored
+test runtime::completions::tests::ready_checks_and_wakeups_do_not_rescan_or_enqueue_per_completion ... ignored
+test runtime::completions::tests::undelivered_results_backpressure_admission_until_consumed ... ignored
+test runtime::startup::tests::empty_healthy_inventory_does_not_add_noise ... ignored
+test runtime::startup::tests::successes_collapse_into_one_inventory_and_diagnostics_remain ... ignored
+test runtime::subagents::tests::host_hooks_keep_order_and_output_policy_reads_live_settings ... ignored
+test runtime::worker::tests::clear_rotation_failure_leaves_context_and_old_transcript_unchanged ... ignored
+test runtime::worker::tests::clear_rotation_preserves_old_transcript_and_records_fresh_context ... ignored
+test runtime::worker::tests::clear_without_session_prepares_fresh_context_and_no_session_id ... ignored
+test runtime::worker::tests::long_session_continues_across_bounded_agent_runs ... ignored
+test runtime::worker::tests::process_notifications_are_framed_as_untrusted_model_context ... ignored
+test runtime::worker::tests::stale_process_generations_cannot_wake_the_current_agent ... ignored
+test skills::plugins::tests::enabled_skills_join_the_tool_and_disabled_ones_do_not ... ignored
+test skills::plugins::tests::workspace_skill_shadows_same_named_plugin_skill ... ignored
+test skills::tests::catalog_carries_shadowed_and_failed_rows ... ignored
+test skills::tests::disabled_skills_leave_the_tool_but_stay_in_the_catalog ... ignored
+test skills::tests::memory_queries_real_skill_prompt_and_preserves_tool_continuation ... ignored
+test skills::tests::mention_model_expands_for_the_model_without_mutating_context ... ignored
+test skills::tests::reload_reports_only_what_changed ... ignored
+test split_main_tests::main_tests::a_planning_episode_briefs_once_and_names_no_file ... ignored
+test split_main_tests::main_tests::a_second_episode_briefs_again ... ignored
+test split_main_tests::main_tests::bare_and_tool_allowlists_are_headless_only ... ignored
+test split_main_tests::main_tests::bare_prompt_is_small_and_enforces_the_requested_output_contract ... ignored
+test split_main_tests::main_tests::context_from_copies_the_messages_it_is_given ... ignored
+test split_main_tests::main_tests::headless_benchmark_flags_parse_without_changing_interactive_defaults ... ignored
+test split_main_tests::main_tests::instructions_append_to_the_prompt_without_entering_it ... ignored
+test split_main_tests::main_tests::normal_is_default_and_auto_requires_its_flag ... ignored
+test split_main_tests::main_tests::normal_mode_opens_no_episode ... ignored
+test split_main_tests::main_tests::prompt_cache_defaults_on_and_can_be_disabled ... ignored
+test split_main_tests::main_tests::provider_precedence_is_explicit_not_inferred_from_url_text ... ignored
+test split_main_tests::main_tests::rewind_cuts_on_a_user_boundary ... ignored
+test split_main_tests::main_tests::rewind_never_leaves_dangling_tool_calls ... ignored
+test split_main_tests::main_tests::rewinding_a_conversation_with_no_turns_is_a_no_op ... ignored
+test split_main_tests::main_tests::rewinding_past_the_start_rewinds_everything_it_can ... ignored
+test split_main_tests::main_tests::spawned_subagents_inherit_the_plan_gate ... ignored
+test split_main_tests::main_tests::startup_flags_pick_the_safest_requested_mode ... ignored
+test split_main_tests::main_tests::system_prompt_advertises_persistent_compute_and_subagent ... ignored
+test split_main_tests::main_tests::system_prompt_advertises_scoped_memory_tools ... ignored
+test split_main_tests::main_tests::system_prompt_advertises_the_task_list ... ignored
+test split_main_tests::main_tests::system_prompt_advertises_web_tools_to_match_registration ... ignored
+test split_main_tests::main_tests::system_prompt_instructs_concurrent_batching ... ignored
+test split_main_tests::main_tests::system_prompt_instructs_planning_and_persistent_compute_state ... ignored
+test split_main_tests::main_tests::system_prompt_leaves_skills_to_the_tool_description ... ignored
+test split_main_tests::main_tests::system_prompt_requires_bounded_subagent_delegation ... ignored
+test split_main_tests::main_tests::theme_prefers_explicit_then_stored_then_default ... ignored
+test subagent_models::tests::local_choices_exist_without_a_cloud_key ... ignored
+test subagent_models::tests::openrouter_key_adds_all_three_remote_tiers ... ignored
+test subagent_models::tests::shortlist_has_three_unique_models_per_tier ... ignored
+test subagent_settings::tests::explicit_concurrency_overrides_storage_and_clones_stay_live ... ignored
+test subagent_settings::tests::retry_setup_preserves_live_custom_values_on_rebuild ... ignored
+test tui::app::tests::git_branch_is_absent_outside_a_worktree ... ignored
+test tui::clipboard::tests::base64_matches_the_rfc_vectors ... ignored
+test tui::clipboard::tests::base64_round_trips_multibyte_text ... ignored
+test tui::clipboard::tests::last_code_block_ignores_an_empty_fence_pair ... ignored
+test tui::clipboard::tests::last_code_block_is_none_without_a_fence ... ignored
+test tui::clipboard::tests::last_code_block_keeps_interior_blank_lines ... ignored
+test tui::clipboard::tests::last_code_block_returns_an_unterminated_block ... ignored
+test tui::clipboard::tests::last_code_block_takes_the_final_fence ... ignored
+test tui::clipboard::tests::osc52_wraps_the_payload_for_the_system_selection ... ignored
+test tui::clipboard_image::tests::empty_success_means_no_image ... ignored
+test tui::clipboard_image::tests::invalid_output_and_process_errors_are_distinct ... ignored
+test tui::clipboard_image::tests::valid_png_bytes_are_returned ... ignored
+test tui::command_catalog::tests::arguments_do_not_affect_filtering ... ignored
+test tui::command_catalog::tests::empty_query_lists_every_command ... ignored
+test tui::command_catalog::tests::plugin_management_is_in_the_command_palette ... ignored
+test tui::command_catalog::tests::prefix_matches_rank_before_substring_matches ... ignored
+test tui::command_catalog::tests::unknown_query_matches_nothing ... ignored
+test tui::components::activity_rail::tests::kinds_share_the_same_header_shape ... ignored
+test tui::components::approval::tests::narrow_terminals_reflow_the_choices_instead_of_wrapping_them ... ignored
+test tui::components::approval::tests::wide_terminals_keep_every_choice_on_one_row ... ignored
+test tui::components::approval::tests::yes_no_prompts_offer_two_keys ... ignored
+test tui::components::ask::tests::enter_submits_even_when_no_option_is_selected ... ignored
+test tui::components::ask::tests::long_option_descriptions_wrap_instead_of_truncating ... ignored
+test tui::components::ask::tests::renders_square_topic_and_default_other_input ... ignored
+test tui::components::composer::tests::a_cursor_at_the_end_of_a_full_row_starts_the_next_row ... ignored
+test tui::components::composer::tests::image_pill_uses_the_accent_style ... ignored
+test tui::components::composer::tests::long_input_wraps_and_keeps_the_cursor_on_its_row ... ignored
+test tui::components::composer::tests::very_long_input_scrolls_rows_to_the_cursor ... ignored
+test tui::components::composer::tests::wide_glyphs_wrap_by_cells ... ignored
+test tui::components::message::tests::every_wrapped_user_row_keeps_the_spine ... ignored
+test tui::components::notification::tests::notice_and_error_share_the_system_glyph ... ignored
+test tui::components::picker::tests::an_uncapped_first_column_yields_to_the_columns_after_it ... ignored
+test tui::components::picker::tests::any_other_key_disarms_without_selecting ... ignored
+test tui::components::picker::tests::armed_header_shows_the_action_strip ... ignored
+test tui::components::picker::tests::enter_activates_the_selected_row ... ignored
+test tui::components::picker::tests::enter_on_an_empty_list_never_activates ... ignored
+test tui::components::picker::tests::lines_mark_the_selection ... ignored
+test tui::components::picker::tests::move_by_pages_and_clamps_like_arrow_navigation ... ignored
+test tui::components::picker::tests::navigation_clamps_to_the_list ... ignored
+test tui::components::picker::tests::other_keys_are_ignored ... ignored
+test tui::components::picker::tests::preselection_and_shrink_stay_in_bounds ... ignored
+test tui::components::picker::tests::space_arms_and_the_action_key_fires ... ignored
+test tui::components::picker::tests::space_is_ignored_without_actions_or_rows ... ignored
+test tui::components::picker::tests::styled_header_keeps_its_spans_and_the_windowed_position ... ignored
+test tui::components::picker::tests::table_columns_after_the_first_are_dim_and_the_cursor_row_is_select ... ignored
+test tui::components::picker::tests::table_lines_align_columns_and_cap_long_cells ... ignored
+test tui::components::picker::tests::windowed_lines_keep_a_large_list_cursor_visible_and_show_position ... ignored
+test tui::components::picker::tests::windowed_lines_move_the_window_only_when_the_cursor_leaves_it ... ignored
+test tui::components::picker::tests::windowed_table_lines_keep_columns_stable_across_pages ... ignored
+test tui::components::section::tests::inspector_blocks_separate_from_the_previous_block_only ... ignored
+test tui::components::section::tests::rail_is_a_section_with_tight_internal_rows ... ignored
+test tui::components::section::tests::tray_owns_header_indent_and_single_spacer ... ignored
+test tui::components::status_bar::tests::assembles_segments_in_order_and_anchors_the_workspace_right ... ignored
+test tui::components::status_bar::tests::compact_forms_give_way_before_any_segment_is_dropped ... ignored
+test tui::components::status_bar::tests::keep_segments_survive_everything_else ... ignored
+test tui::components::status_bar::tests::narrow_rows_drop_the_lowest_priority_first ... ignored
+test tui::components::status_bar::tests::selected_reasoning_effort_follows_the_model ... ignored
+test tui::components::status_bar::tests::yolo_segment_renders_like_any_other ... ignored
+test tui::components::subagent_row::tests::drops_task_before_identity_when_narrow ... ignored
+test tui::components::subagent_row::tests::renders_identity_before_task ... ignored
+test tui::components::tabs::tests::strip_emphasizes_the_active_tab_and_dims_the_rest ... ignored
+test tui::components::tabs::tests::strip_without_a_hint_ends_at_the_last_tab ... ignored
+test tui::components::tool_row::tests::a_reserved_row_truncates_like_the_drawn_one_so_the_column_stays_straight ... ignored
+test tui::components::tool_row::tests::renders_branch_call_detail_and_elapsed_as_one_compact_row ... ignored
+test tui::components::tool_row::tests::wide_glyphs_count_as_two_cells ... ignored
+test tui::components::transcript::tests::sections_have_exactly_one_blank_row_between_them ... ignored
+test tui::components::transcript::tests::tight_components_do_not_gain_padding ... ignored
+test tui::components::tree::tests::branch_prefix_and_continuation_agree_on_last ... ignored
+test tui::components::tree::tests::only_the_drawn_row_gets_the_connector ... ignored
+test tui::components::tree::tests::reserved_and_drawn_rows_share_one_budget ... ignored
+test tui::composer::tests::leading_dot_folder_cannot_consume_the_whole_location_budget ... ignored
+test tui::extensions_command_tests::bad_input_reports_and_sends_nothing ... ignored
+test tui::extensions_command_tests::bare_form_opens_the_picker_and_enter_toggles_in_place ... ignored
+test tui::extensions_command_tests::session_loaded_replays_the_transcript ... ignored
+test tui::extensions_command_tests::sessions_picker_navigates_and_enter_resumes ... ignored
+test tui::extensions_command_tests::sessions_picker_windows_to_the_last_few_and_pages_like_models ... ignored
+test tui::extensions_command_tests::space_d_deletes_a_session_but_never_the_active_one ... ignored
+test tui::extensions_command_tests::typed_form_saves_the_toggle_and_reloads ... ignored
+test tui::format::tests::compact_rows_hide_sub_millisecond_noise ... ignored
+test tui::inspector::summary::tests::ask_summary_keeps_questions_and_answers ... ignored
+test tui::inspector::summary::tests::object_collection_rows_keep_distinguishing_fields ... ignored
+test tui::mcp_command_tests::a_toggled_on_server_moves_from_the_placeholder_to_its_state ... ignored
+test tui::mcp_command_tests::add_list_and_remove_round_trip_through_config_and_reload ... ignored
+test tui::mcp_command_tests::bad_input_reports_and_sends_nothing ... ignored
+test tui::mcp_command_tests::mcp_picker_filters_by_typing_and_reports_position ... ignored
+test tui::mcp_command_tests::plugin_server_rows_are_visible_filterable_and_read_only ... ignored
+test tui::mcp_command_tests::redaction_keeps_env_references_and_the_rest_of_the_command ... ignored
+test tui::mcp_command_tests::redaction_leaves_ordinary_commands_alone ... ignored
+test tui::mcp_command_tests::redaction_masks_literal_credentials_in_every_shape ... ignored
+test tui::mcp_command_tests::rows_report_tool_counts_and_connection_errors ... ignored
+test tui::mcp_command_tests::space_toggles_the_selected_server_and_the_overlay_stays_open ... ignored
+test tui::mcp_command_tests::the_picker_never_renders_a_literal_token ... ignored
+test tui::mode_rewind_todo_tests::completed_todo_progress_says_complete ... ignored
+test tui::mode_rewind_todo_tests::entering_plan_mode_says_nothing_about_files ... ignored
+test tui::mode_rewind_todo_tests::fork_asks_the_worker_to_branch ... ignored
+test tui::mode_rewind_todo_tests::forking_moves_the_session_id_without_touching_the_transcript ... ignored
+test tui::mode_rewind_todo_tests::leaving_plan_mode_reports_only_plans_that_were_written ... ignored
+test tui::mode_rewind_todo_tests::mode_picker_applies_the_picked_mode_on_enter ... ignored
+test tui::mode_rewind_todo_tests::mode_toggles_bare_and_sets_by_name ... ignored
+test tui::mode_rewind_todo_tests::mode_yolo_announces_itself_loudly ... ignored
+test tui::mode_rewind_todo_tests::non_normal_modes_show_in_the_status_line ... ignored
+test tui::mode_rewind_todo_tests::rewind_redraws_the_transcript_and_keeps_the_token_totals ... ignored
+test tui::mode_rewind_todo_tests::rewind_sends_the_turn_count_and_rejects_nonsense ... ignored
+test tui::mode_rewind_todo_tests::switching_from_plan_to_yolo_ends_the_episode_once ... ignored
+test tui::mode_rewind_todo_tests::todo_progress_pins_the_full_plan_in_the_live_region ... ignored
+test tui::mode_rewind_todo_tests::todo_progress_shows_in_the_status_line_once_there_is_a_list ... ignored
+test tui::mode_rewind_todo_tests::todo_renders_the_list_and_says_so_when_there_is_none ... ignored
+test tui::nested_rail_tests::completion_folds_inner_log_into_the_expandable_record ... ignored
+test tui::nested_rail_tests::deeper_spawns_indent_further ... ignored
+test tui::nested_rail_tests::inner_tools_render_indented_under_the_subagent_line ... ignored
+test tui::nested_rail_tests::parallel_nested_subagents_keep_identity_and_children_under_their_own_rows ... ignored
+test tui::nested_rail_tests::subagent_row_names_resolved_provider_and_model ... ignored
+test tui::plugin_command_tests::picker_lists_configured_and_live_state_and_filters ... ignored
+test tui::plugin_command_tests::picker_test_action_sends_the_selected_registered_root ... ignored
+test tui::plugin_command_tests::typed_init_and_static_validate_use_the_tui_workspace ... ignored
+test tui::plugin_command_tests::typed_test_resolves_paths_from_the_tui_workspace ... ignored
+test tui::plugin_command_tests::typed_uninstall_warns_that_loaded_tools_survive_until_exit ... ignored
+test tui::refine_command_tests::a_scriptless_proposal_says_so_and_errors_use_the_notification_glyph ... ignored
+test tui::refine_command_tests::refine_and_undo_send_their_worker_commands ... ignored
+test tui::refine_command_tests::refine_done_renders_the_house_style_block ... ignored
+test tui::refine_command_tests::the_refine_approval_is_yes_no_only ... ignored
+test tui::render::plugins::tests::healthy_skill_keeps_failed_mcp_plugin_degraded_not_wholly_failed ... ignored
+test tui::render::plugins::tests::live_label_combines_skill_and_mcp_components ... ignored
+test tui::render::shell::live::tests::a_running_live_region_keeps_its_foot ... ignored
+test tui::render::shell::tests::a_shorter_hint_drops_its_last_piece_only ... ignored
+test tui::render::shell::tests::inspector_content_width_comes_from_the_padded_block ... ignored
+test tui::render::shell::tests::split_falls_back_to_stacking_on_narrow_terminals ... ignored
+test tui::skills_command_tests::backspace_removes_an_inserted_skill_mention_in_one_go ... ignored
+test tui::skills_command_tests::delete_action_removes_an_installed_skill ... ignored
+test tui::skills_command_tests::delete_refuses_a_skill_from_a_root_it_does_not_own ... ignored
+test tui::skills_command_tests::dollar_picker_filters_and_inserts_an_enabled_skill ... ignored
+test tui::skills_command_tests::dollar_picker_pages_through_large_skill_catalogs ... ignored
+test tui::skills_command_tests::e2e_add_use_and_remove_a_published_skill ... ignored, network: clones a github repository and calls a model
+test tui::skills_command_tests::empty_catalog_points_at_add_and_create ... ignored
+test tui::skills_command_tests::plugin_skill_row_is_read_only_and_enter_inserts_its_mention ... ignored
+test tui::skills_command_tests::reload_goes_through_the_worker_and_garbage_is_rejected ... ignored
+test tui::skills_command_tests::shell_dollars_keep_their_normal_meaning ... ignored
+test tui::skills_command_tests::show_reports_one_skill_and_rejects_unknown_names ... ignored
+test tui::skills_command_tests::skills_picker_filters_by_typing_and_backspace ... ignored
+test tui::skills_command_tests::space_reveals_the_actions_and_t_toggles ... ignored
+test tui::skills_command_tests::submitting_a_skill_mention_keeps_visible_and_worker_text_exact ... ignored
+test tui::stats_segment_tests::segments_render_only_nonzero_counts ... ignored
+test tui::subagent_route_tests::model_chosen_routes_are_selectable ... ignored
+test tui::subagent_route_tests::route_picker_explains_every_policy_in_the_rendered_buffer ... ignored
+test tui::subagent_route_tests::subagent_numeric_controls_render_with_last_row_visible ... ignored
+test tui::subagents_command_tests::subagents_command_sets_custom_depth ... ignored
+test tui::subagents_command_tests::subagents_picker_accepts_custom_numbers_and_unlimited ... ignored
+test tui::subagents_command_tests::subagents_presets_keep_lower_and_upper_choices_selectable ... ignored
+test tui::tests::a_marker_expands_to_the_held_text_on_send ... ignored
+test tui::tests::a_multiline_paste_is_one_marker_and_submits_nothing ... ignored
+test tui::tests::a_narrow_split_stacks_the_inspector_under_the_transcript ... ignored
+test tui::tests::a_removed_marker_leaves_later_markers_expanding ... ignored
+test tui::tests::a_running_live_region_keeps_the_spinner_row_when_it_overflows ... ignored
+test tui::tests::a_short_single_line_paste_is_typed_through ... ignored
+test tui::tests::a_split_gives_the_transcript_pane_a_header ... ignored
+test tui::tests::a_tight_status_row_shortens_the_hint_before_dropping_the_model ... ignored
+test tui::tests::addresses_and_bare_at_signs_survive_submission ... ignored
+test tui::tests::agent_browser_orders_concurrent_spawns_as_parent_linked_trees ... ignored
+test tui::tests::agent_browser_reuses_terminal_body_and_invalidates_changed_projection ... ignored
+test tui::tests::agent_browser_reuses_tree_counts_and_terminal_table_until_state_changes ... ignored
+test tui::tests::agent_browser_routes_mouse_and_ignores_composer_paste ... ignored
+test tui::tests::agent_browser_tab_cycles_running_done_failed_and_all ... ignored
+test tui::tests::agent_browser_tab_keeps_the_cursor_on_the_same_agent_when_it_stays_visible ... ignored
+test tui::tests::agent_history_evicts_old_completions_but_preserves_active_children ... ignored
+test tui::tests::api_key_overlay_accepts_pasted_text ... ignored
+test tui::tests::api_key_prompt_masks_input_and_submits_on_enter ... ignored
+test tui::tests::approval_legend_reflows_on_a_sixty_column_frame ... ignored
+test tui::tests::approval_verdicts_align_under_the_call ... ignored
+test tui::tests::arrows_step_over_a_marker_rather_than_into_it ... ignored
+test tui::tests::assistant_deltas_are_markdown_rendered_while_streaming ... ignored
+test tui::tests::assistant_deltas_render_in_the_transcript_above_live_status ... ignored
+test tui::tests::at_inside_a_word_does_not_open_the_location_picker ... ignored
+test tui::tests::at_opens_the_standard_location_picker_and_filters_as_you_type ... ignored
+test tui::tests::background_run_start_is_hidden_and_stale_completion_is_ignored ... ignored
+test tui::tests::backspace_cancels_an_empty_location_picker_and_removes_the_at ... ignored
+test tui::tests::backspace_removes_a_marker_whole ... ignored
+test tui::tests::backspace_removes_an_image_pill_whole ... ignored
+test tui::tests::backspace_removes_an_inserted_location_mention_in_one_go ... ignored
+test tui::tests::bang_composer_keeps_the_original_unfilled_style ... ignored
+test tui::tests::bang_prompt_dispatches_a_shell_tool_in_the_workspace ... ignored
+test tui::tests::capital_a_saves_the_approval_and_settings_can_revoke_it ... ignored
+test tui::tests::catalog_reply_opens_the_picker_seeded_with_the_command_filter ... ignored
+test tui::tests::clear_flushes_the_screen_and_resets_session_state ... ignored
+test tui::tests::clearing_the_conversation_drops_the_copyable_answer ... ignored
+test tui::tests::clipboard_image_is_an_atomic_pill_and_sends_native_data ... ignored
+test tui::tests::command_palette_uses_the_shared_tabular_window ... ignored
+test tui::tests::compact_command_reaches_the_worker_and_reports_the_result ... ignored
+test tui::tests::completed_assistant_event_does_not_blank_the_stream_before_result ... ignored
+test tui::tests::completed_run_keeps_activity_expanded_before_the_answer ... ignored
+test tui::tests::composer_has_one_blank_row_above_it_without_a_divider ... ignored
+test tui::tests::context_meter_tracks_the_latest_step_not_the_session_total ... ignored
+test tui::tests::context_segment_shows_percentage_when_the_window_is_known ... ignored
+test tui::tests::copy_all_flattens_the_transcript_to_plain_text ... ignored
+test tui::tests::copy_code_takes_the_last_fenced_block ... ignored
+test tui::tests::copy_mid_stream_takes_the_partial_answer_and_names_it ... ignored
+test tui::tests::copy_refuses_a_payload_the_terminal_would_truncate ... ignored
+test tui::tests::copy_rejects_an_unknown_target ... ignored
+test tui::tests::copy_says_so_when_there_is_nothing_to_copy ... ignored
+test tui::tests::copying_the_inspected_tool_leaves_the_transcript_out ... ignored
+test tui::tests::crlf_pastes_are_normalized_before_counting ... ignored
+test tui::tests::ctrl_y_copies_the_last_answer_verbatim ... ignored
+test tui::tests::delete_cancels_an_empty_location_picker_and_removes_the_at ... ignored
+test tui::tests::delete_removes_a_marker_whole_from_its_start ... ignored
+test tui::tests::delete_removes_an_image_pill_whole_from_its_start ... ignored
+test tui::tests::detached_agent_keeps_a_bounded_semantic_transcript_until_clear ... ignored
+test tui::tests::down_focuses_agents_and_enter_opens_the_live_browser ... ignored
+test tui::tests::down_keeps_history_behavior_when_the_composer_has_a_draft ... ignored
+test tui::tests::edit_activity_keeps_its_diff_preview ... ignored
+test tui::tests::effort_command_opens_active_models_effort_picker_and_updates_effort ... ignored
+test tui::tests::elapsed_labels_keep_sub_millisecond_tool_timings_visible ... ignored
+test tui::tests::empty_session_has_a_useful_static_welcome ... ignored
+test tui::tests::errors_use_the_same_glyph_as_notices_with_an_error_body ... ignored
+test tui::tests::failed_clear_notice_keeps_visible_conversation_state ... ignored
+test tui::tests::failed_run_pauses_the_queue_until_empty_enter_resumes_it ... ignored
+test tui::tests::failed_tool_expands_its_output_in_the_rail ... ignored
+test tui::tests::glyph_style_marks_the_stream_and_meters_the_context ... ignored
+test tui::tests::glyph_style_reads_every_mark_from_the_table ... ignored
+test tui::tests::help_as_the_first_command_opens_the_picker_without_polluting_history ... ignored
+test tui::tests::help_picker_filters_without_writing_to_the_transcript ... ignored
+test tui::tests::help_picker_places_the_selected_command_in_the_composer ... ignored
+test tui::tests::hotkeys_lists_registered_shortcuts_without_starting_a_turn ... ignored
+test tui::tests::image_payloads_follow_visual_pill_order ... ignored
+test tui::tests::immediate_model_failure_renders_without_assistant_label ... ignored
+test tui::tests::inspector_caps_large_file_previews ... ignored
+test tui::tests::inspector_classifies_results_by_shape_not_tool_name ... ignored
+test tui::tests::inspector_collection_output_shows_count_without_json_scaffolding ... ignored
+test tui::tests::inspector_json_preview_stops_after_one_level ... ignored
+test tui::tests::inspector_json_source_renders_content_instead_of_its_envelope ... ignored
+test tui::tests::inspector_marks_live_finished_tool_complete_before_output_arrives ... ignored
+test tui::tests::inspector_output_with_tabs_and_ansi_renders_clean_cells ... ignored
+test tui::tests::inspector_shell_output_leads_with_signal_and_keeps_the_tail ... ignored
+test tui::tests::inspector_source_output_reports_language_shape_and_size ... ignored
+test tui::tests::inspector_write_input_renders_source_instead_of_escaped_json ... ignored
+test tui::tests::interrupted_thinking_still_lands_in_the_rail ... ignored
+test tui::tests::later_turns_have_no_divider_or_trailing_spine ... ignored
+test tui::tests::live_activity_groups_thinking_and_parallel_tools ... ignored
+test tui::tests::live_activity_prioritizes_running_tools_and_bounds_the_history ... ignored
+test tui::tests::live_row_uses_minutes_and_current_turn_token_traffic ... ignored
+test tui::tests::live_tool_completion_freezes_elapsed_before_ordered_result_arrives ... ignored
+test tui::tests::local_model_keeps_image_draft_when_send_is_blocked ... ignored
+test tui::tests::location_picker_searches_entries_beyond_the_visible_window ... ignored
+test tui::tests::long_input_grows_the_composer_and_keeps_the_status_row_last ... ignored
+test tui::tests::long_python_inspector_keeps_a_right_gutter_in_summary_and_debug ... ignored
+test tui::tests::markers_number_upward_and_expand_independently ... ignored
+test tui::tests::mermaid_flowchart_reaches_the_rendered_transcript_buffer ... ignored
+test tui::tests::model_changed_retains_effort_for_the_status_line ... ignored
+test tui::tests::model_picker_uses_the_shared_tabular_window ... ignored
+test tui::tests::model_with_reasoning_metadata_opens_effort_picker_at_provider_default ... ignored
+test tui::tests::mouse_wheel_over_split_inspector_scrolls_only_the_inspector ... ignored
+test tui::tests::mouse_wheel_scrolls_the_transcript_not_history ... ignored
+test tui::tests::multiline_edit_preview_is_source_shaped_and_bounded ... ignored
+test tui::tests::narrow_status_bar_keeps_the_hint ... ignored
+test tui::tests::nested_background_agent_is_detached_and_releases_live_activity ... ignored
+test tui::tests::nested_system_flowchart_renders_in_the_terminal_buffer ... ignored
+test tui::tests::no_session_clear_acknowledgement_resets_ui_without_assigning_an_id ... ignored
+test tui::tests::notifications_use_the_shared_leading_glyph ... ignored
+test tui::tests::other_mouse_events_are_ignored ... ignored
+test tui::tests::palette_scrolls_its_own_list_by_arrows_page_keys_and_wheel ... ignored
+test tui::tests::parallel_batch_results_are_labeled_with_their_tool ... ignored
+test tui::tests::pasted_image_path_remains_plain_text ... ignored
+test tui::tests::paused_queue_shows_resume_guidance_in_the_composer_and_status ... ignored
+test tui::tests::picker_escape_closes_without_switching ... ignored
+test tui::tests::picker_filters_navigates_and_switches_on_enter ... ignored
+test tui::tests::prompts_submitted_while_running_queue_in_fifo_order ... ignored
+test tui::tests::provider_without_key_requirement_switches_directly ... ignored
+test tui::tests::queue_clear_discards_waiting_prompts_without_interrupting_the_run ... ignored
+test tui::tests::queue_rail_previews_three_prompts_and_collapses_overflow ... ignored
+test tui::tests::queued_background_agent_reads_as_queued_until_its_inner_loop_starts ... ignored
+test tui::tests::queued_background_completion_marks_failure_and_deduplicates_observer_results ... ignored
+test tui::tests::queued_bang_prompt_stays_a_shell_command ... ignored
+test tui::tests::repeated_clipboard_images_get_distinct_pills ... ignored
+test tui::tests::run_done_reports_turn_duration_and_tool_calls ... ignored
+test tui::tests::scrolled_transcript_keeps_the_same_top_row_as_live_height_changes ... ignored
+test tui::tests::scrolling_offers_the_selection_hint_then_settles_back ... ignored
+test tui::tests::selected_agent_uses_the_normal_thinking_and_work_rails ... ignored
+test tui::tests::selected_tool_keeps_elapsed_time_next_to_the_call ... ignored
+test tui::tests::settings_menu_drills_into_the_matching_pickers ... ignored
+test tui::tests::shell_done_settles_the_tool_and_resets_the_run ... ignored
+test tui::tests::shift_tab_cycles_session_modes ... ignored
+test tui::tests::slash_provider_opens_the_provider_overlay ... ignored
+test tui::tests::slash_theme_opens_a_picker_preselected_on_the_active_theme ... ignored
+test tui::tests::slash_usage_opens_a_read_only_tray_and_esc_closes_it ... ignored
+test tui::tests::split_divider_runs_through_composer_and_status_rows ... ignored
+test tui::tests::split_renders_new_transcript_blocks_at_the_left_panes_real_width ... ignored
+test tui::tests::split_view_connects_the_selected_tool_to_its_inspector ... ignored
+test tui::tests::stale_catalog_reply_is_ignored ... ignored
+test tui::tests::startup_notices_stay_behind_the_welcome_until_the_first_turn ... ignored
+test tui::tests::status_line_starts_with_model_and_anchors_workspace_and_branch ... ignored
+test tui::tests::status_row_leads_the_model_with_its_provider ... ignored
+test tui::tests::streaming_mermaid_holds_a_stable_placeholder_until_the_fence_closes ... ignored
+test tui::tests::streaming_reasoning_renders_inside_the_thinking_group ... ignored
+test tui::tests::subagent_activity_compaction_preserves_out_of_order_results_and_pending_indices ... ignored
+test tui::tests::subagent_display_marks_overflow_after_an_exactly_full_chunk_once ... ignored
+test tui::tests::subagent_history_bounds_aggregate_payload_and_keeps_latest_answer ... ignored
+test tui::tests::subagent_reasoning_and_streaming_previews_have_independent_budgets ... ignored
+test tui::tests::submitting_a_mention_sends_a_plain_path_but_shows_the_at ... ignored
+test tui::tests::successful_run_starts_the_next_queued_prompt ... ignored
+test tui::tests::tab_inserts_the_selected_folder_mention ... ignored
+test tui::tests::thinking_joins_the_rail_and_the_expand_log ... ignored
+test tui::tests::tool_results_connect_under_their_calls ... ignored
+test tui::tests::tool_timing_separates_review_from_execution ... ignored
+test tui::tests::transcript_block_component_owns_vertical_rhythm ... ignored
+test tui::tests::transcript_has_no_role_labels ... ignored
+test tui::tests::transcript_preserves_model_tool_phase_chronology ... ignored
+test tui::tests::turn_output_estimates_streams_then_reconciles_each_step ... ignored
+test tui::tests::turn_token_estimator_is_chunk_invariant ... ignored
+test tui::tests::typed_marker_lookalikes_are_left_alone ... ignored
+test tui::tests::welcome_centres_the_visible_card_not_its_maximum_width ... ignored
+test tui::tests::wrapped_user_prompts_carry_the_spine_on_every_line ... ignored
+test tui::theme_command_tests::theme_command_switches_and_rejects ... ignored
+test update::tests::update_comparison_is_numeric_and_fails_closed ... ignored
+test update::tests::updater_uses_the_public_installer_and_propagates_download_failures ... ignored
+test view::glyphs::tests::every_style_fills_every_slot ... ignored
+test view::glyphs::tests::meter_rounds_to_the_cell_count ... ignored
+test view::glyphs::tests::renderers_do_not_spell_state_marks_inline ... ignored
+test view::markdown::tests::agent_and_web_calls_show_intent_not_json ... ignored
+test view::markdown::tests::agent_and_web_results_are_semantic_not_json ... ignored
+test view::markdown::tests::batch_mutations_show_compact_scope ... ignored
+test view::markdown::tests::code_lines_render_tabs_as_spaces_not_raw_cells ... ignored
+test view::markdown::tests::default_view_theme_uses_the_colored_palette ... ignored
+test view::markdown::tests::errors_show_the_message ... ignored
+test view::markdown::tests::expand_bare_string_output_is_verbatim ... ignored
+test view::markdown::tests::expand_file_content_shows_verbatim_lines ... ignored
+test view::markdown::tests::expand_generic_output_pretty_prints_json ... ignored
+test view::markdown::tests::expand_shell_output_shows_streams_verbatim ... ignored
+test view::markdown::tests::fenced_diagrams_are_not_rendered_in_italics ... ignored
+test view::markdown::tests::file_results_summarize_by_shape ... ignored
+test view::markdown::tests::grep_shows_the_query ... ignored
+test view::markdown::tests::inspector_code_highlights_and_wraps_without_ellipsis ... ignored
+test view::markdown::tests::inspector_code_preserves_indentation_and_blank_lines ... ignored
+test view::markdown::tests::markdown_bullets_and_headers ... ignored
+test view::markdown::tests::markdown_horizontal_rule_uses_terminal_rule ... ignored
+test view::markdown::tests::markdown_ordered_sections_render_nested_emphasis_without_markers ... ignored
+test view::markdown::tests::markdown_plain_text_wraps_with_indent ... ignored
+test view::markdown::tests::markdown_renders_code_fences_as_bordered_verbatim_lines ... ignored
+test view::markdown::tests::markdown_renders_gfm_tables_without_source_delimiters ... ignored
+test view::markdown::tests::markdown_styles_bold_and_inline_code ... ignored
+test view::markdown::tests::markdown_table_wraps_cells_to_the_terminal_width ... ignored
+test view::markdown::tests::monochrome_code_blocks_do_not_emit_token_colors ... ignored
+test view::markdown::tests::orca_theme_uses_the_mint_and_paper_palette ... ignored
+test view::markdown::tests::path_tools_show_the_path ... ignored
+test view::markdown::tests::process_calls_show_actions_instead_of_json ... ignored
+test view::markdown::tests::process_results_show_identity_state_and_first_output ... ignored
+test view::markdown::tests::rust_fences_render_with_multiple_token_colors ... ignored
+test view::markdown::tests::sanitize_expands_tabs_to_stops_and_drops_controls ... ignored
+test view::markdown::tests::sanitize_strips_ansi_escape_sequences_whole ... ignored
+test view::markdown::tests::scroll_window_follows_the_bottom_by_default ... ignored
+test view::markdown::tests::scroll_window_moves_up_and_clamps_at_the_top ... ignored
+test view::markdown::tests::shell_calls_show_the_command ... ignored
+test view::markdown::tests::shell_results_show_exit_and_first_output_line ... ignored
+test view::markdown::tests::skill_and_glob_calls_show_their_useful_arguments ... ignored
+test view::markdown::tests::skill_and_glob_results_are_semantic_not_json ... ignored
+test view::markdown::tests::truncate_flattens_and_cuts_with_ellipsis ... ignored
+test view::markdown::tests::truncate_line_never_passes_control_bytes_through ... ignored
+test view::markdown::tests::truncated_code_does_not_corrupt_following_line_highlights ... ignored
+test view::markdown::tests::unknown_tools_show_their_first_text_field_not_json ... ignored
+test view::mermaid::tests::diagrams_never_exceed_the_requested_width ... ignored
+test view::mermaid::tests::flowchart_accepts_nested_subgraphs_and_local_direction ... ignored
+test view::mermaid::tests::flowchart_preserves_supported_endpoint_semantics ... ignored
+test view::mermaid::tests::flowchart_renders_boxed_nodes_routed_edges_and_labels ... ignored
+test view::mermaid::tests::flowchart_renders_decision_branches_and_merge ... ignored
+test view::mermaid::tests::flowchart_renders_feedback_loops_instead_of_falling_back_to_source ... ignored
+test view::mermaid::tests::markdown_dispatches_mermaid_and_preserves_unsupported_source ... ignored
+test view::mermaid::tests::sequence_renders_lifelines_and_distinct_message_endpoints ... ignored
+test view::mermaid::tests::sequence_style_blocks_do_not_leak_into_native_output ... ignored
+test view::mermaid::tests::unfinished_streaming_mermaid_keeps_one_stable_placeholder ... ignored
+test view::mermaid::tests::unsupported_mermaid_returns_none_for_source_fallback ... ignored
+test view::mermaid::tests::wide_sequence_keeps_lifelines_beyond_eight_participants ... ignored
+
+test result: ok. 0 passed; 0 failed; 552 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

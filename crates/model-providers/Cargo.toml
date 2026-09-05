@@ -10,6 +10,7 @@ description = "Extensible model provider adapters for Orca Harness."
 name = "orca_harness_model_providers"
 
 [dependencies]
+httpdate = "1"
 orca-harness-core = { path = "../harness-core" }
 orca-harness-provider-auth = { path = "../provider-auth" }
 async-trait.workspace = true

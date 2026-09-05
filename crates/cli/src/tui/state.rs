@@ -19,6 +19,15 @@ use orca_harness_model_providers::SupportedEfforts;
 
 use super::format::TokenEstimator;
 
+mod activity;
+pub(crate) mod subagent_history;
+mod subagents;
+pub(crate) use activity::{ToolActivity, ToolStatus};
+pub(crate) use subagents::{
+    AgentBodyCache, AgentBrowser, AgentTab, SpawnActivity, SubagentDisplay, SubagentTranscript,
+    SubagentTranscriptEntry, SubagentTranscriptStatus,
+};
+
 /// Everything the terminal needs to know about the workspace it is
 /// rendering, passed once by the runner and updated by slash commands
 /// and the event loop.
@@ -239,11 +248,16 @@ pub(crate) enum Overlay {
     Settings { picker: ListPicker },
     /// Session-live subagent governance menu.
     Subagents { picker: ListPicker },
-    /// Preset values for one subagent setting row.
+    /// Route or model choices for one subagent setting row.
     SubagentValues {
         setting: SubagentSetting,
         values: Vec<String>,
         picker: ListPicker,
+    },
+    SubagentNumber {
+        setting: SubagentSetting,
+        input: String,
+        error: String,
     },
     /// This workspace's saved always-allowed tools; enter revokes one.
     Approvals {
@@ -280,38 +294,7 @@ pub(crate) enum Overlay {
     },
 }
 
-pub(crate) const SUBAGENT_ROWS: usize = 11;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SubagentSetting {
-    Route,
-    LocalModel,
-    FlashModel,
-    MidModel,
-    FrontierModel,
-    Depth,
-    Steps,
-    Timeout,
-    Output,
-    ToolAttempts,
-    Backoff,
-}
-
-impl SubagentSetting {
-    pub(crate) const ALL: [Self; SUBAGENT_ROWS] = [
-        Self::Route,
-        Self::LocalModel,
-        Self::FlashModel,
-        Self::MidModel,
-        Self::FrontierModel,
-        Self::Depth,
-        Self::Steps,
-        Self::Timeout,
-        Self::Output,
-        Self::ToolAttempts,
-        Self::Backoff,
-    ];
-}
+pub(crate) use crate::subagent_settings::{SubagentSetting, SUBAGENT_ROWS};
 
 /// Rows in the settings overlay: provider, model, theme, transcript view,
 /// api key, approvals.
@@ -356,6 +339,7 @@ pub(crate) struct CompletedWork {
     pub(crate) expanded: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct ThinkingRecord {
     pub(crate) elapsed: Duration,
 }
@@ -422,44 +406,6 @@ impl InspectorMode {
     }
 }
 
-/// Where a tool call stands, as the transcript marks it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolStatus {
-    Running,
-    Done,
-    Failed,
-    /// Never finished and the run is over: interrupted or dropped.
-    Abandoned,
-}
-
-#[derive(Clone)]
-pub(crate) struct ToolActivity {
-    /// The model-assigned tool-call id (anchors nested subagent spawns).
-    pub(crate) call_id: String,
-    pub(crate) call_line: String,
-    pub(crate) tool_name: String,
-    pub(crate) input: serde_json::Value,
-    pub(crate) started: Instant,
-    pub(crate) execution_started: Option<Instant>,
-    pub(crate) execution_elapsed: Option<Duration>,
-    pub(crate) elapsed: Option<Duration>,
-    pub(crate) output: Option<serde_json::Value>,
-    pub(crate) is_error: bool,
-    pub(crate) approval: Option<String>,
-}
-
-impl ToolActivity {
-    pub(crate) fn status(&self, live: bool) -> ToolStatus {
-        let finished = self.output.is_some() || self.elapsed.is_some();
-        match (finished, self.is_error, live) {
-            (true, true, _) => ToolStatus::Failed,
-            (true, false, _) => ToolStatus::Done,
-            (false, _, true) => ToolStatus::Running,
-            (false, _, false) => ToolStatus::Abandoned,
-        }
-    }
-}
-
 pub(crate) struct InspectorBodyCache {
     pub(crate) call_id: String,
     pub(crate) complete: bool,
@@ -468,24 +414,6 @@ pub(crate) struct InspectorBodyCache {
     pub(crate) width: usize,
     pub(crate) mode: InspectorMode,
     pub(crate) lines: Vec<Line<'static>>,
-}
-
-pub(crate) struct SubagentDisplay {
-    pub(crate) task: String,
-    pub(crate) identity: orca_harness_tools::SubagentIdentity,
-}
-
-/// One spawned inner agent's tool activity while it runs.
-pub(crate) struct SpawnActivity {
-    /// Tool-call id of the subagent call that spawned it.
-    pub(crate) call_id: String,
-    pub(crate) parent_id: Option<u64>,
-    pub(crate) depth: u32,
-    pub(crate) task: String,
-    pub(crate) identity: Option<orca_harness_tools::SubagentIdentity>,
-    pub(crate) tools: Vec<ToolActivity>,
-    /// Inner call id -> index into `tools`.
-    pub(crate) pending: HashMap<String, usize>,
 }
 
 pub(crate) enum RunState {
@@ -608,6 +536,15 @@ pub(crate) struct App {
     pub(crate) inspector_area: Option<ratatui::layout::Rect>,
     /// Live inner activity of running subagents, keyed by spawn id.
     pub(crate) subagent_activity: HashMap<u64, SpawnActivity>,
+    /// Session-visible agent history used by the live transcript browser.
+    pub(crate) subagent_transcripts: HashMap<u64, SubagentTranscript>,
+    pub(crate) evicted_agent_histories: usize,
+    pub(crate) agent_list_cache:
+        std::cell::RefCell<Option<std::sync::Arc<super::render::AgentListCache>>>,
+    /// The dedicated read-only agent browser, when open.
+    pub(crate) agent_browser: Option<AgentBrowser>,
+    /// Down from an empty newest composer focuses the actionable agent count.
+    pub(crate) agents_status_focused: bool,
     /// Resolved top-level worker identity retained until the work phase commits,
     /// including when a failed tool result has no structured identity payload.
     pub(crate) subagent_display: HashMap<String, SubagentDisplay>,

@@ -36,6 +36,7 @@ pub struct Segment {
     /// A shorter rendering the bar falls back to before dropping anything.
     compact: Option<String>,
     priority: u8,
+    style: Option<Style>,
 }
 
 impl Segment {
@@ -44,6 +45,7 @@ impl Segment {
             text: text.into(),
             compact: None,
             priority,
+            style: None,
         }
     }
 
@@ -55,6 +57,11 @@ impl Segment {
         if compact != self.text {
             self.compact = Some(compact);
         }
+        self
+    }
+
+    pub fn with_style(mut self, style: Style) -> Self {
+        self.style = Some(style);
         self
     }
 
@@ -146,12 +153,18 @@ impl StatusBar {
             if index > 0 {
                 spans.push(Span::styled(SEPARATOR, style));
             }
-            spans.push(Span::styled(segment.text.clone(), style));
+            spans.push(Span::styled(
+                segment.text.clone(),
+                segment.style.unwrap_or(style),
+            ));
         }
         if let Some(segment) = trailing {
             let pad = slack.saturating_sub(segment.width()).max(TRAILING_GAP);
             spans.push(Span::styled(" ".repeat(pad), style));
-            spans.push(Span::styled(segment.text.clone(), style));
+            spans.push(Span::styled(
+                segment.text.clone(),
+                segment.style.unwrap_or(style),
+            ));
         }
         Line::from(spans)
     }

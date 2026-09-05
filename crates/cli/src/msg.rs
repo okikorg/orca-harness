@@ -169,7 +169,14 @@ pub struct ApprovalRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunId {
     User(u64),
-    BackgroundProcess { generation: u64, sequence: u64 },
+    BackgroundProcess {
+        generation: u64,
+        sequence: u64,
+    },
+    /// One hidden wake-up run delivering a batch of subagent completions.
+    BackgroundSubagents {
+        sequence: u64,
+    },
 }
 
 /// Everything the UI task can receive.
@@ -252,6 +259,12 @@ pub enum UiMsg {
         task: String,
         identity: Option<orca_harness_tools::SubagentIdentity>,
     },
+    /// Reconcile detached jobs that terminate before entering the agent loop.
+    SubagentCompleted {
+        id: u64,
+        is_error: bool,
+        message: String,
+    },
     /// A lifecycle event from inside a running subagent (any depth).
     SubagentEvent {
         id: u64,
@@ -286,6 +299,11 @@ pub enum WorkerCmd {
         sequence: u64,
         notification: ProcessNotification,
     },
+    /// A detached subagent completed into the completion inbox. A parent
+    /// mid-run reads the inbox at its next model call; this wake starts a
+    /// hidden run for an idle parent, and is a no-op once the inbox is
+    /// empty.
+    BackgroundSubagentsReady,
     /// Reset the conversation to just the system prompt.
     Clear,
     /// Deterministically compact the conversation in place.

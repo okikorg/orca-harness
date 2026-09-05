@@ -132,6 +132,76 @@ class GateTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout)
         self.assertIn("INFO", result.stdout)
 
+    def test_criterion_case_in_the_kernel_summary_is_gated(self) -> None:
+        """kernel/report.py --criterion folds cargo bench estimates into the
+        same summary; they are held to their own table, not left INFO."""
+        result = self.run_gate(
+            "kernel",
+            {
+                "summary.json": [
+                    {
+                        "name": "criterion/dispatch/noop_calls/100",
+                        "unit": "s",
+                        "value": 0.5,
+                        "extra": "median=180.000µs",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn("FAIL", result.stdout)
+
+    def test_criterion_sqlite_floor_is_informational(self) -> None:
+        result = self.run_gate(
+            "kernel",
+            {
+                "summary.json": [
+                    {"name": "criterion/memory_fts_50k/raw_sql/broad", "unit": "s", "value": 9.0}
+                ]
+            },
+        )
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("INFO", result.stdout)
+
+    def test_core_tools_median_over_budget_fails(self) -> None:
+        result = self.run_gate(
+            "core-tools",
+            {
+                "summary.json": [
+                    {
+                        "name": "core-tools/apply_patch/distinct wall p50",
+                        "unit": "s",
+                        "value": 2.0,
+                        "extra": "32 calls, 32 files",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn("FAIL", result.stdout)
+
+    def test_core_tools_p99_and_throughput_are_not_gated(self) -> None:
+        """Twenty samples make a p99 the maximum, and throughput is
+        higher-is-better; both are context, not a verdict."""
+        result = self.run_gate(
+            "core-tools",
+            {
+                "summary.json": [
+                    {"name": "core-tools/apply_patch/distinct wall p50", "unit": "s", "value": 0.007},
+                    {"name": "core-tools/apply_patch/distinct wall p99", "unit": "s", "value": 9.0},
+                    {
+                        "name": "core-tools/apply_patch/distinct throughput p50",
+                        "unit": "operations/sec",
+                        "value": 1.0,
+                    },
+                ]
+            },
+        )
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("PASS", result.stdout)
+        self.assertIn("INFO", result.stdout)
+        self.assertNotIn("throughput", result.stdout)
+
     def test_missing_results_fail(self) -> None:
         result = self.run_gate("startup", {})
         self.assertEqual(1, result.returncode, result.stdout)

@@ -179,7 +179,7 @@ pub static MINIMAL: Glyphs = Glyphs {
 
 pub static GLYPH: Glyphs = Glyphs {
     waiting: '□',
-    running: &['⬚'],
+    running: &['□'],
     active: &['□', '■'],
     done: '✓',
     failed: '×',

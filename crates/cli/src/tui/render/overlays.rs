@@ -195,6 +195,11 @@ pub(crate) fn reset_conversation_ui(app: &mut App) {
     app.work_log.clear();
     app.turn_count = 0;
     app.reset_activity();
+    app.subagent_transcripts.clear();
+    app.evicted_agent_histories = 0;
+    app.invalidate_agent_list();
+    app.agent_browser = None;
+    app.agents_status_focused = false;
     app.split_snapshot = None;
     // The answer is gone from the transcript; leaving it copyable would
     // hand back content the user just asked to be rid of.

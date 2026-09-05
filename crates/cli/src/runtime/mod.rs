@@ -1,11 +1,13 @@
 mod agent;
 mod app;
+mod completions;
 mod context;
 mod interactive;
 mod plugin;
 mod session;
 mod signals;
 pub(crate) mod startup;
+pub(crate) mod subagents;
 mod worker;
 
 #[cfg(test)]

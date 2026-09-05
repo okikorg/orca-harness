@@ -17,9 +17,9 @@ mod subagent_route_tests {
                 "mid",
                 "frontier",
             ]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             picker: ListPicker::new(7),
         });
 
@@ -86,5 +86,57 @@ mod subagent_route_tests {
             );
             assert_eq!(settings.model_route().as_deref(), Some(route));
         }
+    }
+    #[test]
+    fn subagent_numeric_controls_render_with_last_row_visible() {
+        use crate::tui::state::{SubagentSetting, SUBAGENT_ROWS};
+        let mut app = super::subagents_command_tests::depth_app(SubagentDepth::default());
+        app.overlay = Some(Overlay::Subagents {
+            picker: ListPicker::with_selected(SUBAGENT_ROWS, SUBAGENT_ROWS - 1),
+        });
+        let render = |app: &App| {
+            let backend = ratatui::backend::TestBackend::new(80, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new(ratatui::text::Text::from(live_lines(
+                            app, 80,
+                        ))),
+                        frame.area(),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..24)
+                .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let list = render(&app);
+        assert!(list.contains("max retry delay"), "{list}");
+        app.overlay = Some(Overlay::SubagentNumber {
+            setting: SubagentSetting::ModelConcurrency,
+            input: "71".into(),
+            error: String::new(),
+        });
+        let editor = render(&app);
+        assert!(
+            editor.contains("provider streams")
+                && editor.contains("> 71")
+                && editor.contains("shared with parent"),
+            "{editor}"
+        );
+        let setting = SubagentSetting::Steps;
+        let values = crate::tui::subagents::subagent_values(&app.cfg.subagent_depth, setting);
+        app.overlay = Some(Overlay::SubagentValues {
+            setting,
+            picker: ListPicker::new(values.len()),
+            values,
+        });
+        let presets = render(&app);
+        assert!(presets.lines().any(|line| line.trim() == "96"), "{presets}");
+        assert!(presets.contains("custom…"), "{presets}");
+        println!("{list}\n{presets}\n{editor}");
     }
 }

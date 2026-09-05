@@ -21,6 +21,7 @@ mod tests {
         saved.set_output_chars(16_000);
         saved.set_tool_attempts(5);
         saved.set_retry_backoff_ms(500);
+        saved.set_background_limit(8);
         save_key("openai", "sk-1").unwrap();
         save_subagent_settings(&saved).unwrap();
 
@@ -33,7 +34,41 @@ mod tests {
         assert_eq!(loaded.output_chars(), 16_000);
         assert_eq!(loaded.tool_attempts(), 5);
         assert_eq!(loaded.retry_backoff_ms(), 500);
+        assert_eq!(loaded.background_limit(), 8);
         assert_eq!(stored_key("openai").as_deref(), Some("sk-1"));
+    }
+
+    #[test]
+    fn every_numeric_subagent_setting_round_trips_custom_values() {
+        let saved = orca_harness_tools::SubagentDepth::default();
+        for field in crate::subagent_settings::NUMERIC {
+            (field.write)(&saved, 123_456);
+        }
+        save_subagent_settings(&saved).unwrap();
+        let loaded = orca_harness_tools::SubagentDepth::default();
+        load_subagent_settings(&loaded);
+        for field in crate::subagent_settings::NUMERIC {
+            assert_eq!((field.read)(&loaded), Some(123_456), "{}", field.key);
+            if field.unlimited {
+                (field.write)(&saved, 0);
+            }
+        }
+        save_subagent_settings(&saved).unwrap();
+        load_subagent_settings(&loaded);
+        for field in crate::subagent_settings::NUMERIC {
+            assert_eq!((field.read)(&loaded), (field.read)(&saved), "{}", field.key);
+        }
+        seed(r#"{"subagents":{"depth":3,"model_attempts":-1,"max_steps":0}}"#);
+        let legacy = orca_harness_tools::SubagentDepth::default();
+        load_subagent_settings(&legacy);
+        assert_eq!(legacy.get(), 3);
+        assert_eq!(legacy.model_attempts(), 0);
+        assert_eq!(legacy.model_backoff_ms(), None);
+        assert_eq!(legacy.parallel_tools(), None);
+        assert_eq!(
+            legacy.max_steps(),
+            orca_harness_tools::DEFAULT_SUBAGENT_MAX_STEPS
+        );
     }
 
     #[test]

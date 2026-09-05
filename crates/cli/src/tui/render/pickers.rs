@@ -243,11 +243,12 @@ pub(crate) fn subagent_settings_lines(
             subagent_current(&app.cfg.subagent_depth, *setting),
         ]
     });
-    picker.table_lines(
+    picker.windowed_table_lines(
         "Subagents (this session) · ↑↓ move · →/enter open · esc close",
         rows,
         [(18, 18), (0, usize::MAX)],
         width,
+        PICKER_ROWS,
     )
 }
 
@@ -269,6 +270,14 @@ pub(crate) fn subagent_value_lines(
                 .map(|value| [value.clone(), subagent_route_description(value).to_string()]),
             [(12, 12), (0, usize::MAX)],
             width,
+        );
+    }
+    if let Some(field) = setting.numeric() {
+        return picker.windowed_lines(
+            &format!("{title} · {}", field.unit),
+            values.iter().cloned(),
+            width,
+            PICKER_ROWS,
         );
     }
     picker.lines(&title, values.iter().cloned(), width)

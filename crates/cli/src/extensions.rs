@@ -57,21 +57,34 @@ pub fn enabled(name: &str) -> bool {
 ///
 /// When attempts are exhausted the last real output is returned as-is, so
 /// the model still sees the actual failure instead of a synthetic one.
+pub(crate) const TOOL_RETRY_ATTEMPTS: u32 = 3;
+pub(crate) const TOOL_RETRY_BACKOFF_MS: u32 = 250;
+
 pub fn tool_retry() -> orca_harness_extensions::ToolRetry {
-    orca_harness_extensions::ToolRetry::new(3)
-        .backoff(std::time::Duration::from_millis(250))
+    orca_harness_extensions::ToolRetry::new(TOOL_RETRY_ATTEMPTS)
+        .backoff(std::time::Duration::from_millis(u64::from(
+            TOOL_RETRY_BACKOFF_MS,
+        )))
         .retry_ok_when(data_failure)
         .retry_error_when(retryable_error)
 }
 
 /// Returned-error retry policy. Native file mutations are never replayed:
 /// their exact-match failures are deterministic, while retrying after an I/O
-/// error could repeat an operation whose rollback was incomplete. Other tools
-/// retain the extension's historical retry-on-`Err` behavior.
+/// error could repeat an operation whose rollback was incomplete. Subagent
+/// control actions (including unsupported legacy wait calls) are deterministic
+/// too, and the poll-guard error on a repeated `list` must reach the model, not be
+/// retried into a harness-side poll loop. Other tools retain the
+/// extension's historical retry-on-`Err` behavior.
 pub fn retryable_error(
     call: &orca_harness_core::ToolCall,
     _error: &orca_harness_core::ToolError,
 ) -> bool {
+    if call.name == "subagent" {
+        return call.arguments["action"]
+            .as_str()
+            .is_none_or(|action| action == "run");
+    }
     !matches!(
         call.name.as_str(),
         "write_file" | "edit_file" | "multi_edit" | "apply_patch"
@@ -140,6 +153,17 @@ mod tests {
         assert!(!retryable_error(&call("write_file"), &error));
         assert!(!retryable_error(&call("edit_file"), &error));
         assert!(retryable_error(&call("web_fetch"), &error));
+
+        let control = |action: &str| orca_harness_core::ToolCall {
+            id: "test".into(),
+            name: "subagent".into(),
+            arguments: serde_json::json!({"action": action}),
+        };
+        assert!(retryable_error(&call("subagent"), &error), "run by default");
+        assert!(retryable_error(&control("run"), &error));
+        assert!(!retryable_error(&control("list"), &error));
+        assert!(!retryable_error(&control("wait"), &error));
+        assert!(!retryable_error(&control("cancel_all"), &error));
     }
 
     #[tokio::test]

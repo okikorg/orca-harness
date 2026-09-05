@@ -17,6 +17,14 @@ struct Captured {
 
 /// Serve exactly one request: capture it, then reply with `response_json`.
 async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<Captured>) {
+    response_server("200 OK", "", response_json).await
+}
+
+async fn response_server(
+    status: &'static str,
+    headers: &'static str,
+    response_json: String,
+) -> (String, oneshot::Receiver<Captured>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
@@ -47,7 +55,7 @@ async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<Ca
         };
         let _ = tx.send(captured);
         let reply = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status}\r\n{headers}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             response_json.len(),
             response_json
         );
@@ -153,5 +161,37 @@ async fn non_streaming_length_finish_reason_is_typed_and_retains_usage() {
             assert_eq!(usage.output_tokens, 11);
         }
         other => panic!("expected OutputLimit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn http_failures_preserve_retry_timing_and_permanent_classification() {
+    use orca_harness_model_providers::http_error::retry_delay;
+    for streaming in [false, true] {
+        for (status, body, delay) in [
+            (
+                "429 Too Many Requests",
+                r#"{"error":{"code":"rate_limit_exceeded"}}"#,
+                Some(std::time::Duration::from_secs(7)),
+            ),
+            (
+                "429 Too Many Requests",
+                r#"{"error":{"code":"insufficient_quota"}}"#,
+                None,
+            ),
+            ("400 Bad Request", "invalid", None),
+            ("401 Unauthorized", "bad key", None),
+        ] {
+            let (url, captured) = response_server(status, "Retry-After: 7\r\n", body.into()).await;
+            let model = OpenAiModel::new("test").base_url(url);
+            let context = Context::new();
+            let result = if streaming {
+                model.generate_streaming(&context, &[], &|_| {}).await
+            } else {
+                model.generate(&context, &[]).await
+            };
+            assert_eq!(retry_delay(&result.unwrap_err()), delay);
+            captured.await.unwrap();
+        }
     }
 }

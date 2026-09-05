@@ -18,8 +18,8 @@ use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
 use orca_harness_tools::{
-    core_tools, BunReplTool, PyKernelTool, SubagentDepth, SubagentModel, SubagentTool, TodoList,
-    TodoWriteTool, Workspace,
+    core_tools, BunReplTool, PyKernelTool, SubagentDepth, SubagentModel, TodoList, TodoWriteTool,
+    Workspace,
 };
 
 use crate::approval::HeadlessGate;
@@ -70,6 +70,7 @@ pub async fn run<M: Model + Clone + 'static>(
     memory: &MemoryStore,
     memory_scope: &MemoryScope,
     model_retries: Arc<AtomicU64>,
+    subagent_settings: SubagentDepth,
 ) -> i32 {
     // Connect before constructing the model adapter so selection made by an
     // MCP tool is reflected in the immediately following provider request.
@@ -235,32 +236,29 @@ pub async fn run<M: Model + Clone + 'static>(
             agent = agent.tool_arc(Arc::new(BunReplTool::new().working_dir(root)));
         }
         if enabled("subagent") {
-            let subagent_settings = SubagentDepth::new(cfg.subagent_depth);
             let extension_settings = subagent_settings.clone();
-            let subagent = SubagentTool::new(model_for_subagents, ws)
-                .inherited_identity(cfg.provider.label(), &cfg.model)
-                .max_depth(subagent_settings.clone())
-                .models(subagent_models.into_iter().map(|choice| SubagentModel {
-                    model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
-                    ..choice
-                }));
-            crate::config::load_subagent_settings(&subagent_settings);
+            let subagent = crate::runtime::subagents::tool(
+                model_for_subagents,
+                ws,
+                (cfg.provider.label(), &cfg.model),
+                &subagent_settings,
+                subagent_models,
+                mcp.catalog(),
+            );
             let subagent_plugin_hooks = plugin_hooks.clone();
             let subagent_auto_approval = auto_approval.for_subagent();
             agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
-                let mut extensions = vec![
-                    Arc::new(orca_harness_tools::MutationPreflight)
-                        as Arc<dyn orca_harness_core::Extension>,
-                    Arc::new(subagent_auto_approval.clone())
-                        as Arc<dyn orca_harness_core::Extension>,
+                let host_hooks = [
+                    Some(Arc::new(subagent_auto_approval.clone())
+                        as Arc<dyn orca_harness_core::Extension>),
+                    subagent_plugin_hooks
+                        .as_ref()
+                        .map(|hooks| hooks.clone() as Arc<dyn orca_harness_core::Extension>),
                 ];
-                if let Some(plugin_hooks) = &subagent_plugin_hooks {
-                    extensions.push(plugin_hooks.clone() as Arc<dyn orca_harness_core::Extension>);
-                }
-                extensions.push(Arc::new(
-                    Truncation::new(extension_settings.output_chars() as usize),
-                ) as Arc<dyn orca_harness_core::Extension>);
-                extensions
+                crate::runtime::subagents::extensions(
+                    &extension_settings,
+                    host_hooks.into_iter().flatten(),
+                )
             }))));
         }
     }

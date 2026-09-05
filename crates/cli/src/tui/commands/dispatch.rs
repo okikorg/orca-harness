@@ -113,7 +113,7 @@ pub(crate) fn slash_command(
                     app.push_line(Line::from(Span::styled(message, dim)));
                 }
                 Err(_) => {
-                    push_error(app, "usage: /subagents [1-5]");
+                    push_error(app, "usage: /subagents [positive depth]");
                 }
             }
             return;

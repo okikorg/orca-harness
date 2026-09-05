@@ -16,6 +16,7 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
             app.cursor = app.composer.chars().count();
             app.reset_palette_picker();
         }
+        After::Replace(next) => app.overlay = Some(next),
         After::Push(next) => {
             if let Some(current) = app.overlay.replace(next) {
                 app.overlay_stack.push(current);

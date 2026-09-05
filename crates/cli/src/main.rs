@@ -13,6 +13,7 @@ mod headless;
 mod instructions;
 mod mcp;
 mod mode;
+mod model_gates;
 mod msg;
 mod plan;
 mod plugin;
@@ -22,6 +23,7 @@ mod refine;
 mod run_args;
 mod skills;
 mod subagent_models;
+mod subagent_settings;
 mod tui;
 mod update;
 mod view;
@@ -107,7 +109,7 @@ OPTIONS:
   --bare             headless: skip user instructions, skills, memory,
                      MCP, compute, subagents, and web tools; defaults
                      --tools to read_file,list_dir,grep,glob
-  --subagent-depth N subagent nesting levels, 1-5 (env ORCA_SUBAGENT_DEPTH;
+  --subagent-depth N subagent nesting levels, positive integer (env ORCA_SUBAGENT_DEPTH;
                      default 1; /subagents adjusts it live in the TUI)
   --theme NAME       theme: default, mono, dracula,
                      solarized-dark, one-dark, monokai, nord, orca
@@ -322,6 +324,9 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          several subagents should be one batch, not a sequence of turns. Serialize \
          only when a call's input genuinely requires another call's output. Push \
          long-running work into background processes and keep working while it runs. \
+         When only background work remains, block on it with the waiting action of the \
+         tool that started it, or end your turn and you will be woken with the results; \
+         never sleep-and-poll or repeat list calls. \
          Writes to the same file are ordered for you; unrelated writes are safe to \
          batch.\n\
          \n\
@@ -350,12 +355,18 @@ struct Endpoint {
     prompt_cache: bool,
     request_session_id: Option<String>,
     model_retries: Arc<AtomicU64>,
+    model_gates: model_gates::ModelGates,
+    subagent_settings: orca_harness_tools::SubagentDepth,
 }
 
 impl Endpoint {
-    const MODEL_MAX_ATTEMPTS: u32 = 10;
-
     fn from_config(cfg: &Config) -> Self {
+        let subagent_settings = subagent_settings::configured(
+            cfg.subagent_depth,
+            std::env::var("ORCA_MODEL_CONCURRENCY")
+                .ok()
+                .and_then(|value| value.parse().ok()),
+        );
         Self {
             provider: cfg.provider,
             base_url: cfg.base_url.clone(),
@@ -368,6 +379,8 @@ impl Endpoint {
                 .prompt_cache
                 .then(orca_harness_extensions::new_session_id),
             model_retries: Arc::new(AtomicU64::new(0)),
+            model_gates: Default::default(),
+            subagent_settings,
         }
     }
 
@@ -391,7 +404,7 @@ impl Endpoint {
     }
 
     fn build_model(&self) -> Arc<dyn Model> {
-        self.build_model_for_ui(None)
+        self.build_model_for_ui_with_label(None, None)
     }
 
     fn model_retry_counter(&self) -> Arc<AtomicU64> {
@@ -399,6 +412,14 @@ impl Endpoint {
     }
 
     fn build_model_for_ui(&self, ui: Option<mpsc::UnboundedSender<UiMsg>>) -> Arc<dyn Model> {
+        self.build_model_for_ui_with_label(ui, None)
+    }
+
+    fn build_model_for_ui_with_label(
+        &self,
+        ui: Option<mpsc::UnboundedSender<UiMsg>>,
+        retry_label: Option<String>,
+    ) -> Arc<dyn Model> {
         let model: Arc<dyn Model> = match self.provider {
             Provider::OpenRouter => {
                 let mut model = OpenRouterModel::new(self.model.as_str())
@@ -471,20 +492,24 @@ impl Endpoint {
         // endpoint boundary so OpenRouter, OpenAI, and local compatible
         // providers all receive the same policy.
         let retries = self.model_retries.clone();
-        let model = RetryModel::new(model, Self::MODEL_MAX_ATTEMPTS).on_retry(
-            move |attempt, max_attempts, _error| {
+        let settings = self.subagent_settings.clone();
+        let model = RetryModel::new(model, None)
+            .config(move || subagent_settings::model_retry_config(&settings))
+            .gate(self.model_gates.for_endpoint(self))
+            .retry_delay(orca_harness_model_providers::http_error::retry_delay)
+            .on_retry(move |attempt, _max_attempts, _error| {
                 retries.fetch_add(1, Ordering::Relaxed);
                 // One compact notification is enough. The final run error
                 // retains the provider detail if every attempt fails.
                 if attempt == 2 {
                     if let Some(ui) = &ui {
+                        let label = retry_label.as_deref().unwrap_or("parent");
                         let _ = ui.send(UiMsg::Notice(format!(
-                            "model request failed · retrying up to {max_attempts} attempts"
+                            "model request failed · {label} · retrying"
                         )));
                     }
                 }
-            },
-        );
+            });
         Arc::new(model)
     }
 }

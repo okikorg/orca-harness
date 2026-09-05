@@ -1,6 +1,12 @@
 use super::super::*;
 use crate::tui::components::transcript::BlockSpacing;
-use crate::tui::state::{SpawnActivity, SubagentDisplay, ToolRecord};
+use crate::tui::state::subagent_history::{
+    append_display_text, bounded_text, compact_activity, display_value,
+};
+use crate::tui::state::{
+    SpawnActivity, SubagentDisplay, SubagentTranscript, SubagentTranscriptEntry,
+    SubagentTranscriptStatus, ToolRecord,
+};
 use orca_harness_extensions::HarnessEvent;
 
 pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: usize) {
@@ -51,22 +57,10 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
                     app.last_answer = Some(message);
                 }
             }
-            let call_line = view::tool_call_line(&tool_name, &input);
             app.turn_tool_calls += 1;
             let index = app.activity_tools.len();
-            app.activity_tools.push(ToolActivity {
-                call_id: tool_call_id.clone(),
-                call_line,
-                tool_name,
-                input,
-                started: Instant::now(),
-                execution_started: None,
-                execution_elapsed: None,
-                elapsed: None,
-                output: None,
-                is_error: false,
-                approval: None,
-            });
+            app.activity_tools
+                .push(ToolActivity::new(tool_call_id.clone(), tool_name, input));
             app.split_tool = Some(index);
             app.split_scroll = 0;
             app.pending_calls.insert(tool_call_id, index);
@@ -74,7 +68,7 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
         HarnessEvent::ToolStarted { tool_call_id, .. } => {
             if let Some(index) = app.pending_calls.get(&tool_call_id).copied() {
                 if let Some(activity) = app.activity_tools.get_mut(index) {
-                    activity.execution_started.get_or_insert_with(Instant::now);
+                    activity.execution_started();
                 }
             }
         }
@@ -85,12 +79,7 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
         } => {
             if let Some(index) = app.pending_calls.get(&tool_call_id).copied() {
                 if let Some(activity) = app.activity_tools.get_mut(index) {
-                    let now = Instant::now();
-                    activity.elapsed = Some(now.duration_since(activity.started));
-                    activity.execution_elapsed = activity
-                        .execution_started
-                        .map(|started| now.duration_since(started));
-                    activity.is_error = is_error;
+                    activity.finish(is_error);
                 }
             }
         }
@@ -109,21 +98,14 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             let call_line = index
                 .and_then(|index| app.activity_tools.get_mut(index))
                 .map(|activity| {
-                    let now = Instant::now();
-                    activity
-                        .elapsed
-                        .get_or_insert_with(|| now.duration_since(activity.started));
-                    if activity.execution_elapsed.is_none() {
-                        activity.execution_elapsed = activity
-                            .execution_started
-                            .map(|started| now.duration_since(started));
-                    }
-                    activity.output = Some(output.clone());
-                    activity.is_error = is_error;
+                    activity.record_result(output.clone(), is_error);
                     activity.call_line.clone()
                 })
                 .unwrap_or_else(|| tool_name.clone());
-            let inner = if tool_name == "subagent" {
+            let inner = if let Some(id) = detached_spawn_id(&tool_name, &output) {
+                mark_subagent_detached(app, id);
+                Vec::new()
+            } else if tool_name == "subagent" {
                 fold_subagent_activity(app, &tool_call_id)
             } else {
                 Vec::new()
@@ -186,6 +168,12 @@ pub(crate) fn collect_spawn_log(app: &mut App, id: u64, lines: &mut Vec<String>)
         return;
     };
     let indent = "  ".repeat(spawn.depth as usize);
+    if spawn.omitted_tools > 0 {
+        lines.push(format!(
+            "{indent}{} earlier tool activities omitted",
+            spawn.omitted_tools
+        ));
+    }
     for tool in &spawn.tools {
         let glyph = match &tool.output {
             Some(_) if tool.is_error => "×",
@@ -220,6 +208,10 @@ pub(crate) fn start_subagent(
     task: String,
     identity: Option<orca_harness_tools::SubagentIdentity>,
 ) {
+    let task = bounded_text(&task);
+    if let Some(browser) = &mut app.agent_browser {
+        browser.body_cache = None;
+    }
     if parent_id.is_none() {
         if let Some(identity) = identity.clone() {
             app.subagent_display.insert(
@@ -231,18 +223,27 @@ pub(crate) fn start_subagent(
             );
         }
     }
+    app.invalidate_agent_list();
     app.subagent_activity.insert(
         id,
         SpawnActivity {
-            call_id,
+            call_id: call_id.clone(),
             parent_id,
             depth,
-            task,
-            identity,
+            task: task.clone(),
+            identity: identity.clone(),
             tools: Vec::new(),
+            omitted_tools: 0,
             pending: std::collections::HashMap::new(),
         },
     );
+    app.subagent_transcripts.insert(
+        id,
+        SubagentTranscript::new(id, parent_id, depth, call_id, task, identity),
+    );
+    if let Some(browser) = &mut app.agent_browser {
+        browser.picker.set_len(app.subagent_transcripts.len());
+    }
 }
 
 pub(crate) fn handle_subagent_event(
@@ -253,6 +254,19 @@ pub(crate) fn handle_subagent_event(
     call_id: String,
     event: HarnessEvent,
 ) {
+    if let HarnessEvent::ToolResult {
+        tool_name, output, ..
+    } = &event
+    {
+        if let Some(child_id) = detached_spawn_id(tool_name, output) {
+            mark_subagent_detached(app, child_id);
+        }
+    }
+    // Nested worker updates can change identity rows inside the selected history.
+    if let Some(browser) = &mut app.agent_browser {
+        browser.body_cache = None;
+    }
+    record_subagent_event(app, id, parent_id, depth, &call_id, &event);
     match event {
         HarnessEvent::ToolCall {
             tool_call_id,
@@ -269,30 +283,22 @@ pub(crate) fn handle_subagent_event(
                     task: String::new(),
                     identity: None,
                     tools: Vec::new(),
+                    omitted_tools: 0,
                     pending: std::collections::HashMap::new(),
                 });
-            let call_line = view::tool_call_line(&tool_name, &input);
             let index = spawn.tools.len();
-            spawn.tools.push(ToolActivity {
-                call_id: tool_call_id.clone(),
-                call_line,
+            spawn.tools.push(ToolActivity::new(
+                tool_call_id.clone(),
                 tool_name,
-                input,
-                started: Instant::now(),
-                execution_started: None,
-                execution_elapsed: None,
-                elapsed: None,
-                output: None,
-                is_error: false,
-                approval: None,
-            });
+                display_value(&input),
+            ));
             spawn.pending.insert(tool_call_id, index);
         }
         HarnessEvent::ToolStarted { tool_call_id, .. } => {
             if let Some(spawn) = app.subagent_activity.get_mut(&id) {
                 if let Some(index) = spawn.pending.get(&tool_call_id).copied() {
                     if let Some(tool) = spawn.tools.get_mut(index) {
-                        tool.execution_started.get_or_insert_with(Instant::now);
+                        tool.execution_started();
                     }
                 }
             }
@@ -305,12 +311,7 @@ pub(crate) fn handle_subagent_event(
             if let Some(spawn) = app.subagent_activity.get_mut(&id) {
                 if let Some(index) = spawn.pending.get(&tool_call_id).copied() {
                     if let Some(tool) = spawn.tools.get_mut(index) {
-                        let now = Instant::now();
-                        tool.elapsed = Some(now.duration_since(tool.started));
-                        tool.execution_elapsed = tool
-                            .execution_started
-                            .map(|started| now.duration_since(started));
-                        tool.is_error = is_error;
+                        tool.finish(is_error);
                     }
                 }
             }
@@ -324,20 +325,177 @@ pub(crate) fn handle_subagent_event(
             if let Some(spawn) = app.subagent_activity.get_mut(&id) {
                 if let Some(index) = spawn.pending.remove(&tool_call_id) {
                     if let Some(tool) = spawn.tools.get_mut(index) {
-                        let now = Instant::now();
-                        tool.elapsed
-                            .get_or_insert_with(|| now.duration_since(tool.started));
-                        if tool.execution_elapsed.is_none() {
-                            tool.execution_elapsed = tool
-                                .execution_started
-                                .map(|started| now.duration_since(started));
-                        }
-                        tool.output = Some(output);
-                        tool.is_error = is_error;
+                        tool.record_result(display_value(&output), is_error);
                     }
                 }
             }
         }
         _ => {}
+    }
+    if let Some(spawn) = app.subagent_activity.get_mut(&id) {
+        spawn.omitted_tools = spawn
+            .omitted_tools
+            .saturating_add(compact_activity(&mut spawn.tools, &mut spawn.pending));
+    }
+}
+
+fn record_subagent_event(
+    app: &mut App,
+    id: u64,
+    parent_id: Option<u64>,
+    depth: u32,
+    call_id: &str,
+    event: &HarnessEvent,
+) {
+    let previous_status = app.subagent_transcripts.get(&id).map(|t| t.status);
+    let transcript = app.subagent_transcripts.entry(id).or_insert_with(|| {
+        SubagentTranscript::new(
+            id,
+            parent_id,
+            depth,
+            call_id.to_string(),
+            String::new(),
+            None,
+        )
+    });
+    // The first event out of the inner loop (`AgentStart`, normally) means
+    // a queued background worker got its slot. Elapsed restarts so the row
+    // times the run rather than the wait.
+    if transcript.status == SubagentTranscriptStatus::Queued {
+        transcript.status = SubagentTranscriptStatus::Running;
+        transcript.started = Instant::now();
+    }
+    match event {
+        HarnessEvent::AssistantDelta { text } => {
+            if transcript.streaming_assistant.is_empty() && !text.is_empty() {
+                transcript.commit_settled_activity();
+            }
+            append_display_text(&mut transcript.streaming_assistant, text);
+        }
+        HarnessEvent::ReasoningDelta { text } => {
+            if transcript.streaming_reasoning.is_empty() && !text.is_empty() {
+                transcript.commit_settled_activity();
+                transcript.reasoning_started = Some(Instant::now());
+            }
+            append_display_text(&mut transcript.streaming_reasoning, text);
+        }
+        HarnessEvent::Assistant { message } => {
+            transcript.commit_activity();
+            let streamed = std::mem::take(&mut transcript.streaming_assistant);
+            transcript.push_assistant(if message.is_empty() {
+                streamed
+            } else {
+                message.clone()
+            });
+        }
+        HarnessEvent::ToolCall {
+            tool_call_id,
+            tool_name,
+            input,
+        } => {
+            transcript.flush_reasoning();
+            let streamed = std::mem::take(&mut transcript.streaming_assistant);
+            transcript.push_assistant(streamed);
+            let index = transcript.activity_tools.len();
+            transcript.activity_tools.push(ToolActivity::new(
+                tool_call_id.clone(),
+                tool_name.clone(),
+                display_value(input),
+            ));
+            transcript.pending_calls.insert(tool_call_id.clone(), index);
+        }
+        HarnessEvent::ToolStarted { tool_call_id, .. } => {
+            if let Some(index) = transcript.pending_calls.get(tool_call_id).copied() {
+                if let Some(tool) = transcript.activity_tools.get_mut(index) {
+                    tool.execution_started();
+                }
+            }
+        }
+        HarnessEvent::ToolFinished {
+            tool_call_id,
+            is_error,
+            ..
+        } => {
+            if let Some(index) = transcript.pending_calls.get(tool_call_id).copied() {
+                if let Some(tool) = transcript.activity_tools.get_mut(index) {
+                    tool.finish(*is_error);
+                }
+            }
+        }
+        HarnessEvent::ToolResult {
+            tool_call_id,
+            output,
+            is_error,
+            ..
+        } => {
+            if let Some(index) = transcript.pending_calls.remove(tool_call_id) {
+                if let Some(tool) = transcript.activity_tools.get_mut(index) {
+                    tool.record_result(display_value(output), *is_error);
+                }
+            }
+        }
+        HarnessEvent::Usage { usage } => {
+            transcript.input_tokens = transcript.input_tokens.saturating_add(usage.input_tokens);
+            transcript.output_tokens = transcript.output_tokens.saturating_add(usage.output_tokens);
+        }
+        HarnessEvent::Result { message } => {
+            transcript.finish_activity();
+            let streamed = std::mem::take(&mut transcript.streaming_assistant);
+            transcript.push_assistant(if message.is_empty() {
+                streamed
+            } else {
+                message.clone()
+            });
+            transcript.status = SubagentTranscriptStatus::Completed;
+            transcript.elapsed = Some(transcript.started.elapsed());
+        }
+        HarnessEvent::Error { message } => {
+            transcript.finish_activity();
+            let streamed = std::mem::take(&mut transcript.streaming_assistant);
+            transcript.push_assistant(streamed);
+            transcript.push_entry(SubagentTranscriptEntry::Error(bounded_text(message)));
+            transcript.status = SubagentTranscriptStatus::Failed;
+            transcript.elapsed = Some(transcript.started.elapsed());
+        }
+        HarnessEvent::AgentStart | HarnessEvent::ToolInputDelta { .. } => {}
+    }
+    transcript.compact_activity();
+    let status_changed = previous_status != Some(transcript.status);
+    let terminal = !transcript.status.is_active();
+    let terminal_detached = transcript.detached && !transcript.status.is_active();
+    if terminal_detached {
+        app.subagent_activity.remove(&id);
+    }
+    if status_changed {
+        app.invalidate_agent_list();
+    }
+    if terminal {
+        app.retain_agent_history();
+    }
+}
+
+fn mark_subagent_detached(app: &mut App, id: u64) {
+    let terminal = app
+        .subagent_transcripts
+        .get_mut(&id)
+        .is_some_and(|transcript| {
+            transcript.detached = true;
+            !transcript.status.is_active()
+        });
+    if terminal {
+        app.subagent_activity.remove(&id);
+    }
+}
+
+fn detached_spawn_id(tool_name: &str, output: &serde_json::Value) -> Option<u64> {
+    if tool_name == "subagent"
+        && output
+            .get("termination")
+            .and_then(serde_json::Value::as_str)
+            == Some("detached")
+    {
+        output.get("spawnId").and_then(serde_json::Value::as_u64)
+    } else {
+        None
     }
 }

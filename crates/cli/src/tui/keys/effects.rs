@@ -7,6 +7,8 @@ pub(super) enum After {
     CloseAndCompose(String),
     /// Replace the active picker while retaining it as a left-arrow parent.
     Push(Overlay),
+    /// Change the active editor while retaining its existing parent.
+    Replace(Overlay),
     /// Send to the worker with the overlay left open (toggle rows).
     Send(WorkerCmd),
     CloseAndSend(WorkerCmd),

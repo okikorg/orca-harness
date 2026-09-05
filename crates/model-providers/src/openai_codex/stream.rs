@@ -128,14 +128,14 @@ impl Accumulator {
                 self.usage = parse_usage(&event["response"]["usage"]);
                 Ok(vec![])
             }
-            "response.failed" | "response.incomplete" | "error" => Err(ModelError::Request(
-                event
-                    .pointer("/response/error/message")
-                    .or_else(|| event.pointer("/error/message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Codex response failed")
-                    .to_string(),
-            )),
+            "response.failed" | "response.incomplete" | "error" => {
+                Err(crate::http_error::stream_error(
+                    event
+                        .pointer("/response/error")
+                        .or_else(|| event.get("error"))
+                        .unwrap_or(&event),
+                ))
+            }
             _ => Ok(vec![]),
         }
     }
@@ -183,6 +183,25 @@ fn parse_usage(value: &Value) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_errors_preserve_provider_retry_policy() {
+        for code in ["insufficient_quota", "rate_limit_exceeded"] {
+            for event in [
+                serde_json::json!({"type": "response.failed", "response": {"error": {"code": code}}}),
+                serde_json::json!({"type": "error", "error": {"code": code}}),
+                serde_json::json!({"type": "error", "code": code}),
+            ] {
+                let error = Accumulator::default()
+                    .apply(&event.to_string())
+                    .unwrap_err();
+                assert_eq!(
+                    crate::http_error::retry_delay(&error).is_some(),
+                    code == "rate_limit_exceeded"
+                );
+            }
+        }
+    }
 
     #[test]
     fn accumulates_text_tool_and_usage() {

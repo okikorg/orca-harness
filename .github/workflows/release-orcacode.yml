@@ -19,8 +19,8 @@ name: release-orcacode
 #
 # The release profile in Cargo.toml already sets lto = "fat", opt-level = "z"
 # and strip = true, so nothing here strips or shrinks the binary. The size
-# gate (ci/check-binary-size.sh, under 6,000,000 bytes) runs on the linux
-# x64 and darwin arm64 binaries. The only outside input is the dispatch tag
+# gate (ci/check-binary-size.sh, the limit at the top of that script) runs
+# on the linux x64 and darwin arm64 binaries. The only outside input is the dispatch tag
 # name, which is validated before it reaches a shell or a URL.
 
 on:

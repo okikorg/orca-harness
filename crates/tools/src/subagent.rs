@@ -15,7 +15,8 @@
 //!
 //! Lifetime: the per-call tool instances (including a fresh `process`
 //! manager) drop when the call returns, so anything a subagent spawned
-//! dies with it. Cancelling the parent run cancels every level below.
+//! dies with it. Foreground workers follow parent cancellation; detached
+//! workers follow their session manager lifetime.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -41,6 +42,16 @@ type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 /// Inner-agent retry policy: total attempts plus backoff.
 type RetryPolicy = (u32, std::time::Duration);
 
+mod background;
+use background::{
+    detach_subagent, execution_deadline, subagent_control, subagent_parameters, subagent_result,
+    BackgroundConfig, InFlight,
+};
+pub use background::{
+    BackgroundJob, BackgroundStatus, SubagentManager, SubagentNotification,
+    DEFAULT_BACKGROUND_SUBAGENT_LIMIT,
+};
+
 enum ModelRoute {
     Inherit,
     Auto,
@@ -48,29 +59,8 @@ enum ModelRoute {
     Fixed(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SubagentIdentity {
-    pub provider: String,
-    pub model: String,
-    /// Stable tool-facing route such as `frontier/claude-sonnet-5`.
-    /// `None` means the worker inherited the orchestrator model.
-    pub route: Option<String>,
-}
-
-impl SubagentIdentity {
-    pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
-        Self {
-            provider: provider.into(),
-            model: model.into(),
-            route: None,
-        }
-    }
-
-    fn with_route(mut self, route: String) -> Self {
-        self.route = Some(route);
-        self
-    }
-}
+mod identity;
+pub use identity::SubagentIdentity;
 
 /// One host-approved model the orchestrator may select for a spawned agent.
 /// The host owns provider construction and credentials; this tool only exposes
@@ -118,15 +108,6 @@ pub struct SubagentSpawn {
 /// Builds extensions to attach to each spawned inner agent.
 pub type SpawnExtensions = Arc<dyn Fn(&SubagentSpawn) -> Vec<Arc<dyn Extension>> + Send + Sync>;
 
-/// Decrements the in-flight agent count however the call ends.
-struct InFlight(BackgroundStats);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.dec_agents();
-    }
-}
-
 pub struct SubagentTool<M: Model + Clone + 'static> {
     model: M,
     inherited_identity: Option<SubagentIdentity>,
@@ -150,6 +131,7 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
     retry_policy: Option<RetryPolicy>,
     /// Data-failure rule for [`Self::retry_policy`].
     ok_failure: Option<OkFailureRule>,
+    background: Option<BackgroundConfig>,
 }
 
 impl<M: Model + Clone + 'static> SubagentTool<M> {
@@ -184,6 +166,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             stats: BackgroundStats::default(),
             retry_policy: None,
             ok_failure: None,
+            background: None,
         }
     }
 
@@ -197,6 +180,21 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
     /// Adopt shared live counters (in-flight agent count, all depths).
     pub fn stats(mut self, stats: BackgroundStats) -> Self {
         self.stats = stats;
+        self
+    }
+
+    /// Enable explicit `background: true` calls for an interactive host.
+    pub fn background(
+        mut self,
+        manager: SubagentManager,
+        notify: impl Fn(SubagentNotification) + Send + Sync + 'static,
+    ) -> Self {
+        self.spawn_seq = manager.spawn_sequence();
+        self.background = Some(BackgroundConfig {
+            manager,
+            notifier: Arc::new(notify),
+            last_list: Default::default(),
+        });
         self
     }
 
@@ -306,6 +304,9 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             stats: self.stats.clone(),
             retry_policy: self.retry_policy,
             ok_failure: self.ok_failure.clone(),
+            // Detached nesting needs durable child-context ownership. Keep the
+            // first release depth-zero while preserving foreground nesting.
+            background: None,
         }
     }
 }
@@ -368,7 +369,6 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
                 }),
             );
         }
-
         let routing = match &route {
             ModelRoute::Inherit => " The user's `/subagents` route is `inherit`; omit `model`. \
                 Every worker uses the orchestrator's current model, and explicit model requests \
@@ -387,10 +387,10 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
                  exactly `{preferred}`. Conflicting model requests are rejected."
             ),
         };
-        let required = if requires_model {
-            json!(["task", "model"])
+        let controls = if self.background.is_some() {
+            format!(" Background execution is the default; set background=false explicitly to wait in the foreground. A background call returns a spawnId immediately; the answer arrives later as a `background_subagent_completions` message batched with any other results ready at that moment. {BACKGROUND_DELIVERY} The acknowledgement's status is `running`, or `queued` when the user's concurrency limit is reached and the agent starts once a running one finishes. To inspect or stop spawned agents, call this subagent tool, not process: action=list answers what is running right now, action=cancel with spawnId or action=cancel_all stops agents.", BACKGROUND_DELIVERY = background::BACKGROUND_DELIVERY)
         } else {
-            json!(["task"])
+            String::new()
         };
         ToolSchema {
             name: "subagent".into(),
@@ -399,15 +399,11 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
                 tool access to work on one bounded task. Subagents can run for many model steps, \
                 so delegate deliberately: give a complete, self-contained task with the exact \
                 result expected and an explicit stopping condition. Avoid open-ended goals or \
-                investigation without a defined deliverable. It sees nothing of this conversation \
-                and returns only its final answer. Several subagent calls issued in the same \
-                response run in parallel.{routing}"
+                investigation without a defined deliverable. It sees nothing of this conversation. \
+                A foreground run returns only its final answer. Several subagent calls issued in the same \
+                response run in parallel.{routing}{controls}"
             ),
-            parameters: Value::Object(serde_json::Map::from_iter([
-                ("type".into(), Value::String("object".into())),
-                ("properties".into(), Value::Object(properties)),
-                ("required".into(), required),
-            ])),
+            parameters: subagent_parameters(self.background.as_ref().map(|config| &config.manager), properties, requires_model),
         }
     }
 
@@ -416,10 +412,22 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        if let Some(result) = subagent_control(self.background.as_ref(), &input) {
+            return result;
+        }
         let task = input
             .get("task")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`task` (string) is required"))?;
+        let detached = input
+            .get("background")
+            .and_then(Value::as_bool)
+            .unwrap_or(self.background.is_some());
+        if detached && self.background.is_none() {
+            return Err(ToolError::msg(
+                "background subagents are unavailable in this host or nesting depth",
+            ));
+        }
         let requested = input.get("model").and_then(Value::as_str);
         let route = self.max_depth.effective_model_route();
         if let Some(requested) = requested {
@@ -486,8 +494,6 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             .or_else(|| self.system_prompt.clone());
 
         let spawn_id = self.spawn_seq.fetch_add(1, Ordering::SeqCst);
-        self.stats.inc_agents();
-        let _in_flight = InFlight(self.stats.clone());
 
         let meter = Meter::default();
         let telemetry = meter.clone();
@@ -496,15 +502,23 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
         if !self.limits_configured {
             limits.max_steps = self.max_depth.max_steps();
         }
-        let worker_deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_secs(self.max_depth.timeout_secs() as u64);
-        limits.deadline = Some(match (limits.deadline, ctx.deadline) {
-            (Some(configured), Some(parent)) => configured.min(parent).min(worker_deadline),
-            (Some(configured), None) => configured.min(worker_deadline),
-            (None, Some(parent)) => parent.min(worker_deadline),
-            (None, None) => worker_deadline,
-        });
-        let mut agent = Agent::new(model.clone()).limits(limits).extension(meter);
+        if let Some(parallel) = self.max_depth.parallel_tools() {
+            limits.max_parallel_tools = if parallel == 0 {
+                usize::MAX
+            } else {
+                parallel as usize
+            };
+        }
+        let timeout = self.max_depth.timeout_secs();
+        if !detached {
+            limits.deadline = execution_deadline(
+                limits.deadline.into_iter().chain(ctx.deadline).min(),
+                timeout,
+            );
+        }
+        let mut agent = Agent::new(model.clone())
+            .limits(limits.clone())
+            .extension(meter);
         if let Some(system) = system {
             agent = agent.system_prompt(system);
         }
@@ -518,15 +532,27 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
                 identity.clone(),
             )));
         }
+        let spawn = SubagentSpawn {
+            id: spawn_id,
+            parent_id: self.parent_spawn,
+            depth: self.depth,
+            call_id: ctx.call_id.clone(),
+            task: task.to_string(),
+            identity: identity.clone(),
+        };
+        // Reserve delivery capacity before host extensions announce this spawn.
+        let background = self
+            .background
+            .as_ref()
+            .filter(|_| detached)
+            .map(|config| {
+                config
+                    .admit(&spawn)
+                    .map(|admission| (config.clone(), admission))
+            })
+            .transpose()
+            .map_err(ToolError::msg)?;
         if let Some(factory) = &self.spawn_extensions {
-            let spawn = SubagentSpawn {
-                id: spawn_id,
-                parent_id: self.parent_spawn,
-                depth: self.depth,
-                call_id: ctx.call_id.clone(),
-                task: task.to_string(),
-                identity: identity.clone(),
-            };
             for extension in factory(&spawn) {
                 agent = agent.extension_arc(extension);
             }
@@ -549,34 +575,18 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             )));
         }
 
+        self.stats.inc_agents();
+        let in_flight = InFlight(self.stats.clone());
+        if let Some(background) = background {
+            return Ok(detach_subagent(
+                background, agent, spawn, telemetry, limits, timeout, in_flight,
+            ));
+        }
+
+        let _in_flight = in_flight;
         let result = agent
             .run_with_cancellation(task, ctx.cancellation.child_token())
             .await;
-        let elapsed_ms = started.elapsed().as_millis();
-        let total = telemetry.total();
-        let steps = telemetry.steps();
-        let tool_calls = telemetry.tool_calls();
-        let answer = result.map_err(|err| {
-            ToolError::msg(format!(
-                "subagent failed: {err} (runtimeMs={elapsed_ms}, steps={steps}, toolCalls={tool_calls}, inputTokens={}, outputTokens={})",
-                total.input_tokens, total.output_tokens
-            ))
-        })?;
-        Ok(json!({
-            "answer": answer,
-            "usage": {
-                "inputTokens": total.input_tokens,
-                "outputTokens": total.output_tokens,
-            },
-            "runtimeMs": elapsed_ms,
-            "steps": steps,
-            "toolCalls": tool_calls,
-            "termination": "completed",
-            "identity": identity.as_ref().map(|identity| json!({
-                "provider": identity.provider,
-                "model": identity.model,
-                "route": identity.route,
-            })),
-        }))
+        subagent_result(result, &telemetry, started, identity.as_ref()).map_err(ToolError::msg)
     }
 }

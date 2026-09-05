@@ -51,7 +51,7 @@ fn bearer() -> BearerCredential {
     }
 }
 
-async fn rejecting_server() -> (String, oneshot::Receiver<String>) {
+async fn rejecting_server(reply: &'static [u8]) -> (String, oneshot::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
@@ -69,12 +69,7 @@ async fn rejecting_server() -> (String, oneshot::Receiver<String>) {
             }
         };
         let _ = tx.send(head);
-        stream
-            .write_all(
-                b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
+        stream.write_all(reply).await.unwrap();
         stream.shutdown().await.unwrap();
     });
 
@@ -83,7 +78,10 @@ async fn rejecting_server() -> (String, oneshot::Receiver<String>) {
 
 #[tokio::test]
 async fn generation_identifies_orcacode_without_impersonating_codex_cli() {
-    let (base_url, captured) = rejecting_server().await;
+    let (base_url, captured) = rejecting_server(
+        b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    )
+    .await;
     let model = OpenAiCodexModel::new("gpt-test", Arc::new(Credentials)).base_url(base_url);
     let mut context = Context::new();
     context.push_user("hello");
@@ -96,4 +94,23 @@ async fn generation_identifies_orcacode_without_impersonating_codex_cli() {
     assert!(head.contains("originator: orcacode"));
     assert!(!head.contains("codex_cli_rs"));
     assert!(head.contains("chatgpt-account-id: account-test"));
+}
+
+#[tokio::test]
+async fn codex_throttle_preserves_retry_after() {
+    for streaming in [false, true] {
+        let (url, captured) = rejecting_server(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
+        let model = OpenAiCodexModel::new("test", Arc::new(Credentials)).base_url(url);
+        let context = Context::new();
+        let result = if streaming {
+            model.generate_streaming(&context, &[], &|_| {}).await
+        } else {
+            model.generate(&context, &[]).await
+        };
+        assert_eq!(
+            orca_harness_model_providers::http_error::retry_delay(&result.unwrap_err()),
+            Some(std::time::Duration::from_secs(7))
+        );
+        captured.await.unwrap();
+    }
 }

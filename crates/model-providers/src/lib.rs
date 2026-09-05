@@ -5,6 +5,7 @@
 //! Codex owns its distinct Responses protocol and credential lifecycle.
 
 pub mod catalog;
+pub mod http_error;
 pub mod openai;
 pub mod openai_codex;
 pub mod openrouter;

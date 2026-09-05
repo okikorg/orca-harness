@@ -148,7 +148,7 @@ async fn retry_model_preserves_streaming_and_retries_request_errors() {
         .unwrap();
 
     assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    assert_eq!(*retries.lock().unwrap(), vec![(2, 10), (3, 10)]);
+    assert_eq!(*retries.lock().unwrap(), vec![(2, Some(10)), (3, Some(10))]);
     assert!(matches!(response, ModelResponse::Final { ref text, .. } if text == "recovered"));
     assert_eq!(deltas.lock().unwrap().len(), 1);
 }

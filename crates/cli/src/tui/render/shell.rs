@@ -12,23 +12,21 @@ use ratatui::Frame;
 use crate::tui::components::approval::ApprovalPrompt;
 use crate::tui::components::composer::Composer;
 use crate::tui::components::status_bar::{self, Segment, StatusBar};
-use crate::tui::components::tree::TreeBranch;
 use crate::tui::components::welcome::Welcome;
 use crate::view::glyphs::glyphs;
-use crate::view::{self, theme};
+use crate::view::theme;
 
-use super::super::format::{elapsed_label, fmt_tokens, workspace_status_name};
+use super::super::format::workspace_status_name;
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
-use super::super::{
-    App, InspectorBodyCache, Overlay, RunState, ViewMode, PALETTE_ROWS, PICKER_ROWS,
-    QUEUE_PREVIEW_ROWS,
-};
-use super::overlays::*;
-use super::pickers::*;
-use super::plugins::*;
+use super::super::{App, InspectorBodyCache, ViewMode};
+use super::agents::draw_agent_browser;
+use super::overlays::context_segment;
 use super::transcript::*;
+
+mod live;
+pub(crate) use live::*;
 
 /// Breathing room between inspector content and the terminal edge. The
 /// renderer asks the padded block for its inner width, so previews wrap to
@@ -68,19 +66,29 @@ impl SplitKind {
     /// `[conversation, inspector]`; both are the whole area when off.
     fn areas(self, area: Rect) -> [Rect; 2] {
         match self {
-            Self::SideBySide => {
-                Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
-                    .areas(area)
-            }
-            Self::Stacked => {
-                Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
-                    .areas(area)
-            }
+            Self::SideBySide => self.areas_at(area, 58),
+            Self::Stacked => self.areas_at(area, 60),
             Self::Off => [area, area],
         }
     }
 
-    fn block(self, border_style: ratatui::style::Style) -> Block<'static> {
+    /// `[first, second]` with `first_percent` of the width (side by side)
+    /// or the height (stacked) going to the first pane.
+    pub(crate) fn areas_at(self, area: Rect, first_percent: u16) -> [Rect; 2] {
+        let constraints = [
+            Constraint::Percentage(first_percent),
+            Constraint::Percentage(100 - first_percent),
+        ];
+        match self {
+            Self::SideBySide => Layout::horizontal(constraints).areas(area),
+            Self::Stacked => Layout::vertical(constraints).areas(area),
+            Self::Off => [area, area],
+        }
+    }
+
+    /// The second pane's chrome: a divider on the side it shares with the
+    /// first pane and a padded outer edge.
+    pub(crate) fn block(self, border_style: ratatui::style::Style) -> Block<'static> {
         let borders = match self {
             Self::Stacked => Borders::TOP,
             Self::SideBySide | Self::Off => Borders::LEFT,
@@ -91,7 +99,7 @@ impl SplitKind {
             .padding(INSPECTOR_PADDING)
     }
 
-    fn content_width(self, area: Rect) -> usize {
+    pub(crate) fn content_width(self, area: Rect) -> usize {
         self.block(ratatui::style::Style::default())
             .inner(area)
             .width as usize
@@ -103,6 +111,10 @@ impl SplitKind {
 const RESERVED_ROWS: usize = 5;
 
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
+    if app.agent_browser.is_some() {
+        draw_agent_browser(frame, app);
+        return;
+    }
     let width = frame.area().width as usize;
     // Split the whole terminal first so the transcript, live rail, composer,
     // and status share one column and the inspector owns the rest.
@@ -305,6 +317,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     });
     let hint = if let Some(hint) = approval_hint.as_deref() {
         hint
+    } else if app.agents_status_focused {
+        "enter open agents · up composer"
     } else if app.scroll > 0 {
         // Fresh scroll: name the two ways to get text out, since capture
         // means a plain drag will not select. Then it settles back to the
@@ -370,8 +384,26 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 true,
             )),
         );
-    for stat in stats_segments(&app.cfg.stats) {
-        status.push(Segment::new(stat, status_bar::STATS));
+    let active_agents = app
+        .subagent_transcripts
+        .values()
+        .filter(|agent| agent.status.is_active())
+        .count();
+    for stat in stats_segments(&app.cfg.stats, active_agents) {
+        let focused = app.agents_status_focused && stat.starts_with("agents ");
+        let segment = Segment::new(
+            stat,
+            if focused {
+                status_bar::KEEP
+            } else {
+                status_bar::STATS
+            },
+        );
+        status.push(if focused {
+            segment.with_style(theme().select)
+        } else {
+            segment
+        });
     }
     status
         .push(Segment::new(
@@ -423,290 +455,9 @@ pub(crate) fn stabilize_transcript_scroll(app: &mut App, max_scroll: usize) {
     app.transcript_max_scroll = max_scroll;
 }
 
-/// Status-line segments for live background work; empty when idle so the
-/// line stays quiet. Each persistent compute tool is unnumbered (0 or 1).
-pub(crate) fn stats_segments(stats: &orca_harness_tools::BackgroundStats) -> Vec<String> {
-    let mut out = Vec::new();
-    if stats.processes() > 0 {
-        out.push(format!("procs {}", stats.processes()));
-    }
-    if stats.kernels() > 0 {
-        out.push("pykernel".to_string());
-    }
-    if stats.bun_repls() > 0 {
-        out.push("bun".to_string());
-    }
-    if stats.agents() > 0 {
-        out.push(format!("agents {}", stats.agents()));
-    }
-    out
-}
-
-pub(crate) fn queue_segment(queued: usize) -> String {
-    if queued == 0 {
-        String::new()
-    } else {
-        format!("q {queued}")
-    }
-}
-
-/// Plan mode is a restriction the user cannot be allowed to forget: it
-/// sits next to the run state, not among the optional segments, and it
-/// is the one segment that never abbreviates away. Normal mode says
-/// nothing — the absence of the word is the normal case.
-///
-/// Once the agent has written a plan, the count rides along, so a landed
-/// plan is visible without waiting for `/mode normal` to list it.
-///
-/// Yolo is the same bargain from the other side: it silences exactly
-/// the mechanism whose job is to say "wait", so while it is on its
-/// segment never abbreviates away either. It renders as plain `yolo`.
-pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::PlanArea) -> String {
-    match mode.get() {
-        crate::mode::Mode::Normal => {
-            return String::new();
-        }
-        crate::mode::Mode::Auto => return "auto".to_string(),
-        crate::mode::Mode::Yolo => return "yolo".to_string(),
-        crate::mode::Mode::Plan => {}
-    }
-    match plan.written().len() {
-        0 => "plan".to_string(),
-        1 => "plan · 1 plan".to_string(),
-        n => format!("plan · {n} plans"),
-    }
-}
-
-/// Progress through the agent's task list, once it has one.
-pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
-    match todos.progress() {
-        (_, 0) => String::new(),
-        (done, total) => format!("todo {done}/{total}"),
-    }
-}
-
-/// A compact execution rail. Prompts stay out of the transcript until
-/// they start, so the conversation preserves its actual chronology.
-pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
-    let t = theme();
-    let g = glyphs();
-    if app.prompt_queue.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("  {}", g.status_prefix(g.waiting)), t.dim),
-        Span::styled("queued", t.strong),
-        Span::styled(format!(" · {}", app.prompt_queue.len()), t.dim),
-    ])];
-    let visible = app.prompt_queue.len().min(QUEUE_PREVIEW_ROWS);
-    let overflow = app.prompt_queue.len().saturating_sub(visible);
-    for (index, prompt) in app.prompt_queue.iter().take(visible).enumerate() {
-        let branch = TreeBranch {
-            indent: "  ",
-            last: index + 1 == visible && overflow == 0,
-        };
-        let label = if index == 0 {
-            "next".to_string()
-        } else {
-            (index + 1).to_string()
-        };
-        let available = width.saturating_sub(12).max(8);
-        lines.push(Line::from(vec![
-            Span::styled(branch.prefix(), t.dim),
-            Span::styled(
-                format!("{label:<4} "),
-                if index == 0 { t.accent } else { t.dim },
-            ),
-            Span::styled(
-                view::truncate_line(prompt, available),
-                if index == 0 { t.strong } else { t.dim },
-            ),
-        ]));
-    }
-    if overflow > 0 {
-        let branch = TreeBranch {
-            indent: "  ",
-            last: true,
-        };
-        lines.push(Line::from(Span::styled(
-            format!("{}     +{overflow} more", branch.prefix()),
-            t.dim,
-        )));
-    }
-    lines
-}
-
-/// Which end of the live region survives when it is taller than the space.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum LiveAnchor {
-    /// Prompts, overlays and pickers are read from their header down.
-    Top,
-    /// While a run is in progress the spinner row at the foot is what the
-    /// user watches, so a tall queue or todo list gives up its head.
-    Bottom,
-}
-
-pub(crate) struct LiveRegion {
-    pub(crate) lines: Vec<Line<'static>>,
-    pub(crate) anchor: LiveAnchor,
-}
-
-impl LiveRegion {
-    fn top(lines: Vec<Line<'static>>) -> Self {
-        Self {
-            lines,
-            anchor: LiveAnchor::Top,
-        }
-    }
-
-    /// The rows that fit in `height`, taken from the anchored end.
-    pub(crate) fn window(&self, height: usize) -> &[Line<'static>] {
-        let len = self.lines.len();
-        match self.anchor {
-            LiveAnchor::Top => &self.lines[..height.min(len)],
-            LiveAnchor::Bottom => &self.lines[len.saturating_sub(height)..],
-        }
-    }
-}
-
-/// The pinned live region's rows; see [`live_region`] for the anchoring.
-#[cfg(test)]
-pub(crate) fn live_lines(app: &App, width: usize) -> Vec<Line<'static>> {
-    live_region(app, width).lines
-}
-
-/// The pinned live region: approval prompt beats ask form, overlays, palette,
-/// then run status. Streaming content itself is projected into the main transcript.
-pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
-    let t = theme();
-    if let Some(request) = &app.approval {
-        return LiveRegion::top(
-            ApprovalPrompt {
-                tool_name: &request.tool_name,
-                detail: &request.detail,
-                yes_no: request.yes_no,
-            }
-            .lines(width),
-        );
-    }
-    if let Some(ask) = &app.ask {
-        return LiveRegion::top(ask.lines(width));
-    }
-    if let Some(overlay) = &app.overlay {
-        let mut lines = match overlay {
-            Overlay::Help { filter, picker } => help_picker_lines(filter, picker, width),
-            Overlay::Models(picker) => model_picker_lines(picker, PICKER_ROWS + 2, width),
-            Overlay::Efforts(picker) => effort_picker_lines(picker, width),
-            Overlay::Locations(picker) => location_picker_lines(picker, width),
-            Overlay::SkillMentions(picker) => skill_mention_picker_lines(picker, width),
-            Overlay::Providers { picker } => provider_lines(picker, width),
-            Overlay::Themes { picker } => theme_picker_lines(picker, width),
-            Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
-            Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),
-            Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
-            Overlay::Style { picker } => style_lines(picker, width),
-            Overlay::Inspector { picker } => {
-                inspector_picker_lines(app.inspector_mode, picker, width)
-            }
-            Overlay::Usage => usage_lines(app, width),
-            Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
-            Overlay::Settings { picker } => settings_lines(app, picker, width),
-            Overlay::Subagents { picker } => subagent_settings_lines(app, picker, width),
-            Overlay::SubagentValues {
-                setting,
-                values,
-                picker,
-            } => subagent_value_lines(*setting, values, picker, width),
-            Overlay::Approvals { tools, picker } => approvals_lines(tools, picker, width),
-            Overlay::Extensions { picker } => extensions_picker_lines(picker, width),
-            Overlay::Mcp {
-                entries,
-                filter,
-                picker,
-            } => crate::tui::mcp_picker::lines(entries, &app.cfg.mcp, filter, picker, width),
-            Overlay::Plugins {
-                entries,
-                filter,
-                picker,
-            } => plugin_picker_lines(
-                entries,
-                &app.cfg.mcp,
-                &app.cfg.skills,
-                filter,
-                picker,
-                width,
-            ),
-            Overlay::Skills {
-                entries,
-                filter,
-                picker,
-            } => crate::tui::skills_picker::lines(entries, filter, picker, width),
-            Overlay::Sessions { sessions, picker } => {
-                sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
-            }
-        };
-        if !app.overlay_stack.is_empty() {
-            if let Some(span) = lines.first_mut().and_then(|line| line.spans.first_mut()) {
-                span.content = span
-                    .content
-                    .replace(" · esc close", " · ← back · esc close")
-                    .into();
-            }
-        }
-        return LiveRegion::top(lines);
-    }
-    if app.palette_query().is_some() {
-        return LiveRegion::top(palette_lines(app, PALETTE_ROWS + 2, width));
-    }
-    if app.running() {
-        let mut lines = queue_lines(app, width);
-        lines.extend(todo_lines(&app.cfg.todos, width));
-        let spinner = glyphs().active_frame(app.spinner_frame);
-        let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
-            "writing"
-        } else if !app.reasoning.is_empty() {
-            "thinking"
-        } else {
-            "working"
-        };
-        if let RunState::Running { started, .. } = &app.run {
-            let token_io = if app.turn_tokens_in == 0 && app.turn_tokens_out == 0 {
-                String::new()
-            } else {
-                format!(
-                    " · ↑{} ↓{}",
-                    fmt_tokens(app.turn_tokens_in),
-                    fmt_tokens(app.turn_tokens_out)
-                )
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {spinner} "), t.accent),
-                Span::styled(
-                    format!(
-                        "{verb} · {}{token_io} · esc to interrupt",
-                        elapsed_label(started.elapsed())
-                    ),
-                    t.dim,
-                ),
-            ]));
-        }
-        return LiveRegion {
-            lines,
-            anchor: LiveAnchor::Bottom,
-        };
-    }
-    let mut lines = queue_lines(app, width);
-    lines.extend(todo_lines(&app.cfg.todos, width));
-    LiveRegion {
-        lines,
-        anchor: LiveAnchor::Bottom,
-    }
-}
-
 /// The hint without its last ` · piece`: a tight row gives up the least
 /// useful key before it gives up the model name.
-fn shorter_hint(hint: &str) -> String {
+pub(crate) fn shorter_hint(hint: &str) -> String {
     hint.rsplit_once(" · ")
         .map(|(head, _)| head)
         .unwrap_or(hint)
@@ -752,23 +503,5 @@ mod tests {
         let [top, bottom] = SplitKind::Stacked.areas(Rect::new(0, 0, 90, 30));
         assert_eq!(top.width, 90);
         assert_eq!(top.height + bottom.height, 30);
-    }
-
-    #[test]
-    fn a_running_live_region_keeps_its_foot() {
-        let region = LiveRegion {
-            lines: (0..5).map(|n| Line::from(n.to_string())).collect(),
-            anchor: LiveAnchor::Bottom,
-        };
-        let shown: Vec<String> = region
-            .window(2)
-            .iter()
-            .map(|line| line.to_string())
-            .collect();
-        assert_eq!(shown, ["3", "4"]);
-        let region = LiveRegion::top(region.lines);
-        assert_eq!(region.window(2).len(), 2);
-        assert_eq!(region.window(2)[0].to_string(), "0");
-        assert_eq!(region.window(9).len(), 5);
     }
 }

@@ -62,7 +62,7 @@ pub use memory::{
 };
 pub use policy::{PolicyOutcome, PolicyRule, ToolPolicy};
 pub use read_tool_result::ReadToolResultTool;
-pub use retry::{RetryModel, ToolRetry};
+pub use retry::{ModelGate, ModelRetryConfig, RetryModel, ToolRetry};
 pub use session::{
     new_session_id, workspace_key, LoadedSession, SessionError, SessionFile, SessionHandler,
     SessionMeta, SESSION_FORMAT_VERSION,

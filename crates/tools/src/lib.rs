@@ -63,11 +63,10 @@ pub use core_tools::{
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use kernel::PyKernelTool;
 pub use subagent::{
-    SpawnExtensions, SubagentDepth, SubagentIdentity, SubagentModel, SubagentSpawn, SubagentTool,
-    AUTO_SUBAGENT_ROUTE, DEFAULT_SUBAGENT_MAX_STEPS, DEFAULT_SUBAGENT_TIMEOUT, MAX_SUBAGENT_DEPTH,
-    MAX_SUBAGENT_MAX_STEPS, MAX_SUBAGENT_OUTPUT_CHARS, MAX_SUBAGENT_RETRY_ATTEMPTS,
-    MAX_SUBAGENT_RETRY_BACKOFF_MS, MAX_SUBAGENT_TIMEOUT_SECS, MIN_SUBAGENT_DEPTH,
-    MIN_SUBAGENT_MAX_STEPS, MIN_SUBAGENT_OUTPUT_CHARS, MIN_SUBAGENT_TIMEOUT_SECS,
+    BackgroundJob, BackgroundStatus, SpawnExtensions, SubagentDepth, SubagentIdentity,
+    SubagentManager, SubagentModel, SubagentNotification, SubagentSpawn, SubagentTool,
+    AUTO_SUBAGENT_ROUTE, DEFAULT_BACKGROUND_SUBAGENT_LIMIT, DEFAULT_SUBAGENT_MAX_STEPS,
+    DEFAULT_SUBAGENT_TIMEOUT, MIN_SUBAGENT_DEPTH, MIN_SUBAGENT_MAX_STEPS,
     PREFERENCE_SUBAGENT_ROUTE,
 };
 pub use todo::{TodoItem, TodoList, TodoStatus, TodoWriteTool};

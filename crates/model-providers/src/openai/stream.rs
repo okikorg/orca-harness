@@ -10,20 +10,20 @@ use super::{parse_tool_arguments, WireUsage};
 /// Reassembles SSE `data:` payloads from arbitrarily-split byte chunks.
 #[derive(Default)]
 pub(crate) struct SseLineBuffer {
-    buf: String,
+    buf: Vec<u8>,
 }
 
 impl SseLineBuffer {
     /// Feed raw body bytes; returns every complete `data:` payload found.
     pub(crate) fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buf.push_str(&String::from_utf8_lossy(bytes));
+        // Decode only complete lines: a network chunk can split a UTF-8 codepoint.
+        self.buf.extend_from_slice(bytes);
         let mut payloads = Vec::new();
-        while let Some(pos) = self.buf.find('\n') {
-            let line: String = self.buf.drain(..=pos).collect();
-            let line = line.trim();
-            if let Some(payload) = line.strip_prefix("data:") {
-                payloads.push(payload.trim().to_string());
+        while let Some(pos) = self.buf.iter().position(|byte| *byte == b'\n') {
+            if let Some(payload) = Self::payload(&self.buf[..pos]) {
+                payloads.push(payload);
             }
+            self.buf.drain(..=pos);
         }
         payloads
     }
@@ -32,15 +32,20 @@ impl SseLineBuffer {
     /// newline. Non-`data:` remainder is ignored, matching `push`.
     pub(crate) fn finish(&mut self) -> Vec<String> {
         let line = std::mem::take(&mut self.buf);
-        line.trim()
+        Self::payload(&line).into_iter().collect()
+    }
+
+    fn payload(line: &[u8]) -> Option<String> {
+        String::from_utf8_lossy(line)
+            .trim()
             .strip_prefix("data:")
-            .map(|payload| vec![payload.trim().to_string()])
-            .unwrap_or_default()
+            .map(|payload| payload.trim().to_string())
     }
 }
 
 #[derive(Deserialize)]
 struct WireChunk {
+    error: Option<serde_json::Value>,
     #[serde(default)]
     choices: Vec<WireChunkChoice>,
     usage: Option<WireUsage>,
@@ -107,6 +112,10 @@ impl ChunkAccumulator {
                 payload.len()
             ))
         })?;
+
+        if let Some(error) = chunk.error {
+            return Err(crate::http_error::stream_error(&error));
+        }
 
         if let Some(usage) = chunk.usage {
             self.usage = Some(usage.into_usage());
@@ -257,6 +266,31 @@ impl ChunkAccumulator {
 mod tests {
     use super::*;
 
+    #[test]
+    fn stream_errors_preserve_provider_retry_policy() {
+        for (error, retryable) in [
+            (
+                serde_json::json!({"code": "insufficient_quota", "message": "quota"}),
+                false,
+            ),
+            (
+                serde_json::json!({"code": 403, "message": "forbidden"}),
+                false,
+            ),
+            (
+                serde_json::json!({"code": "rate_limit_exceeded", "message": "busy"}),
+                true,
+            ),
+        ] {
+            let payload = serde_json::json!({"error": error}).to_string();
+            let failure = ChunkAccumulator::new().apply(&payload).unwrap_err();
+            assert_eq!(
+                crate::http_error::retry_delay(&failure).is_some(),
+                retryable
+            );
+        }
+    }
+
     fn apply_all(acc: &mut ChunkAccumulator, payloads: &[&str]) -> Vec<ModelDelta> {
         payloads
             .iter()
@@ -291,6 +325,21 @@ mod tests {
         let mut buf = SseLineBuffer::default();
         assert!(buf.push(b"data: [DONE]").is_empty());
         assert_eq!(buf.finish(), vec!["[DONE]".to_string()]);
+    }
+
+    #[test]
+    fn sse_buffer_preserves_unicode_at_every_network_split() {
+        let payload = r#"{"choices":[{"delta":{"content":"café東京𝄞"}}]}"#;
+        for ending in ["\r\n\r\n", ""] {
+            let frame = format!("data: {payload}{ending}");
+            for split in 0..=frame.len() {
+                let mut buffer = SseLineBuffer::default();
+                let mut actual = buffer.push(&frame.as_bytes()[..split]);
+                actual.extend(buffer.push(&frame.as_bytes()[split..]));
+                actual.extend(buffer.finish());
+                assert_eq!(actual, [payload], "network split at byte {split}");
+            }
+        }
     }
 
     #[test]

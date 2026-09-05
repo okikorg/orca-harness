@@ -12,6 +12,7 @@ pub mod progress_list;
 pub mod section;
 pub mod status_bar;
 pub mod subagent_row;
+pub mod tabs;
 pub mod tool_row;
 pub mod transcript;
 pub mod tree;

@@ -253,20 +253,60 @@ pub(crate) fn handle_overlay_key(
         } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => {
                 let value = values[index].clone();
+                if setting.numeric().is_some() && value == crate::tui::subagents::CUSTOM_VALUE {
+                    let setting = *setting;
+                    return apply_after(
+                        app,
+                        worker,
+                        After::Replace(Overlay::SubagentNumber {
+                            setting,
+                            input: String::new(),
+                            error: String::new(),
+                        }),
+                    );
+                }
                 apply_subagent_value(&app.cfg.subagent_depth, *setting, &value);
-                let note = match crate::config::save_subagent_settings(&app.cfg.subagent_depth) {
-                    Ok(_) => format!(
-                        "subagent {} set to {} (saved; applies to the next spawn)",
-                        subagent_setting_label(*setting),
-                        value
-                    ),
-                    Err(err) => format!(
-                        "subagent {} set to {} for this session (save failed: {err})",
-                        subagent_setting_label(*setting),
-                        value
-                    ),
-                };
+                let note =
+                    crate::tui::subagents::save_subagent_note(&app.cfg.subagent_depth, *setting);
                 After::PopWithNote(note)
+            }
+            _ => After::Nothing,
+        },
+        Overlay::SubagentNumber {
+            setting,
+            input,
+            error,
+        } => match key.code {
+            KeyCode::Char('u') if ctrl => {
+                input.clear();
+                error.clear();
+                After::Nothing
+            }
+            KeyCode::Char(c) if !ctrl => {
+                input.push(c);
+                error.clear();
+                After::Nothing
+            }
+            KeyCode::Backspace => {
+                input.pop();
+                error.clear();
+                After::Nothing
+            }
+            KeyCode::Enter => {
+                let field = setting.numeric().expect("numeric editor");
+                match field.parse(input) {
+                    Ok(value) => {
+                        (field.write)(&app.cfg.subagent_depth, value);
+                        After::PopWithNote(crate::tui::subagents::save_subagent_note(
+                            &app.cfg.subagent_depth,
+                            *setting,
+                        ))
+                    }
+                    Err(message) => {
+                        *error = message.into();
+                        After::Nothing
+                    }
+                }
             }
             _ => After::Nothing,
         },

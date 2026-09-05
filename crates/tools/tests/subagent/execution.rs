@@ -1,7 +1,6 @@
 #[test]
 fn default_governance_is_bounded() {
     assert_eq!(DEFAULT_SUBAGENT_MAX_STEPS, 24);
-    assert_eq!(MAX_SUBAGENT_MAX_STEPS, 96);
     assert_eq!(DEFAULT_SUBAGENT_TIMEOUT, Duration::from_secs(5 * 60));
 }
 
@@ -174,7 +173,9 @@ async fn parent_cancellation_reaches_the_inner_run() {
 #[tokio::test]
 async fn parent_deadline_bounds_the_inner_run() {
     let (ws, _dir) = temp_ws();
-    let tool = SubagentTool::new(Arc::new(StallModel), &ws);
+    let settings = orca_harness_tools::SubagentDepth::default();
+    settings.set_timeout_secs(0);
+    let tool = SubagentTool::new(Arc::new(StallModel), &ws).max_depth(settings);
     let tctx = ToolContext {
         call_id: "t".into(),
         tool_name: "subagent".into(),
@@ -300,11 +301,16 @@ fn schema_describes_bounded_delegation_and_inherit_omits_model() {
 
 #[tokio::test]
 async fn inherit_rejects_an_explicit_model_before_spawning() {
-    let default = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("inherited")]));
+    let default = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
+        "inherited",
+    )]));
     let flash = Arc::new(ScriptedModel::new(vec![]));
     let (ws, _dir) = temp_ws();
-    let tool = SubagentTool::new(default.clone(), &ws)
-        .models([SubagentModel::new("flash/one", "fast", flash.clone())]);
+    let tool = SubagentTool::new(default.clone(), &ws).models([SubagentModel::new(
+        "flash/one",
+        "fast",
+        flash.clone(),
+    )]);
 
     let schema = tool.schema();
     assert!(schema.parameters["properties"]["model"].is_null());
@@ -317,7 +323,10 @@ async fn inherit_rejects_an_explicit_model_before_spawning() {
         .to_string();
     assert!(err.contains("conflicts with the user's `inherit` preference"));
 
-    let inherited = tool.call(json!({"task": "right route"}), &ctx()).await.unwrap();
+    let inherited = tool
+        .call(json!({"task": "right route"}), &ctx())
+        .await
+        .unwrap();
     assert_eq!(inherited["answer"], "inherited");
     assert_eq!(default.generate_calls(), 1);
     assert_eq!(flash.generate_calls(), 0);
@@ -325,3 +334,54 @@ async fn inherit_rejects_an_explicit_model_before_spawning() {
 
 use orca_harness_core::Message;
 use orca_harness_tools::SubagentDepth;
+
+#[tokio::test]
+async fn worker_parallel_tool_setting_controls_actual_overlap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Overlap {
+        active: AtomicUsize,
+        peak: AtomicUsize,
+    }
+    #[async_trait]
+    impl Tool for Overlap {
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: "overlap".into(),
+                description: "measure overlap".into(),
+                parameters: json!({"type":"object"}),
+            }
+        }
+        async fn call(&self, _: Value, _: &ToolContext) -> Result<Value, ToolError> {
+            let n = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(json!(true))
+        }
+    }
+    for (limit, peak) in [(1, 1), (3, 3), (0, 6)] {
+        let overlap = Arc::new(Overlap {
+            active: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        });
+        let tools = overlap.clone();
+        let model = Arc::new(ScriptedModel::tool_round(
+            (0..6)
+                .map(|n| call(&n.to_string(), "overlap", json!({})))
+                .collect(),
+            "done",
+        ));
+        let settings = orca_harness_tools::SubagentDepth::default();
+        settings.set_parallel_tools(limit);
+        let worker = SubagentTool::with_tools(
+            model,
+            Arc::new(move || vec![tools.clone() as Arc<dyn Tool>]),
+        )
+        .max_depth(settings);
+        worker
+            .call(json!({"task":"measure"}), &ctx())
+            .await
+            .unwrap();
+        assert_eq!(overlap.peak.load(Ordering::SeqCst), peak);
+    }
+}

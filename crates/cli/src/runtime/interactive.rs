@@ -1,4 +1,5 @@
 use super::agent::subagent_extensions;
+use super::completions::{ActiveInventory, CompletionDelivery, CompletionInbox};
 use super::session::open_session;
 use super::worker::worker;
 use std::process::ExitCode;
@@ -19,7 +20,8 @@ use orca_harness_tool_extensions::web::{
 };
 use orca_harness_tools::{
     core_tools_with_guard, AskTool, BackgroundStats, BunReplTool, FileGuard, ProcessTool,
-    PyKernelTool, SubagentDepth, SubagentSpawn, SubagentTool, TodoList, TodoWriteTool, Workspace,
+    PyKernelTool, SubagentDepth, SubagentManager, SubagentSpawn, TodoList, TodoWriteTool,
+    Workspace,
 };
 
 use crate::approval::Approval;
@@ -73,7 +75,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         system.push_str(&block);
     }
     let endpoint = Endpoint::from_config(&cfg);
-    let subagent_depth = SubagentDepth::new(cfg.subagent_depth);
+    let subagent_depth = endpoint.subagent_settings.clone();
     let stats = BackgroundStats::new();
     let mode = ModeHandle::new(cfg.mode());
     let todos = TodoList::new();
@@ -132,6 +134,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
             &memory,
             &memory_scope,
             endpoint.model_retry_counter(),
+            subagent_depth.clone(),
         )
         .await;
         return ExitCode::from(code as u8);
@@ -141,7 +144,10 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let process_generation = Arc::new(AtomicU64::new(0));
-    crate::update::check_in_background(ui_tx.clone());
+    // The concurrency limit is a `/subagents` setting: queued workers start
+    // the moment the user raises it.
+    let subagent_manager = SubagentManager::from_settings(subagent_depth.clone());
+    let completions = CompletionInbox::new(subagent_manager.clone());
 
     // Session warnings surface as transcript notices; recording failures
     // must be visible but never fatal mid-run.
@@ -226,6 +232,8 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let memory = memory.clone();
         let memory_scope = memory_scope.clone();
         let process_generation = process_generation.clone();
+        let subagent_manager = subagent_manager.clone();
+        let completions = completions.clone();
         let cmd_tx = cmd_tx.clone();
         move |endpoint: &Endpoint| {
             let generation = process_generation.fetch_add(1, Ordering::AcqRel) + 1;
@@ -234,7 +242,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 endpoint.build_model_for_ui(Some(ui_tx.clone())),
                 endpoint.provider.label(),
                 &endpoint.model,
-                subagent_models::choices(endpoint),
+                subagent_models::choices_with_ui(endpoint, ui_tx.clone()),
                 &cfg,
                 &ws,
                 &ui_tx,
@@ -254,6 +262,8 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 &memory_scope,
                 generation,
                 &process_generation,
+                &subagent_manager,
+                &completions,
                 &cmd_tx,
             )
         }
@@ -268,6 +278,11 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         eprintln!("ORCA_BENCH set: exiting after startup, before the terminal UI");
         return ExitCode::SUCCESS;
     }
+    // The update check only produces a transcript notice, so it starts
+    // with the UI rather than in the cold-start path above: spawned any
+    // earlier, the runtime waits on its DNS lookup at shutdown and the
+    // startup benchmark measures the network instead of the binary.
+    crate::update::check_in_background(ui_tx.clone());
     let initial_provider = endpoint.provider;
     let session_id = session.as_ref().map(|s| s.session_id());
     // The TUI reads per-server tool counts off the same handle the
@@ -293,6 +308,8 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         cmd_rx,
         worker_commands,
         process_generation,
+        subagent_manager,
+        completions,
         ui_tx,
     ));
 
@@ -344,6 +361,8 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     memory_scope: &MemoryScope,
     process_generation: u64,
     current_process_generation: &Arc<AtomicU64>,
+    subagent_manager: &SubagentManager,
+    completions: &CompletionInbox,
     worker: &mpsc::UnboundedSender<crate::msg::WorkerCmd>,
 ) -> Agent<Arc<dyn Model>> {
     // MCP visibility is a host-side model concern: core keeps its sacred,
@@ -368,9 +387,13 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     // a call plan mode refuses never reaches the user as a prompt.
     // Both read the shared handle per call: /mode applies to the call
     // in flight, yolo included.
+    // Completion delivery sits ahead of session recording and compaction
+    // in the before_model chain, so a batch handed over between steps is
+    // recorded and budgeted in the same pass.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
+        .extension(CompletionDelivery::new(completions.clone(), ui.clone()))
         .extension(PlanGate::new(mode.clone(), plan_area.clone()))
         .extension(orca_harness_tools::MutationPreflight)
         .extension(auto_approval.clone());
@@ -390,6 +413,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             }),
         );
     }
+    agent = agent.extension(ActiveInventory(subagent_manager.clone()));
     if let Some(session) = session {
         agent = agent.extension_arc(session.clone());
     }
@@ -477,25 +501,21 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         BunReplTool::new().working_dir(root).stats(stats.clone()),
     ));
     let ui_events = ui.clone();
-    let mut subagent = SubagentTool::new(model_for_subagents, ws)
-        .inherited_identity(inherited_provider, inherited_model)
-        .max_depth(subagent_depth.clone())
-        .models(
-            subagent_models
-                .into_iter()
-                .map(|choice| orca_harness_tools::SubagentModel {
-                    model: Arc::new(McpModel::new(choice.model, mcp.catalog())) as Arc<dyn Model>,
-                    ..choice
-                }),
-        )
-        .stats(stats.clone());
-    crate::config::load_subagent_settings(subagent_depth);
-    if extensions::enabled("retry") {
-        // Install defaults once; subsequent rebuilds preserve `/subagents`
-        // choices while attaching the same data-failure classifier.
-        subagent_depth.ensure_retry_defaults(3, 250);
-        subagent = subagent.retry_ok_when(extensions::data_failure);
-    }
+    let mut subagent = super::subagents::tool(
+        model_for_subagents,
+        ws,
+        (inherited_provider, inherited_model),
+        subagent_depth,
+        subagent_models,
+        mcp.catalog(),
+    )
+    .stats(stats.clone())
+    .background(subagent_manager.clone(), {
+        let worker = worker.clone();
+        let completions = completions.clone();
+        let ui = ui.clone();
+        move |notification| completions.publish(notification, &ui, &worker)
+    });
     let subagent_mode = mode.clone();
     let subagent_plan = plan_area.clone();
     let subagent_settings = subagent_depth.clone();

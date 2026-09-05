@@ -47,6 +47,29 @@ pub(crate) fn handle_ui_msg(
             call_id,
             event,
         } => handle_subagent_event(app, id, parent_id, depth, call_id, event),
+        UiMsg::SubagentCompleted {
+            id,
+            is_error,
+            message,
+        } => {
+            if let Some(transcript) = app
+                .subagent_transcripts
+                .get(&id)
+                .filter(|t| t.status.is_active())
+            {
+                let (parent_id, depth, call_id) = (
+                    transcript.parent_id,
+                    transcript.depth,
+                    transcript.call_id.clone(),
+                );
+                let event = if is_error {
+                    orca_harness_extensions::HarnessEvent::Error { message }
+                } else {
+                    orca_harness_extensions::HarnessEvent::Result { message }
+                };
+                handle_subagent_event(app, id, parent_id, depth, call_id, event);
+            }
+        }
         UiMsg::Approval(request) => app.approval = Some(request),
         UiMsg::Ask(request) => app.ask = Some(crate::tui::components::ask::AskForm::new(request)),
         UiMsg::Models { request_id, result } => {

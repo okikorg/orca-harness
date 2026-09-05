@@ -149,16 +149,10 @@ pub fn save_subagent_settings(settings: &orca_harness_tools::SubagentDepth) -> i
                 .map(|model| (tier.to_string(), json!(model)))
         })
         .collect::<serde_json::Map<String, Value>>();
-    let value = json!({
-        "route": settings.model_route(),
-        "preferred": preferred,
-        "depth": settings.get(),
-        "max_steps": settings.max_steps(),
-        "timeout_secs": settings.timeout_secs(),
-        "output_chars": settings.output_chars(),
-        "tool_attempts": settings.tool_attempts(),
-        "retry_backoff_ms": settings.retry_backoff_ms(),
-    });
+    let mut value = json!({ "route": settings.model_route(), "preferred": preferred });
+    for field in crate::subagent_settings::NUMERIC {
+        value[field.key] = json!((field.read)(settings));
+    }
     mutate_root(move |root| {
         root.insert("subagents".into(), value);
     })
@@ -171,34 +165,14 @@ pub fn load_subagent_settings(settings: &orca_harness_tools::SubagentDepth) {
     let Some(saved) = load_root().and_then(|root| root.get("subagents").cloned()) else {
         return;
     };
-    if let Some(value) = saved["depth"].as_u64().and_then(|v| u32::try_from(v).ok()) {
-        settings.set(value);
-    }
-    for (field, set) in [
-        (
-            "max_steps",
-            orca_harness_tools::SubagentDepth::set_max_steps
-                as fn(&orca_harness_tools::SubagentDepth, u32) -> u32,
-        ),
-        (
-            "timeout_secs",
-            orca_harness_tools::SubagentDepth::set_timeout_secs,
-        ),
-        (
-            "output_chars",
-            orca_harness_tools::SubagentDepth::set_output_chars,
-        ),
-        (
-            "tool_attempts",
-            orca_harness_tools::SubagentDepth::set_tool_attempts,
-        ),
-        (
-            "retry_backoff_ms",
-            orca_harness_tools::SubagentDepth::set_retry_backoff_ms,
-        ),
-    ] {
-        if let Some(value) = saved[field].as_u64().and_then(|v| u32::try_from(v).ok()) {
-            set(settings, value);
+    for field in crate::subagent_settings::NUMERIC {
+        if let Some(value) = saved[field.key]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+        {
+            if field.parse(&value.to_string()).is_ok() {
+                (field.write)(settings, value);
+            }
         }
     }
     if let Some(preferred) = saved["preferred"].as_object() {

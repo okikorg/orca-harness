@@ -90,12 +90,20 @@ const OPENROUTER: [CuratedModel; 9] = [
 /// its configured URL. Cloud choices use OpenRouter and are included only when
 /// an API key can be resolved without prompting.
 pub(crate) fn choices(endpoint: &Endpoint) -> Vec<SubagentModel<Arc<dyn Model>>> {
-    choices_with_openrouter_key(endpoint, Provider::OpenRouter.resolve_key())
+    choices_with_openrouter_key(endpoint, Provider::OpenRouter.resolve_key(), None)
+}
+
+pub(crate) fn choices_with_ui(
+    endpoint: &Endpoint,
+    ui: tokio::sync::mpsc::UnboundedSender<crate::msg::UiMsg>,
+) -> Vec<SubagentModel<Arc<dyn Model>>> {
+    choices_with_openrouter_key(endpoint, Provider::OpenRouter.resolve_key(), Some(ui))
 }
 
 fn choices_with_openrouter_key(
     endpoint: &Endpoint,
     openrouter_key: Option<String>,
+    ui: Option<tokio::sync::mpsc::UnboundedSender<crate::msg::UiMsg>>,
 ) -> Vec<SubagentModel<Arc<dyn Model>>> {
     let local = Endpoint {
         provider: Provider::Local,
@@ -111,8 +119,10 @@ fn choices_with_openrouter_key(
         prompt_cache: true,
         request_session_id: Some(orca_harness_extensions::new_session_id()),
         model_retries: Arc::default(),
+        model_gates: endpoint.model_gates.clone(),
+        subagent_settings: endpoint.subagent_settings.clone(),
     };
-    let mut choices = build(&local, &LOCAL);
+    let mut choices = build(&local, &LOCAL, ui.clone());
 
     let openrouter_key = if endpoint.provider == Provider::OpenRouter {
         endpoint.api_key.clone().or(openrouter_key)
@@ -130,13 +140,19 @@ fn choices_with_openrouter_key(
             prompt_cache: true,
             request_session_id: Some(orca_harness_extensions::new_session_id()),
             model_retries: Arc::default(),
+            model_gates: endpoint.model_gates.clone(),
+            subagent_settings: endpoint.subagent_settings.clone(),
         };
-        choices.extend(build(&openrouter, &OPENROUTER));
+        choices.extend(build(&openrouter, &OPENROUTER, ui));
     }
     choices
 }
 
-fn build(endpoint: &Endpoint, entries: &[CuratedModel]) -> Vec<SubagentModel<Arc<dyn Model>>> {
+fn build(
+    endpoint: &Endpoint,
+    entries: &[CuratedModel],
+    ui: Option<tokio::sync::mpsc::UnboundedSender<crate::msg::UiMsg>>,
+) -> Vec<SubagentModel<Arc<dyn Model>>> {
     entries
         .iter()
         .map(|entry| {
@@ -144,7 +160,14 @@ fn build(endpoint: &Endpoint, entries: &[CuratedModel]) -> Vec<SubagentModel<Arc
                 model: entry.endpoint_model.into(),
                 ..endpoint.clone()
             };
-            SubagentModel::new(entry.choice_id, entry.description, worker.build_model())
+            let label = format!(
+                "subagent {} ({}/{})",
+                entry.choice_id,
+                worker.provider.label(),
+                worker.model
+            );
+            let model = worker.build_model_for_ui_with_label(ui.clone(), Some(label));
+            SubagentModel::new(entry.choice_id, entry.description, model)
                 .identity(worker.provider.label(), worker.model)
         })
         .collect()
@@ -179,8 +202,11 @@ mod tests {
                 prompt_cache: false,
                 request_session_id: None,
                 model_retries: Arc::default(),
+                model_gates: Default::default(),
+                subagent_settings: Default::default(),
             },
             Some("key".into()),
+            None,
         );
         assert!(choices.iter().all(|choice| choice.identity.is_some()));
         assert!(choices.iter().any(|choice| {
@@ -204,8 +230,10 @@ mod tests {
             prompt_cache: false,
             request_session_id: None,
             model_retries: Arc::default(),
+            model_gates: Default::default(),
+            subagent_settings: Default::default(),
         };
-        let choices = choices_with_openrouter_key(&endpoint, None);
+        let choices = choices_with_openrouter_key(&endpoint, None, None);
         assert_eq!(choices.len(), 3);
         assert!(choices.iter().all(|choice| choice.id.starts_with("local/")));
     }
@@ -222,8 +250,10 @@ mod tests {
             prompt_cache: false,
             request_session_id: None,
             model_retries: Arc::default(),
+            model_gates: Default::default(),
+            subagent_settings: Default::default(),
         };
-        let choices = choices_with_openrouter_key(&endpoint, Some("openrouter-key".into()));
+        let choices = choices_with_openrouter_key(&endpoint, Some("openrouter-key".into()), None);
         assert_eq!(choices.len(), 12);
         for tier in ["flash/", "mid/", "frontier/"] {
             assert_eq!(

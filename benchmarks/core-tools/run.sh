@@ -38,3 +38,7 @@ python3 "${REPO_ROOT}/benchmarks/core-tools/report.py" \
   --samples "$SAMPLES" \
   --git-sha "$(git rev-parse HEAD)" \
   --worktree "$(if git diff --quiet && git diff --cached --quiet; then echo clean; else echo dirty; fi)"
+
+echo
+echo "=== core tools budgets ==="
+python3 "${REPO_ROOT}/benchmarks/shared/check_budgets.py" --suite core-tools

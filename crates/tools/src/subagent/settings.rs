@@ -6,18 +6,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 pub const DEFAULT_SUBAGENT_MAX_STEPS: u32 = 24;
 pub const DEFAULT_SUBAGENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
-/// Bounds on subagent nesting depth. Each extra level multiplies model
-/// calls, so the ceiling is deliberately low.
+/// A worker needs at least one nesting level and one model step.
 pub const MIN_SUBAGENT_DEPTH: u32 = 1;
-pub const MAX_SUBAGENT_DEPTH: u32 = 5;
 pub const MIN_SUBAGENT_MAX_STEPS: u32 = 1;
-pub const MAX_SUBAGENT_MAX_STEPS: u32 = 96;
-pub const MIN_SUBAGENT_TIMEOUT_SECS: u32 = 30;
-pub const MAX_SUBAGENT_TIMEOUT_SECS: u32 = 30 * 60;
-pub const MIN_SUBAGENT_OUTPUT_CHARS: u32 = 1_000;
-pub const MAX_SUBAGENT_OUTPUT_CHARS: u32 = 64_000;
-pub const MAX_SUBAGENT_RETRY_ATTEMPTS: u32 = 10;
-pub const MAX_SUBAGENT_RETRY_BACKOFF_MS: u32 = 2_000;
 pub const AUTO_SUBAGENT_ROUTE: &str = "auto";
 pub const PREFERENCE_SUBAGENT_ROUTE: &str = "preference";
 
@@ -43,7 +34,15 @@ struct SubagentSettingsInner {
     max_steps: AtomicU32,
     timeout_secs: AtomicU32,
     output_chars: AtomicU32,
+    /// A watch rather than an atomic: queued background workers wait on
+    /// it, so raising the limit mid-session admits them immediately.
+    background_limit: tokio::sync::watch::Sender<u32>,
     retry: StdMutex<LiveRetry>,
+    parallel_tools: StdMutex<Option<u32>>,
+    model_concurrency: tokio::sync::watch::Sender<usize>,
+    model_attempts: AtomicU32,
+    model_backoff_ms: StdMutex<Option<u32>>,
+    model_max_backoff_ms: AtomicU32,
     routing: StdMutex<ModelRouting>,
 }
 
@@ -65,6 +64,14 @@ impl SubagentDepth {
             max_steps: AtomicU32::new(DEFAULT_SUBAGENT_MAX_STEPS),
             timeout_secs: AtomicU32::new(DEFAULT_SUBAGENT_TIMEOUT.as_secs() as u32),
             output_chars: AtomicU32::new(8_000),
+            background_limit: tokio::sync::watch::Sender::new(
+                super::DEFAULT_BACKGROUND_SUBAGENT_LIMIT,
+            ),
+            parallel_tools: StdMutex::new(None),
+            model_concurrency: tokio::sync::watch::Sender::new(0),
+            model_attempts: AtomicU32::new(0),
+            model_backoff_ms: StdMutex::new(None),
+            model_max_backoff_ms: AtomicU32::new(0),
             retry: StdMutex::new(LiveRetry {
                 attempts: 1,
                 backoff_ms: 250,
@@ -101,7 +108,7 @@ impl SubagentDepth {
     }
 
     pub fn set_timeout_secs(&self, value: u32) -> u32 {
-        set_min(&self.0.timeout_secs, value, MIN_SUBAGENT_TIMEOUT_SECS)
+        set_min(&self.0.timeout_secs, value, 0)
     }
 
     pub fn output_chars(&self) -> u32 {
@@ -109,7 +116,73 @@ impl SubagentDepth {
     }
 
     pub fn set_output_chars(&self, value: u32) -> u32 {
-        set_min(&self.0.output_chars, value, MIN_SUBAGENT_OUTPUT_CHARS)
+        set_min(&self.0.output_chars, value, 0)
+    }
+
+    /// How many detached workers may run at once; the rest queue in
+    /// spawn order. Zero means unrestricted.
+    pub fn background_limit(&self) -> u32 {
+        *self.0.background_limit.borrow()
+    }
+
+    pub fn set_background_limit(&self, value: u32) -> u32 {
+        self.0.background_limit.send_replace(value);
+        value
+    }
+
+    pub(super) fn background_limit_watch(&self) -> tokio::sync::watch::Receiver<u32> {
+        self.0.background_limit.subscribe()
+    }
+
+    /// None inherits the host limit; zero explicitly allows unrestricted parallel tools.
+    pub fn parallel_tools(&self) -> Option<u32> {
+        *self.0.parallel_tools.lock().unwrap()
+    }
+
+    pub fn set_parallel_tools(&self, value: u32) -> u32 {
+        *self.0.parallel_tools.lock().unwrap() = Some(value);
+        value
+    }
+
+    /// Provider controls are shared by parent and worker model wrappers.
+    /// Zero concurrency/attempts/maximum delay means no configured ceiling.
+    pub fn model_concurrency(&self) -> u32 {
+        *self.0.model_concurrency.borrow() as u32
+    }
+
+    pub fn set_model_concurrency(&self, value: u32) -> u32 {
+        self.0.model_concurrency.send_replace(value as usize);
+        value
+    }
+
+    pub fn model_concurrency_watch(&self) -> tokio::sync::watch::Receiver<usize> {
+        self.0.model_concurrency.subscribe()
+    }
+
+    pub fn model_attempts(&self) -> u32 {
+        self.0.model_attempts.load(Ordering::Relaxed)
+    }
+
+    pub fn set_model_attempts(&self, value: u32) -> u32 {
+        set_min(&self.0.model_attempts, value, 0)
+    }
+
+    /// None inherits the model wrapper's default backoff.
+    pub fn model_backoff_ms(&self) -> Option<u32> {
+        *self.0.model_backoff_ms.lock().unwrap()
+    }
+
+    pub fn set_model_backoff_ms(&self, value: u32) -> u32 {
+        *self.0.model_backoff_ms.lock().unwrap() = Some(value);
+        value
+    }
+
+    pub fn model_max_backoff_ms(&self) -> u32 {
+        self.0.model_max_backoff_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn set_model_max_backoff_ms(&self, value: u32) -> u32 {
+        set_min(&self.0.model_max_backoff_ms, value, 0)
     }
 
     pub fn tool_attempts(&self) -> u32 {
@@ -287,5 +360,5 @@ fn set_min(target: &AtomicU32, value: u32, min: u32) -> u32 {
 }
 
 fn clamp_depth(depth: u32) -> u32 {
-    depth.clamp(MIN_SUBAGENT_DEPTH, MAX_SUBAGENT_DEPTH)
+    depth.max(MIN_SUBAGENT_DEPTH)
 }

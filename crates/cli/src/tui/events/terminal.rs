@@ -19,8 +19,12 @@ use super::super::format::byte_index;
 use super::super::input::{
     insert_clipboard_image, insert_paste, marker_ending_at, marker_starting_at, remove_marker,
 };
-use super::super::render::transcript_content_width;
-use super::super::state::{App, LocationPicker, Overlay, RunState, SkillMentionPicker};
+use super::super::render::{
+    agent_ids, cycle_agent_tab, selected_agent_copy, transcript_content_width,
+};
+use super::super::state::{
+    AgentBrowser, App, LocationPicker, Overlay, RunState, SkillMentionPicker,
+};
 use super::super::PALETTE_ROWS;
 use super::super::{
     copy_command, expand_latest_work, expand_tool, handle_approval_key, handle_overlay_key,
@@ -44,6 +48,14 @@ pub(crate) fn handle_terminal_event(
     let key = match event {
         CtEvent::Key(key) => key,
         CtEvent::Mouse(mouse) => {
+            if let Some(browser) = &mut app.agent_browser {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => browser.scroll = browser.scroll.saturating_add(3),
+                    MouseEventKind::ScrollDown => browser.scroll = browser.scroll.saturating_sub(3),
+                    _ => {}
+                }
+                return;
+            }
             let over_inspector = app.inspector_area.is_some_and(|area| {
                 area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
             });
@@ -66,14 +78,18 @@ pub(crate) fn handle_terminal_event(
             return;
         }
         // Most overlays are keystroke menus with nowhere to put pasted text.
-        // The API-key overlay is the exception: it is a text field and must
-        // accept bracketed paste just like individually typed characters.
+        // Text-entry overlays accept bracketed paste like typed characters.
         CtEvent::Paste(text) => {
             if let Some(ask) = app.ask.as_mut() {
                 ask.handle_paste(&text);
+            } else if let Some(Overlay::SubagentNumber { input, error, .. }) = app.overlay.as_mut()
+            {
+                input.push_str(&text);
+                error.clear();
             } else if let Some(Overlay::ApiKey { input, .. }) = app.overlay.as_mut() {
                 input.push_str(&text);
-            } else if app.approval.is_none() && app.overlay.is_none() {
+            } else if app.approval.is_none() && app.overlay.is_none() && app.agent_browser.is_none()
+            {
                 insert_paste(app, &text);
             }
             return;
@@ -100,6 +116,38 @@ pub(crate) fn handle_terminal_event(
         }
         return;
     }
+    if app.agent_browser.is_some() {
+        match key.code {
+            KeyCode::Esc | KeyCode::Left => app.agent_browser = None,
+            KeyCode::Tab => cycle_agent_tab(app),
+            KeyCode::Char('y') if ctrl => {
+                if let Some(text) = selected_agent_copy(app) {
+                    app.clipboard_pending = Some(text);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(browser) = &mut app.agent_browser {
+                    browser.scroll = browser.scroll.saturating_add(PALETTE_ROWS);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(browser) = &mut app.agent_browser {
+                    browser.scroll = browser.scroll.saturating_sub(PALETTE_ROWS);
+                }
+            }
+            KeyCode::Up | KeyCode::Down => {
+                if let Some(browser) = &mut app.agent_browser {
+                    let previous = browser.picker.index();
+                    browser.picker.on_key(key.code);
+                    if browser.picker.index() != previous {
+                        browser.scroll = 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
     if app.overlay.is_some() {
         handle_overlay_key(app, key, worker);
         return;
@@ -118,6 +166,21 @@ pub(crate) fn handle_terminal_event(
         }
         if !app.overlay_stack.is_empty() {
             return;
+        }
+    }
+    if app.agents_status_focused {
+        match key.code {
+            KeyCode::Enter | KeyCode::Right => {
+                app.agent_browser = Some(AgentBrowser::new(agent_ids(app).len()));
+                app.agents_status_focused = false;
+                return;
+            }
+            KeyCode::Up | KeyCode::Esc => {
+                app.agents_status_focused = false;
+                return;
+            }
+            KeyCode::Left | KeyCode::Down => return,
+            _ => app.agents_status_focused = false,
         }
     }
     let content_width = transcript_content_width(app, width);
@@ -313,6 +376,11 @@ pub(crate) fn handle_terminal_event(
         KeyCode::Down => {
             if app.palette_query().is_some() {
                 palette_move(app, 1);
+            } else if app.composer.is_empty()
+                && app.history_pos.is_none()
+                && !app.subagent_transcripts.is_empty()
+            {
+                app.agents_status_focused = true;
             } else {
                 history_nav(app, 1);
             }

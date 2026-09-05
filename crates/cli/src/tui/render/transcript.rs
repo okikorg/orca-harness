@@ -1,10 +1,7 @@
-use std::time::Duration;
-
 use ratatui::text::{Line, Span};
 
 use orca_harness_tools::TodoStatus;
 
-use crate::tui::components::activity_rail::{ActivityRail, ActivityRailKind};
 use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
 use crate::tui::components::subagent_row::SubagentRow;
 use crate::tui::components::tool_row::ToolRow;
@@ -14,11 +11,11 @@ use crate::tui::state::{SubagentDisplay, ToolStatus};
 use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
-use super::super::format::{elapsed_label, plural, tool_timing_label};
-use super::super::{
-    App, LocationPicker, SkillMentionPicker, ToolActivity, LIVE_TOOL_ROWS, PICKER_ROWS,
-};
-use super::overlays::*;
+use super::super::format::tool_timing_label;
+use super::super::{App, LocationPicker, SkillMentionPicker, ToolActivity, PICKER_ROWS};
+mod activity;
+pub(crate) use activity::*;
+
 /// The task list belongs beside the live run state, where the complete
 /// plan stays visible instead of disappearing into a clipped status line.
 pub(crate) fn todo_lines(todos: &orca_harness_tools::TodoList, width: usize) -> Vec<Line<'static>> {
@@ -171,7 +168,7 @@ pub(crate) fn projected_tail(
     tail
 }
 
-fn identity_label(identity: &orca_harness_tools::SubagentIdentity) -> String {
+pub(crate) fn identity_label(identity: &orca_harness_tools::SubagentIdentity) -> String {
     format!("{}:{}", identity.provider, identity.model)
 }
 
@@ -187,7 +184,24 @@ fn result_identity(output: &serde_json::Value) -> Option<orca_harness_tools::Sub
     })
 }
 
-fn subagent_display(app: &App, tool: &ToolActivity) -> Option<SubagentDisplay> {
+fn subagent_display(
+    app: &App,
+    owner_id: Option<u64>,
+    tool: &ToolActivity,
+) -> Option<SubagentDisplay> {
+    if let Some(owner_id) = owner_id {
+        return app
+            .subagent_transcripts
+            .values()
+            .filter(|child| child.parent_id == Some(owner_id) && child.call_id == tool.call_id)
+            .max_by_key(|child| child.id)
+            .and_then(|child| {
+                Some(SubagentDisplay {
+                    task: child.task.clone(),
+                    identity: child.identity.clone()?,
+                })
+            });
+    }
     app.subagent_display
         .get(&tool.call_id)
         .map(|display| SubagentDisplay {
@@ -339,289 +353,4 @@ fn hidden_tools_line(indent: &str, hidden: usize) -> Line<'static> {
         format!("{indent}… {hidden} earlier tools"),
         theme().dim,
     ))
-}
-
-/// Quiet, chronological rows for a completed phase. Thinking and tool work
-/// remain separate so collapsing detail never rewrites the event sequence.
-pub(crate) fn collapsed_activity_lines(app: &App) -> Vec<Line<'static>> {
-    let tool_count = app.activity_tools.len();
-    let thinking_count = app.thinking_log.len();
-    let failed = app
-        .activity_tools
-        .iter()
-        .filter(|tool| tool.is_error)
-        .count();
-    let tool_elapsed = app
-        .activity_tools
-        .iter()
-        .filter_map(|tool| tool.elapsed)
-        .max()
-        .unwrap_or_default();
-
-    let mut lines = Vec::new();
-    if thinking_count > 0 {
-        let thinking_elapsed = app
-            .thinking_log
-            .iter()
-            .map(|record| record.elapsed)
-            .sum::<Duration>();
-        ActivityRail::new(
-            ActivityRailKind::Thinking,
-            &section_mark(false, 0),
-            format!(
-                "{} · {}",
-                elapsed_label(thinking_elapsed),
-                plural(thinking_count, "update")
-            ),
-            theme().dim,
-        )
-        .append_to(&mut lines);
-    }
-
-    if tool_count > 0 {
-        let mut parts = vec![plural(tool_count, "tool")];
-        if failed > 0 {
-            parts.push(format!("{failed} failed"));
-        }
-        parts.push(elapsed_label(tool_elapsed));
-        let style = if failed > 0 {
-            theme().error
-        } else {
-            theme().dim
-        };
-        ActivityRail::new(
-            ActivityRailKind::Work,
-            &section_mark(false, 0),
-            parts.join(" · "),
-            style,
-        )
-        .append_to(&mut lines);
-    }
-
-    lines
-}
-
-/// Render the current run as one coherent activity rail. While the run is
-/// live this includes the latest reasoning tail and pending tool states;
-/// once committed, the rail is retained for on-demand expansion.
-#[cfg(test)]
-pub(crate) fn activity_lines(app: &App, width: usize, live: bool) -> Vec<Line<'static>> {
-    activity_lines_selected(app, width, live, None)
-}
-
-pub(crate) fn activity_lines_selected(
-    app: &App,
-    width: usize,
-    live: bool,
-    selected_tool: Option<usize>,
-) -> Vec<Line<'static>> {
-    let t = theme();
-    let mut lines = Vec::new();
-    let current_thinking = !app.reasoning.trim().is_empty();
-    let thinking_count = app.thinking_log.len() + usize::from(current_thinking);
-    if thinking_count > 0 {
-        let elapsed = app
-            .thinking_log
-            .iter()
-            .map(|record| record.elapsed)
-            .sum::<Duration>()
-            + app
-                .reasoning_started
-                .map(|started| started.elapsed())
-                .unwrap_or_default();
-        // Thinking is at rest once a tool call or answer has followed it.
-        let thinking_live = live && current_thinking;
-        let mut thinking = ActivityRail::new(
-            ActivityRailKind::Thinking,
-            &section_mark(thinking_live, app.spinner_frame),
-            format!(
-                "{} · {}",
-                elapsed_label(elapsed),
-                plural(thinking_count, "update")
-            ),
-            t.dim,
-        );
-        if live && current_thinking {
-            let body_width = width.saturating_sub(6).max(16);
-            let wrapped: Vec<String> = app
-                .reasoning
-                .lines()
-                .flat_map(|paragraph| {
-                    textwrap::wrap(paragraph, body_width)
-                        .into_iter()
-                        .map(|part| part.into_owned())
-                })
-                .collect();
-            for line in wrapped.iter().rev().take(2).rev() {
-                thinking.push(Line::from(Span::styled(format!("    {line}"), t.dim)));
-            }
-        }
-        thinking.append_to(&mut lines);
-    }
-
-    if app.activity_tools.is_empty() {
-        return lines;
-    }
-    let complete = app
-        .activity_tools
-        .iter()
-        .filter(|tool| tool.elapsed.is_some())
-        .count();
-    let running = app.activity_tools.len() - complete;
-    let g = glyphs();
-    let (marker, summary) = if live {
-        (
-            section_mark(running > 0, app.spinner_frame),
-            format!("{} {complete} · {} {running}", g.done, g.waiting),
-        )
-    } else {
-        (
-            section_mark(false, 0),
-            plural(app.activity_tools.len(), "tool"),
-        )
-    };
-    let mut work = ActivityRail::new(ActivityRailKind::Work, &marker, summary, t.dim);
-
-    let visible_indices = if live && app.activity_tools.len() > LIVE_TOOL_ROWS {
-        let mut selected: Vec<usize> = app
-            .activity_tools
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, tool)| tool.elapsed.is_none())
-            .map(|(index, _)| index)
-            .take(LIVE_TOOL_ROWS)
-            .collect();
-        let remaining = LIVE_TOOL_ROWS.saturating_sub(selected.len());
-        selected.extend(
-            app.activity_tools
-                .iter()
-                .enumerate()
-                .rev()
-                .filter(|(_, tool)| tool.elapsed.is_some())
-                .map(|(index, _)| index)
-                .take(remaining),
-        );
-        selected.sort_unstable();
-        selected
-    } else {
-        (0..app.activity_tools.len()).collect()
-    };
-    let hidden = app
-        .activity_tools
-        .len()
-        .saturating_sub(visible_indices.len());
-    if hidden > 0 {
-        work.push(hidden_tools_line("    ", hidden));
-    }
-
-    for (position, index) in visible_indices.iter().copied().enumerate() {
-        let tool = &app.activity_tools[index];
-        let branch = TreeBranch {
-            indent: "    ",
-            last: position + 1 == visible_indices.len(),
-        };
-        let (glyph, status_style) = tool_mark(tool, live, app.spinner_frame);
-        let glyph = glyph.as_str();
-        let mut detail = tool
-            .output
-            .as_ref()
-            .map(|output| view::tool_result_summary(&tool.tool_name, output, tool.is_error))
-            .unwrap_or_default();
-        if let Some(approval) = &tool.approval {
-            detail = if detail.is_empty() {
-                approval.clone()
-            } else {
-                format!("{approval} · {detail}")
-            };
-        }
-        let elapsed = tool_timing_label(tool, false);
-        let selected = selected_tool == Some(index);
-        let connector = Connector::for_row(selected_tool.is_some(), selected);
-        let row_style = if selected { t.select } else { t.accent };
-        let continuation = if tool.tool_name == "subagent" {
-            if let Some(display) = subagent_display(app, tool) {
-                let identity = identity_label(&display.identity);
-                let row = SubagentRow {
-                    branch,
-                    glyph,
-                    identity: &identity,
-                    task: &display.task,
-                    elapsed: &elapsed,
-                    connector,
-                    width,
-                    branch_style: t.dim,
-                    glyph_style: status_style,
-                    label_style: row_style,
-                    identity_style: t.accent,
-                    task_style: row_style,
-                };
-                let continuation = row.continuation();
-                work.push(row.line());
-                continuation
-            } else {
-                let row = ToolRow {
-                    branch,
-                    glyph,
-                    call: &tool.call_line,
-                    detail: &detail,
-                    elapsed: &elapsed,
-                    connector,
-                    width,
-                    branch_style: t.dim,
-                    glyph_style: status_style,
-                    call_style: row_style,
-                };
-                let continuation = row.continuation();
-                work.push(row.line());
-                continuation
-            }
-        } else {
-            let row = ToolRow {
-                branch,
-                glyph,
-                call: &tool.call_line,
-                detail: &detail,
-                elapsed: &elapsed,
-                connector,
-                width,
-                branch_style: t.dim,
-                glyph_style: status_style,
-                call_style: row_style,
-            };
-            let continuation = row.continuation();
-            work.push(row.line());
-            continuation
-        };
-        if matches!(
-            tool.tool_name.as_str(),
-            "edit_file" | "multi_edit" | "apply_patch"
-        ) {
-            work.extend(mutation_diff_preview_lines(tool, width, continuation));
-        }
-        if tool.tool_name == "subagent" && tool.output.is_none() {
-            let mut nested = Vec::new();
-            nested_subagent_lines(app, &tool.call_id, width, continuation, &mut nested);
-            work.extend(nested);
-        }
-        if tool.is_error {
-            if let Some(output) = &tool.output {
-                let output_width = width.saturating_sub(12).max(16);
-                for output_line in view::expand_output(&tool.tool_name, output)
-                    .into_iter()
-                    .take(4)
-                {
-                    work.push(Line::from(Span::styled(
-                        format!(
-                            "    {continuation} │ {}",
-                            view::truncate_line(&output_line, output_width)
-                        ),
-                        t.error,
-                    )));
-                }
-            }
-        }
-    }
-    work.append_to(&mut lines);
-    lines
 }

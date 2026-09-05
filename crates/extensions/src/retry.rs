@@ -31,7 +31,7 @@ type RetryRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 type ErrorRetryRule = Arc<dyn Fn(&ToolCall, &ToolError) -> bool + Send + Sync>;
 
 /// Called immediately before another model attempt begins.
-type ModelRetryNotice = Arc<dyn Fn(u32, u32, &ModelError) + Send + Sync>;
+type ModelRetryNotice = Arc<dyn Fn(u32, Option<u32>, &ModelError) + Send + Sync>;
 
 /// Retries a failing tool up to `max_attempts` total tries.
 pub struct ToolRetry {
@@ -160,53 +160,248 @@ impl Extension for ToolRetry {
     }
 }
 
-/// Wraps a [`Model`], retrying transient transport and incomplete-generation
-/// failures. Invalid, filtered, and malformed responses are deterministic.
-pub struct RetryModel<M: Model> {
-    inner: M,
-    max_attempts: u32,
-    backoff: Duration,
-    on_retry: Option<ModelRetryNotice>,
+/// Shared admission and cooldown for models drawing on the same provider quota.
+/// Dropping a queued or active request releases its place/permit automatically.
+#[derive(Clone)]
+pub struct ModelGate {
+    admission: Arc<tokio::sync::Mutex<()>>,
+    active: tokio::sync::watch::Sender<usize>,
+    limit: tokio::sync::watch::Receiver<usize>,
+    cooldown: Arc<std::sync::Mutex<Option<tokio::time::Instant>>>,
 }
 
-impl<M: Model> RetryModel<M> {
-    pub fn new(inner: M, max_attempts: u32) -> Self {
+struct ModelPermit<'a>(&'a tokio::sync::watch::Sender<usize>);
+impl Drop for ModelPermit<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|active| *active -= 1);
+    }
+}
+
+impl ModelGate {
+    /// None leaves concurrency unrestricted while retaining shared cooldown.
+    pub fn new(concurrency: impl Into<Option<usize>>) -> Self {
+        let limit = concurrency.into().map_or(0, |n| n.max(1));
+        Self::from_limit(tokio::sync::watch::channel(limit).1)
+    }
+
+    /// A live limit shared by the host. Zero means unrestricted. Closing the
+    /// sender retains its last value; changing it wakes queued requests.
+    pub fn from_limit(limit: tokio::sync::watch::Receiver<usize>) -> Self {
         Self {
-            inner,
-            max_attempts: max_attempts.max(1),
-            backoff: Duration::from_millis(200),
-            on_retry: None,
+            admission: Arc::new(tokio::sync::Mutex::new(())),
+            active: tokio::sync::watch::Sender::new(0),
+            limit,
+            cooldown: Arc::new(std::sync::Mutex::new(Some(tokio::time::Instant::now()))),
         }
     }
 
+    async fn acquire(&self) -> ModelPermit<'_> {
+        // The async mutex supplies FIFO admission without a second worker queue.
+        let _admission = self.admission.lock().await;
+        let mut active = self.active.subscribe();
+        let mut limit = self.limit.clone();
+        loop {
+            let count = *active.borrow_and_update();
+            let cap = *limit.borrow_and_update();
+            if cap == 0 || count < cap {
+                let until = *self.cooldown.lock().unwrap();
+                if until.is_some_and(|until| until <= tokio::time::Instant::now()) {
+                    self.active.send_modify(|active| *active += 1);
+                    return ModelPermit(&self.active);
+                }
+                wait_until(until).await;
+            } else {
+                tokio::select! {
+                    _ = active.changed() => {},
+                    _ = async {
+                        if limit.changed().await.is_err() {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {},
+                }
+            }
+        }
+    }
+
+    fn defer(&self, delay: Duration) {
+        let mut until = self.cooldown.lock().unwrap();
+        *until = until
+            .zip(tokio::time::Instant::now().checked_add(delay))
+            .map(|(old, next)| old.max(next));
+    }
+}
+
+/// User-adjustable retry policy. Provider Retry-After always remains a minimum.
+#[derive(Clone, Copy)]
+pub struct ModelRetryConfig {
+    pub max_attempts: Option<u32>,
+    pub backoff: Duration,
+    pub max_backoff: Option<Duration>,
+}
+
+impl Default for ModelRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: None,
+            backoff: Duration::from_millis(200),
+            max_backoff: None,
+        }
+    }
+}
+
+/// Wraps a model with optional retry limits. A host can share admission across wrappers
+/// and supply provider-specific retry timing without coupling extensions to HTTP.
+pub struct RetryModel<M: Model> {
+    inner: M,
+    max_attempts: Option<u32>,
+    backoff: Duration,
+    on_retry: Option<ModelRetryNotice>,
+    config: Option<Arc<dyn Fn() -> ModelRetryConfig + Send + Sync>>,
+    gate: Option<ModelGate>,
+    retry_delay: fn(&ModelError) -> Option<Duration>,
+}
+
+impl<M: Model> RetryModel<M> {
+    /// None retries until success, a permanent error, or caller cancellation/deadline.
+    pub fn new(inner: M, max_attempts: impl Into<Option<u32>>) -> Self {
+        Self {
+            inner,
+            max_attempts: max_attempts.into().map(|attempts| attempts.max(1)),
+            backoff: ModelRetryConfig::default().backoff,
+            on_retry: None,
+            config: None,
+            gate: None,
+            retry_delay: |error| match error {
+                ModelError::Request(_)
+                | ModelError::OutputLimit { .. }
+                | ModelError::IncompleteResponse { .. } => Some(Duration::ZERO),
+                _ => None,
+            },
+        }
+    }
+
+    /// Base exponential backoff. Provider timing remains a minimum wait.
     pub fn backoff(mut self, backoff: Duration) -> Self {
         self.backoff = backoff;
         self
     }
 
-    /// Observe a retry without coupling the model layer to a particular UI.
-    /// `attempt` is the upcoming attempt number, starting at two.
+    /// Read host settings at each failure, so existing wrappers see live edits.
+    pub fn config(mut self, config: impl Fn() -> ModelRetryConfig + Send + Sync + 'static) -> Self {
+        self.config = Some(Arc::new(config));
+        self
+    }
+
+    pub fn gate(mut self, gate: ModelGate) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// Return a minimum wait for retryable errors, or `None` to stop.
+    pub fn retry_delay(mut self, policy: fn(&ModelError) -> Option<Duration>) -> Self {
+        self.retry_delay = policy;
+        self
+    }
+
+    /// Observe the upcoming attempt (starting at two) without coupling to UI.
     pub fn on_retry(
         mut self,
-        callback: impl Fn(u32, u32, &ModelError) + Send + Sync + 'static,
+        callback: impl Fn(u32, Option<u32>, &ModelError) + Send + Sync + 'static,
     ) -> Self {
         self.on_retry = Some(Arc::new(callback));
         self
     }
 
-    fn notify_retry(&self, next_attempt: u32, error: &ModelError) {
-        if let Some(callback) = &self.on_retry {
-            callback(next_attempt, self.max_attempts, error);
+    async fn run(
+        &self,
+        context: &Context,
+        tools: &[ToolSchema],
+        sink: Option<&dyn DeltaSink>,
+    ) -> Result<ModelResponse, ModelError> {
+        let mut attempt = 1u32;
+        let mut base = self.backoff;
+        let mut ceiling = base;
+        loop {
+            let permit = match &self.gate {
+                Some(gate) => Some(gate.acquire().await),
+                None => None,
+            };
+            let tracked = TrackedSink {
+                sink,
+                emitted: std::sync::atomic::AtomicBool::new(false),
+            };
+            let result = if sink.is_some() {
+                self.inner
+                    .generate_streaming(context, tools, &tracked)
+                    .await
+            } else {
+                self.inner.generate(context, tools).await
+            };
+            let error = match result {
+                Ok(response) => return Ok(response),
+                Err(error) => error,
+            };
+            let Some(minimum) = (self.retry_delay)(&error) else {
+                return Err(error);
+            };
+            let config = self.config.as_ref().map_or(
+                ModelRetryConfig {
+                    max_attempts: self.max_attempts,
+                    backoff: self.backoff,
+                    max_backoff: None,
+                },
+                |config| config(),
+            );
+            if base != config.backoff {
+                base = config.backoff;
+                ceiling = base;
+            }
+            let bounded = config.max_backoff.map_or(ceiling, |max| ceiling.min(max));
+            let delay = minimum.max(bounded.mul_f64(fastrand::f64()));
+            // Publish before releasing the permit, including on the final failure.
+            if let Some(gate) = &self.gate {
+                gate.defer(delay);
+            }
+            drop(permit);
+            // Deltas have already reached the caller; replay would corrupt its
+            // provisional text/tool input. Let the caller handle that failure.
+            if config.max_attempts.is_some_and(|max| attempt >= max)
+                || tracked.emitted.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(error);
+            }
+            if let Some(notice) = &self.on_retry {
+                notice(attempt.saturating_add(1), config.max_attempts, &error);
+            }
+            wait_until(tokio::time::Instant::now().checked_add(delay)).await;
+            attempt = attempt.saturating_add(1);
+            ceiling = ceiling.saturating_mul(2);
         }
     }
+}
 
-    fn retryable(error: &ModelError) -> bool {
-        matches!(
-            error,
-            ModelError::Request(_)
-                | ModelError::OutputLimit { .. }
-                | ModelError::IncompleteResponse { .. }
-        )
+// An unrepresentable future instant must remain cancellable, not panic or
+// silently turn an overflowing backoff into an immediate retry.
+async fn wait_until(until: Option<tokio::time::Instant>) {
+    match until {
+        Some(until) => tokio::time::sleep_until(until).await,
+        None => std::future::pending().await,
+    }
+}
+
+struct TrackedSink<'a> {
+    sink: Option<&'a dyn DeltaSink>,
+    emitted: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl DeltaSink for TrackedSink<'_> {
+    async fn emit(&self, delta: orca_harness_core::ModelDelta) {
+        self.emitted
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(sink) = self.sink {
+            sink.emit(delta).await;
+        }
     }
 }
 
@@ -217,21 +412,7 @@ impl<M: Model> Model for RetryModel<M> {
         context: &Context,
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
-        let mut last_err = None;
-        for attempt in 1..=self.max_attempts {
-            match self.inner.generate(context, tools).await {
-                Ok(response) => return Ok(response),
-                Err(err) if Self::retryable(&err) => {
-                    if attempt < self.max_attempts {
-                        self.notify_retry(attempt + 1, &err);
-                        tokio::time::sleep(self.backoff).await;
-                    }
-                    last_err = Some(err);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        Err(last_err.unwrap_or_else(|| ModelError::Request("retry: no attempts made".into())))
+        self.run(context, tools, None).await
     }
 
     async fn generate_streaming(
@@ -240,20 +421,6 @@ impl<M: Model> Model for RetryModel<M> {
         tools: &[ToolSchema],
         sink: &dyn DeltaSink,
     ) -> Result<ModelResponse, ModelError> {
-        let mut last_err = None;
-        for attempt in 1..=self.max_attempts {
-            match self.inner.generate_streaming(context, tools, sink).await {
-                Ok(response) => return Ok(response),
-                Err(err) if Self::retryable(&err) => {
-                    if attempt < self.max_attempts {
-                        self.notify_retry(attempt + 1, &err);
-                        tokio::time::sleep(self.backoff).await;
-                    }
-                    last_err = Some(err);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        Err(last_err.unwrap_or_else(|| ModelError::Request("retry: no attempts made".into())))
+        self.run(context, tools, Some(sink)).await
     }
 }

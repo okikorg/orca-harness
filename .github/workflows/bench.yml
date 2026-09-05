@@ -1,0 +1,111 @@
+name: bench
+
+# Performance gate: every benchmark suite that can run without a live model
+# or a second harness, on Linux, where benchmarks/shared/check_budgets.py
+# enforces its budgets. Consumes zero untrusted input.
+#
+# Gated (the job fails on regression):
+#   kernel      dispatch and fan-out p99 at 5 000 iterations, plus criterion
+#   startup     orcacode cold-start wall clock under hyperfine
+#   core-tools  apply_patch / multi_edit real-file p50 wall clock
+#   mcp         deterministic search metrics asserted by the suite's tests
+# Informational (reported, uploaded, never gated):
+#   kernel real-tool probe, subagent concurrency and capacity simulations.
+#
+# The budgets sit several times above what a quiet machine produces. A
+# shared runner cannot measure small drift honestly, so the gate catches
+# cliffs: a blocking call on the dispatch path, a directory walk added to
+# startup, a fsync per edit. Left out on purpose: benchmarks/compare (needs
+# fx) and benchmarks/harness-comparison (live models, API keys, cost).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+
+      # Pinned rather than apt-installed: startup/run.sh runs hyperfine with
+      # --shell=none (1.13+), and a version that drifts under us would move
+      # the numbers this job is supposed to be comparing.
+      - name: install hyperfine
+        env:
+          HYPERFINE_VERSION: "1.20.0"
+        run: |
+          set -euo pipefail
+          curl -fsSLO "https://github.com/sharkdp/hyperfine/releases/download/v${HYPERFINE_VERSION}/hyperfine_${HYPERFINE_VERSION}_amd64.deb"
+          sudo dpkg -i "hyperfine_${HYPERFINE_VERSION}_amd64.deb"
+          rm "hyperfine_${HYPERFINE_VERSION}_amd64.deb"
+          hyperfine --version
+
+      # The parsers and the gate are what turn probe output into a verdict;
+      # they are tested before anything is measured.
+      - name: reporting tests
+        run: ./benchmarks/run_reporting_tests.sh
+
+      # kernel/run.sh --ci and startup/run.sh --ci skip their own builds so
+      # the release artifacts are built once, here, and reused by every
+      # suite that follows. The subagent runners build their own probes.
+      - name: build
+        run: |
+          cargo build --release -p orcacode
+          cargo build --release -p orca-harness-core --example fanout_probe
+          cargo build --release -p orca-harness-tools --example tool_fanout_perf
+
+      - name: kernel benchmarks (gated, with criterion)
+        run: ./benchmarks/kernel/run.sh --ci --criterion
+
+      - name: startup benchmarks (gated)
+        run: ./benchmarks/startup/run.sh --ci
+
+      - name: core-tools benchmarks (gated)
+        run: ./benchmarks/core-tools/run.sh
+
+      - name: mcp search benchmarks (gated by their tests)
+        run: |
+          python3 -m unittest discover -s benchmarks/mcp -p '*_test.py' -v
+          python3 benchmarks/mcp/accuracy.py
+          python3 benchmarks/mcp/distribution.py
+          python3 benchmarks/mcp/pareto.py
+
+      - name: subagent concurrency (informational)
+        run: ./benchmarks/subagent/run.sh --quick
+
+      - name: subagent capacity simulation (informational)
+        run: ./benchmarks/subagent/sim.sh --quick
+
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: benchmarks/results/
+          if-no-files-found: warn
+          retention-days: 30

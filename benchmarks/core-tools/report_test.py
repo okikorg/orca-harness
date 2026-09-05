@@ -49,6 +49,21 @@ class ReportTest(unittest.TestCase):
             measurements[0]["throughput_p50_operations_per_second"], 32 / 0.016
         )
 
+    def test_every_median_wall_metric_has_a_budget(self):
+        """The gate looks metrics up by name; a rename on either side would
+        silently stop enforcing them."""
+        budgets_path = pathlib.Path(__file__).parents[1] / "shared" / "check_budgets.py"
+        spec = importlib.util.spec_from_file_location("check_budgets", budgets_path)
+        assert spec is not None and spec.loader is not None
+        check_budgets = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check_budgets)
+        expected = {
+            f"core-tools/{tool}/{scenario} wall p50"
+            for tool in ("apply_patch", "multi_edit")
+            for scenario in REPORT.SCENARIOS
+        }
+        self.assertEqual(expected, set(check_budgets.CORE_TOOLS_BUDGETS))
+
     def test_missing_samples_fails_loudly(self):
         with self.assertRaisesRegex(ValueError, "expected 2 samples"):
             REPORT.aggregate(

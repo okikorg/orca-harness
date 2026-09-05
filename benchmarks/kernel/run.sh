@@ -13,10 +13,14 @@
 #                     genuine tool latency
 #
 # Usage:
-#   ./benchmarks/kernel/run.sh              # probes only
+#   ./benchmarks/kernel/run.sh              # probes + real tools
 #   ./benchmarks/kernel/run.sh --quick      # fewer iterations, skip real tools
 #   ./benchmarks/kernel/run.sh --criterion  # also run and record cargo bench
-#   ./benchmarks/kernel/run.sh --ci         # skip the build, skip real tools
+#   ./benchmarks/kernel/run.sh --ci         # more iterations, skip the build
+#
+# Flags combine: CI runs `--ci --criterion`. The real-tool probe runs under
+# --ci too; its numbers are informational (no budget), so on a shared
+# runner they are reported rather than judged.
 #
 # Requires: python3
 
@@ -34,11 +38,14 @@ ITERS=2000
 RUN_TOOLS=true
 RUN_CRITERION=false
 SKIP_BUILD=false
-case "${1:-}" in
-  --quick)     ITERS=200;  RUN_TOOLS=false ;;
-  --criterion) RUN_CRITERION=true ;;
-  --ci)        ITERS=5000; RUN_TOOLS=false; SKIP_BUILD=true ;;
-esac
+for flag in "$@"; do
+  case "$flag" in
+    --quick)     ITERS=200;  RUN_TOOLS=false ;;
+    --criterion) RUN_CRITERION=true ;;
+    --ci)        ITERS=5000; SKIP_BUILD=true ;;
+    *) echo "usage: $0 [--quick] [--criterion] [--ci]" >&2; exit 2 ;;
+  esac
+done
 
 mkdir -p "$RESULTS_DIR"
 rm -f "${RESULTS_DIR}"/*.txt "${RESULTS_DIR}"/summary.json

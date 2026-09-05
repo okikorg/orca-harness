@@ -76,84 +76,6 @@ mod theme_command_tests {
 }
 
 #[cfg(test)]
-mod subagents_command_tests {
-    use super::*;
-    use orca_harness_tools::SubagentDepth;
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    pub(super) fn depth_app(depth: SubagentDepth) -> App {
-        App::new(TuiConfig {
-            model_name: "m".into(),
-            workspace_name: "w".into(),
-            workspace_root: "/test-ws".into(),
-            provider: Provider::Local,
-            subagent_depth: depth,
-            stats: orca_harness_tools::BackgroundStats::new(),
-            session_id: None,
-            mcp: Default::default(),
-            skills: Default::default(),
-            mode: Default::default(),
-            todos: Default::default(),
-            plan: Default::default(),
-        })
-    }
-
-    #[tokio::test]
-    async fn subagents_picker_updates_live_presets() {
-        let settings = SubagentDepth::new(1);
-        let mut app = depth_app(settings.clone());
-        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-        slash_command(&mut app, "subagents", &worker, 80);
-        // route plus four tier preferences, then depth and steps
-        for _ in 0..6 {
-            handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
-        }
-        handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
-        let Some(Overlay::SubagentValues { ref picker, .. }) = app.overlay else {
-            panic!("steps preset picker");
-        };
-        assert_eq!(picker.index(), 3, "24 steps is the default preset");
-        handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
-        handle_overlay_key(&mut app, key(KeyCode::Enter), &worker);
-        assert_eq!(settings.max_steps(), 36);
-        assert!(
-            matches!(app.overlay, Some(Overlay::Subagents { .. })),
-            "selection returns to settings so more values can be changed"
-        );
-        assert!(app.overlay_stack.is_empty());
-        handle_overlay_key(&mut app, key(KeyCode::Esc), &worker);
-        assert!(app.overlay.is_none(), "escape closes the settings picker");
-    }
-
-    #[tokio::test]
-    async fn subagents_command_sets_and_clamps_depth() {
-        let depth = SubagentDepth::new(1);
-        let mut app = depth_app(depth.clone());
-        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-        slash_command(&mut app, "subagents 3", &worker, 80);
-        assert_eq!(depth.get(), 3);
-
-        slash_command(&mut app, "subagents 99", &worker, 80);
-        assert_eq!(depth.get(), 5, "out-of-range input clamps");
-
-        // Bare form opens the full live settings menu and changes nothing.
-        slash_command(&mut app, "subagents", &worker, 80);
-        assert_eq!(depth.get(), 5);
-        assert!(matches!(app.overlay, Some(Overlay::Subagents { .. })));
-        handle_overlay_key(&mut app, key(KeyCode::Esc), &worker);
-
-        // Garbage input leaves the value alone.
-        slash_command(&mut app, "subagents lots", &worker, 80);
-        assert_eq!(depth.get(), 5);
-    }
-}
-
-#[cfg(test)]
 mod mode_rewind_todo_tests {
     use super::*;
     use crate::mode::{Mode, ModeHandle};
@@ -424,7 +346,10 @@ mod mode_rewind_todo_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("todo · 1/3 done"), "{rendered}");
-        assert!(rendered.contains("├─ ✓ inspect the rendering"), "{rendered}");
+        assert!(
+            rendered.contains("├─ ✓ inspect the rendering"),
+            "{rendered}"
+        );
         assert!(
             rendered.contains("├─ ▸ add a visible progress cue"),
             "{rendered}"

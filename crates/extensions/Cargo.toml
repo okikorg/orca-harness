@@ -10,6 +10,7 @@ description = "Critical extensions for Orca Harness: event streaming, tool polic
 name = "orca_harness_extensions"
 
 [dependencies]
+fastrand = "2"
 orca-harness-core = { path = "../harness-core" }
 async-trait = { workspace = true }
 serde = { workspace = true }
@@ -22,7 +23,7 @@ rusqlite = { workspace = true }
 criterion = { workspace = true }
 orca-harness-model-providers = { path = "../model-providers" }
 orca-harness-tools = { path = "../tools" }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [[bench]]
 name = "memory"

@@ -22,9 +22,7 @@ use super::state::{
     App, EffortPicker, InspectorMode, LocationEntry, ModelPicker, Overlay, SubagentSetting,
     ViewMode,
 };
-use super::subagents::{
-    apply_subagent_value, subagent_selected, subagent_setting_label, subagent_values,
-};
+use super::subagents::{apply_subagent_value, subagent_selected, subagent_values};
 use super::{
     clear_tool_connectors, plugin_picker_action, push_error, push_notice, remove_skill, PICKER_ROWS,
 };

@@ -212,8 +212,11 @@ impl AgentBuilder {
             }
         }
         if let Some(config) = self.extension_config.model_retry {
-            self.model =
-                Arc::new(RetryModel::new(self.model, config.attempts).backoff(config.duration()));
+            self.model = Arc::new(
+                RetryModel::new(self.model, config.attempts)
+                    .backoff(config.duration())
+                    .retry_delay(orca_harness_model_providers::http_error::retry_delay),
+            );
         }
         if let Some(mcp) = &self.mcp {
             self.tools.extend(mcp.tools());

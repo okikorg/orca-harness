@@ -1,0 +1,112 @@
+name: ci
+
+# Merge gate for the workspace: formatting, the source-size limit, clippy
+# with warnings denied, the full test suite, the benchmark reporting tests,
+# a bench smoke run, and the release binary size. Consumes zero untrusted
+# input. Benchmarks with budgets run in bench.yml so a slow benchmark job
+# never holds up test feedback.
+#
+# `lint` and `test` compile different targets (check vs test profile), so
+# they run as two jobs rather than one serial list.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: fmt, source size, clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      # Two views of the same limit: the shell gate is what release.sh runs
+      # locally and is the authority; the audit prints the largest files so
+      # the ones approaching the limit are visible before they cross it.
+      - name: source size
+        run: |
+          ./ci/check-source-size.sh
+          python3 scripts/audit_crates.py --top 25
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: test
+        run: cargo test --workspace
+
+      # Every benchmark parser and gate has its own tests; a broken parser
+      # would otherwise fail (or pass) the bench job for the wrong reason.
+      - name: benchmark reporting tests
+        run: ./benchmarks/run_reporting_tests.sh
+
+      # Compiles and runs every criterion bench once, as a test: proves the
+      # bench targets still build and their setup code still runs.
+      - name: bench (smoke)
+        run: cargo bench --workspace -- --test
+
+  size:
+    name: release binary size
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: build
+        run: cargo build --release -p orcacode
+
+      - name: release binary size
+        run: ./ci/check-binary-size.sh

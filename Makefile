@@ -13,7 +13,7 @@ SHELL := /bin/bash
 VERSION ?=
 require_version = $(if $(VERSION),,$(error VERSION is required, for example: make $@ VERSION=0.3.0))
 
-.PHONY: help build test fmt clippy check size bench notes prepare tag release dist publish
+.PHONY: help build test fmt clippy audit check size bench bench-all notes prepare tag release dist publish
 
 help:  ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-9s %s\n", $$1, $$2}'
@@ -23,23 +23,40 @@ help:  ## list targets
 build:  ## release build of orcacode
 	cargo build --release -p orcacode
 
-test:  ## the workspace test suite
+test:  ## the workspace test suite plus the benchmark reporting tests, as CI runs them
 	cargo test --workspace
+	./benchmarks/run_reporting_tests.sh
 
 fmt:  ## rustfmt check, as CI runs it
-	cargo fmt --check
+	cargo fmt --all --check
 
 clippy:  ## clippy with warnings denied, as CI runs it
 	cargo clippy --workspace --all-targets -- -D warnings
 
-check: fmt clippy  ## what CI checks before the tests: fmt, clippy, source size
+audit:  ## source-size limit: the gate, then the largest files
 	./ci/check-source-size.sh
+	python3 scripts/audit_crates.py --top 25
 
-size: build  ## the release binary against the 6,000,000 byte gate
+check: fmt audit clippy  ## what CI checks before the tests: fmt, source size, clippy
+
+size: build  ## the release binary against ci/check-binary-size.sh
 	./ci/check-binary-size.sh
 
 bench:  ## benchmark smoke, as CI runs it
 	cargo bench --workspace -- --test
+
+bench-all: build  ## every suite bench.yml runs, budgets informational off Linux
+	cargo build --release -p orca-harness-core --example fanout_probe
+	cargo build --release -p orca-harness-tools --example tool_fanout_perf
+	./benchmarks/kernel/run.sh --ci --criterion
+	./benchmarks/startup/run.sh --ci
+	./benchmarks/core-tools/run.sh
+	python3 -m unittest discover -s benchmarks/mcp -p '*_test.py'
+	python3 benchmarks/mcp/accuracy.py
+	python3 benchmarks/mcp/distribution.py
+	python3 benchmarks/mcp/pareto.py
+	./benchmarks/subagent/run.sh --quick
+	./benchmarks/subagent/sim.sh --quick
 
 ## Release: notes, edit the file, prepare, push, tag (VERSION=X.Y.Z)
 
