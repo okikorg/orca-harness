@@ -62,10 +62,10 @@ fn agent_browser_orders_concurrent_spawns_as_parent_linked_trees() {
 
     app.agent_browser = Some(crate::tui::state::AgentBrowser::new(rows.len()));
     let rendered = rendered_rows(&mut app, 160, 36).join("\n");
-    assert!(rendered.contains("□ root a"), "{rendered}");
-    assert!(rendered.contains("├─ □ child a"), "{rendered}");
-    assert!(rendered.contains("│  └─ □ grandchild a"), "{rendered}");
-    assert!(rendered.contains("└─ □ child b"), "{rendered}");
+    assert!(rendered.contains("□ #10 root a"), "{rendered}");
+    assert!(rendered.contains("├─ □ #30 child a"), "{rendered}");
+    assert!(rendered.contains("│  └─ □ #40 grandchild a"), "{rendered}");
+    assert!(rendered.contains("└─ □ #50 child b"), "{rendered}");
 }
 
 fn finish_test_subagent(
@@ -139,7 +139,7 @@ fn agent_browser_tab_cycles_running_done_failed_and_all() {
 
     let rendered = rendered_rows(&mut app, 160, 36).join("\n");
     assert!(
-        rendered.contains("Running · Done · Failed · All"),
+        rendered.contains("Running 1 · Done 1 · Failed 1 · All 3"),
         "{rendered}"
     );
     assert!(!rendered.contains("Done / stalled / failed"), "{rendered}");
@@ -193,4 +193,47 @@ fn agent_browser_tab_keeps_the_cursor_on_the_same_agent_when_it_stays_visible() 
     // Back on All, the failed agent is still the selected row: third of three.
     press_in_browser(&mut app, &worker, KeyCode::Tab);
     assert_eq!(app.agent_browser.as_ref().unwrap().picker.index(), 2);
+}
+
+#[test]
+fn agent_page_renders_task_first_entries_counts_and_empty_filters() {
+    let _theme = THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+    let original = view::theme_name();
+    view::set_theme(view::ThemeName::Orca);
+    let (worker, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    set_ui_style(UiStyle::Glyph);
+    start_named_test_subagent(&mut app, &worker, 12, None, 0, "root-12", "Review dispatcher and trace cancellation through queued tool calls");
+    start_named_test_subagent(&mut app, &worker, 15, Some(12), 1, "child-15", "Check cancellation");
+    start_named_test_subagent(&mut app, &worker, 11, None, 0, "root-11", "Inspect documentation");
+    finish_test_subagent(&mut app, &worker, 11, "root-11", HarnessEvent::Result { message: "Documentation matches the current behavior.".into() });
+    finish_test_subagent(&mut app, &worker, 12, "root-12", HarnessEvent::ReasoningDelta { text: "Tracing how queued calls react to cancellation.".into() });
+    finish_test_subagent(&mut app, &worker, 12, "root-12", HarnessEvent::ToolCall { tool_call_id: "read-12".into(), tool_name: "read_file".into(), input: serde_json::json!({"path": "crates/harness-core/src/dispatcher.rs"}) });
+    finish_test_subagent(&mut app, &worker, 12, "root-12", HarnessEvent::ToolResult { tool_call_id: "read-12".into(), tool_name: "read_file".into(), output: serde_json::json!({"bytes": 20600}), is_error: false });
+    finish_test_subagent(&mut app, &worker, 12, "root-12", HarnessEvent::AssistantDelta { text: "Cancellation reaches active tools. I am checking queued calls next.".into() });
+    app.subagent_transcripts.get_mut(&12).unwrap().input_tokens = 8200;
+    app.subagent_transcripts.get_mut(&12).unwrap().output_tokens = 1100;
+    app.agent_browser = Some(crate::tui::state::AgentBrowser::new(3));
+    for width in [60, 100, 160] {
+        let rows = rendered_rows(&mut app, width, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("Agents · 3 total"), "{screen}");
+        assert!(screen.contains("#12"), "{screen}");
+        assert!(screen.contains("Review dispatcher"), "{screen}");
+        assert!(screen.contains("Tokens: in 8.2k"), "{screen}");
+        assert!(screen.contains("tab"), "{screen}");
+        println!("\n--- Orca agent page / {width} columns ---\n{screen}");
+    }
+    app.agent_browser.as_mut().unwrap().tab = crate::tui::state::AgentTab::Failed;
+    let empty = rendered_rows(&mut app, 100, 30).join("\n");
+    assert!(empty.contains("No failed agents"), "{empty}");
+    assert!(empty.contains("1 completed"), "{empty}");
+    finish_test_subagent(&mut app, &worker, 12, "root-12", HarnessEvent::Result { message: "Review complete.".into() });
+    finish_test_subagent(&mut app, &worker, 15, "child-15", HarnessEvent::Result { message: "Cancellation checked.".into() });
+    app.agent_browser.as_mut().unwrap().tab = crate::tui::state::AgentTab::Running;
+    let idle = rendered_rows(&mut app, 100, 30).join("\n");
+    assert!(idle.contains("No running agents"), "{idle}");
+    assert!(idle.contains("3 completed"), "{idle}");
+    view::set_theme(original);
+    set_ui_style(UiStyle::Minimal);
 }

@@ -108,8 +108,10 @@ mod main_tests {
     }
 
     #[test]
-    fn theme_prefers_explicit_then_stored_then_default() {
-        assert_eq!(resolve_theme(None), "default");
+    fn theme_prefers_explicit_then_stored_then_orca() {
+        assert_eq!(resolve_theme(None), "orca");
+        assert_eq!(crate::config::stored_theme(), None);
+        assert_eq!(resolve_theme(Some("default".to_string())), "default");
         assert_eq!(resolve_theme(Some("mono".to_string())), "mono");
         crate::config::save_theme("nord").unwrap();
         assert_eq!(resolve_theme(None), "nord");

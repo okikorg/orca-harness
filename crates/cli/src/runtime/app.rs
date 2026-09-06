@@ -13,7 +13,7 @@ pub(crate) async fn entrypoint() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cfg = match invocation {
+    let mut cfg = match invocation {
         Invocation::Update => {
             return match crate::update::run() {
                 Ok(()) => ExitCode::SUCCESS,
@@ -61,6 +61,18 @@ pub(crate) async fn entrypoint() -> ExitCode {
             }
         };
     }
+
+    let endpoint = Endpoint::from_config(&cfg);
+    cfg.model = match endpoint.catalog_model(Some(&cfg.model)).await {
+        Ok(model) => model,
+        Err(error) => {
+            eprintln!(
+                "error: could not select a model from the {} catalog: {error}",
+                cfg.provider.label()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
 
     run_mode(cfg).await
 }

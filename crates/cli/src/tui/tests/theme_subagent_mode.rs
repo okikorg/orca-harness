@@ -140,7 +140,7 @@ mod mode_rewind_todo_tests {
         slash_command(&mut app, "mode sideways", &worker, 80);
         assert_eq!(mode.get(), Mode::Normal);
         // Glyphed like every other system line, not flush-left.
-        assert!(texts(&app).contains("• unknown mode: sideways"));
+        assert!(texts(&app).contains("• error: unknown mode: sideways"));
     }
 
     /// The picker is preselected on the current mode and enter applies
@@ -351,7 +351,7 @@ mod mode_rewind_todo_tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("├─ ▸ add a visible progress cue"),
+            rendered.contains(&format!("├─ {} add a visible progress cue", crate::view::glyphs::glyphs().cursor)),
             "{rendered}"
         );
         assert!(rendered.contains("└─ □ verify it"), "{rendered}");

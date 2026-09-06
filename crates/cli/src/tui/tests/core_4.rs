@@ -185,7 +185,7 @@
 
         let joined = flat_lines(&activity_lines_selected(&app, 180, true, Some(0)));
         assert!(
-            joined.contains("shell $ cargo test --workspace · 2.0s"),
+            joined.contains("Run    $ cargo test --workspace · 2.0s"),
             "elapsed follows the call without an alignment gap: {joined}"
         );
     }
@@ -257,12 +257,12 @@
         );
         let joined = flat_lines(&activity_lines(&app, 100, true));
         assert!(
-            joined.contains("× shell $ cargo test · exit 1"),
+            joined.contains("× Run    $ cargo test") && joined.contains("Exit 1"),
             "failure state shown: {joined}"
         );
         assert!(
-            joined.contains("test result: FAILED"),
-            "stdout expanded: {joined}"
+            app.activity_tools[0].output.as_ref().unwrap()["stdout"] == "test result: FAILED",
+            "full stdout remains available for inspection: {joined}"
         );
         assert!(
             joined.contains("assertion failed"),

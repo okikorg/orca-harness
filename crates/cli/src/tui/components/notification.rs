@@ -37,8 +37,14 @@ impl Notification {
             NotificationKind::Error => t.error,
         };
         Line::from(vec![
-            Span::styled("• ", t.accent),
-            Span::styled(self.text, body),
+            Span::styled("• ", body),
+            Span::styled(
+                match self.kind {
+                    NotificationKind::Notice => self.text,
+                    NotificationKind::Error => format!("error: {}", self.text),
+                },
+                body,
+            ),
         ])
     }
 }

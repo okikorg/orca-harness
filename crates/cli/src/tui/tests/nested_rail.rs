@@ -129,8 +129,8 @@ mod nested_rail_tests {
         );
         let text = rail_text(&app);
         assert!(text.contains("subagent"), "rail: {text}");
-        assert!(text.contains("list_dir"), "rail: {text}");
-        let inner_line = text.lines().find(|l| l.contains("list_dir")).unwrap();
+        assert!(text.contains("List   "), "rail: {text}");
+        let inner_line = text.lines().find(|l| l.contains("List   ")).unwrap();
         assert!(
             inner_line.starts_with("      "),
             "inner line must be indented: {inner_line:?}"
@@ -160,7 +160,7 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let inner_line = text.lines().find(|l| l.contains("list_dir")).unwrap();
+        let inner_line = text.lines().find(|l| l.contains("List   ")).unwrap();
         assert!(inner_line.contains("✓"), "completed glyph: {inner_line:?}");
     }
 
@@ -202,7 +202,7 @@ mod nested_rail_tests {
         );
         let text = rail_text(&app);
         let child = text.lines().find(|l| l.contains("subagent inner")).unwrap();
-        let grandchild = text.lines().find(|l| l.contains("grep")).unwrap();
+        let grandchild = text.lines().find(|l| l.contains("Search ")).unwrap();
         let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
         assert!(
             indent(grandchild) > indent(child),
@@ -290,9 +290,9 @@ mod nested_rail_tests {
         assert!(text.contains("✓ subagent · openrouter:vendor/alpha · task alpha"), "{text}");
         let alpha = text.find("vendor/alpha").unwrap();
         let beta = text.find("vendor/beta").unwrap();
-        let grep = text.find("grep").unwrap();
+        let grep = text.find("Search ").unwrap();
         assert!(alpha < beta && beta < grep, "beta's child stays below beta: {text}");
-        assert!(!text[alpha..beta].contains("grep"), "grep must not appear under alpha: {text}");
+        assert!(!text[alpha..beta].contains("Search "), "grep must not appear under alpha: {text}");
 
         start_subagent(
             &mut app,

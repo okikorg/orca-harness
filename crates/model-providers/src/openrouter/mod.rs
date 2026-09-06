@@ -134,8 +134,8 @@ impl Model for OpenRouterModel {
     }
 }
 
-/// List the catalog of any OpenAI-compatible endpoint (`GET {base}/models`),
-/// sorted by id. OpenRouter's catalog is public; the key is optional.
+/// List the catalog of any OpenAI-compatible endpoint (`GET {base}/models`) in
+/// provider order. OpenRouter's catalog is public; the key is optional.
 pub async fn list_models(
     base_url: &str,
     api_key: Option<&str>,
@@ -174,12 +174,11 @@ pub async fn list_models(
     }
     let listing: Listing = serde_json::from_str(&body)
         .map_err(|e| ModelError::InvalidResponse(format!("{e}: {body}")))?;
-    let mut models = listing
+    let models = listing
         .data
         .into_iter()
         .map(normalize_reasoning_efforts)
         .collect::<Vec<_>>();
-    models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
 }
 

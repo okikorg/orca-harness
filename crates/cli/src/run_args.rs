@@ -130,7 +130,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     });
     let model = model
         .or_else(|| config::stored_model(provider.label()))
-        .unwrap_or_else(|| provider.default_model().into());
+        .unwrap_or_default();
     let theme = resolve_theme(theme);
 
     if prompt.is_none() && (bare || tools.is_some()) {

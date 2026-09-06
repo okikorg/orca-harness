@@ -13,6 +13,8 @@ fn test_app() -> App {
         todos: Default::default(),
         plan: Default::default(),
     });
+    // These interaction fixtures exercise the explicit Minimal style.
+    set_ui_style(UiStyle::Minimal);
     // A transcript taller than any viewport so scrolling has room.
     for i in 0..100 {
         app.transcript.push(Line::from(format!("line {i}")));

@@ -42,6 +42,7 @@ impl Welcome<'_> {
             row("/models", "switch model"),
             row("/mode", "plan, auto review, yolo"),
         ];
+        let content = super::layout::fit_lines(content, available_width);
         let content_width = content.iter().map(Line::width).max().unwrap_or(0);
         let indent = " ".repeat(width.saturating_sub(content_width) / 2);
         let content = content.into_iter().map(|line| {
@@ -55,6 +56,7 @@ impl Welcome<'_> {
         let top = (full_height.saturating_sub(rows) / 2).min(clip.saturating_sub(rows));
         std::iter::repeat_n(Line::from(""), top)
             .chain(content)
+            .take(clip)
             .collect()
     }
 }

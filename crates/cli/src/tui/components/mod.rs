@@ -5,6 +5,7 @@ pub mod approval;
 pub mod ask;
 pub mod composer;
 pub mod inspector;
+mod layout;
 pub mod message;
 pub mod notification;
 pub mod picker;
@@ -14,6 +15,10 @@ pub mod status_bar;
 pub mod subagent_row;
 pub mod tabs;
 pub mod tool_row;
+pub(crate) mod tool_error;
 pub mod transcript;
 pub mod tree;
 pub mod welcome;
+
+#[cfg(test)]
+mod render_tests;

@@ -63,7 +63,7 @@ impl<'a> Composer<'a> {
     fn inner_width(&self) -> usize {
         self.width
             .saturating_sub(view::cell_width(SPINE) + 1)
-            .max(8)
+            .max(1)
     }
 
     /// Place every char on a row and column; the cursor sits after the
@@ -100,11 +100,14 @@ impl<'a> Composer<'a> {
     pub fn render(self) -> ComposerRender {
         if self.text.is_empty() {
             return ComposerRender {
-                lines: vec![Line::from(vec![
-                    Span::styled(SPINE, self.accent),
-                    Span::styled(self.placeholder.to_string(), self.dim),
-                ])],
-                cursor_x: view::cell_width(SPINE) as u16,
+                lines: super::layout::fit_lines(
+                    vec![Line::from(vec![
+                        Span::styled(SPINE, self.accent),
+                        Span::styled(self.placeholder.to_string(), self.dim),
+                    ])],
+                    self.width,
+                ),
+                cursor_x: view::cell_width(SPINE).min(self.width.saturating_sub(1)) as u16,
                 cursor_y: 0,
             };
         }
@@ -139,8 +142,9 @@ impl<'a> Composer<'a> {
             lines.push(Line::from(spans));
         }
         ComposerRender {
-            lines,
-            cursor_x: (view::cell_width(SPINE) + cursor_col) as u16,
+            lines: super::layout::fit_lines(lines, self.width),
+            cursor_x: (view::cell_width(SPINE) + cursor_col).min(self.width.saturating_sub(1))
+                as u16,
             cursor_y: (cursor_row - first) as u16,
         }
     }

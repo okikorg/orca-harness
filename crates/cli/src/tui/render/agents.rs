@@ -25,14 +25,13 @@ use crate::tui::state::{
 use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
-use super::shell::{shorter_hint, SplitKind, SPLIT_MIN_WIDTH};
+use super::shell::{SplitKind, SPLIT_MIN_WIDTH};
 use super::transcript::{identity_label, live_subagent_activity_lines, subagent_activity_lines};
 
 /// Share of the width (or height, stacked) the spawn tree takes; the
 /// transcript gets the rest, as the inspector does in split view.
 const LIST_PERCENT: u16 = 38;
-const LIST_HINT: &str = "tab switch · ↑↓ select · esc close";
-const HINT: &str = "pgup/pgdn transcript · ctrl+y copy answer · esc close";
+const HINT: &str = "↑↓ select · tab filter · esc close";
 
 mod list;
 #[cfg(test)]
@@ -90,8 +89,7 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
     };
     let [list_area, transcript_area] = split.areas_at(content_area, LIST_PERCENT);
 
-    // The list: one picker row per agent, its branch and state mark ahead
-    // of the task, with the state and elapsed time as the dim trailing cell.
+    // The picker still selects agents; each entry uses two visual rows.
     let projection = agent_list_projection(app);
     let list_width = list_area.width.saturating_sub(1) as usize;
     let list_rows = agent_table(app, &projection, &rows, list_width);
@@ -102,9 +100,13 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
     let transcript = rows
         .get(selected)
         .and_then(|row| app.subagent_transcripts.get(&row.id));
-    let header = transcript.map_or_else(empty_transcript_lines, |transcript| {
-        transcript_header_lines(transcript, transcript_width)
-    });
+    let tab = app.agent_browser.as_ref().expect("browser open").tab;
+    let mut header = transcript.map_or_else(
+        || empty_transcript_lines(tab, projection.counts, transcript_width),
+        |transcript| transcript_header_lines(transcript, transcript_width),
+    );
+    // Keep a short pane usable even when the selected task wraps.
+    header.truncate(split.block(t.dim).inner(transcript_area).height as usize);
     let selected_id = transcript.map(|transcript| transcript.id);
     let body = cached_transcript_body(app, selected_id, transcript_width);
     let body_height =
@@ -114,19 +116,43 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
         .agent_browser
         .as_mut()
         .expect("agent browser remains open while drawing");
-    let labels = AgentTab::ALL.map(AgentTab::label);
+    let [queued, active, done, failed] = projection.counts;
+    let counts = [queued + active, done, failed, projection.rows.len()];
+    let names = if list_width >= 48 {
+        ["Running", "Done", "Failed", "All"]
+    } else {
+        ["Run", "Done", "Fail", "All"]
+    };
+    let labels =
+        std::array::from_fn::<_, 4, _>(|index| format!("{} {}", names[index], counts[index]));
     let active_tab = AgentTab::ALL
         .iter()
         .position(|tab| *tab == browser.tab)
         .unwrap_or(0);
-    let list_lines = browser.picker.cached_table_lines(
-        tab_strip(&labels, active_tab, LIST_HINT),
+    let all_tabs = tab_strip(&labels.each_ref().map(String::as_str), active_tab, "");
+    let tab_header = if list_width < all_tabs.width() + 2 {
+        Line::from(Span::styled(
+            format!(
+                "{} {} · tab filter",
+                browser.tab.label(),
+                counts[active_tab]
+            ),
+            t.strong,
+        ))
+    } else {
+        all_tabs
+    };
+    let mut list_lines = vec![agent_line(
+        &format!("Agents · {} total", projection.rows.len()),
+        list_width,
+        t.strong,
+    )];
+    list_lines.extend(browser.picker.cached_entry_lines(
+        tab_header,
         &list_rows,
-        // One cell clear before the divider.
-        list_area.width.saturating_sub(1) as usize,
-        // Header and spacer take the first two rows.
-        (list_area.height as usize).saturating_sub(2),
-    );
+        list_width,
+        (list_area.height as usize).saturating_sub(1),
+    ));
     browser.scroll = browser.scroll.min(body.len().saturating_sub(body_height));
     let end = body.len().saturating_sub(browser.scroll);
     let start = end.saturating_sub(body_height);
@@ -143,7 +169,7 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
     let mut status = StatusBar::new();
     status
         .push(Segment::new(
-            format!("agents {}", rows.len()),
+            format!("shown {}", rows.len()),
             status_bar::KEEP,
         ))
         .push(Segment::new(format!("active {active}"), status_bar::KEEP));
@@ -162,7 +188,11 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
     }
     status
         .push(Segment::new("parent continues", status_bar::STATS))
-        .push(Segment::new(HINT, status_bar::HINT).with_compact(shorter_hint(HINT)));
+        .push(Segment::new(HINT, status_bar::HINT).with_compact("↑↓ · tab · esc"))
+        .push(Segment::new(
+            "pgup/pgdn transcript · ctrl+y copy answer",
+            status_bar::STATS,
+        ));
     frame.render_widget(
         Paragraph::new(status.line(area.width as usize, t.dim)),
         status_area,
@@ -247,71 +277,117 @@ fn transcript_elapsed(transcript: &SubagentTranscript) -> Duration {
         .unwrap_or_else(|| transcript.started.elapsed())
 }
 
-/// The pinned pane header, shaped like the tool inspector's: identity,
-/// state and timing in the state colour, the task as the title, and the
-/// dim figures under it. A blank row separates it from the body.
+/// Task first, then status, identity, and quiet usage metadata.
 fn transcript_header_lines(transcript: &SubagentTranscript, width: usize) -> Vec<Line<'static>> {
     let t = theme();
-    let body_width = width.saturating_sub(2);
     let identity = transcript
         .identity
         .as_ref()
         .map(identity_label)
         .unwrap_or_else(|| "inherited model".into());
-    let mut figures = vec![
-        format!("input {}", fmt_tokens(transcript.input_tokens)),
-        format!("output {}", fmt_tokens(transcript.output_tokens)),
-        format!("depth {}", transcript.depth),
-    ];
-    if transcript.detached {
-        figures.push("background".into());
+    let mut lines = Vec::new();
+    let task = view::sanitize_cells(&transcript.task);
+    let wrapped = textwrap::wrap(&task, width.saturating_sub(2).max(1));
+    for (index, part) in wrapped.iter().take(3).enumerate() {
+        let title = if index == 2 && wrapped.len() > 3 {
+            format!("{part}…")
+        } else {
+            part.to_string()
+        };
+        lines.push(agent_line(&title, width, t.strong));
     }
+    let background = if transcript.detached {
+        " · background"
+    } else {
+        ""
+    };
+    lines.push(agent_line(
+        &format!(
+            "{} {} · {}{background}",
+            status_mark(transcript.status),
+            status_label(transcript.status),
+            elapsed_label(transcript_elapsed(transcript))
+        ),
+        width,
+        status_style(transcript.status),
+    ));
+    let parent = transcript
+        .parent_id
+        .map(|id| format!(" · parent #{id}"))
+        .unwrap_or_default();
+    lines.push(agent_line(
+        &format!("#{} · {identity}{parent}", transcript.id),
+        width,
+        t.dim,
+    ));
+    lines.push(agent_line(
+        &format!(
+            "Tokens: in {} · out {} · depth {}",
+            fmt_tokens(transcript.input_tokens),
+            fmt_tokens(transcript.output_tokens),
+            transcript.depth
+        ),
+        width,
+        t.dim,
+    ));
     if transcript.omitted_activity > 0 {
-        figures.push(format!(
-            "{} earlier history items omitted",
-            transcript.omitted_activity
+        lines.push(agent_line(
+            &format!(
+                "{} earlier history items omitted",
+                transcript.omitted_activity
+            ),
+            width,
+            t.dim,
         ));
     }
-    vec![
-        Line::from(Span::styled(
-            format!(
-                "  {}",
-                view::truncate_line(
-                    &format!(
-                        "{} subagent · {identity} · {} · {}",
-                        status_mark(transcript.status),
-                        status_label(transcript.status),
-                        elapsed_label(transcript_elapsed(transcript))
-                    ),
-                    body_width
-                )
-            ),
-            status_style(transcript.status),
-        )),
-        Line::from(Span::styled(
-            format!("  {}", view::truncate_line(&transcript.task, body_width)),
-            t.strong,
-        )),
-        Line::from(Span::styled(
-            format!(
-                "  {}",
-                view::truncate_line(&figures.join(" · "), body_width)
-            ),
-            t.dim,
-        )),
-        Line::from(""),
-    ]
+    lines.push(Line::default());
+    lines
 }
 
-fn empty_transcript_lines() -> Vec<Line<'static>> {
+fn agent_line(text: &str, width: usize, style: Style) -> Line<'static> {
+    if width == 0 {
+        return Line::default();
+    }
+    Line::from(view::truncate_styled_line(
+        vec![Span::styled(format!("  {text}"), style)],
+        width,
+    ))
+}
+
+fn agent_text(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    let text = view::sanitize_cells(text);
+    textwrap::wrap(&text, width.saturating_sub(2).max(1))
+        .into_iter()
+        .map(|part| agent_line(&part, width, style))
+        .collect()
+}
+
+fn empty_transcript_lines(tab: AgentTab, counts: [usize; 4], width: usize) -> Vec<Line<'static>> {
     let t = theme();
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return vec![
+            agent_line("No subagents yet", width, t.strong),
+            agent_line("Spawned agents will appear here.", width, t.dim),
+        ];
+    }
+    let title = match tab {
+        AgentTab::Running => "No running agents",
+        AgentTab::Done => "No completed agents",
+        AgentTab::Failed => "No failed agents",
+        AgentTab::All => "No agents in this view",
+    };
     vec![
-        Line::from(Span::styled("  Agents", t.strong)),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Spawned agents and their transcripts will appear here.",
+        agent_line(title, width, t.strong),
+        agent_line(
+            &format!(
+                "{} completed · {} failed · {total} total",
+                counts[2], counts[3]
+            ),
+            width,
             t.dim,
-        )),
+        ),
+        agent_line("Tab switches filters", width, t.dim),
     ]
 }
 
@@ -329,20 +405,20 @@ fn transcript_body_lines(
             SubagentTranscriptEntry::Activity { thinking, tools } => {
                 subagent_activity_lines(app, transcript.id, thinking, tools, width)
             }
-            SubagentTranscriptEntry::Error(message) => vec![Line::from(Span::styled(
-                format!("  failed · {message}"),
-                t.error,
-            ))],
+            SubagentTranscriptEntry::Error(message) => {
+                agent_text(&format!("failed · {message}"), width, t.error)
+            }
         };
         append_block(&mut lines, block, BlockSpacing::Section, prior);
         prior = lines.last().map(line_is_blank);
     }
 
     if transcript.status == SubagentTranscriptStatus::Queued {
-        lines.push(Line::from(Span::styled(
-            "  Waiting for a slot: the /subagents background agents limit is reached.",
+        lines.extend(agent_text(
+            "Waiting for a slot: the /subagents background agents limit is reached.",
+            width,
             t.dim,
-        )));
+        ));
     }
     if transcript.status == SubagentTranscriptStatus::Running {
         let activity = live_subagent_activity_lines(app, transcript, width);

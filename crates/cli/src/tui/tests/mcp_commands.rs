@@ -59,11 +59,11 @@ mod mcp_command_tests {
             .lines()
             .find(|line| {
                 let mut cells = line.split_whitespace();
-                matches!(cells.next(), Some(first) if first == name || (first == "▸" && cells.next() == Some(name)))
+                matches!(cells.next(), Some(first) if first == name || (first == crate::view::glyphs::glyphs().cursor && cells.next() == Some(name)))
             })
             .unwrap_or_else(|| panic!("missing {name} row: {text}"));
         line.split_whitespace()
-            .filter(|cell| *cell != "▸")
+            .filter(|cell| *cell != crate::view::glyphs::glyphs().cursor)
             .collect()
     }
 

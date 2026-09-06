@@ -23,7 +23,7 @@ pub fn spine_text(text: &str, width: usize, indent: &str, style: Style) -> Vec<L
     let text = view::sanitize_cells(text);
     let prefix = format!("{indent}│");
     let text_prefix = format!("{prefix} ");
-    let body_width = width.saturating_sub(view::cell_width(&text_prefix)).max(8);
+    let body_width = width.saturating_sub(view::cell_width(&text_prefix)).max(1);
     let mut lines = Vec::new();
     for source in text.lines() {
         let wrapped = textwrap::wrap(source, body_width);
@@ -38,7 +38,7 @@ pub fn spine_text(text: &str, width: usize, indent: &str, style: Style) -> Vec<L
             }
         }
     }
-    lines
+    super::layout::fit_lines(lines, width)
 }
 
 /// Compact aligned metadata. Values remain plain text so themes and mono mode
@@ -59,14 +59,18 @@ where
             // A label past the cap is cut like any other cell, so one long
             // key cannot push every value out of its column.
             let label = view::truncate_line(label, label_width);
-            let prefix = format!("{INSPECTOR_BODY_INDENT}{label:<label_width$}  ");
-            Line::from(vec![
-                Span::styled(prefix.clone(), theme().dim),
-                Span::raw(view::truncate_line(
-                    &value,
-                    width.saturating_sub(view::cell_width(&prefix)),
-                )),
-            ])
+            let pad = " ".repeat(label_width.saturating_sub(view::cell_width(&label)));
+            let prefix = format!("{INSPECTOR_BODY_INDENT}{label}{pad}  ");
+            super::layout::fit(
+                Line::from(vec![
+                    Span::styled(prefix.clone(), theme().dim),
+                    Span::raw(view::truncate_line(
+                        &value,
+                        width.saturating_sub(view::cell_width(&prefix)),
+                    )),
+                ]),
+                width,
+            )
         })
         .collect()
 }
@@ -81,7 +85,7 @@ pub struct CodePreview<'a> {
 
 impl CodePreview<'_> {
     pub fn lines(&self) -> Vec<Line<'static>> {
-        if self.language == "text" {
+        let lines = if self.language == "text" {
             self.text
                 .lines()
                 .map(|line| {
@@ -100,6 +104,7 @@ impl CodePreview<'_> {
                 .collect()
         } else {
             view::highlighted_code_lines(self.text, self.language, self.width, self.indent)
-        }
+        };
+        super::layout::fit_lines(lines, self.width)
     }
 }

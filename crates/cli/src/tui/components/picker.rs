@@ -10,7 +10,7 @@
 //!
 //! Rows are cells: a table's first column reads in the normal text
 //! colour and the columns after it are dim, so a name stands out from its
-//! description; the cursor row is painted `select` throughout. A column
+//! description; the selected primary cell is bold in `select`. A column
 //! with no cap flexes: when the natural widths overflow the row, it gives
 //! up cells so the columns after it stay on screen.
 
@@ -270,21 +270,47 @@ impl ListPicker {
         self.render(header, Some(rows.len()), &rows, width, window)
     }
 
-    /// Render a cached table without reformatting or cloning off-screen rows.
-    pub(crate) fn cached_table_lines(
+    /// Two visual lines per selectable entry, without changing picker indices.
+    /// Each cached row contains a title span followed by its metadata span.
+    pub(crate) fn cached_entry_lines(
         &self,
         header: Line<'static>,
         rows: &[Vec<Span<'static>>],
         width: usize,
-        visible_rows: usize,
+        height: usize,
     ) -> Vec<Line<'static>> {
-        self.render(
-            header,
-            Some(rows.len()),
-            rows,
-            width,
-            self.window(rows.len(), visible_rows),
-        )
+        let room = height.saturating_sub(2);
+        let entry_height = if room >= 2 { 2 } else { 1 };
+        let window = self.window(rows.len(), room / entry_height);
+        let mut lines = self.render(header, None, rows, width, 0..0);
+        let t = theme();
+        for index in window {
+            let Some(title) = rows[index].first() else {
+                continue;
+            };
+            let selected = index == self.index();
+            lines.push(super::layout::fit(
+                Line::from(vec![
+                    Span::styled(marker(selected), if selected { t.select } else { t.dim }),
+                    Span::styled(
+                        title.content.clone(),
+                        if selected {
+                            t.select.add_modifier(ratatui::style::Modifier::BOLD)
+                        } else {
+                            title.style
+                        },
+                    ),
+                ]),
+                width,
+            ));
+            if entry_height == 2 {
+                let mut spans = vec![Span::raw("    ")];
+                spans.extend(rows[index].iter().skip(1).cloned());
+                lines.push(super::layout::fit(Line::from(spans), width));
+            }
+        }
+        lines.truncate(height);
+        lines
     }
 
     /// The rows a bounded catalog shows: the last window, moved just far
@@ -325,6 +351,9 @@ impl ListPicker {
             } else {
                 format!("{}/{total}", selected.min(total - 1) + 1)
             };
+            let position = view::truncate_line(&position, width.saturating_sub(2).max(1));
+            let budget = width.saturating_sub(view::cell_width(&position) + 3);
+            header = super::layout::fit(header, budget);
             let pad = width
                 .saturating_sub(view::spans_width(&header.spans) + view::cell_width(&position) + 2)
                 .max(1);
@@ -333,21 +362,24 @@ impl ListPicker {
                 header_style,
             ));
         }
-        let mut lines = vec![header, Line::from("")];
+        let mut lines = vec![super::layout::fit(header, width), Line::from("")];
         for (index, row) in rows.iter().enumerate().take(window.end).skip(window.start) {
             let is_selected = index == selected;
             let mut spans = vec![Span::styled(
                 marker(is_selected),
                 if is_selected { t.select } else { t.dim },
             )];
-            spans.extend(row.iter().cloned().map(|span| {
-                if is_selected {
-                    Span::styled(span.content, t.select)
+            spans.extend(row.iter().cloned().enumerate().map(|(column, span)| {
+                if is_selected && column == 0 {
+                    Span::styled(
+                        span.content,
+                        t.select.add_modifier(ratatui::style::Modifier::BOLD),
+                    )
                 } else {
                     span
                 }
             }));
-            lines.push(Line::from(view::truncate_styled_line(spans, width)));
+            lines.push(super::layout::fit(Line::from(spans), width));
         }
         lines
     }

@@ -260,7 +260,8 @@ fn activity_lines_from(
         let mut detail = tool
             .output
             .as_ref()
-            .map(|output| view::tool_result_summary(&tool.tool_name, output, tool.is_error))
+            .filter(|_| !tool.is_error)
+            .map(|output| view::tool_result_summary(&tool.tool_name, output, false))
             .unwrap_or_default();
         if let Some(approval) = &tool.approval {
             detail = if detail.is_empty() {
@@ -340,19 +341,11 @@ fn activity_lines_from(
         }
         if tool.is_error {
             if let Some(output) = &tool.output {
-                let output_width = width.saturating_sub(12).max(16);
-                for output_line in view::expand_output(&tool.tool_name, output)
-                    .into_iter()
-                    .take(4)
-                {
-                    work.push(Line::from(Span::styled(
-                        format!(
-                            "    {continuation} │ {}",
-                            view::truncate_line(&output_line, output_width)
-                        ),
-                        t.error,
-                    )));
-                }
+                work.extend(crate::tui::components::tool_error::lines(
+                    output,
+                    width,
+                    continuation,
+                ));
             }
         }
     }

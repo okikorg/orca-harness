@@ -14,6 +14,24 @@ mod tests {
     }
 
     #[test]
+    fn fresh_installs_use_glyph_without_overwriting_saved_style() {
+        use crate::view::glyphs::UiStyle;
+        TEST_FILE.with(|file| *file.borrow_mut() = None);
+        assert_eq!(UiStyle::stored(), UiStyle::Glyph);
+        assert!(
+            TEST_FILE.with(|file| file.borrow().is_none()),
+            "reading the default must not create config"
+        );
+        seed(r#"{"theme":"nord"}"#);
+        assert_eq!(UiStyle::stored(), UiStyle::Glyph);
+        for (saved, expected) in [("minimal", UiStyle::Minimal), ("glyph", UiStyle::Glyph)] {
+            save_style(saved).unwrap();
+            assert_eq!(UiStyle::stored(), expected);
+            assert_eq!(stored_theme().as_deref(), Some("nord"));
+        }
+    }
+
+    #[test]
     fn subagent_preferences_round_trip_and_preserve_other_config() {
         let saved = orca_harness_tools::SubagentDepth::new(3);
         saved.set_max_steps(36);

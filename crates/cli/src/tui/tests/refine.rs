@@ -156,7 +156,7 @@ mod refine_command_tests {
             &tx,
             90,
         );
-        assert!(printed(&app).contains("• refine: nothing to refine"));
+        assert!(printed(&app).contains("• error: refine: nothing to refine"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

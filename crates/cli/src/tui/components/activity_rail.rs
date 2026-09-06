@@ -31,9 +31,16 @@ impl ActivityRail {
         summary: impl Into<String>,
         style: Style,
     ) -> Self {
-        let header = format!("  {marker} {} · {}", kind.label(), summary.into());
+        let header = Line::from(vec![
+            Span::styled(format!("  {marker} "), style),
+            Span::styled(
+                kind.label(),
+                style.add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {}", summary.into()), crate::view::theme().dim),
+        ]);
         Self {
-            rail: Section::rail(Line::from(Span::styled(header, style))),
+            rail: Section::rail(header),
         }
     }
 

@@ -43,12 +43,12 @@ impl UiStyle {
         Self::ALL.into_iter().find(|style| style.slug() == value)
     }
 
-    /// The persisted choice, Minimal when none is saved.
+    /// The persisted choice, Glyph when none is saved.
     pub fn stored() -> Self {
         crate::config::stored_style()
             .as_deref()
             .and_then(Self::from_slug)
-            .unwrap_or(Self::Minimal)
+            .unwrap_or(Self::Glyph)
     }
 
     pub fn glyphs(self) -> &'static Glyphs {

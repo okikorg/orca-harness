@@ -208,7 +208,7 @@ impl AskForm {
         let mut topic_line = vec![Span::raw("    ")];
         for (index, topic) in self.request.topics.iter().enumerate() {
             if index > 0 {
-                topic_line.push(Span::styled("  ───  ", t.dim));
+                topic_line.push(Span::styled("   ", t.dim));
             }
             let glyph = if self.topic_complete_at(index) {
                 g.done
@@ -227,16 +227,12 @@ impl AskForm {
             topic.questions.iter().zip(&draft.questions).enumerate()
         {
             let active = question_index == self.focus;
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {} ", if active { g.cursor } else { " " }),
-                    if active { t.accent } else { t.dim },
-                ),
-                Span::styled(
-                    view::truncate_line(&question.question, width.saturating_sub(6)),
-                    if active { t.strong } else { t.dim },
-                ),
-            ]));
+            lines.extend(super::layout::wrapped(
+                &question.question,
+                &format!("  {} ", if active { g.cursor } else { " " }),
+                width,
+                if active { t.strong } else { t.dim },
+            ));
             if question.options.is_empty() {
                 let value = answer.values.first().map(String::as_str).unwrap_or("");
                 let shown = if value.is_empty() {
@@ -260,25 +256,19 @@ impl AskForm {
                     let selected = answer.values.iter().any(|value| value == &option.label);
                     let cursor = active && answer.option == option_index;
                     let marker = if selected { g.done } else { g.waiting };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("      {} ", if cursor { g.cursor } else { " " }),
-                            if cursor { t.accent } else { t.dim },
-                        ),
-                        Span::styled(
-                            format!("{marker} {}", option.label),
-                            if selected || cursor { t.strong } else { t.dim },
-                        ),
-                    ]));
+                    lines.extend(super::layout::wrapped(
+                        &option.label,
+                        &format!("      {} {marker} ", if cursor { g.cursor } else { " " }),
+                        width,
+                        if selected || cursor { t.strong } else { t.dim },
+                    ));
                     if let Some(description) = &option.description {
                         // The explanation the agent wrote is the point of
                         // the option: wrap it rather than cut it.
                         let description = view::sanitize_cells(description);
-                        for part in textwrap::wrap(&description, width.saturating_sub(12).max(16)) {
-                            lines.push(Line::from(Span::styled(
-                                format!("            {part}"),
-                                t.dim,
-                            )));
+                        for part in textwrap::wrap(&description, width.saturating_sub(10).max(1)) {
+                            lines
+                                .push(Line::from(Span::styled(format!("          {part}"), t.dim)));
                         }
                     }
                 }
@@ -317,14 +307,31 @@ impl AskForm {
                 },
             ),
         ]));
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(
-                "    ↑↓ question · ←→ option · space choose · tab next topic · enter send · esc cancel",
-                width,
-            ),
-            t.dim,
-        )));
-        lines
+        // Keep each key paired with its action when the legend reflows.
+        let mut hints = String::from("    ");
+        for hint in [
+            "↑↓ question",
+            "←→ option",
+            "space choose",
+            "tab next topic",
+            "enter send",
+            "esc cancel",
+        ] {
+            let separator = if hints.trim().is_empty() { "" } else { " · " };
+            if view::cell_width(&hints) + view::cell_width(separator) + view::cell_width(hint)
+                > width
+            {
+                if !hints.trim().is_empty() {
+                    lines.push(Line::from(Span::styled(std::mem::take(&mut hints), t.dim)));
+                }
+                hints = format!("    {hint}");
+            } else {
+                hints.push_str(separator);
+                hints.push_str(hint);
+            }
+        }
+        lines.extend(super::layout::wrapped(hints.trim(), "    ", width, t.dim));
+        super::layout::fit_lines(lines, width)
     }
 }
 

@@ -221,8 +221,13 @@ fn table_columns_after_the_first_are_dim_and_the_cursor_row_is_select() {
     assert_eq!(lines[2].spans[0].style, t.dim);
     assert_eq!(lines[2].spans[1].style, Style::default());
     assert_eq!(lines[2].spans[2].style, t.dim);
-    // Selected: everything in the select colour.
-    assert!(lines[3].spans.iter().all(|span| span.style == t.select));
+    // Selection emphasizes the primary cell without flattening metadata.
+    assert_eq!(lines[3].spans[0].style, t.select);
+    assert_eq!(
+        lines[3].spans[1].style,
+        t.select.add_modifier(ratatui::style::Modifier::BOLD)
+    );
+    assert_eq!(lines[3].spans[2].style, t.dim);
 }
 
 #[test]
@@ -336,4 +341,28 @@ fn windowed_table_lines_keep_columns_stable_across_pages() {
         .spans
         .iter()
         .any(|span| span.content.contains("11/12")));
+}
+
+#[test]
+fn two_line_entries_scroll_by_agent_and_keep_selection_visible() {
+    let mut picker = ListPicker::with_selected(12, 9);
+    let rows: Vec<_> = (0..12)
+        .map(|id| vec![Span::raw(format!("Agent #{id}")), Span::raw("running · 2s")])
+        .collect();
+    for height in [0, 1, 2, 3, 4, 8, 12] {
+        let lines = picker.cached_entry_lines(Line::from("Agents"), &rows, 30, height);
+        assert!(lines.len() <= height);
+        assert!(lines.iter().all(|line| line.width() <= 30));
+        if height >= 3 {
+            assert!(lines
+                .iter()
+                .any(|line| line.to_string().contains("Agent #9")));
+        }
+    }
+    picker.move_by(-1);
+    let lines = picker.cached_entry_lines(Line::from("Agents"), &rows, 30, 8);
+    assert!(lines
+        .iter()
+        .any(|line| line.to_string().contains("Agent #8")));
+    assert_eq!(picker.index(), 8);
 }

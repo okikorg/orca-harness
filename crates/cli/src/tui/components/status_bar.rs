@@ -99,6 +99,10 @@ impl StatusBar {
     }
 
     pub fn line(&self, width: usize, style: Style) -> Line<'static> {
+        super::layout::fit(self.layout_line(width, style), width)
+    }
+
+    fn layout_line(&self, width: usize, style: Style) -> Line<'static> {
         let mut kept: Vec<Segment> = self.segments.clone();
         let mut trailing = self.trailing.as_ref();
         loop {
@@ -237,7 +241,7 @@ mod tests {
     #[test]
     fn keep_segments_survive_everything_else() {
         let line = bar().line(12, Style::default());
-        assert_eq!(text(&line), " idle · plan mode");
+        assert_eq!(text(&line), " idle · pla…");
     }
 
     /// The yolo segment renders like any other mode segment — plain

@@ -87,8 +87,8 @@ USAGE:
   orcacode plugin <COMMAND>         manage Agent Plugin packages
 
 OPTIONS:
-  --model NAME       model id (env ORCA_MODEL; default qwen3.5:9b,
-                     or openrouter/auto with --openrouter)
+  --model NAME       model id (env ORCA_MODEL; otherwise selected from the
+                     provider's live catalog)
   --base-url URL     OpenAI-compatible endpoint (env ORCA_BASE_URL;
                      default: api.openai.com if OPENAI_API_KEY is set,
                      otherwise http://localhost:11434/v1)
@@ -260,11 +260,11 @@ fn workspace_scope(ws: &Workspace) -> String {
         .to_string()
 }
 
-/// --theme and ORCA_THEME beat the saved preference; default otherwise.
+/// --theme and ORCA_THEME beat the saved preference; Orca otherwise.
 fn resolve_theme(explicit: Option<String>) -> String {
     explicit
         .or_else(config::stored_theme)
-        .unwrap_or_else(|| "default".into())
+        .unwrap_or_else(|| "orca".into())
 }
 
 /// The `skill` tool is deliberately absent from this list. Whether it is
@@ -401,6 +401,25 @@ impl Endpoint {
                 openrouter::list_models(&self.base_url, self.api_key.as_deref()).await
             }
         }
+    }
+
+    /// Keep a requested or saved model only while the provider still advertises
+    /// it. Otherwise use the first catalog entry, whose ordering is the
+    /// provider adapter's default-selection policy.
+    async fn catalog_model(&self, requested: Option<&str>) -> Result<String, String> {
+        let models = self
+            .list_models()
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(requested) = requested.filter(|model| !model.is_empty()) {
+            if models.iter().any(|model| model.id == requested) {
+                return Ok(requested.to_string());
+            }
+        }
+        models
+            .first()
+            .map(|model| model.id.clone())
+            .ok_or_else(|| format!("{} returned an empty model catalog", self.provider.label()))
     }
 
     fn build_model(&self) -> Arc<dyn Model> {

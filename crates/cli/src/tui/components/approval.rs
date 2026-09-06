@@ -73,12 +73,25 @@ impl ApprovalPrompt<'_> {
                 row.push(Span::raw(" ".repeat(HINT_GAP)));
                 used += HINT_GAP;
             }
+            if INDENT.len() + hint_width > width {
+                row.clear();
+                lines.extend(super::layout::wrapped(
+                    label,
+                    &format!("{INDENT}{key} "),
+                    width,
+                    t.strong,
+                ));
+                used = 0;
+                continue;
+            }
             row.push(Span::styled((*key).to_string(), t.strong));
             row.push(Span::styled(format!(" {label}"), t.dim));
             used += hint_width;
         }
-        lines.push(Line::from(row));
-        lines
+        if !row.is_empty() {
+            lines.push(Line::from(row));
+        }
+        super::layout::fit_lines(lines, width)
     }
 }
 

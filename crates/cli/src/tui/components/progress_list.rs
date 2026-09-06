@@ -53,5 +53,5 @@ pub fn progress_list(label: &str, items: &[ProgressItem<'_>], width: usize) -> V
             Span::styled(content, style),
         ]));
     }
-    lines
+    super::layout::fit_lines(lines, width)
 }

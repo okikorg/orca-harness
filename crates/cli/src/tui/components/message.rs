@@ -7,18 +7,21 @@ use crate::view;
 
 pub fn user_prompt(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let indent = format!("{} ", crate::view::glyphs::glyphs().rail);
-    let body_width = width.saturating_sub(view::cell_width(&indent)).max(16);
+    let body_width = width.saturating_sub(view::cell_width(&indent)).max(1);
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
         if paragraph.trim().is_empty() {
-            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                indent.trim_end().to_string(),
+                style,
+            )));
             continue;
         }
         for piece in textwrap::wrap(paragraph, body_width) {
             lines.push(Line::from(Span::styled(format!("{indent}{piece}"), style)));
         }
     }
-    lines
+    super::layout::fit_lines(lines, width)
 }
 
 pub fn assistant_message(text: &str, width: usize) -> Vec<Line<'static>> {

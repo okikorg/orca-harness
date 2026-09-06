@@ -96,7 +96,8 @@ pub fn finish_row(
     connector: Connector,
     style: Style,
 ) -> Line<'static> {
-    if connector == Connector::Drawn {
+    spans = super::layout::fit(Line::from(spans), row_budget(width, connector)).spans;
+    if connector == Connector::Drawn && width > 0 {
         let used = view::spans_width(&spans);
         let dots = width.saturating_sub(used + 1);
         spans.push(Span::styled(
@@ -104,7 +105,7 @@ pub fn finish_row(
             style,
         ));
     }
-    Line::from(spans)
+    super::layout::fit(Line::from(spans), width)
 }
 
 #[cfg(test)]

@@ -334,6 +334,6 @@
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
         );
         let joined = flat_lines(&activity_lines(&app, 80, true));
-        assert!(joined.contains("shell $ ls"));
-        assert!(joined.contains("□ shell $ ls · approved"));
+        assert!(joined.contains("Run    $ ls"));
+        assert!(joined.contains("□ Run    $ ls · approved"));
     }

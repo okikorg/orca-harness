@@ -463,11 +463,23 @@ pub(crate) async fn worker<F>(
                 login_task = None;
                 match result {
                     Ok(()) => {
-                        endpoint.provider = provider;
-                        endpoint.base_url = provider.base_url().into();
-                        endpoint.api_key = None;
-                        endpoint.model = provider.default_model().into();
-                        endpoint.reasoning_effort = None;
+                        let mut candidate = endpoint.clone();
+                        candidate.provider = provider;
+                        candidate.base_url = provider.base_url().into();
+                        candidate.api_key = None;
+                        candidate.reasoning_effort = None;
+                        let requested = config::stored_model(provider.label());
+                        candidate.model = match candidate.catalog_model(requested.as_deref()).await
+                        {
+                            Ok(model) => model,
+                            Err(error) => {
+                                let _ = ui.send(UiMsg::Notice(format!(
+                                    "login succeeded, but model catalog failed: {error}"
+                                )));
+                                continue;
+                            }
+                        };
+                        endpoint = candidate;
                         let _ = config::save_provider(provider.label());
                         agent = build(&endpoint);
                         spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
@@ -507,11 +519,22 @@ pub(crate) async fn worker<F>(
                     task.abort();
                 }
                 login_attempt = login_attempt.wrapping_add(1);
-                endpoint.provider = provider;
-                endpoint.base_url = provider.base_url().into();
-                endpoint.api_key = api_key.or_else(|| provider.resolve_key());
-                endpoint.model = provider.default_model().into();
-                endpoint.reasoning_effort = None;
+                let mut candidate = endpoint.clone();
+                candidate.provider = provider;
+                candidate.base_url = provider.base_url().into();
+                candidate.api_key = api_key.or_else(|| provider.resolve_key());
+                candidate.reasoning_effort = None;
+                let requested = config::stored_model(provider.label());
+                candidate.model = match candidate.catalog_model(requested.as_deref()).await {
+                    Ok(model) => model,
+                    Err(error) => {
+                        let _ = ui.send(UiMsg::Notice(format!(
+                            "provider model catalog failed: {error}"
+                        )));
+                        continue;
+                    }
+                };
+                endpoint = candidate;
                 let _ = config::save_provider(provider.label());
                 agent = build(&endpoint);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());

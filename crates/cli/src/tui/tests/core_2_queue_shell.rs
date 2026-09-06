@@ -46,9 +46,9 @@ fn parallel_batch_results_are_labeled_with_their_tool() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let list_call = joined.find("list_dir .").unwrap();
+    let list_call = joined.find("List   .").unwrap();
     let list_result = joined.find("· 2 entries").unwrap();
-    let shell_call = joined.find("shell $ git log").unwrap();
+    let shell_call = joined.find("Run    $ git log").unwrap();
     let shell_result = joined.find("· exit 0 · abc123").unwrap();
     assert!(
         list_call < list_result && shell_call < shell_result,
@@ -77,8 +77,8 @@ fn parallel_batch_results_are_labeled_with_their_tool() {
         80,
     );
     let joined = flat_lines(&activity_lines(&app, 80, true));
-    assert!(joined.contains("shell $ ls"));
-    assert!(joined.contains("✓ shell $ ls · exit 0"));
+    assert!(joined.contains("Run    $ ls"));
+    assert!(joined.contains("✓ Run    $ ls · exit 0"));
 }
 
 #[test]

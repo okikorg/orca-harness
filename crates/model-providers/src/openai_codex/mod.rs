@@ -48,6 +48,9 @@ pub struct CodexModelInfo {
     pub supported_reasoning_levels: Vec<CodexReasoningLevel>,
     #[serde(default)]
     pub default_reasoning_level: Option<String>,
+    /// Lower values are preferred by the provider.
+    #[serde(default)]
+    pub priority: i32,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -128,14 +131,17 @@ async fn parse_catalog_response(response: reqwest::Response) -> Result<Vec<Model
         .or_else(|| value.get("data"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| ModelError::InvalidResponse("Codex catalog has no models array".into()))?;
-    rows.iter()
+    let mut models = rows
+        .iter()
         .cloned()
         .map(|row| {
             let info: CodexModelInfo = serde_json::from_value(row)
                 .map_err(|error| ModelError::InvalidResponse(error.to_string()))?;
-            Ok(info.into())
+            Ok(info)
         })
-        .collect()
+        .collect::<Result<Vec<CodexModelInfo>, ModelError>>()?;
+    models.sort_by_key(|model| model.priority);
+    Ok(models.into_iter().map(Into::into).collect())
 }
 
 #[derive(Clone, Debug)]
@@ -377,7 +383,8 @@ mod catalog_tests {
                 {"effort": "low", "description": "Fast"},
                 {"effort": "high", "description": "Deep"}
             ],
-            "default_reasoning_level": "high"
+            "default_reasoning_level": "high",
+            "priority": 2
         }))
         .unwrap();
 
@@ -388,5 +395,15 @@ mod catalog_tests {
             crate::SupportedEfforts::Listed(vec!["low".into(), "high".into()])
         );
         assert_eq!(reasoning.default_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn catalog_priority_is_deserialized() {
+        let model: super::CodexModelInfo = serde_json::from_value(json!({
+            "slug": "preferred",
+            "priority": 0
+        }))
+        .unwrap();
+        assert_eq!(model.priority, 0);
     }
 }

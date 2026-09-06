@@ -102,7 +102,7 @@
             .find(|row| row.contains("Streaming heading"))
             .expect("heading row");
         // The prefix is the style's heading mark, not the raw source line.
-        assert_eq!(heading.trim_start(), "# Streaming heading");
+        assert_eq!(heading.trim_start(), format!("{}Streaming heading{}", crate::view::glyphs::glyphs().heading[0], crate::view::glyphs::glyphs().caret));
         assert!(
             rendered_cell_is_bold(&mut app, 80, 24, "Streaming"),
             "heading text is rendered bold: {heading}"

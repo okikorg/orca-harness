@@ -107,16 +107,6 @@ impl Provider {
             Provider::OpenRouter | Provider::Vercel | Provider::OpenAi | Provider::OpenAiCodex
         )
     }
-
-    pub fn default_model(self) -> &'static str {
-        match self {
-            Provider::OpenRouter => "openrouter/auto",
-            Provider::Vercel => "openai/gpt-4o-mini",
-            Provider::OpenAi => "gpt-4o-mini",
-            Provider::OpenAiCodex => "gpt-5.4",
-            Provider::Local => "qwen3.5:9b",
-        }
-    }
 }
 
 #[cfg(test)]
@@ -137,7 +127,6 @@ mod tests {
             }
         );
         assert!(Provider::Vercel.supports_images());
-        assert_eq!(Provider::Vercel.default_model(), "openai/gpt-4o-mini");
     }
 }
 

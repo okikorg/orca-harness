@@ -27,21 +27,59 @@ impl ToolRow<'_> {
     pub fn line(&self) -> Line<'static> {
         let prefix = self.branch.prefix();
         let row_width = row_budget(self.width, self.connector);
-        let detail_width = (row_width / 3).clamp(12, 40);
-        let detail = view::truncate_line(self.detail, detail_width);
-        let status: String = [detail.as_str(), self.elapsed]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .map(|part| format!(" · {part}"))
-            .collect();
-        let fixed_width = view::cell_width(&prefix) + 2 + view::cell_width(&status);
-        let call_width = row_width.saturating_sub(fixed_width).max(8);
-        let spans = vec![
+        let call = view::sanitize_cells(self.call);
+        let call = call.lines().next().unwrap_or_default();
+        let (name, target) = call.split_once(' ').unwrap_or((call, ""));
+        let action = match name {
+            "read_file" => "Read",
+            "list_dir" => "List",
+            "grep" | "web_search" => "Search",
+            "glob" => "Find",
+            "edit_file" | "multi_edit" => "Edit",
+            "apply_patch" => "Patch",
+            "write_file" => "Write",
+            "shell" => "Run",
+            "web_fetch" => "Fetch",
+            "web_crawl" => "Crawl",
+            _ => name,
+        };
+        let action = format!("{action:<6} ");
+        let prefix_width = view::cell_width(&prefix) + view::cell_width(self.glyph) + 1;
+        let elapsed_width = if self.elapsed.is_empty() {
+            0
+        } else {
+            view::cell_width(self.elapsed) + 3
+        };
+        let available =
+            row_width.saturating_sub(prefix_width + view::cell_width(&action) + elapsed_width);
+        // The target gets priority over the result summary on narrow panes.
+        let detail_width = (row_width / 3)
+            .min(40)
+            .min(available.saturating_sub(view::cell_width(target).min(28) + 3));
+        let detail = if detail_width == 0 {
+            String::new()
+        } else {
+            view::truncate_line(self.detail, detail_width)
+        };
+        let status = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(" · {detail}")
+        };
+        let target_width = available.saturating_sub(view::cell_width(&status));
+        let mut spans = vec![
             Span::styled(prefix, self.branch_style),
             Span::styled(format!("{} ", self.glyph), self.glyph_style),
-            Span::styled(view::truncate_line(self.call, call_width), self.call_style),
-            Span::styled(status, self.glyph_style),
+            Span::styled(action, self.branch_style),
+            Span::styled(view::truncate_line(target, target_width), self.call_style),
+            Span::styled(status, self.branch_style),
         ];
+        if !self.elapsed.is_empty() {
+            spans.push(Span::styled(
+                format!(" · {}", self.elapsed),
+                self.branch_style,
+            ));
+        }
         finish_row(spans, self.width, self.connector, self.branch_style)
     }
 }
@@ -78,10 +116,10 @@ mod tests {
     #[test]
     fn renders_branch_call_detail_and_elapsed_as_one_compact_row() {
         let row = row(100, Connector::None);
-        assert_eq!(
-            text(&row.line()),
-            "    └─ ✓ read_file README.md · read 120 bytes · 2ms"
-        );
+        let rendered = text(&row.line());
+        assert!(rendered.starts_with("    └─ ✓ Read   README.md · read 120 bytes"));
+        assert!(rendered.ends_with("2ms"));
+        assert_eq!(rendered, "    └─ ✓ Read   README.md · read 120 bytes · 2ms");
         assert_eq!(row.continuation(), "  ");
     }
 
@@ -94,6 +132,20 @@ mod tests {
         let drawn = text(&long.line());
         assert!(drawn.starts_with(&reserved), "{reserved:?} vs {drawn:?}");
         assert!(drawn.ends_with('○'));
+    }
+
+    #[test]
+    fn action_labels_preserve_targets_and_unknown_tool_identity() {
+        for (call, expected) in [
+            ("shell $ cargo test", "Run    $ cargo test"),
+            ("list_dir docs/", "List   docs/"),
+            ("grep 'error' in src", "Search 'error' in src"),
+            ("custom.search docs", "custom.search docs"),
+        ] {
+            let mut row = row(100, Connector::None);
+            row.call = call;
+            assert!(text(&row.line()).contains(expected));
+        }
     }
 
     #[test]

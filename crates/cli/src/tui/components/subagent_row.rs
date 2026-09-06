@@ -33,10 +33,10 @@ impl SubagentRow<'_> {
             + view::cell_width(self.glyph)
             + view::cell_width(" subagent ·  · ")
             + view::cell_width(self.elapsed);
-        let content_width = row_width.saturating_sub(fixed).max(8);
+        let content_width = row_width.saturating_sub(fixed);
         let identity_width = view::cell_width(self.identity).min(content_width);
         let task_width = content_width.saturating_sub(identity_width + 3);
-        let identity = view::truncate_line(self.identity, identity_width.max(8));
+        let identity = view::truncate_line(self.identity, identity_width);
         let task = (task_width >= 8).then(|| view::truncate_line(self.task, task_width));
 
         let mut spans = vec![
@@ -53,7 +53,7 @@ impl SubagentRow<'_> {
         if !self.elapsed.is_empty() {
             spans.push(Span::styled(
                 format!(" · {}", self.elapsed),
-                self.glyph_style,
+                self.branch_style,
             ));
         }
         finish_row(spans, self.width, self.connector, self.branch_style)

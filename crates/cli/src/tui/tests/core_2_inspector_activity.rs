@@ -115,14 +115,14 @@ fn notifications_use_the_shared_leading_glyph() {
 
     let notice = app.pending_history.last().expect("notification line");
     assert_eq!(line_text(notice), "• theme set to default");
-    assert_eq!(notice.spans[0].style, theme().accent);
+    assert_eq!(notice.spans[0].style, theme().dim);
     assert_eq!(notice.spans[1].style, theme().dim);
 }
 
 /// A refused command is still the system talking. Without the shared
 /// glyph it renders flush-left against the notices around it and
-/// reads as model output — so the glyph is the same and only the
-/// body carries the error color.
+/// reads as model output. The glyph stays the same; the error label and
+/// color distinguish severity even in monochrome.
 #[test]
 fn errors_use_the_same_glyph_as_notices_with_an_error_body() {
     let _theme = THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
@@ -133,10 +133,10 @@ fn errors_use_the_same_glyph_as_notices_with_an_error_body() {
 
     let notice = &app.pending_history[app.pending_history.len() - 2];
     let error = app.pending_history.last().expect("error line");
-    assert_eq!(line_text(error), "• unknown mode: pkan");
+    assert_eq!(line_text(error), "• error: unknown mode: pkan");
     // Same leading glyph, so both lines start in the same column.
     assert_eq!(line_text(notice).chars().next(), Some('•'));
-    assert_eq!(error.spans[0].style, notice.spans[0].style);
+    assert_eq!(error.spans[0].style, theme().error);
     // Severity is the body's job, and it differs from a notice.
     assert_eq!(error.spans[1].style, theme().error);
     assert_ne!(error.spans[1].style, notice.spans[1].style);
@@ -268,8 +268,8 @@ fn tool_results_connect_under_their_calls() {
         80,
     );
     let joined = flat_lines(&activity_lines(&app, 80, true));
-    assert!(joined.contains("shell $ ls"));
-    assert!(joined.contains("✓ shell $ ls · exit 0 · a.rs"));
+    assert!(joined.contains("Run    $ ls"));
+    assert!(joined.contains("✓ Run    $ ls · exit 0 · a.rs"));
 }
 
 fn flat_lines(lines: &[Line]) -> String {
@@ -340,7 +340,7 @@ fn thinking_joins_the_rail_and_the_expand_log() {
         joined.contains("Thinking"),
         "thinking group first: {joined}"
     );
-    assert!(joined.contains("read_file a.rs"));
+    assert!(joined.contains("Read   a.rs"));
     let record = app.tool_log.last().expect("thinking recorded");
     assert_eq!(record.tool_name, "thinking");
     assert_eq!(record.output, serde_json::json!("let me check the file"));

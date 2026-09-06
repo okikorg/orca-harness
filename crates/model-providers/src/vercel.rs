@@ -39,7 +39,7 @@ fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
     let entries = listing["data"]
         .as_array()
         .ok_or_else(|| ModelError::InvalidResponse("model catalog has no data array".into()))?;
-    let mut models = entries
+    let models = entries
         .iter()
         .map(|entry| {
             let mut model: ModelInfo = serde_json::from_value(entry.clone())
@@ -52,7 +52,6 @@ fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
             Ok(model)
         })
         .collect::<Result<Vec<_>, ModelError>>()?;
-    models.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(models)
 }
 

@@ -14,7 +14,11 @@ pub fn tab_strip(labels: &[&str], active: usize, hint: &str) -> Line<'static> {
         if index > 0 {
             spans.push(Span::styled(" · ", t.dim));
         }
-        let style = if index == active { t.strong } else { t.dim };
+        let style = if index == active {
+            t.strong.add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            t.dim
+        };
         spans.push(Span::styled(label.to_string(), style));
     }
     if !hint.is_empty() {
@@ -39,7 +43,10 @@ mod tests {
             .iter()
             .find(|span| span.content == "Done")
             .expect("active label is its own span");
-        assert_eq!(done.style, t.strong);
+        assert_eq!(
+            done.style,
+            t.strong.add_modifier(ratatui::style::Modifier::BOLD)
+        );
         assert!(line
             .spans
             .iter()

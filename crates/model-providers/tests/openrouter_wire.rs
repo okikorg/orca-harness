@@ -58,7 +58,7 @@ async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<Ca
 }
 
 #[tokio::test]
-async fn list_models_parses_the_catalog_sorted_and_sends_the_key() {
+async fn list_models_parses_the_catalog_in_provider_order_and_sends_the_key() {
     let catalog = json!({"data": [
         {"id": "z/last", "context_length": 32768,
          "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
@@ -74,10 +74,10 @@ async fn list_models_parses_the_catalog_sorted_and_sends_the_key() {
     assert!(sent.head.contains("bearer sk-or-test"));
 
     assert_eq!(models.len(), 2);
-    assert_eq!(models[0].id, "a/first");
-    assert_eq!(models[0].summary(), "a/first  128k ctx  free");
+    assert_eq!(models[0].id, "z/last");
+    assert_eq!(models[1].summary(), "a/first  128k ctx  free");
     assert_eq!(
-        models[1].summary(),
+        models[0].summary(),
         "z/last  32k ctx  $1.00/M in $2.00/M out"
     );
 }

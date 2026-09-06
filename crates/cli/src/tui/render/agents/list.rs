@@ -67,13 +67,18 @@ pub(super) fn agent_table(
                 elapsed_label(transcript_elapsed(transcript))
             );
         }
+        // Carry the ancestor stem through the second line of each entry.
+        let stem = row.prefix.replace("├─", "│ ").replace("└─", "  ");
+        labels[1] = format!("{stem}  {}", labels[1]);
         labels
     });
-    let table = Arc::new(crate::tui::components::picker::table_rows(
-        labels,
-        [(14, usize::MAX), (0, usize::MAX)],
-        width,
-    ));
+    let table = Arc::new(
+        labels
+            .map(|[title, metadata]| {
+                vec![Span::raw(title), Span::styled(metadata, view::theme().dim)]
+            })
+            .collect(),
+    );
     app.agent_browser
         .as_mut()
         .expect("browser open")
@@ -109,9 +114,10 @@ pub(super) fn agent_list_projection(app: &App) -> Arc<AgentListCache> {
             row.id,
             [
                 format!(
-                    "{}{} {}",
+                    "{}{} #{} {}",
                     row.prefix,
                     status_mark(transcript.status),
+                    transcript.id,
                     transcript.task
                 ),
                 format!(
