@@ -8,6 +8,7 @@ use orca_harness_extensions::{
     ReadToolResultTool, SessionFile, SessionHandler, ToolRetry, Truncation, TruncationStore,
     UsageMeter,
 };
+use orca_harness_tool_extensions::skills::SkillOnce;
 use tokio::sync::Mutex;
 
 use crate::extensions::Compaction;
@@ -382,6 +383,11 @@ async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
             long_session = long_session.on_compact(move |report| callback(report));
         }
         agent = agent.extension(long_session);
+    }
+    // After compaction: it reads "already loaded" off the context the
+    // model is about to see.
+    if definition.inner.skill_once {
+        agent = agent.extension(SkillOnce::new());
     }
     if let Some(recorder) = &recorder {
         agent = agent.extension_arc(recorder.clone() as Arc<dyn Extension>);

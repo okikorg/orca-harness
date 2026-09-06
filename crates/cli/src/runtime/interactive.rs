@@ -15,6 +15,7 @@ use orca_harness_extensions::{
     Truncation, TruncationStore,
 };
 use orca_harness_tool_extensions::mcp::McpModel;
+use orca_harness_tool_extensions::skills::SkillOnce;
 use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
@@ -426,6 +427,9 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     // Last in the around-tool chain: everything before this point is host
     // preflight, while everything after it is actual execution.
     agent = agent.extension(execution_events);
+    // After LongSession: it reads "already loaded" off the context the
+    // model is about to see, which compaction may have just shrunk.
+    agent = agent.extension(SkillOnce::new());
     // read_tool_result stays registered even with truncation off so
     // outputs trimmed before the toggle remain pageable.
     agent = agent

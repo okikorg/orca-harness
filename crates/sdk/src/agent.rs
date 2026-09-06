@@ -22,6 +22,10 @@ pub(crate) struct AgentDefinition {
     pub limits: Limits,
     pub tools: Vec<Arc<dyn Tool>>,
     pub extensions: Vec<Arc<dyn Extension>>,
+    /// The `skill` tool is registered, so each run pairs it with
+    /// `SkillOnce`. Not in `extensions`: that list is registered ahead
+    /// of compaction, and `SkillOnce` has to run after it.
+    pub skill_once: bool,
     pub extension_config: ExtensionConfig,
     pub context_capacity: Option<u64>,
     pub file_guard: FileGuard,
@@ -206,9 +210,11 @@ impl AgentBuilder {
         let custom_tools = std::mem::take(&mut self.tools);
         self.tools = preset_tools(self.preset, self.harness.workspace(), &self.file_guard);
         self.tools.extend(custom_tools);
+        let mut skill_once = false;
         if let Some(skills) = &self.skills {
             if let Some(tool) = skills.tool() {
                 self.tools.push(tool);
+                skill_once = true;
             }
         }
         if let Some(config) = self.extension_config.model_retry {
@@ -254,6 +260,7 @@ impl AgentBuilder {
                 limits: self.limits,
                 tools: self.tools,
                 extensions: self.extensions,
+                skill_once,
                 extension_config: self.extension_config,
                 context_capacity: self.context_capacity,
                 file_guard: self.file_guard,

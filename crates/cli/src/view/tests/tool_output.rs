@@ -183,6 +183,14 @@
         );
         assert_eq!(
             tool_result_summary(
+                "skill",
+                &json!({"name": "dry-yagni", "alreadyLoaded": true, "note": "still applies"}),
+                false
+            ),
+            "already loaded dry-yagni"
+        );
+        assert_eq!(
+            tool_result_summary(
                 "glob",
                 &json!({"matches": ["a.md", "b.md"], "truncated": false}),
                 false

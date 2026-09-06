@@ -253,3 +253,18 @@ fn schema_carries_the_catalog_and_the_enum() {
         json!(["release"])
     );
 }
+
+/// The model reads this description fresh every turn, and "call this
+/// before starting work" alone reads as "again, this turn". The
+/// description has to say what `SkillOnce` enforces.
+#[test]
+fn description_says_a_skill_loads_once() {
+    let temp = Temp::new("once");
+    release(&temp);
+    let description = tool(&temp).schema().description;
+    assert!(
+        description.contains("once per conversation"),
+        "{description}"
+    );
+    assert!(description.contains("do not reload"), "{description}");
+}

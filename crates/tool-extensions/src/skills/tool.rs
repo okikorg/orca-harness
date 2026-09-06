@@ -4,6 +4,11 @@
 //! list the model re-reads every turn. The catalog rides in this tool's
 //! description and its `name` enum instead, so a `/skills` toggle takes
 //! effect through the ordinary agent rebuild.
+//!
+//! The tool itself is stateless: every call reads the file and returns
+//! it. Answering a repeat load with a reminder is [`super::SkillOnce`]'s
+//! job, because "already in the conversation" is a property of the
+//! context, which only an extension can see.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -79,8 +84,11 @@ impl SkillTool {
         let mut text = String::from(
             "Load a skill: instructions the user wrote for a specific task, plus the \
              text files they point at. Call this before starting work a listed skill \
-             covers, then follow what it says. Pass `resource` to read a file the \
-             instructions refer to, and `offset` to continue a long one.",
+             covers, then follow what it says. A skill loads once per conversation: \
+             its instructions stay in force for every later turn, so do not reload one \
+             that is already in this conversation — a repeat call returns a reminder, \
+             not the text. Pass `resource` to read a file the instructions refer to, \
+             and `offset` to continue a long one.",
         );
         if !self.skills.is_empty() {
             text.push_str("\nAvailable skills:");

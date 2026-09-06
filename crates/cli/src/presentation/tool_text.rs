@@ -221,10 +221,12 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .and_then(Value::as_array)
             .map(|e| format!("{} entries", e.len())),
         "glob" | "grep" => matches_summary(output),
-        "skill" => output
-            .get("name")
-            .and_then(Value::as_str)
-            .map(|name| format!("loaded {name}")),
+        "skill" => output.get("name").and_then(Value::as_str).map(|name| {
+            match output.get("alreadyLoaded") == Some(&Value::Bool(true)) {
+                true => format!("already loaded {name}"),
+                false => format!("loaded {name}"),
+            }
+        }),
         "subagent" => subagent_result_summary(output),
         "web_fetch" => web_fetch_result_summary(output),
         "web_search" => output

@@ -14,6 +14,7 @@ use orca_harness_extensions::{
     MemorySearchTool, MemoryStore, Truncation, UsageMeter,
 };
 use orca_harness_tool_extensions::mcp::McpModel;
+use orca_harness_tool_extensions::skills::SkillOnce;
 use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
@@ -193,6 +194,9 @@ pub async fn run<M: Model + Clone + 'static>(
         agent = agent.extension_arc(session.clone());
     }
     agent = agent.extension(execution_events);
+    if !cfg.bare && enabled("skill") {
+        agent = agent.extension(SkillOnce::new());
+    }
     for tool in core_tools(ws) {
         if enabled(&tool.schema().name) {
             agent = agent.tool_arc(tool);

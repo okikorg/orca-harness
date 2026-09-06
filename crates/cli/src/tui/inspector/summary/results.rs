@@ -463,6 +463,10 @@ fn append_skill_result(lines: &mut Vec<Line<'static>>, output: &Value, width: us
     if !instructions.is_empty() {
         text_section(lines, "instructions", instructions, width, Style::default());
     }
+    let note = string(output, "note");
+    if !note.is_empty() {
+        text_section(lines, "note", note, width, Style::default());
+    }
     if let Some(resources) = output.get("resources") {
         append_generic_value(lines, "resources", resources, width);
     }
