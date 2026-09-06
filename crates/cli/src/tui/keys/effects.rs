@@ -39,6 +39,10 @@ pub(super) enum After {
     SendWithNote(WorkerCmd, String),
     /// Close and start the /models fetch-then-pick flow.
     FetchModels,
+    FetchSubagentModels {
+        tier: String,
+        provider: crate::Provider,
+    },
     /// Delete an installed skill, then rescan. Deferred out of the
     /// overlay match because it needs `app` (the shared handle, the
     /// config, the transcript), which the match holds borrowed.

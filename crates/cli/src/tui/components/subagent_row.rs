@@ -31,7 +31,7 @@ impl SubagentRow<'_> {
         let row_width = row_budget(self.width, self.connector);
         let fixed = view::cell_width(&prefix)
             + view::cell_width(self.glyph)
-            + view::cell_width(" subagent ·  · ")
+            + view::cell_width(" Subagent ·  · ")
             + view::cell_width(self.elapsed);
         let content_width = row_width.saturating_sub(fixed);
         let identity_width = view::cell_width(self.identity).min(content_width);
@@ -42,7 +42,7 @@ impl SubagentRow<'_> {
         let mut spans = vec![
             Span::styled(prefix, self.branch_style),
             Span::styled(format!("{} ", self.glyph), self.glyph_style),
-            Span::styled("subagent", self.label_style),
+            Span::styled("Subagent", self.label_style),
             Span::styled(" · ", self.branch_style),
             Span::styled(identity, self.identity_style),
         ];
@@ -95,7 +95,7 @@ mod tests {
     fn renders_identity_before_task() {
         assert_eq!(
             text(&row(120).line()),
-            "    └─ ✓ subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory · 37.0s"
+            "    └─ ✓ Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory · 37.0s"
         );
     }
 
@@ -103,7 +103,7 @@ mod tests {
     fn drops_task_before_identity_when_narrow() {
         let rendered = text(&row(70).line());
         assert!(
-            rendered.contains("subagent · openrouter:anthropic/claude-sonnet-5"),
+            rendered.contains("Subagent · openrouter:anthropic/claude-sonnet-5"),
             "{rendered}"
         );
         assert!(!rendered.contains("Explore"), "{rendered}");

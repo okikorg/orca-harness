@@ -67,15 +67,17 @@ pub(super) fn agent_table(
                 elapsed_label(transcript_elapsed(transcript))
             );
         }
-        // Carry the ancestor stem through the second line of each entry.
-        let stem = row.prefix.replace("├─", "│ ").replace("└─", "  ");
-        labels[1] = format!("{stem}  {}", labels[1]);
         labels
     });
     let table = Arc::new(
         labels
             .map(|[title, metadata]| {
-                vec![Span::raw(title), Span::styled(metadata, view::theme().dim)]
+                let metadata = format!(" · {metadata}");
+                let title_width = width.saturating_sub(4 + view::cell_width(&metadata));
+                vec![
+                    Span::raw(view::truncate_line(&title, title_width)),
+                    Span::styled(metadata, view::theme().dim),
+                ]
             })
             .collect(),
     );

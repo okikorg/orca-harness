@@ -280,7 +280,11 @@ pub(crate) fn subagent_value_lines(
             PICKER_ROWS,
         );
     }
-    picker.lines(&title, values.iter().cloned(), width)
+    picker.lines(
+        &format!("{title} · choose provider"),
+        values.iter().cloned(),
+        width,
+    )
 }
 
 pub(crate) fn inspector_picker_lines(

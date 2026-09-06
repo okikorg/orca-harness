@@ -309,7 +309,8 @@ impl SubagentDepth {
         self.0.routing.lock().unwrap().available.clone()
     }
 
-    pub(super) fn set_available_models(&self, models: Vec<String>) {
+    /// Register the host catalog before restoring saved routing preferences.
+    pub fn set_available_models(&self, models: Vec<String>) {
         let mut routing = self.0.routing.lock().unwrap();
         routing.available = models;
         for tier in MODEL_TIERS {

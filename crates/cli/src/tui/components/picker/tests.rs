@@ -344,10 +344,10 @@ fn windowed_table_lines_keep_columns_stable_across_pages() {
 }
 
 #[test]
-fn two_line_entries_scroll_by_agent_and_keep_selection_visible() {
+fn single_line_entries_scroll_by_agent_and_keep_selection_visible() {
     let mut picker = ListPicker::with_selected(12, 9);
     let rows: Vec<_> = (0..12)
-        .map(|id| vec![Span::raw(format!("Agent #{id}")), Span::raw("running · 2s")])
+        .map(|id| vec![Span::raw(format!("Agent #{id}")), Span::raw(" · running · 2s")])
         .collect();
     for height in [0, 1, 2, 3, 4, 8, 12] {
         let lines = picker.cached_entry_lines(Line::from("Agents"), &rows, 30, height);
@@ -356,7 +356,7 @@ fn two_line_entries_scroll_by_agent_and_keep_selection_visible() {
         if height >= 3 {
             assert!(lines
                 .iter()
-                .any(|line| line.to_string().contains("Agent #9")));
+                .any(|line| line.to_string().contains("Agent #9 · running · 2s")));
         }
     }
     picker.move_by(-1);

@@ -413,6 +413,45 @@ pub(crate) async fn worker<F>(
                     }
                 }
             }
+            WorkerCmd::ListSubagentModels {
+                request_id,
+                provider,
+            } => {
+                let candidate = crate::subagent_models::provider_endpoint(&endpoint, provider);
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    let result = candidate.list_models().await.map_err(|e| e.to_string());
+                    let _ = ui.send(UiMsg::Models { request_id, result });
+                });
+            }
+            WorkerCmd::SetSubagentModel {
+                tier,
+                provider,
+                model,
+            } => {
+                match crate::subagent_models::save_assignment(
+                    &endpoint,
+                    &subagent_manager,
+                    &tier,
+                    provider,
+                    model,
+                ) {
+                    Ok(_) => {
+                        agent = build(&endpoint);
+                        let result = config::save_subagent_settings(&endpoint.subagent_settings);
+                        let note = match result {
+                            Ok(_) => format!("subagent {tier} model saved; applies to new spawns"),
+                            Err(e) => {
+                                format!("subagent model saved, routing settings save failed: {e}")
+                            }
+                        };
+                        let _ = ui.send(UiMsg::Notice(note));
+                    }
+                    Err(e) => {
+                        let _ = ui.send(UiMsg::Notice(format!("subagent model save failed: {e}")));
+                    }
+                }
+            }
             WorkerCmd::ListModels { request_id, filter } => {
                 // Detached: a slow catalog fetch must not wedge the worker
                 // (runs and model switches would queue behind it).

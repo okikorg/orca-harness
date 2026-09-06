@@ -270,8 +270,7 @@ impl ListPicker {
         self.render(header, Some(rows.len()), &rows, width, window)
     }
 
-    /// Two visual lines per selectable entry, without changing picker indices.
-    /// Each cached row contains a title span followed by its metadata span.
+    /// One visual line per selectable entry, with cached title and metadata spans.
     pub(crate) fn cached_entry_lines(
         &self,
         header: Line<'static>,
@@ -279,36 +278,8 @@ impl ListPicker {
         width: usize,
         height: usize,
     ) -> Vec<Line<'static>> {
-        let room = height.saturating_sub(2);
-        let entry_height = if room >= 2 { 2 } else { 1 };
-        let window = self.window(rows.len(), room / entry_height);
-        let mut lines = self.render(header, None, rows, width, 0..0);
-        let t = theme();
-        for index in window {
-            let Some(title) = rows[index].first() else {
-                continue;
-            };
-            let selected = index == self.index();
-            lines.push(super::layout::fit(
-                Line::from(vec![
-                    Span::styled(marker(selected), if selected { t.select } else { t.dim }),
-                    Span::styled(
-                        title.content.clone(),
-                        if selected {
-                            t.select.add_modifier(ratatui::style::Modifier::BOLD)
-                        } else {
-                            title.style
-                        },
-                    ),
-                ]),
-                width,
-            ));
-            if entry_height == 2 {
-                let mut spans = vec![Span::raw("    ")];
-                spans.extend(rows[index].iter().skip(1).cloned());
-                lines.push(super::layout::fit(Line::from(spans), width));
-            }
-        }
+        let window = self.window(rows.len(), height.saturating_sub(2));
+        let mut lines = self.render(header, None, rows, width, window);
         lines.truncate(height);
         lines
     }

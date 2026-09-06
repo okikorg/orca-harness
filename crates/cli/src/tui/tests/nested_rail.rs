@@ -56,7 +56,7 @@ mod nested_rail_tests {
 
         let live = rail_text(&app);
         assert!(
-            live.contains("subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            live.contains("Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
             "{live}"
         );
         assert!(!live.contains("{\"task\""), "raw JSON should be replaced: {live}");
@@ -84,7 +84,7 @@ mod nested_rail_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            completed.contains("subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            completed.contains("Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
             "{completed}"
         );
 
@@ -98,7 +98,7 @@ mod nested_rail_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            failed.contains("subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            failed.contains("Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
             "{failed}"
         );
     }
@@ -128,9 +128,9 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        assert!(text.contains("subagent"), "rail: {text}");
-        assert!(text.contains("List   "), "rail: {text}");
-        let inner_line = text.lines().find(|l| l.contains("List   ")).unwrap();
+        assert!(text.contains("Subagent"), "rail: {text}");
+        assert!(text.contains("List · "), "rail: {text}");
+        let inner_line = text.lines().find(|l| l.contains("List · ")).unwrap();
         assert!(
             inner_line.starts_with("      "),
             "inner line must be indented: {inner_line:?}"
@@ -139,7 +139,7 @@ mod nested_rail_tests {
             inner_line.contains("└─") || inner_line.contains("├─"),
             "inner line must carry a tree branch so ownership is unambiguous: {inner_line:?}"
         );
-        let outer_line = text.lines().find(|l| l.contains("subagent")).unwrap();
+        let outer_line = text.lines().find(|l| l.contains("Subagent")).unwrap();
         let branch_col = |l: &str| l.find(['└', '├']).unwrap();
         assert!(
             branch_col(inner_line) > branch_col(outer_line),
@@ -160,7 +160,7 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let inner_line = text.lines().find(|l| l.contains("List   ")).unwrap();
+        let inner_line = text.lines().find(|l| l.contains("List · ")).unwrap();
         assert!(inner_line.contains("✓"), "completed glyph: {inner_line:?}");
     }
 
@@ -201,8 +201,8 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let child = text.lines().find(|l| l.contains("subagent inner")).unwrap();
-        let grandchild = text.lines().find(|l| l.contains("Search ")).unwrap();
+        let child = text.lines().find(|l| l.contains("Subagent · inner")).unwrap();
+        let grandchild = text.lines().find(|l| l.contains("Search")).unwrap();
         let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
         assert!(
             indent(grandchild) > indent(child),
@@ -287,12 +287,12 @@ mod nested_rail_tests {
         let text = rail_text(&app);
         assert_eq!(text.matches("openrouter:vendor/alpha").count(), 1, "{text}");
         assert_eq!(text.matches("openrouter:vendor/beta").count(), 1, "{text}");
-        assert!(text.contains("✓ subagent · openrouter:vendor/alpha · task alpha"), "{text}");
+        assert!(text.contains("✓ Subagent · openrouter:vendor/alpha · task alpha"), "{text}");
         let alpha = text.find("vendor/alpha").unwrap();
         let beta = text.find("vendor/beta").unwrap();
-        let grep = text.find("Search ").unwrap();
+        let grep = text.find("Search").unwrap();
         assert!(alpha < beta && beta < grep, "beta's child stays below beta: {text}");
-        assert!(!text[alpha..beta].contains("Search "), "grep must not appear under alpha: {text}");
+        assert!(!text[alpha..beta].contains("Search"), "grep must not appear under alpha: {text}");
 
         start_subagent(
             &mut app,

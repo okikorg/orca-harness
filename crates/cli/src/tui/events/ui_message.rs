@@ -83,9 +83,11 @@ pub(crate) fn handle_ui_msg(
             let t = theme();
             // Learn the active model's window from the catalog in passing.
             if let Ok(models) = &result {
-                if let Some(info) = models.iter().find(|m| m.id == app.cfg.model_name) {
-                    if info.context_length.is_some() {
-                        app.context_window = info.context_length;
+                if !matches!(target, ModelPickerTarget::Subagent { .. }) {
+                    if let Some(info) = models.iter().find(|m| m.id == app.cfg.model_name) {
+                        if info.context_length.is_some() {
+                            app.context_window = info.context_length;
+                        }
                     }
                 }
             }
@@ -96,6 +98,11 @@ pub(crate) fn handle_ui_msg(
                 }
                 (ModelPickerTarget::Models { filter }, Ok(models)) => {
                     app.overlay = Some(Overlay::Models(ModelPicker::new(models, filter)));
+                }
+                (ModelPickerTarget::Subagent { tier, provider }, Ok(models)) => {
+                    let mut picker = ModelPicker::new(models, String::new());
+                    picker.subagent = Some((tier, provider));
+                    app.overlay = Some(Overlay::Models(picker));
                 }
                 (ModelPickerTarget::ActiveModelEffort, Ok(models)) => {
                     let effort_picker = models

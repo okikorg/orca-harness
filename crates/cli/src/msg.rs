@@ -314,6 +314,15 @@ pub enum WorkerCmd {
     LoadSession { path: std::path::PathBuf },
     /// Fetch the endpoint's model catalog, keeping ids containing `filter`.
     ListModels { request_id: u64, filter: String },
+    ListSubagentModels {
+        request_id: u64,
+        provider: Provider,
+    },
+    SetSubagentModel {
+        tier: String,
+        provider: Provider,
+        model: String,
+    },
     /// Run a provider-owned interactive OAuth flow, then activate it.
     LoginProvider { provider: Provider },
     /// Result of a detached provider login; `attempt` rejects stale completions.

@@ -346,6 +346,7 @@
                 .map(|(_, target)| match target {
                     ModelPickerTarget::Models { filter } => filter.as_str(),
                     ModelPickerTarget::ActiveModelEffort => "effort",
+                    ModelPickerTarget::Subagent { .. } => "subagent",
                 }),
             Some("")
         );
@@ -460,4 +461,79 @@
         assert_eq!(UiStyle::stored(), UiStyle::Glyph);
         set_ui_style(UiStyle::Minimal);
         let _ = crate::config::save_style("minimal");
+    }
+
+    #[test]
+    fn subagent_model_picker_selects_across_providers_without_switching_parent() {
+        use crate::tui::state::SubagentSetting;
+        for setting in [
+            SubagentSetting::LocalModel,
+            SubagentSetting::FlashModel,
+            SubagentSetting::MidModel,
+            SubagentSetting::FrontierModel,
+        ] {
+            for provider in Provider::ALL {
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                let mut app = test_app();
+                let parent = app.cfg.model_name.clone();
+                let parent_window = app.context_window;
+                let values = crate::tui::subagents::subagent_values(&app.cfg.subagent_depth, setting);
+                let index = values.iter().position(|p| p == provider.label()).unwrap();
+                app.overlay = Some(Overlay::SubagentValues {
+                    setting,
+                    picker: ListPicker::with_selected(values.len(), index),
+                    values,
+                });
+                handle_overlay_key(
+                    &mut app,
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    &tx,
+                );
+                let WorkerCmd::ListSubagentModels {
+                    request_id,
+                    provider: requested,
+                } = rx.try_recv().unwrap()
+                else {
+                    panic!("expected subagent catalog request");
+                };
+                assert_eq!(requested, provider);
+                handle_ui_msg(
+                    &mut app,
+                    UiMsg::Models {
+                        request_id,
+                        result: Ok(catalog()),
+                    },
+                    &tx,
+                    100,
+                );
+                let mut terminal = ratatui::Terminal::new(
+                    ratatui::backend::TestBackend::new(100, 12)).unwrap();
+                terminal.draw(|frame| frame.render_widget(
+                    ratatui::widgets::Paragraph::new(ratatui::text::Text::from(live_lines(&app, 100))),
+                    frame.area())).unwrap();
+                let buffer = terminal.backend().buffer();
+                let rendered = (0..12).map(|y| (0..100)
+                    .map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                    .collect::<Vec<_>>().join("\n");
+                assert!(rendered.contains(provider.label()), "{rendered}");
+                handle_overlay_key(
+                    &mut app,
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    &tx,
+                );
+                let WorkerCmd::SetSubagentModel {
+                    tier,
+                    provider: selected,
+                    model,
+                } = rx.try_recv().unwrap()
+                else {
+                    panic!("expected tier assignment, not parent switch");
+                };
+                assert_eq!(tier, crate::tui::subagents::tier(setting).unwrap());
+                assert_eq!(selected, provider);
+                assert_eq!(model, catalog()[0].id);
+                assert_eq!(app.cfg.model_name, parent);
+                assert_eq!(app.context_window, parent_window);
+            }
+        }
     }

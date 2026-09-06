@@ -267,9 +267,9 @@ fn spinner_changes_only_marker_cells_and_completion_is_static() {
             1,
             "only the Work marker moves; running tools keep their square"
         );
-        assert!(a.contains("✓ Read   "));
-        assert!(a.contains("□ Run    cargo test"));
-        assert!(b.contains("□ Run    cargo test"));
+        assert!(a.contains("✓ Read · "));
+        assert!(a.contains("□ Run · cargo test"));
+        assert!(b.contains("□ Run · cargo test"));
         for mark in glyphs().running {
             assert_eq!(view::cell_width(&mark.to_string()), 1);
         }
@@ -372,7 +372,7 @@ fn render_readable_tool_failures() {
             }
         }
         let rendered = screen(lines, width as u16);
-        assert!(rendered.contains("Read   docs/"));
+        assert!(rendered.contains("Read · docs/"));
         assert!(rendered.contains("File not found"));
         assert!(!rendered.contains("read_file"));
         assert!(!rendered.contains("\"error\""));

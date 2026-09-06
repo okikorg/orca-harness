@@ -67,6 +67,7 @@ pub struct TuiConfig {
 /// The interactive model selector: the fetched catalog, a live-typed
 /// filter, and the standard shared picker state for the filtered view.
 pub(crate) struct ModelPicker {
+    pub(crate) subagent: Option<(String, crate::Provider)>,
     pub(crate) models: Vec<ModelInfo>,
     pub(crate) filter: String,
     pub(crate) picker: ListPicker,
@@ -77,6 +78,10 @@ pub(crate) struct ModelPicker {
 pub(crate) enum ModelPickerTarget {
     Models { filter: String },
     ActiveModelEffort,
+    Subagent {
+        tier: String,
+        provider: crate::Provider,
+    },
 }
 
 /// Provider-advertised reasoning efforts for the active or newly chosen model.
@@ -160,6 +165,7 @@ impl ModelPicker {
             .filter(|model| needle.is_empty() || model.id.to_lowercase().contains(&needle))
             .count();
         Self {
+            subagent: None,
             models,
             filter,
             picker: ListPicker::new(len),

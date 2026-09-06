@@ -132,6 +132,27 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
         After::PluginAction { plugin, action } => {
             plugin_picker_action(app, worker, plugin, action);
         }
+        After::FetchSubagentModels { tier, provider } => {
+            if let Some(current) = app.overlay.take() {
+                app.overlay_stack.push(current);
+            }
+            let request_id = app.next_picker_request;
+            app.next_picker_request += 1;
+            app.picker_pending = Some((request_id, ModelPickerTarget::Subagent { tier, provider }));
+            if worker
+                .send(WorkerCmd::ListSubagentModels {
+                    request_id,
+                    provider,
+                })
+                .is_err()
+            {
+                app.picker_pending = None;
+                app.overlay = app.overlay_stack.pop();
+                push_error(app, "worker is gone; restart orcacode");
+            } else {
+                push_notice(app, "fetching provider models…");
+            }
+        }
         After::FetchModels => {
             if let Some(current) = app.overlay.take() {
                 app.overlay_stack.push(current);

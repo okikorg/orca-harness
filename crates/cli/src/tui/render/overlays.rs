@@ -219,8 +219,25 @@ pub(crate) fn model_picker_lines(
     } else {
         format!("filter: {}", picker.filter)
     };
+    let title = picker
+        .subagent
+        .as_ref()
+        .map(|(tier, provider)| {
+            let tier = if tier == "flash" {
+                "fast"
+            } else {
+                tier.as_str()
+            };
+            format!("Subagent {tier} / {}", provider.label())
+        })
+        .unwrap_or_else(|| "Models".into());
+    let action = if picker.subagent.is_some() {
+        "select"
+    } else {
+        "switch"
+    };
     let header_left = format!(
-        "  Models {} · {filter_note} · →/enter switch · esc close",
+        "  {title} {} · {filter_note} · →/enter {action} · esc close",
         filtered.len()
     );
     if filtered.is_empty() {
@@ -234,7 +251,7 @@ pub(crate) fn model_picker_lines(
 
     let rows = height.saturating_sub(2).max(1);
     picker.picker.windowed_table_lines(
-        &format!("Models · {filter_note} · →/enter switch · esc close"),
+        &format!("{title} · {filter_note} · →/enter {action} · esc close"),
         filtered.into_iter().map(|model| {
             let summary = model.summary();
             let detail = summary

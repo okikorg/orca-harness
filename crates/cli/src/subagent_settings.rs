@@ -289,6 +289,12 @@ pub(crate) fn configure_tool_retry<M: orca_harness_core::Model + Clone + 'static
 /// Load once per endpoint session; an explicit environment limit wins over storage.
 pub(crate) fn configured(depth: u32, model_concurrency: Option<u32>) -> SubagentDepth {
     let settings = SubagentDepth::new(depth);
+    settings.set_available_models(
+        crate::config::stored_subagent_models()
+            .into_iter()
+            .map(|(tier, selection)| format!("{tier}/{}/{}", selection.provider, selection.model))
+            .collect(),
+    );
     crate::config::load_subagent_settings(&settings);
     if let Some(limit) = model_concurrency {
         settings.set_model_concurrency(limit);

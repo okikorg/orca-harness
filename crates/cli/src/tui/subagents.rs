@@ -3,7 +3,7 @@ use orca_harness_tools::SubagentDepth;
 
 pub(crate) const CUSTOM_VALUE: &str = "custom…";
 
-fn tier(setting: SubagentSetting) -> Option<&'static str> {
+pub(crate) fn tier(setting: SubagentSetting) -> Option<&'static str> {
     match setting {
         SubagentSetting::LocalModel => Some("local"),
         SubagentSetting::FlashModel => Some("flash"),
@@ -20,7 +20,7 @@ pub(crate) fn subagent_setting_label(setting: SubagentSetting) -> &'static str {
     match setting {
         SubagentSetting::Route => "default route",
         SubagentSetting::LocalModel => "local model",
-        SubagentSetting::FlashModel => "flash model",
+        SubagentSetting::FlashModel => "fast model",
         SubagentSetting::MidModel => "mid model",
         SubagentSetting::FrontierModel => "frontier model",
         _ => unreachable!(),
@@ -34,7 +34,7 @@ pub(crate) fn subagent_current(settings: &SubagentDepth, setting: SubagentSettin
     if let Some(tier) = tier(setting) {
         return settings
             .preferred_model(tier)
-            .unwrap_or_else(|| "unavailable".into());
+            .unwrap_or_else(|| "not selected".into());
     }
     setting
         .numeric()
@@ -57,8 +57,11 @@ pub(crate) fn subagent_values(settings: &SubagentDepth, setting: SubagentSetting
         );
         return routes;
     }
-    if let Some(tier) = tier(setting) {
-        return settings.models_for_tier(tier);
+    if tier(setting).is_some() {
+        return crate::Provider::ALL
+            .into_iter()
+            .map(|provider| provider.label().to_string())
+            .collect();
     }
     let field = setting.numeric().expect("numeric setting");
     let current = (field.read)(settings).unwrap_or_else(field.default);
@@ -91,9 +94,9 @@ pub(crate) fn subagent_route_description(route: &str) -> &'static str {
             "model chooses only from your preferred models"
         }
         "local" => "always use the preferred local model",
-        "flash" => "always use the preferred fast cloud model",
-        "mid" => "always use the preferred balanced cloud model",
-        "frontier" => "always use the preferred strongest cloud model",
+        "flash" => "always use the preferred fast model",
+        "mid" => "always use the preferred balanced model",
+        "frontier" => "always use the preferred strongest model",
         _ => "approved worker route",
     }
 }
@@ -106,7 +109,10 @@ pub(crate) fn subagent_selected(
     let current = if setting == SubagentSetting::Route {
         settings.model_route().unwrap_or_else(|| "inherit".into())
     } else if let Some(tier) = tier(setting) {
-        settings.preferred_model(tier).unwrap_or_default()
+        settings
+            .preferred_model(tier)
+            .and_then(|id| id.split('/').nth(1).map(str::to_string))
+            .unwrap_or_default()
     } else {
         subagent_current(settings, setting)
     };

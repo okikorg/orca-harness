@@ -50,6 +50,14 @@ pub(super) fn handle_model_key(picker: &mut ModelPicker, code: KeyCode) -> After
         }
         _ => match picker.picker.on_key(code) {
             PickerEvent::Activated(_) => match picker.selected_model() {
+                Some(model) if picker.subagent.is_some() => {
+                    let (tier, provider) = picker.subagent.clone().unwrap();
+                    After::CloseAndSend(WorkerCmd::SetSubagentModel {
+                        tier,
+                        provider,
+                        model: model.id,
+                    })
+                }
                 Some(model) => match EffortPicker::new(model.clone()) {
                     Some(efforts) => After::Push(Overlay::Efforts(efforts)),
                     None => After::CloseAndSetModel {

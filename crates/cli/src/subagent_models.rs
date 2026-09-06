@@ -1,174 +1,83 @@
-//! Curated worker models offered to the orchestrator.
-//!
-//! Snapshot reviewed 2026-08-25 against OpenRouter's public model catalog,
-//! Artificial Analysis, and the linked Ollama model cards. This is deliberately
-//! static: startup stays deterministic and model availability errors stay
-//! visible instead of silently rerouting.
-
-use std::sync::Arc;
-
+//! User-selected worker models; no provider-specific model shortlist.
+use crate::{Endpoint, Provider};
 use orca_harness_core::Model;
 use orca_harness_tools::SubagentModel;
+use std::sync::Arc;
 
-use crate::{Endpoint, Provider};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CuratedModel {
-    choice_id: &'static str,
-    endpoint_model: &'static str,
-    description: &'static str,
+pub(crate) fn provider_endpoint(endpoint: &Endpoint, provider: Provider) -> Endpoint {
+    Endpoint {
+        provider,
+        base_url: if provider == endpoint.provider {
+            endpoint.base_url.clone()
+        } else {
+            provider.base_url().into()
+        },
+        api_key: if provider == endpoint.provider {
+            endpoint.api_key.clone()
+        } else {
+            provider.resolve_key()
+        },
+        reasoning_effort: None,
+        max_output_tokens: None,
+        request_session_id: Some(orca_harness_extensions::new_session_id()),
+        model_retries: Arc::default(),
+        ..endpoint.clone()
+    }
 }
 
-const LOCAL: [CuratedModel; 3] = [
-    CuratedModel {
-        choice_id: "local/qwen3-coder-next",
-        endpoint_model: "qwen3-coder-next:latest",
-        description: "local/free · strongest coding specialist here · ~52 GB · 256K context",
-    },
-    CuratedModel {
-        choice_id: "local/glm-4.7-flash",
-        endpoint_model: "glm-4.7-flash:latest",
-        description: "local/free · efficient 30B-A3B coding agent · ~19 GB · 198K context",
-    },
-    CuratedModel {
-        choice_id: "local/gpt-oss-20b",
-        endpoint_model: "gpt-oss:20b",
-        description: "local/free · compact general agent · ~14 GB · 128K context",
-    },
-];
+/// Existing workers own a catalog snapshot, so do not replace its shared routes mid-tree.
+pub(crate) fn save_assignment(
+    endpoint: &Endpoint,
+    manager: &orca_harness_tools::SubagentManager,
+    tier: &str,
+    provider: Provider,
+    model: String,
+) -> Result<(), String> {
+    if !manager.active().is_empty() {
+        return Err("wait for running subagents to finish, then select the model again".into());
+    }
+    let candidate = provider_endpoint(endpoint, provider);
+    crate::config::save_subagent_model(
+        tier,
+        crate::config::SubagentModelSelection {
+            provider: provider.label().into(),
+            model,
+            base_url: candidate.base_url,
+        },
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
 
-const OPENROUTER: [CuratedModel; 9] = [
-    CuratedModel {
-        choice_id: "flash/gemini-3.7-flash",
-        endpoint_model: "google/gemini-3.7-flash",
-        description: "remote · fast premium worker · $0.375/M in, $1.875/M out · 1M context",
-    },
-    CuratedModel {
-        choice_id: "flash/deepseek-v4-flash",
-        endpoint_model: "deepseek/deepseek-v4-flash-0731",
-        description: "remote · ultra-low-cost coding worker · $0.04/M in, $0.08/M out · 1M context",
-    },
-    CuratedModel {
-        choice_id: "flash/qwen3.7-flash",
-        endpoint_model: "qwen/qwen3.7-flash",
-        description: "remote · cheap multimodal worker · $0.03/M in, $0.13/M out · 1M context",
-    },
-    CuratedModel {
-        choice_id: "mid/kimi-k2.7-code",
-        endpoint_model: "moonshotai/kimi-k2.7-code",
-        description: "remote · coding-specific long-horizon worker · $0.67/M in, $3.40/M out",
-    },
-    CuratedModel {
-        choice_id: "mid/glm-5.2",
-        endpoint_model: "z-ai/glm-5.2",
-        description: "remote · project-scale reasoning · $1.19/M in, $3.74/M out · 1M context",
-    },
-    CuratedModel {
-        choice_id: "mid/minimax-m3",
-        endpoint_model: "minimax/minimax-m3",
-        description: "remote · economical multimodal agent · $0.30/M in, $1.20/M out",
-    },
-    CuratedModel {
-        choice_id: "frontier/claude-opus-5",
-        endpoint_model: "anthropic/claude-opus-5",
-        description: "remote · maximum-confidence long-horizon coding · $5/M in, $25/M out",
-    },
-    CuratedModel {
-        choice_id: "frontier/gpt-5.6-sol",
-        endpoint_model: "openai/gpt-5.6-sol",
-        description: "remote · strong command-line and multi-step coding · $2/M in, $10/M out",
-    },
-    CuratedModel {
-        choice_id: "frontier/claude-sonnet-5",
-        endpoint_model: "anthropic/claude-sonnet-5",
-        description: "remote · frontier price/performance · $2/M in, $10/M out",
-    },
-];
-
-/// Build choices reachable from this host. Local choices always target Ollama's
-/// conventional endpoint; when the active endpoint itself is local, preserve
-/// its configured URL. Cloud choices use OpenRouter and are included only when
-/// an API key can be resolved without prompting.
 pub(crate) fn choices(endpoint: &Endpoint) -> Vec<SubagentModel<Arc<dyn Model>>> {
-    choices_with_openrouter_key(endpoint, Provider::OpenRouter.resolve_key(), None)
+    build(endpoint, None)
 }
 
 pub(crate) fn choices_with_ui(
     endpoint: &Endpoint,
     ui: tokio::sync::mpsc::UnboundedSender<crate::msg::UiMsg>,
 ) -> Vec<SubagentModel<Arc<dyn Model>>> {
-    choices_with_openrouter_key(endpoint, Provider::OpenRouter.resolve_key(), Some(ui))
-}
-
-fn choices_with_openrouter_key(
-    endpoint: &Endpoint,
-    openrouter_key: Option<String>,
-    ui: Option<tokio::sync::mpsc::UnboundedSender<crate::msg::UiMsg>>,
-) -> Vec<SubagentModel<Arc<dyn Model>>> {
-    let local = Endpoint {
-        provider: Provider::Local,
-        base_url: if endpoint.provider == Provider::Local {
-            endpoint.base_url.clone()
-        } else {
-            Provider::Local.base_url().into()
-        },
-        api_key: None,
-        model: String::new(),
-        reasoning_effort: None,
-        max_output_tokens: None,
-        prompt_cache: true,
-        request_session_id: Some(orca_harness_extensions::new_session_id()),
-        model_retries: Arc::default(),
-        model_gates: endpoint.model_gates.clone(),
-        subagent_settings: endpoint.subagent_settings.clone(),
-    };
-    let mut choices = build(&local, &LOCAL, ui.clone());
-
-    let openrouter_key = if endpoint.provider == Provider::OpenRouter {
-        endpoint.api_key.clone().or(openrouter_key)
-    } else {
-        openrouter_key
-    };
-    if let Some(key) = openrouter_key {
-        let openrouter = Endpoint {
-            provider: Provider::OpenRouter,
-            base_url: Provider::OpenRouter.base_url().into(),
-            api_key: Some(key),
-            model: String::new(),
-            reasoning_effort: None,
-            max_output_tokens: None,
-            prompt_cache: true,
-            request_session_id: Some(orca_harness_extensions::new_session_id()),
-            model_retries: Arc::default(),
-            model_gates: endpoint.model_gates.clone(),
-            subagent_settings: endpoint.subagent_settings.clone(),
-        };
-        choices.extend(build(&openrouter, &OPENROUTER, ui));
-    }
-    choices
+    build(endpoint, Some(ui))
 }
 
 fn build(
     endpoint: &Endpoint,
-    entries: &[CuratedModel],
     ui: Option<tokio::sync::mpsc::UnboundedSender<crate::msg::UiMsg>>,
 ) -> Vec<SubagentModel<Arc<dyn Model>>> {
-    entries
-        .iter()
-        .map(|entry| {
-            let worker = Endpoint {
-                model: entry.endpoint_model.into(),
-                ..endpoint.clone()
-            };
-            let label = format!(
-                "subagent {} ({}/{})",
-                entry.choice_id,
-                worker.provider.label(),
-                worker.model
-            );
+    crate::config::stored_subagent_models()
+        .into_iter()
+        .filter_map(|(tier, selection)| {
+            let provider = Provider::from_label(&selection.provider)?;
+            let mut worker = provider_endpoint(endpoint, provider);
+            worker.base_url = selection.base_url;
+            worker.model = selection.model;
+            let id = format!("{tier}/{}/{}", provider.label(), worker.model);
+            let description = format!("user-selected {} / {}", provider.label(), worker.model);
+            let label = format!("subagent {id} ({}/{})", provider.label(), worker.model);
             let model = worker.build_model_for_ui_with_label(ui.clone(), Some(label));
-            SubagentModel::new(entry.choice_id, entry.description, model)
-                .identity(worker.provider.label(), worker.model)
+            Some(
+                SubagentModel::new(id, description, model).identity(provider.label(), worker.model),
+            )
         })
         .collect()
 }
@@ -177,54 +86,12 @@ fn build(
 mod tests {
     use super::*;
 
-    #[test]
-    fn shortlist_has_three_unique_models_per_tier() {
-        let all = LOCAL.into_iter().chain(OPENROUTER);
-        let ids: std::collections::HashSet<_> = all.clone().map(|model| model.choice_id).collect();
-        assert_eq!(ids.len(), 12);
-        for tier in ["local/", "flash/", "mid/", "frontier/"] {
-            assert_eq!(
-                all.clone()
-                    .filter(|model| model.choice_id.starts_with(tier))
-                    .count(),
-                3
-            );
-        }
-        assert!(all.clone().all(|model| !model.endpoint_model.is_empty()));
-        let choices = choices_with_openrouter_key(
-            &Endpoint {
-                provider: Provider::Local,
-                base_url: Provider::Local.base_url().into(),
-                api_key: None,
-                model: "orchestrator".into(),
-                reasoning_effort: None,
-                max_output_tokens: None,
-                prompt_cache: false,
-                request_session_id: None,
-                model_retries: Arc::default(),
-                model_gates: Default::default(),
-                subagent_settings: Default::default(),
-            },
-            Some("key".into()),
-            None,
-        );
-        assert!(choices.iter().all(|choice| choice.identity.is_some()));
-        assert!(choices.iter().any(|choice| {
-            let identity = choice.identity.as_ref().unwrap();
-            identity.provider == "openrouter" && identity.model.contains('/')
-        }));
-        assert!(all
-            .clone()
-            .all(|model| !model.endpoint_model.ends_with(":batch")));
-    }
-
-    #[test]
-    fn local_choices_exist_without_a_cloud_key() {
-        let endpoint = Endpoint {
-            provider: Provider::OpenAi,
-            base_url: Provider::OpenAi.base_url().into(),
-            api_key: Some("openai-key".into()),
-            model: "gpt-4o".into(),
+    fn endpoint() -> Endpoint {
+        Endpoint {
+            provider: Provider::Local,
+            base_url: "http://localhost:12345/v1".into(),
+            api_key: None,
+            model: "parent".into(),
             reasoning_effort: None,
             max_output_tokens: None,
             prompt_cache: false,
@@ -232,37 +99,164 @@ mod tests {
             model_retries: Arc::default(),
             model_gates: Default::default(),
             subagent_settings: Default::default(),
-        };
-        let choices = choices_with_openrouter_key(&endpoint, None, None);
-        assert_eq!(choices.len(), 3);
-        assert!(choices.iter().all(|choice| choice.id.starts_with("local/")));
+        }
     }
 
     #[test]
-    fn openrouter_key_adds_all_three_remote_tiers() {
+    fn subagent_catalog_uses_saved_provider_models_and_restores_fixed_route() {
+        let endpoint = endpoint();
+        for (tier, provider, model) in [
+            ("local", "local", "my-installed-model:tag"),
+            ("flash", "openai", "my-fast-model"),
+            ("mid", "vercel", "vendor/my-model"),
+            ("frontier", "openai-codex", "my-frontier-model"),
+        ] {
+            crate::config::save_subagent_model(
+                tier,
+                crate::config::SubagentModelSelection {
+                    provider: provider.into(),
+                    model: model.into(),
+                    base_url: Provider::from_label(provider).unwrap().base_url().into(),
+                },
+            )
+            .unwrap();
+        }
+        let choices = choices(&endpoint);
+        assert_eq!(choices.len(), 4);
+        for choice in &choices {
+            let identity = choice.identity.as_ref().unwrap();
+            assert!(choice
+                .id
+                .ends_with(&format!("{}/{}", identity.provider, identity.model)));
+        }
+        let settings = crate::subagent_settings::configured(1, None);
+        assert!(settings.set_model_route(Some("mid".into())));
+        crate::config::save_subagent_settings(&settings).unwrap();
+        let reloaded = crate::subagent_settings::configured(1, None);
+        assert_eq!(
+            reloaded.default_model().as_deref(),
+            Some("mid/vercel/vendor/my-model")
+        );
+        assert_eq!(crate::config::stored_subagent_models().len(), 4);
+    }
+
+    #[test]
+    fn subagent_provider_selection_preserves_active_custom_endpoint() {
+        let endpoint = endpoint();
+        assert_eq!(
+            provider_endpoint(&endpoint, Provider::Local).base_url,
+            endpoint.base_url
+        );
+        let remote = provider_endpoint(&endpoint, Provider::OpenAi);
+        assert_eq!(remote.base_url, Provider::OpenAi.base_url());
+        assert_eq!(endpoint.model, "parent");
+    }
+
+    #[test]
+    fn subagent_catalog_has_no_implicit_model_choices() {
+        assert!(choices(&endpoint()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod live_assignment_tests {
+    use super::*;
+    use orca_harness_core::{
+        CancellationToken, Context, ModelError, ModelResponse, Tool, ToolContext, ToolSchema,
+    };
+    use orca_harness_tools::{SubagentDepth, SubagentManager, SubagentTool};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct NestedWorker {
+        release: CancellationToken,
+        calls: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl Model for NestedWorker {
+        async fn generate(
+            &self,
+            _: &Context,
+            _: &[ToolSchema],
+        ) -> Result<ModelResponse, ModelError> {
+            self.release.cancelled().await;
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(ModelResponse::tool_calls(vec![
+                    orca_harness_core::ToolCall {
+                        id: "nested".into(),
+                        name: "subagent".into(),
+                        arguments: serde_json::json!({"task": "nested", "background": false}),
+                    },
+                ]))
+            } else {
+                Ok(ModelResponse::final_text("done"))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn subagent_assignment_waits_for_existing_tree_without_breaking_nested_spawns() {
+        let settings = SubagentDepth::new(2);
+        let release = CancellationToken::new();
+        let model = Arc::new(NestedWorker {
+            release: release.clone(),
+            calls: AtomicUsize::new(0),
+        });
+        let manager = SubagentManager::from_settings(settings.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tool = SubagentTool::with_tools(model.clone(), Arc::new(Vec::new))
+            .models([SubagentModel::new("flash/local/old", "old", model.clone())])
+            .max_depth(settings.clone())
+            .background(manager.clone(), move |event| {
+                let _ = tx.send(event);
+            });
+        assert!(settings.set_model_route(Some("flash".into())));
         let endpoint = Endpoint {
             provider: Provider::Local,
             base_url: Provider::Local.base_url().into(),
             api_key: None,
-            model: "qwen3.5:9b".into(),
+            model: "parent".into(),
             reasoning_effort: None,
             max_output_tokens: None,
             prompt_cache: false,
             request_session_id: None,
             model_retries: Arc::default(),
             model_gates: Default::default(),
-            subagent_settings: Default::default(),
+            subagent_settings: settings.clone(),
         };
-        let choices = choices_with_openrouter_key(&endpoint, Some("openrouter-key".into()), None);
-        assert_eq!(choices.len(), 12);
-        for tier in ["flash/", "mid/", "frontier/"] {
-            assert_eq!(
-                choices
-                    .iter()
-                    .filter(|choice| choice.id.starts_with(tier))
-                    .count(),
-                3
-            );
-        }
+        save_assignment(&endpoint, &manager, "flash", Provider::Local, "old".into()).unwrap();
+        tool.call(
+            serde_json::json!({"task": "outer"}),
+            &ToolContext {
+                call_id: "outer".into(),
+                tool_name: "subagent".into(),
+                cancellation: CancellationToken::new(),
+                deadline: None,
+            },
+        )
+        .await
+        .unwrap();
+        let err = save_assignment(&endpoint, &manager, "flash", Provider::Local, "new".into())
+            .unwrap_err();
+        assert!(err.contains("wait for running subagents"));
+        assert_eq!(
+            crate::config::stored_subagent_models()["flash"].model,
+            "old"
+        );
+        release.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            model.calls.load(Ordering::SeqCst),
+            3,
+            "nested worker must execute"
+        );
+        assert!(manager.active().is_empty());
+        save_assignment(&endpoint, &manager, "flash", Provider::Local, "new".into()).unwrap();
+        assert_eq!(
+            crate::config::stored_subagent_models()["flash"].model,
+            "new"
+        );
     }
 }

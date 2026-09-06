@@ -265,6 +265,15 @@ pub(crate) fn handle_overlay_key(
                         }),
                     );
                 }
+                if let Some(tier) = crate::tui::subagents::tier(*setting) {
+                    if let Some(provider) = crate::Provider::from_label(&value) {
+                        let after = After::FetchSubagentModels {
+                            tier: tier.into(),
+                            provider,
+                        };
+                        return apply_after(app, worker, after);
+                    }
+                }
                 apply_subagent_value(&app.cfg.subagent_depth, *setting, &value);
                 let note =
                     crate::tui::subagents::save_subagent_note(&app.cfg.subagent_depth, *setting);

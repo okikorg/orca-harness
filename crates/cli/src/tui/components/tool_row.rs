@@ -39,11 +39,16 @@ impl ToolRow<'_> {
             "apply_patch" => "Patch",
             "write_file" => "Write",
             "shell" => "Run",
+            "subagent" => "Subagent",
             "web_fetch" => "Fetch",
             "web_crawl" => "Crawl",
             _ => name,
         };
-        let action = format!("{action:<6} ");
+        let action = if target.is_empty() {
+            action.to_string()
+        } else {
+            format!("{action} · ")
+        };
         let prefix_width = view::cell_width(&prefix) + view::cell_width(self.glyph) + 1;
         let elapsed_width = if self.elapsed.is_empty() {
             0
@@ -117,9 +122,9 @@ mod tests {
     fn renders_branch_call_detail_and_elapsed_as_one_compact_row() {
         let row = row(100, Connector::None);
         let rendered = text(&row.line());
-        assert!(rendered.starts_with("    └─ ✓ Read   README.md · read 120 bytes"));
+        assert!(rendered.starts_with("    └─ ✓ Read · README.md · read 120 bytes"));
         assert!(rendered.ends_with("2ms"));
-        assert_eq!(rendered, "    └─ ✓ Read   README.md · read 120 bytes · 2ms");
+        assert_eq!(rendered, "    └─ ✓ Read · README.md · read 120 bytes · 2ms");
         assert_eq!(row.continuation(), "  ");
     }
 
@@ -137,10 +142,11 @@ mod tests {
     #[test]
     fn action_labels_preserve_targets_and_unknown_tool_identity() {
         for (call, expected) in [
-            ("shell $ cargo test", "Run    $ cargo test"),
-            ("list_dir docs/", "List   docs/"),
-            ("grep 'error' in src", "Search 'error' in src"),
-            ("custom.search docs", "custom.search docs"),
+            ("shell $ cargo test", "Run · $ cargo test"),
+            ("list_dir docs/", "List · docs/"),
+            ("grep 'error' in src", "Search · 'error' in src"),
+            ("custom.search docs", "custom.search · docs"),
+            ("subagent inspect files", "Subagent · inspect files"),
         ] {
             let mut row = row(100, Connector::None);
             row.call = call;

@@ -50,9 +50,9 @@ mod subagent_route_tests {
                 "model chooses only from your preferred models",
             ),
             ("local", "always use the preferred local model"),
-            ("flash", "always use the preferred fast cloud model"),
-            ("mid", "always use the preferred balanced cloud model"),
-            ("frontier", "always use the preferred strongest cloud model"),
+            ("flash", "always use the preferred fast model"),
+            ("mid", "always use the preferred balanced model"),
+            ("frontier", "always use the preferred strongest model"),
         ] {
             assert!(
                 rendered

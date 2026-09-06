@@ -184,15 +184,15 @@
             "work totals missing: {joined}"
         );
         assert!(
-            joined.contains("Read   src/tui.rs"),
+            joined.contains("Read · src/tui.rs"),
             "completed call missing: {joined}"
         );
         assert!(
-            joined.contains("✓ Read   src/tui.rs · read 2.0 kB"),
+            joined.contains("✓ Read · src/tui.rs · read 2.0 kB"),
             "result missing: {joined}"
         );
         assert!(
-            joined.contains("Run    $ cargo test"),
+            joined.contains("Run · $ cargo test"),
             "running call missing: {joined}"
         );
         assert!(joined.contains("□"), "running state missing: {joined}");
@@ -241,7 +241,7 @@
             "history summarized: {joined}"
         );
         assert!(
-            joined.contains("□ Run    $ cargo test --workspace"),
+            joined.contains("□ Run · $ cargo test --workspace"),
             "running tool retained: {joined}"
         );
         assert!(
@@ -293,8 +293,8 @@
         let work = joined.find("Work · 1 tool").expect("work rail");
         let answer = joined.find("Everything passed.").expect("answer");
         assert!(work < answer, "work precedes answer: {joined}");
-        assert!(joined.contains("Run    $ cargo test"));
-        assert!(joined.contains("✓ Run    $ cargo test · exit 0 · 42 tests passed"));
+        assert!(joined.contains("Run · $ cargo test"));
+        assert!(joined.contains("✓ Run · $ cargo test · exit 0 · 42 tests passed"));
         assert!(
             !joined.contains("private reasoning text"),
             "completed thinking is collapsed"
@@ -302,8 +302,8 @@
 
         let details = flat_lines(&app.work_log.last().expect("work tree retained").lines);
         assert!(details.contains("Thinking"));
-        assert!(details.contains("Run    $ cargo test"));
-        assert!(details.contains("✓ Run    $ cargo test · exit 0 · 42 tests passed"));
+        assert!(details.contains("Run · $ cargo test"));
+        assert!(details.contains("✓ Run · $ cargo test · exit 0 · 42 tests passed"));
         assert!(
             app.work_log.last().expect("work tree retained").expanded,
             "completed rails are expanded by default"
@@ -317,8 +317,8 @@
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded.contains("Run    $ cargo test"));
-        let tool = expanded.find("Run    $ cargo test").expect("expanded tool");
+        assert!(expanded.contains("Run · $ cargo test"));
+        let tool = expanded.find("Run · $ cargo test").expect("expanded tool");
         let answer = expanded.find("Everything passed.").expect("answer");
         assert!(tool < answer, "work expands in place: {expanded}");
         let once = app.transcript.len();
