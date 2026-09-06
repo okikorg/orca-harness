@@ -9,6 +9,7 @@ mod tests {
     include!("tests/core_4.rs");
     include!("tests/core_5.rs");
     include!("tests/core_6.rs");
+    include!("tests/agent_browser.rs");
     include!("tests/background_subagents.rs");
     include!("tests/agent_browser_cache.rs");
     include!("tests/subagent_history.rs");
