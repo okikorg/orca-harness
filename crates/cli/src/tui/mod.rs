@@ -118,6 +118,9 @@ use self::render::{draw, transcript_content_width};
 use ratatui::layout::{Constraint, Layout};
 
 const EXPAND_MAX_LINES: usize = 200;
+/// How many lines of a finished `!cmd` shell result are shown inline by
+/// default. `/expand 1` reveals the rest of a longer output.
+const SHELL_PREVIEW_MAX_LINES: usize = 20;
 const TRANSCRIPT_CAP: usize = 5000;
 const INSPECTOR_PREVIEW_LINES: usize = 240;
 const INSPECTOR_PREVIEW_CHARS: usize = 32 * 1024;

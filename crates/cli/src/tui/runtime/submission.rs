@@ -185,36 +185,84 @@ pub(crate) fn start_next_queued_prompt(
 /// Print the full output of the n-th most recent tool call (1 = latest)
 /// into the transcript.
 pub(crate) fn expand_tool(app: &mut App, nth_latest: usize, width: usize) {
-    let t = theme();
     let Some(record) = app.tool_log.iter().rev().nth(nth_latest.saturating_sub(1)) else {
         push_notice(app, "nothing to expand");
         return;
     };
-    let lines = view::expand_output(&record.tool_name, &record.output);
+    let (call_line, tool_name, output, inner) = (
+        record.call_line.clone(),
+        record.tool_name.clone(),
+        record.output.clone(),
+        record.inner.clone(),
+    );
+    expand_tool_record(app, &call_line, &tool_name, &output, &inner, width, EXPAND_MAX_LINES);
+}
+
+/// The bounded, automatically shown preview for a finished user shell
+/// (`!cmd`): the same `┌ │ └` expansion visuals as `/expand`, but capped
+/// so a long output never floods the transcript unsolicited. `/expand 1`
+/// afterwards still reveals the full result.
+pub(crate) fn expand_last_shell(app: &mut App, width: usize) {
+    let Some(record) = app
+        .tool_log
+        .iter()
+        .rev()
+        .find(|record| record.tool_name == "shell")
+    else {
+        return;
+    };
+    let (call_line, tool_name, output, inner) = (
+        record.call_line.clone(),
+        record.tool_name.clone(),
+        record.output.clone(),
+        record.inner.clone(),
+    );
+    expand_tool_record(
+        app,
+        &call_line,
+        &tool_name,
+        &output,
+        &inner,
+        width,
+        SHELL_PREVIEW_MAX_LINES,
+    );
+}
+
+fn expand_tool_record(
+    app: &mut App,
+    call_line: &str,
+    tool_name: &str,
+    output: &serde_json::Value,
+    inner: &[String],
+    width: usize,
+    max_lines: usize,
+) {
+    let t = theme();
+    let lines = view::expand_output(tool_name, output);
     let mut rendered = Vec::new();
     rendered.push(Line::from(vec![
         Span::styled("  ┌ ", t.dim),
-        Span::styled(record.call_line.clone(), t.accent),
+        Span::styled(call_line.to_string(), t.accent),
     ]));
     let body_width = width.saturating_sub(6).max(16);
-    for line in lines.iter().take(EXPAND_MAX_LINES) {
+    for line in lines.iter().take(max_lines) {
         rendered.push(Line::from(vec![
             Span::styled("  │ ", t.dim),
             Span::raw(view::truncate_line(line, body_width)),
         ]));
     }
-    if lines.len() > EXPAND_MAX_LINES {
+    if lines.len() > max_lines {
         rendered.push(Line::from(Span::styled(
-            format!("  │ … {} more lines", lines.len() - EXPAND_MAX_LINES),
+            format!("  │ … {} more lines", lines.len() - max_lines),
             t.dim,
         )));
     }
-    if !record.inner.is_empty() {
+    if !inner.is_empty() {
         rendered.push(Line::from(vec![
             Span::styled("  │ ", t.dim),
             Span::styled("inner activity:", t.dim),
         ]));
-        for line in &record.inner {
+        for line in inner {
             rendered.push(Line::from(vec![
                 Span::styled("  │   ", t.dim),
                 Span::raw(view::truncate_line(line, body_width.saturating_sub(2))),

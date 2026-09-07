@@ -177,6 +177,67 @@ fn shell_done_settles_the_tool_and_resets_the_run() {
         app.tool_log.last().map(|tool| tool.tool_name.as_str()),
         Some("shell")
     );
+    // A `!cmd` turn shows its output inline (bounded preview), not just
+    // the compact rail summary.
+    let texts = pending_texts(&app).join("\n");
+    assert!(
+        texts.contains("/test-ws"),
+        "shell stdout lands in the transcript: {texts:?}"
+    );
+}
+
+#[test]
+fn shell_done_preview_is_bounded_and_expand_reveals_the_rest() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
+        started: Instant::now(),
+        cancel: CancellationToken::new(),
+    };
+    let many_lines: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+    handle_harness_event(
+        &mut app,
+        HarnessEvent::ToolCall {
+            tool_call_id: "user-shell-1".into(),
+            tool_name: "shell".into(),
+            input: serde_json::json!({"command": "seq 50"}),
+        },
+        80,
+    );
+    handle_harness_event(
+        &mut app,
+        HarnessEvent::ToolResult {
+            tool_call_id: "user-shell-1".into(),
+            tool_name: "shell".into(),
+            output: serde_json::json!({"stdout": many_lines, "exitCode": 0}),
+            is_error: false,
+        },
+        80,
+    );
+    handle_ui_msg(&mut app, UiMsg::ShellDone { id: crate::msg::RunId::User(1) }, &tx, 80);
+
+    let preview = pending_texts(&app).join("\n");
+    assert!(
+        preview.contains("line 1") && preview.contains("line 20"),
+        "preview head shown: {preview:?}"
+    );
+    assert!(
+        !preview.contains("line 21"),
+        "preview capped at the first 20 lines: {preview:?}"
+    );
+    assert!(
+        preview.contains("30 more lines"),
+        "preview says how much is hidden: {preview:?}"
+    );
+
+    // /expand 1 still reveals the full 50-line output.
+    expand_tool(&mut app, 1, 80);
+    let expanded = pending_texts(&app).join("\n");
+    assert!(
+        expanded.contains("line 50"),
+        "expand sees past the preview cap: {expanded:?}"
+    );
 }
 
 #[test]

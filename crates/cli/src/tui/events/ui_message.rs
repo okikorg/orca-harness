@@ -10,7 +10,7 @@ use crate::view::theme;
 use super::super::format::{elapsed_label, fmt_tokens, plural};
 use super::super::render::{replay_transcript, reset_conversation_ui};
 use super::super::state::{App, EffortPicker, ModelPicker, ModelPickerTarget, Overlay, RunState};
-use super::super::{push_notice, push_wrapped_lines, start_next_queued_prompt};
+use super::super::{expand_last_shell, push_notice, push_wrapped_lines, start_next_queued_prompt};
 
 /// The dim one-row footer under a finished turn: `done · 0.2s · 2 tools ·
 /// ↑12.0k ↓611`. It sits with the answer it describes rather than
@@ -394,6 +394,11 @@ pub(crate) fn handle_ui_msg(
                 return;
             }
             app.commit_activity(width);
+            // `!cmd` is an explicit request to run and see: show the
+            // result inline (bounded) instead of hiding it behind
+            // `/expand`. The rail summary above already gives the
+            // exit code and first line at a glance.
+            expand_last_shell(app, width);
             let elapsed = match &app.run {
                 RunState::Running { started, .. } => Some(started.elapsed()),
                 RunState::Idle => None,
