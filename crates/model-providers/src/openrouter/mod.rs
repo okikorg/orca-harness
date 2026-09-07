@@ -144,7 +144,7 @@ pub async fn list_models(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| ModelError::Request(e.to_string()))?;
+        .map_err(|e| crate::http_error::transport_error(&e))?;
     let mut request = client.get(&url);
     if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
@@ -163,7 +163,7 @@ pub async fn list_models(
     let body = response
         .text()
         .await
-        .map_err(|e| ModelError::Request(e.to_string()))?;
+        .map_err(|e| crate::http_error::transport_error(&e))?;
     if !status.is_success() {
         return Err(ModelError::Request(format!("HTTP {status}: {body}")));
     }

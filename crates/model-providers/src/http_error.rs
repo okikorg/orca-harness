@@ -36,6 +36,33 @@ pub(crate) async fn check_response(
     ))
 }
 
+/// Turn a transport failure into a `ModelError` without losing its cause.
+///
+/// `reqwest::Error`'s `Display` is only the outermost layer, typically
+/// "error sending request for url (...)". The part an operator needs is
+/// underneath it: "client error (Connect)" and then the io or TLS error such
+/// as "invalid peer certificate: UnknownIssuer" or "Connection refused".
+/// `to_string()` drops all of that, and `ModelError::Request` carries a plain
+/// string, so the chain has to be flattened here. Layers are joined with
+/// " <- ", outermost first.
+pub fn transport_error(error: &(dyn std::error::Error + 'static)) -> ModelError {
+    ModelError::Request(describe(error))
+}
+
+pub(crate) fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = error.to_string();
+    let mut source = error.source();
+    while let Some(inner) = source {
+        let text = inner.to_string();
+        if !text.is_empty() && !out.ends_with(&text) {
+            out.push_str(" <- ");
+            out.push_str(&text);
+        }
+        source = inner.source();
+    }
+    out
+}
+
 /// Preserve status, provider code and Retry-After without extending ModelError.
 pub fn request_error(status: u16, retry_after: Option<&str>, body: &str) -> ModelError {
     let payload: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
@@ -175,5 +202,70 @@ mod tests {
         let date = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
         let delay = retry_delay(&request_error(429, Some(&date), "busy")).unwrap();
         assert!(delay > Duration::from_secs(58) && delay <= Duration::from_secs(60));
+    }
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Layer {
+        message: &'static str,
+        inner: Option<Box<Layer>>,
+    }
+
+    impl fmt::Display for Layer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl Error for Layer {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.inner
+                .as_deref()
+                .map(|inner| inner as &(dyn Error + 'static))
+        }
+    }
+
+    #[test]
+    fn describe_keeps_every_layer_outermost_first() {
+        let error = Layer {
+            message: "error sending request for url (https://api.example.test/v1/chat/completions)",
+            inner: Some(Box::new(Layer {
+                message: "client error (Connect)",
+                inner: Some(Box::new(Layer {
+                    message: "invalid peer certificate: UnknownIssuer",
+                    inner: None,
+                })),
+            })),
+        };
+        assert_eq!(
+            super::describe(&error),
+            "error sending request for url (https://api.example.test/v1/chat/completions) <- client error (Connect) <- invalid peer certificate: UnknownIssuer"
+        );
+    }
+
+    #[test]
+    fn describe_leaves_a_single_layer_alone() {
+        let error = Layer {
+            message: "timed out",
+            inner: None,
+        };
+        assert_eq!(super::describe(&error), "timed out");
+    }
+
+    #[test]
+    fn transport_error_is_a_request_error() {
+        let error = Layer {
+            message: "boom",
+            inner: None,
+        };
+        match super::transport_error(&error) {
+            orca_harness_core::ModelError::Request(text) => assert_eq!(text, "boom"),
+            other => panic!("expected Request, got {other:?}"),
+        }
     }
 }
