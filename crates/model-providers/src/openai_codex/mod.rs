@@ -110,7 +110,7 @@ async fn send_catalog_request(
         .header("originator", "orcacode")
         .send()
         .await
-        .map_err(|error| ModelError::Request(error.to_string()))
+        .map_err(|error| crate::http_error::transport_error(&error))
 }
 
 async fn parse_catalog_response(response: reqwest::Response) -> Result<Vec<ModelInfo>, ModelError> {
@@ -261,7 +261,7 @@ impl OpenAiCodexModel {
         request
             .send()
             .await
-            .map_err(|e| ModelError::Request(e.to_string()))
+            .map_err(|e| crate::http_error::transport_error(&e))
     }
 }
 
@@ -341,7 +341,7 @@ async fn collect_stream(
     let mut frames = SseBuffer::default();
     let mut accumulator = Accumulator::default();
     while let Some(chunk) = bytes.next().await {
-        let chunk = chunk.map_err(|e| ModelError::Request(e.to_string()))?;
+        let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
         for payload in frames.push(&chunk)? {
             if payload == "[DONE]" {
                 continue;
