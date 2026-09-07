@@ -30,19 +30,11 @@ impl ToolRow<'_> {
         let call = view::sanitize_cells(self.call);
         let call = call.lines().next().unwrap_or_default();
         let (name, target) = call.split_once(' ').unwrap_or((call, ""));
-        let action = match name {
-            "read_file" => "Read",
-            "list_dir" => "List",
-            "grep" | "web_search" => "Search",
-            "glob" => "Find",
-            "edit_file" | "multi_edit" => "Edit",
-            "apply_patch" => "Patch",
-            "write_file" => "Write",
-            "shell" => "Run",
-            "subagent" => "Subagent",
-            "web_fetch" => "Fetch",
-            "web_crawl" => "Crawl",
-            _ => name,
+        let mapped_action = crate::presentation::tool_action_label(name);
+        let action = if mapped_action.is_empty() {
+            name
+        } else {
+            mapped_action
         };
         let action = if target.is_empty() {
             action.to_string()

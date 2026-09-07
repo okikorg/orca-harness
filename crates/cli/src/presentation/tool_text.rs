@@ -4,6 +4,45 @@ use serde_json::Value;
 
 use crate::view::truncate_line;
 
+/// Short, human-readable verbs used by the TUI for tool activity rows.
+///
+/// Keep this exhaustive for built-in tools: falling back to the protocol
+/// name makes snake_case identifiers leak into the user-facing activity rail.
+pub fn tool_action_label(name: &str) -> &'static str {
+    match name {
+        "shell" => "Shell",
+        "exec_command" => "Exec command",
+        "read_file" => "Read",
+        "write_file" => "Write",
+        "edit_file" => "Edit",
+        "multi_edit" => "Multi-edit",
+        "apply_patch" => "Apply patch",
+        "list_dir" => "List directory",
+        "grep" => "Search text",
+        "web_search" => "Web search",
+        "glob" => "Find",
+        "process" => "Manage process",
+        "pykernel" => "PyKernel",
+        "bun_repl" => "Bun REPL",
+        "subagent" => "Subagent",
+        "todo_write" => "Todo",
+        "ask" => "Ask",
+        "web_fetch" => "Fetch web page",
+        "web_crawl" => "Crawl web pages",
+        "read_tool_result" => "Read tool result",
+        "skill" => "Load skill",
+        "mcp_search_tools" => "Search MCP tools",
+        "mcp_select_tool" => "Select MCP tool",
+        "mcp_features" => "Use MCP feature",
+        "copy_file" => "Copy file",
+        "rename_file" => "Rename file",
+        "delete_file" => "Delete file",
+        "create_folder" => "Create folder",
+        "file_info" => "Inspect file info",
+        _ => "",
+    }
+}
+
 pub fn tool_call_line(name: &str, args: &Value) -> String {
     let detail = match name {
         "shell" => args

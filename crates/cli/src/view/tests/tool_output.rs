@@ -5,6 +5,29 @@
     }
 
     #[test]
+    fn every_builtin_tool_has_a_human_activity_label() {
+        let tools = [
+            "shell", "read_file", "write_file", "edit_file", "multi_edit", "apply_patch",
+            "list_dir", "grep", "glob", "process", "pykernel", "bun_repl", "subagent",
+            "todo_write", "ask", "web_fetch", "web_search", "web_crawl", "read_tool_result",
+            "skill", "mcp_search_tools", "mcp_select_tool", "mcp_features", "copy_file",
+            "rename_file", "delete_file", "create_folder", "file_info",
+        ];
+        for tool in tools {
+            assert!(!crate::presentation::tool_action_label(tool).is_empty(), "{tool}");
+        }
+        assert_eq!(crate::presentation::tool_action_label("pykernel"), "PyKernel");
+        assert_eq!(crate::presentation::tool_action_label("todo_write"), "Todo");
+        assert_eq!(crate::presentation::tool_action_label("grep"), "Search text");
+        assert_eq!(crate::presentation::tool_action_label("web_search"), "Web search");
+        assert_eq!(crate::presentation::tool_action_label("edit_file"), "Edit");
+        assert_eq!(
+            crate::presentation::tool_action_label("multi_edit"),
+            "Multi-edit"
+        );
+    }
+
+    #[test]
     fn path_tools_show_the_path() {
         let line = tool_call_line("read_file", &json!({"path": "src/main.rs"}));
         assert_eq!(line, "read_file src/main.rs");

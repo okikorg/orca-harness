@@ -100,7 +100,8 @@ fn inspector_status(tool: &ToolActivity) -> (&'static str, Style) {
 
 fn inspector_action_label(tool_name: &str) -> &'static str {
     match tool_name {
-        "shell" | "exec_command" => "Run a shell command",
+        "shell" => "Run a shell command",
+        "exec_command" => "Execute a command",
         "read_file" => "Read a file",
         "write_file" => "Write a file",
         "edit_file" => "Edit a file",
@@ -108,6 +109,7 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
         "apply_patch" => "Apply a multi-file patch",
         "list_dir" => "List a directory",
         "grep" => "Search workspace text",
+        "web_search" => "Search the web",
         "glob" => "Find workspace paths",
         "process" => "Manage a background process",
         "pykernel" => "Run Python in the persistent kernel",
@@ -116,13 +118,17 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
         "todo_write" => "Update the task list",
         "ask" => "Ask for clarification",
         "web_fetch" => "Fetch a web document",
-        "web_search" => "Search the web",
         "web_crawl" => "Crawl web pages",
         "read_tool_result" => "Read a stored tool result",
         "skill" => "Load skill instructions",
         "mcp_search_tools" => "Search connected capabilities",
         "mcp_select_tool" => "Select a connected capability",
         "mcp_features" => "Use an MCP server feature",
+        "copy_file" => "Copy a file",
+        "rename_file" => "Rename a file",
+        "delete_file" => "Delete a file",
+        "create_folder" => "Create a folder",
+        "file_info" => "Inspect file metadata",
         _ => "Inspect tool input and output",
     }
 }
