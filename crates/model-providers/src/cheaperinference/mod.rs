@@ -17,17 +17,17 @@ pub async fn list_models() -> Result<Vec<ModelInfo>, ModelError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|error| ModelError::Request(error.to_string()))?;
+        .map_err(|error| crate::http_error::transport_error(&error))?;
     let response = client
         .get(CHEAPERINFERENCE_MODELS_URL)
         .send()
         .await
-        .map_err(|error| ModelError::Request(error.to_string()))?;
+        .map_err(|error| crate::http_error::transport_error(&error))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| ModelError::Request(error.to_string()))?;
+        .map_err(|error| crate::http_error::transport_error(&error))?;
     if !status.is_success() {
         return Err(ModelError::Request(format!("HTTP {status}: {body}")));
     }
