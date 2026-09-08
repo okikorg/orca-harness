@@ -1,4 +1,8 @@
 //! Compact provider/model-first row for delegated agents.
+//!
+//! `label` names the kind of work the row stands for — a spawned `Subagent`,
+//! or a `Stage` of a submitted graph — so both read as one family and one
+//! width calculation serves them.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -9,6 +13,8 @@ use crate::view;
 pub struct SubagentRow<'a> {
     pub branch: TreeBranch<'a>,
     pub glyph: &'a str,
+    /// The row's kind: `"Subagent"`, `"Stage"`.
+    pub label: &'a str,
     pub identity: &'a str,
     pub task: &'a str,
     pub elapsed: &'a str,
@@ -31,7 +37,8 @@ impl SubagentRow<'_> {
         let row_width = row_budget(self.width, self.connector);
         let fixed = view::cell_width(&prefix)
             + view::cell_width(self.glyph)
-            + view::cell_width(" Subagent ·  · ")
+            + view::cell_width(self.label)
+            + view::cell_width("  ·  · ")
             + view::cell_width(self.elapsed);
         let content_width = row_width.saturating_sub(fixed);
         let identity_width = view::cell_width(self.identity).min(content_width);
@@ -42,7 +49,7 @@ impl SubagentRow<'_> {
         let mut spans = vec![
             Span::styled(prefix, self.branch_style),
             Span::styled(format!("{} ", self.glyph), self.glyph_style),
-            Span::styled("Subagent", self.label_style),
+            Span::styled(self.label.to_string(), self.label_style),
             Span::styled(" · ", self.branch_style),
             Span::styled(identity, self.identity_style),
         ];
@@ -78,6 +85,7 @@ mod tests {
                 last: true,
             },
             glyph: "✓",
+            label: "Subagent",
             identity: "openrouter:anthropic/claude-sonnet-5",
             task: "Explore the benchmarks directory",
             elapsed: "37.0s",

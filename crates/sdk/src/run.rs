@@ -15,6 +15,7 @@ pub struct RunRequest {
     pub images: Vec<Image>,
     pub deadline: Option<Duration>,
     pub(crate) on_event: Option<EventCallback>,
+    pub(crate) continue_at_step_limit: bool,
 }
 
 impl RunRequest {
@@ -24,7 +25,16 @@ impl RunRequest {
             images: Vec::new(),
             deadline: None,
             on_event: None,
+            continue_at_step_limit: false,
         }
+    }
+
+    /// Continue the same conversation after each bounded kernel run reaches its
+    /// model-step limit. Disabled by default. Cancellation and the absolute
+    /// deadline still apply to the entire request; other errors are returned.
+    pub fn continue_at_step_limit(mut self, enabled: bool) -> Self {
+        self.continue_at_step_limit = enabled;
+        self
     }
 
     pub fn image(mut self, image: Image) -> Self {

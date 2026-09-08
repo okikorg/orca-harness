@@ -32,6 +32,7 @@ use orca_harness_core::{
 use crate::{core_tools, BackgroundStats, Workspace};
 
 mod settings;
+pub(crate) mod spawn;
 pub use settings::*;
 
 type ToolFactory = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
@@ -42,7 +43,7 @@ type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 /// Inner-agent retry policy: total attempts plus backoff.
 type RetryPolicy = (u32, std::time::Duration);
 
-mod background;
+pub(crate) mod background;
 use background::{
     detach_subagent, execution_deadline, subagent_control, subagent_parameters, subagent_result,
     BackgroundConfig, InFlight,
@@ -103,11 +104,17 @@ pub struct SubagentSpawn {
     pub call_id: String,
     pub task: String,
     pub identity: Option<SubagentIdentity>,
+    /// Workflow membership; ordinary subagents use None.
+    pub run: Option<orca_harness_dag::RunId>,
+    /// The graph stage this spawn executes, for a workflow run. Hosts join
+    /// it against the submitted graph; the prompt alone cannot name a stage.
+    pub stage: Option<orca_harness_dag::StageId>,
 }
 
 /// Builds extensions to attach to each spawned inner agent.
 pub type SpawnExtensions = Arc<dyn Fn(&SubagentSpawn) -> Vec<Arc<dyn Extension>> + Send + Sync>;
 
+#[derive(Clone)]
 pub struct SubagentTool<M: Model + Clone + 'static> {
     model: M,
     inherited_identity: Option<SubagentIdentity>,
@@ -429,164 +436,41 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             ));
         }
         let requested = input.get("model").and_then(Value::as_str);
-        let route = self.max_depth.effective_model_route();
-        if let Some(requested) = requested {
-            if !self.models.iter().any(|choice| choice.id == requested) {
-                return Err(ToolError::msg(format!(
-                    "unknown subagent model `{requested}`"
-                )));
-            }
-        }
-        match (&route, requested) {
-            (ModelRoute::Inherit, Some(requested)) => {
-                return Err(ToolError::msg(format!(
-                    "subagent model `{requested}` conflicts with the user's `inherit` \
-                     preference selected via `/subagents`; omit `model` to use the \
-                     orchestrator's current model"
-                )));
-            }
-            (ModelRoute::Fixed(preferred), Some(requested)) if requested != preferred => {
-                return Err(ToolError::msg(format!(
-                    "subagent model `{requested}` conflicts with the user's preferred model \
-                     `{preferred}` selected via `/subagents`; omit `model` or request \
-                     `{preferred}`"
-                )));
-            }
-            (ModelRoute::Preference(_), None) => {
-                return Err(ToolError::msg(
-                    "the user's `preference` route requires one saved preferred `model`",
-                ));
-            }
-            (ModelRoute::Preference(preferred), Some(requested))
-                if !preferred.iter().any(|model| model == requested) =>
-            {
-                return Err(ToolError::msg(format!(
-                    "subagent model `{requested}` is not one of the user's saved preferred models"
-                )));
-            }
-            _ => {}
-        }
-        let selected = requested.map(str::to_string).or(match route {
-            ModelRoute::Fixed(preferred) => Some(preferred),
-            _ => None,
-        });
-        let (model, identity) = match selected.as_deref() {
-            None => (self.model.clone(), self.inherited_identity.clone()),
-            Some(id) => {
-                let choice = self
-                    .models
-                    .iter()
-                    .find(|choice| choice.id == id)
-                    .ok_or_else(|| ToolError::msg(format!("unknown subagent model `{id}`")))?;
-                (
-                    choice.model.clone(),
-                    choice
-                        .identity
-                        .clone()
-                        .map(|identity| identity.with_route(id.to_string())),
-                )
-            }
-        };
-        let system = input
-            .get("systemPrompt")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| self.system_prompt.clone());
-
-        let spawn_id = self.spawn_seq.fetch_add(1, Ordering::SeqCst);
-
-        let meter = Meter::default();
-        let telemetry = meter.clone();
-        let started = std::time::Instant::now();
-        let mut limits = self.limits.clone();
-        if !self.limits_configured {
-            limits.max_steps = self.max_depth.max_steps();
-        }
-        if let Some(parallel) = self.max_depth.parallel_tools() {
-            limits.max_parallel_tools = if parallel == 0 {
-                usize::MAX
-            } else {
-                parallel as usize
-            };
-        }
-        let timeout = self.max_depth.timeout_secs();
-        if !detached {
-            limits.deadline = execution_deadline(
-                limits.deadline.into_iter().chain(ctx.deadline).min(),
-                timeout,
-            );
-        }
-        let mut agent = Agent::new(model.clone())
-            .limits(limits.clone())
-            .extension(meter);
-        if let Some(system) = system {
-            agent = agent.system_prompt(system);
-        }
-        for tool in (self.tools)() {
-            agent = agent.tool_arc(tool);
-        }
-        if self.depth + 1 < self.max_depth.get() {
-            agent = agent.tool_arc(Arc::new(self.child_replica(
-                spawn_id,
-                model,
-                identity.clone(),
-            )));
-        }
-        let spawn = SubagentSpawn {
-            id: spawn_id,
-            parent_id: self.parent_spawn,
-            depth: self.depth,
-            call_id: ctx.call_id.clone(),
+        let req = spawn::SpawnRequest {
+            id: self.next_spawn_id(),
+            generation: None,
+            expected_model_key: None,
+            depth: None,
             task: task.to_string(),
-            identity: identity.clone(),
+            system_prompt: input
+                .get("systemPrompt")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            model: requested.map(str::to_string),
+            call_id: ctx.call_id.clone(),
+            run: None,
+            stage: None,
+            parent_id: None,
+            notifier: None,
         };
-        // Reserve delivery capacity before host extensions announce this spawn.
-        let background = self
-            .background
-            .as_ref()
-            .filter(|_| detached)
-            .map(|config| {
-                config
-                    .admit(&spawn)
-                    .map(|admission| (config.clone(), admission))
-            })
-            .transpose()
-            .map_err(ToolError::msg)?;
-        if let Some(factory) = &self.spawn_extensions {
-            for extension in factory(&spawn) {
-                agent = agent.extension_arc(extension);
-            }
+        let prepared =
+            self.prepare_spawn(req, detached, if detached { None } else { ctx.deadline })?;
+        if detached {
+            return Ok(prepared.detach());
         }
-        // Retry *inside* the inner loop. The top-level agent's `ToolRetry`
-        // only wraps that agent's own tool calls — inner agents build a
-        // fresh `Agent` here, so without this they get no retry at all.
-        // Register after the host's spawn extensions: like the top-level
-        // build, retry wraps their `around_tool`, and denials from
-        // `before_tool` never reach the around chain, so a `Deny` verdict
-        // is not retried.
-        let tool_attempts = self.max_depth.tool_attempts();
-        if tool_attempts > 1 {
-            agent = agent.extension_arc(std::sync::Arc::new(SubagentRetry::new(
-                (
-                    tool_attempts,
-                    std::time::Duration::from_millis(self.max_depth.retry_backoff_ms() as u64),
-                ),
-                self.ok_failure.clone(),
-            )));
-        }
-
-        self.stats.inc_agents();
-        let in_flight = InFlight(self.stats.clone());
-        if let Some(background) = background {
-            return Ok(detach_subagent(
-                background, agent, spawn, telemetry, limits, timeout, in_flight,
-            ));
-        }
-
+        let spawn::Prepared {
+            agent,
+            spawn,
+            telemetry,
+            started,
+            in_flight,
+            ..
+        } = prepared;
         let _in_flight = in_flight;
         let result = agent
             .run_with_cancellation(task, ctx.cancellation.child_token())
             .await;
-        subagent_result(result, &telemetry, started, identity.as_ref()).map_err(ToolError::msg)
+        subagent_result(result, &telemetry, started, spawn.identity.as_ref())
+            .map_err(ToolError::msg)
     }
 }

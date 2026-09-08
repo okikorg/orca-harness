@@ -119,3 +119,28 @@ async fn panicking_background_workers_report_failure_and_release_queue_slots() {
     assert!(manager.active().is_empty());
     assert_eq!(stats.agents(), 0);
 }
+
+#[tokio::test]
+async fn detached_subagent_does_not_inherit_the_parent_tool_deadline() {
+    let (workspace, dir) = temp_ws();
+    let manager = orca_harness_tools::SubagentManager::default();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let tool = SubagentTool::new(
+        Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("done")])),
+        &workspace,
+    )
+    .background(manager, move |notification| {
+        let _ = tx.send(notification);
+    });
+    let mut context = ctx();
+    context.deadline = Some(tokio::time::Instant::now() - Duration::from_secs(1));
+    tool.call(json!({"task":"detached"}), &context)
+        .await
+        .unwrap();
+    let notification = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(notification.result.is_ok(), "{:?}", notification.result);
+    std::fs::remove_dir_all(dir).unwrap();
+}

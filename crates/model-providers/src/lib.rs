@@ -6,6 +6,7 @@
 
 pub mod catalog;
 pub mod cheaperinference;
+pub mod http;
 pub mod http_error;
 pub mod openai;
 pub mod openai_codex;

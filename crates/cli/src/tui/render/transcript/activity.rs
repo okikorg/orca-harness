@@ -278,6 +278,7 @@ fn activity_lines_from(
             if let Some(display) = subagent_display(app, owner_id, tool) {
                 let identity = identity_label(&display.identity);
                 let row = SubagentRow {
+                    label: "Subagent",
                     branch,
                     glyph,
                     identity: &identity,

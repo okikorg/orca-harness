@@ -32,6 +32,8 @@ pub(crate) struct AgentTableCache {
     width: usize,
     theme: view::ThemeName,
     pub(crate) rows: Arc<Vec<Vec<Span<'static>>>>,
+    created: std::time::Instant,
+    terminal: bool,
 }
 
 pub(super) fn agent_table(
@@ -43,20 +45,21 @@ pub(super) fn agent_table(
     let browser = app.agent_browser.as_ref().expect("browser open");
     let tab = browser.tab;
     let theme = view::theme_name();
-    let terminal = rows
-        .iter()
-        .all(|row| !projection.statuses[&row.id].is_active());
-    if terminal {
+    {
         if let Some(cache) = &browser.table_cache {
             if Arc::ptr_eq(&cache.projection, projection)
                 && cache.tab == tab
                 && cache.width == width
                 && cache.theme == theme
+                && (cache.terminal || cache.created.elapsed() < std::time::Duration::from_secs(1))
             {
                 return Arc::clone(&cache.rows);
             }
         }
     }
+    let terminal = rows
+        .iter()
+        .all(|row| !projection.statuses[&row.id].is_active());
     let labels = rows.iter().map(|row| {
         let mut labels = projection.labels[&row.id].clone();
         if projection.statuses[&row.id].is_active() {
@@ -84,7 +87,9 @@ pub(super) fn agent_table(
     app.agent_browser
         .as_mut()
         .expect("browser open")
-        .table_cache = terminal.then(|| AgentTableCache {
+        .table_cache = Some(AgentTableCache {
+        created: std::time::Instant::now(),
+        terminal,
         projection: Arc::clone(projection),
         tab,
         width,

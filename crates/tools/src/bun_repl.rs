@@ -314,8 +314,12 @@ impl BunReplTool {
                         dropped += push_bounded(&mut stderr, &chunk.bytes, stderr_keep);
                     }
                     Some(chunk) => {
-                        dropped += push_bounded(&mut stdout, &chunk.bytes, keep);
+                        // Look for the completion marker before trimming: a
+                        // flood still draining behind it can push the marker
+                        // out of the bounded buffer within this same chunk.
+                        stdout.extend_from_slice(&chunk.bytes);
                         ok_seen |= find(&stdout, ok.as_bytes()).is_some();
+                        dropped += trim_front(&mut stdout, keep);
                     }
                     None => break ReadOutcome::Closed,
                 }
@@ -421,6 +425,10 @@ where
 
 fn push_bounded(buffer: &mut Vec<u8>, chunk: &[u8], cap: usize) -> u64 {
     buffer.extend_from_slice(chunk);
+    trim_front(buffer, cap)
+}
+
+fn trim_front(buffer: &mut Vec<u8>, cap: usize) -> u64 {
     if buffer.len() <= cap {
         return 0;
     }

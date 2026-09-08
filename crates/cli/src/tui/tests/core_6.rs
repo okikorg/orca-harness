@@ -68,7 +68,7 @@ fn split_view_connects_the_selected_tool_to_its_inspector() {
         .find(|line| line.contains('○'))
         .expect("connector row");
     assert!(
-        connected.contains("Run") && connected.chars().count() <= 70,
+        connected.contains("Shell") && connected.chars().count() <= 70,
         "call and connector stay on one row: {connected}"
     );
 

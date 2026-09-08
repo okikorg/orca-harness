@@ -196,6 +196,8 @@ pub(crate) fn reset_conversation_ui(app: &mut App) {
     app.turn_count = 0;
     app.reset_activity();
     app.subagent_transcripts.clear();
+    app.workflows.clear();
+    app.workflow_stages.clear();
     app.evicted_agent_histories = 0;
     app.invalidate_agent_list();
     app.agent_browser = None;

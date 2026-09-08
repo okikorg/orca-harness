@@ -195,7 +195,15 @@ pub(crate) fn expand_tool(app: &mut App, nth_latest: usize, width: usize) {
         record.output.clone(),
         record.inner.clone(),
     );
-    expand_tool_record(app, &call_line, &tool_name, &output, &inner, width, EXPAND_MAX_LINES);
+    expand_tool_record(
+        app,
+        &call_line,
+        &tool_name,
+        &output,
+        &inner,
+        width,
+        EXPAND_MAX_LINES,
+    );
 }
 
 /// The bounded, automatically shown preview for a finished user shell

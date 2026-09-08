@@ -188,6 +188,7 @@ fn component_widths_and_cursor_stay_inside_the_pane() {
             );
             lines.push(
                 subagent_row::SubagentRow {
+                    label: "Subagent",
                     branch: tree::TreeBranch {
                         indent: "    ",
                         last: true,
@@ -268,8 +269,8 @@ fn spinner_changes_only_marker_cells_and_completion_is_static() {
             "only the Work marker moves; running tools keep their square"
         );
         assert!(a.contains("✓ Read · "));
-        assert!(a.contains("□ Run · cargo test"));
-        assert!(b.contains("□ Run · cargo test"));
+        assert!(a.contains("□ Shell · cargo test"));
+        assert!(b.contains("□ Shell · cargo test"));
         for mark in glyphs().running {
             assert_eq!(view::cell_width(&mark.to_string()), 1);
         }

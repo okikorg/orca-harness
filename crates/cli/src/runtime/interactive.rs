@@ -148,7 +148,12 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     // The concurrency limit is a `/subagents` setting: queued workers start
     // the moment the user raises it.
     let subagent_manager = SubagentManager::from_settings(subagent_depth.clone());
-    let completions = CompletionInbox::new(subagent_manager.clone());
+    // Stage outputs live for the session, not for one tool: the model-switch
+    // closure below rebuilds every tool, and a run admitted before the switch
+    // must still replay after it.
+    let workflow_store = orca_harness_tools::WorkflowStore::new();
+    let completions =
+        CompletionInbox::new(subagent_manager.clone()).with_workflow_store(workflow_store.clone());
 
     // Session warnings surface as transcript notices; recording failures
     // must be visible but never fatal mid-run.
@@ -234,6 +239,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
         let memory_scope = memory_scope.clone();
         let process_generation = process_generation.clone();
         let subagent_manager = subagent_manager.clone();
+        let workflow_store = workflow_store.clone();
         let completions = completions.clone();
         let cmd_tx = cmd_tx.clone();
         move |endpoint: &Endpoint| {
@@ -264,6 +270,7 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
                 generation,
                 &process_generation,
                 &subagent_manager,
+                &workflow_store,
                 &completions,
                 &cmd_tx,
             )
@@ -363,6 +370,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     process_generation: u64,
     current_process_generation: &Arc<AtomicU64>,
     subagent_manager: &SubagentManager,
+    workflow_store: &orca_harness_tools::WorkflowStore,
     completions: &CompletionInbox,
     worker: &mpsc::UnboundedSender<crate::msg::WorkerCmd>,
 ) -> Agent<Arc<dyn Model>> {
@@ -536,6 +544,11 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             Some(&subagent_auto_approval),
         )
     }));
-    agent = agent.tool_arc(std::sync::Arc::new(subagent));
+    let subagent = std::sync::Arc::new(subagent);
+    agent = agent.tool_arc(std::sync::Arc::new(
+        orca_harness_tools::WorkflowTool::new(subagent.clone(), workflow_store.clone())
+            .expect("interactive host provides depth-zero background execution"),
+    ));
+    agent = agent.tool_arc(subagent);
     agent
 }

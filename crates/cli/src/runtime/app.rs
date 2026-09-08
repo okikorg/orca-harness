@@ -13,7 +13,7 @@ pub(crate) async fn entrypoint() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut cfg = match invocation {
+    let cfg = match invocation {
         Invocation::Update => {
             return match crate::update::run() {
                 Ok(()) => ExitCode::SUCCESS,
@@ -62,17 +62,11 @@ pub(crate) async fn entrypoint() -> ExitCode {
         };
     }
 
-    let endpoint = Endpoint::from_config(&cfg);
-    cfg.model = match endpoint.catalog_model(Some(&cfg.model)).await {
-        Ok(model) => model,
-        Err(error) => {
-            eprintln!(
-                "error: could not select a model from the {} catalog: {error}",
-                cfg.provider.label()
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-
+    // Nothing between arg parsing and the loop may touch the network: the
+    // model id is already settled by flag, environment, saved choice, or
+    // `Provider::default_model`. Validating it against the provider catalog
+    // here cost a round trip on every cold start, and an id the provider no
+    // longer serves surfaces as the provider's own error on the first
+    // request instead.
     run_mode(cfg).await
 }

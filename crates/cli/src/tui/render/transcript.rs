@@ -306,6 +306,7 @@ pub(crate) fn nested_spawn_rows(
             let identity = identity_label(child.identity.as_ref().unwrap());
             lines.push(
                 SubagentRow {
+                    label: "Subagent",
                     branch,
                     glyph,
                     identity: &identity,

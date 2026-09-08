@@ -4,23 +4,23 @@ use orca_harness_core::{Agent, Limits, Model};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-mod manager;
+pub(crate) mod manager;
 mod protocol;
 pub use manager::{
     BackgroundJob, BackgroundStatus, SubagentManager, SubagentNotification,
     DEFAULT_BACKGROUND_SUBAGENT_LIMIT,
 };
 pub(super) use protocol::{subagent_control, subagent_parameters, BACKGROUND_DELIVERY};
-type SubagentNotifier = Arc<dyn Fn(SubagentNotification) + Send + Sync>;
+pub(crate) type SubagentNotifier = Arc<dyn Fn(SubagentNotification) + Send + Sync>;
 
 /// What the last non-empty `action=list` reported, so a repeat with no
 /// change can be refused instead of serving as a polling primitive.
 pub(super) type ListSnapshot = Arc<std::sync::Mutex<Option<Vec<(u64, BackgroundStatus)>>>>;
 
 #[derive(Clone)]
-pub(super) struct BackgroundConfig {
-    pub(super) manager: SubagentManager,
-    pub(super) notifier: SubagentNotifier,
+pub(crate) struct BackgroundConfig {
+    pub(crate) manager: SubagentManager,
+    pub(crate) notifier: SubagentNotifier,
     pub(super) last_list: ListSnapshot,
 }
 
@@ -105,7 +105,15 @@ pub(super) fn detach_subagent<M: Model + Clone + 'static>(
         let spawn = job.spawn.as_ref().unwrap();
         let slot = match slot {
             Some(slot) => Some(slot),
-            None => job.manager.acquire(spawn.id, &cancellation).await,
+            None => match limits.deadline.filter(|_| spawn.run.is_some()) {
+                Some(deadline) => {
+                    tokio::time::timeout_at(deadline, job.manager.acquire(spawn.id, &cancellation))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                None => job.manager.acquire(spawn.id, &cancellation).await,
+            },
         };
         job.result = if let Some(_slot) = slot {
             // Queue time does not consume the worker's execution timeout.
@@ -117,7 +125,12 @@ pub(super) fn detach_subagent<M: Model + Clone + 'static>(
                 .await;
             subagent_result(result, &telemetry, started, spawn.identity.as_ref())
         } else {
-            Err("subagent cancelled before execution".into())
+            Err(if cancellation.is_cancelled() {
+                "subagent cancelled before execution"
+            } else {
+                "subagent queue deadline exceeded"
+            }
+            .into())
         };
     });
     acknowledgement

@@ -7,6 +7,8 @@ fn notification(generation: u64, id: u64, answer: &str) -> SubagentNotification 
     SubagentNotification {
         generation,
         spawn: SubagentSpawn {
+            stage: None,
+            run: None,
             id,
             parent_id: None,
             depth: 0,
@@ -510,3 +512,6 @@ async fn delivery_appends_one_user_turn_per_model_call_with_everything_ready() {
     );
     assert!(!inbox.has_ready());
 }
+
+#[path = "tests/workflow.rs"]
+mod workflow;

@@ -1,4 +1,6 @@
-use super::harness::{handle_harness_event, handle_subagent_event, start_subagent};
+use super::harness::{
+    bind_workflow_stage, handle_harness_event, handle_subagent_event, start_subagent,
+};
 
 use ratatui::text::{Line, Span};
 use tokio::sync::mpsc;
@@ -39,7 +41,14 @@ pub(crate) fn handle_ui_msg(
             call_id,
             task,
             identity,
-        } => start_subagent(app, id, parent_id, depth, call_id, task, identity),
+            run,
+            stage,
+        } => {
+            start_subagent(app, id, parent_id, depth, call_id, task, identity);
+            if let (Some(run), Some(stage)) = (run, stage) {
+                bind_workflow_stage(app, id, run, &stage);
+            }
+        }
         UiMsg::SubagentEvent {
             id,
             parent_id,
@@ -52,6 +61,16 @@ pub(crate) fn handle_ui_msg(
             is_error,
             message,
         } => {
+            if let Some(transcript) = app.subagent_transcripts.get_mut(&id) {
+                transcript.detached = true;
+            }
+            app.subagent_activity.remove(&id);
+            // A run reports its own outcome, which is authoritative for every
+            // stage: stages stopped by a cancellation never report themselves.
+            if let Some(workflow) = app.workflows.get_mut(&id) {
+                workflow.settle(&message, is_error);
+                app.invalidate_agent_list();
+            }
             if let Some(transcript) = app
                 .subagent_transcripts
                 .get(&id)

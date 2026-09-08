@@ -1164,6 +1164,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orca-harness-dag"
+version = "0.5.0"
+dependencies = [
+ "criterion",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "orca-harness-extensions"
 version = "0.5.0"
 dependencies = [
@@ -1238,7 +1247,9 @@ name = "orca-harness-tools"
 version = "0.5.0"
 dependencies = [
  "async-trait",
+ "criterion",
  "orca-harness-core",
+ "orca-harness-dag",
  "orca-harness-extensions",
  "orca-harness-model-providers",
  "serde",

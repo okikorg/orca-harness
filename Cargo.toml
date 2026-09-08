@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/harness-core",
+    "crates/harness-dag",
     "crates/provider-auth",
     "crates/model-providers",
     "crates/tools",

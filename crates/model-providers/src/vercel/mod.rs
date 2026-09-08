@@ -10,11 +10,10 @@ pub const VERCEL_GATEWAY_BASE_URL: &str = "https://ai-gateway.vercel.sh/v1";
 /// Fetch Vercel's catalog and map its `context_window` and
 /// `reasoning_options` fields into the provider-neutral model metadata.
 pub async fn list_models(api_key: Option<&str>) -> Result<Vec<ModelInfo>, ModelError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|error| crate::http_error::transport_error(&error))?;
-    let mut request = client.get(format!("{VERCEL_GATEWAY_BASE_URL}/models"));
+    let client = crate::http::client();
+    let mut request = client
+        .get(format!("{VERCEL_GATEWAY_BASE_URL}/models"))
+        .timeout(crate::http::CATALOG_TIMEOUT);
     if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
     }

@@ -84,3 +84,6 @@ pub fn fs_admin_tools(ws: &Workspace) -> Vec<Arc<dyn Tool>> {
         Arc::new(FileInfoTool::new(ws.clone())),
     ]
 }
+
+mod workflow;
+pub use workflow::{WorkflowStore, WorkflowTool};

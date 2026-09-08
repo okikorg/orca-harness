@@ -41,6 +41,8 @@ pub(crate) fn subagent_extensions(
         call_id: call_id.clone(),
         task: spawn.task.clone(),
         identity: spawn.identity.clone(),
+        run: spawn.run,
+        stage: spawn.stage.clone(),
     });
     let events = EventStream::from_fn(move |event| {
         let _ = ui.send(UiMsg::SubagentEvent {

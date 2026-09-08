@@ -101,26 +101,67 @@ impl App {
     }
 
     pub(crate) fn retain_agent_history(&mut self) {
-        let mut completed: Vec<_> = self
-            .subagent_transcripts
-            .values()
-            .filter(|transcript| !transcript.status.is_active())
-            .map(|transcript| {
-                (
-                    transcript.started + transcript.elapsed.unwrap_or_default(),
-                    transcript.id,
-                )
-            })
-            .collect();
-        let excess = completed.len().saturating_sub(COMPLETED_AGENT_HISTORY);
-        if excess == 0 {
+        let mut groups: HashMap<u64, Vec<u64>> = HashMap::new();
+        for transcript in self.subagent_transcripts.values() {
+            let mut root = transcript.id;
+            let mut remaining = self.subagent_transcripts.len();
+            while remaining > 0 {
+                let Some(parent) = self
+                    .subagent_transcripts
+                    .get(&root)
+                    .and_then(|t| t.parent_id)
+                else {
+                    break;
+                };
+                if !self.subagent_transcripts.contains_key(&parent) {
+                    break;
+                }
+                root = parent;
+                remaining -= 1;
+            }
+            groups.entry(root).or_default().push(transcript.id);
+        }
+        let mut completed = Vec::new();
+        let mut count = 0;
+        for ids in groups.into_values() {
+            if ids
+                .iter()
+                .any(|id| self.subagent_transcripts[id].status.is_active())
+            {
+                continue;
+            }
+            count += ids.len();
+            let finished = ids
+                .iter()
+                .map(|id| {
+                    let t = &self.subagent_transcripts[id];
+                    t.started + t.elapsed.unwrap_or_default()
+                })
+                .max()
+                .unwrap();
+            completed.push((finished, ids));
+        }
+        if count <= COMPLETED_AGENT_HISTORY {
             return;
         }
-        completed.sort_unstable();
-        for (_, id) in completed.into_iter().take(excess) {
-            self.subagent_transcripts.remove(&id);
-            self.evicted_agent_histories = self.evicted_agent_histories.saturating_add(1);
+        completed.sort_unstable_by_key(|(finished, _)| *finished);
+        for (_, ids) in completed {
+            if count <= COMPLETED_AGENT_HISTORY {
+                break;
+            }
+            count -= ids.len();
+            for id in ids {
+                self.subagent_transcripts.remove(&id);
+                self.evicted_agent_histories = self.evicted_agent_histories.saturating_add(1);
+            }
         }
+        // A plan outlives its stages' transcripts but not its own run row:
+        // once the run is unreachable in the browser, so is its graph.
+        self.workflows
+            .retain(|run, _| self.subagent_transcripts.contains_key(run));
+        let workflows = &self.workflows;
+        self.workflow_stages
+            .retain(|_, (run, _)| workflows.contains_key(run));
         self.invalidate_agent_list();
         if let Some(browser) = &mut self.agent_browser {
             browser.body_cache = None;

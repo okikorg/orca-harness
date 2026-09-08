@@ -353,6 +353,7 @@ async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
         }
     });
 
+    let continue_at_step_limit = request.continue_at_step_limit && limits.max_steps > 0;
     let mut agent = CoreAgent::new(definition.inner.model.clone()).limits(limits);
     for tool in &definition.inner.tools {
         agent = agent.tool_arc(tool.clone());
@@ -393,7 +394,15 @@ async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
         agent = agent.extension_arc(recorder.clone() as Arc<dyn Extension>);
     }
 
-    let run_result = agent.run_context(&mut context, cancellation).await;
+    let run_result = loop {
+        match agent.run_context(&mut context, cancellation.clone()).await {
+            Err(orca_harness_core::HarnessError::StepLimitExceeded) if continue_at_step_limit => {
+                // A fully synchronous model/tool slice must not starve Stop.
+                tokio::task::yield_now().await;
+            }
+            result => break result,
+        }
+    };
     let persistence_result = match &recorder {
         Some(recorder) => {
             recorder.sync(&context);
