@@ -414,22 +414,35 @@
         app.git_branch = Some("feature/status-branch".into());
         app.turn_count = 1;
 
+        // Both styles say where the session is; only the marks differ,
+        // so the trailing form is asserted per style rather than left to
+        // whichever one happens to be active.
+        for (style, trailing) in [
+            (UiStyle::Minimal, "  orca-harness · feature/status-branch"),
+            (UiStyle::Glyph, "  ⌂ orca-harness (⑂ feature/status-branch)"),
+        ] {
+            set_ui_style(style);
+            let rows = rendered_rows(&mut app, 160, 24);
+            let status = rows
+                .iter()
+                .find(|row| row.contains("gpt-oss:20b"))
+                .expect("status line");
+
+            assert!(
+                status.starts_with(" local:gpt-oss:20b ·"),
+                "model not first: {status}"
+            );
+            assert!(
+                status.trim_end().ends_with(trailing),
+                "workspace and branch not anchored right: {status}"
+            );
+        }
+        set_ui_style(UiStyle::Minimal);
         let rows = rendered_rows(&mut app, 160, 24);
         let status = rows
             .iter()
             .find(|row| row.contains("gpt-oss:20b"))
             .expect("status line");
-
-        assert!(
-            status.starts_with(" local:gpt-oss:20b ·"),
-            "model not first: {status}"
-        );
-        assert!(
-            status
-                .trim_end()
-                .ends_with("  orca-harness · feature/status-branch"),
-            "workspace and branch not anchored right: {status}"
-        );
         assert!(
             !status.contains("cwd"),
             "cwd prefix should be omitted: {status}"

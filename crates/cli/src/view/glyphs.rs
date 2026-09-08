@@ -118,6 +118,10 @@ pub struct Glyphs {
     pub meter: Option<(char, char)>,
     /// Markdown heading prefixes by level (h1, h2, h3).
     pub heading: [&'static str; 3],
+    /// The workspace root on the status line; empty for none.
+    pub workspace: &'static str,
+    /// The git branch on the status line; empty for none.
+    pub branch: &'static str,
     /// Selected picker row marker.
     pub cursor: &'static str,
     /// Prefix of the finished-turn footer; empty for none. Both styles
@@ -142,6 +146,46 @@ impl Glyphs {
             format!("{mark} ")
         } else {
             String::new()
+        }
+    }
+
+    /// The status bar's trailing segment: where the session is running.
+    ///
+    /// A marked style nests the branch inside the workspace — `⌂ orca
+    /// (⑂ main)` — so the two read as one place rather than as two more
+    /// `·`-joined segments. A text-only style keeps the flat join, which
+    /// is what it has always shown.
+    pub fn workspace_label(&self, name: &str, branch: Option<&str>) -> String {
+        match (self.workspace.is_empty(), branch) {
+            (true, Some(branch)) => format!("{name} · {branch}"),
+            (true, None) => name.to_string(),
+            (false, Some(branch)) => {
+                format!("{} {name} ({} {branch})", self.workspace, self.branch)
+            }
+            (false, None) => format!("{} {name}", self.workspace),
+        }
+    }
+
+    /// The trailing segment's compact form. The folder name is the most
+    /// recoverable thing on the row — the branch is what the person
+    /// actually needs — so it is the first thing the bar gives up, ahead
+    /// of the context meter.
+    pub fn workspace_compact(&self, name: &str, branch: Option<&str>) -> String {
+        match branch {
+            Some(branch) if self.branch.is_empty() => branch.to_string(),
+            Some(branch) => format!("{} {branch}", self.branch),
+            None => self.workspace_label(name, None),
+        }
+    }
+
+    /// A count segment: `✓ 2/5` where marks are on, `todo 2/5` where the
+    /// style is text-only. The mark replaces the word rather than joining
+    /// it, so a marked bar is never the wider of the two.
+    pub fn counted(&self, mark: char, word: &str, body: &str) -> String {
+        if self.status_marks {
+            format!("{mark} {body}")
+        } else {
+            format!("{word} {body}")
         }
     }
 
@@ -173,6 +217,8 @@ pub static MINIMAL: Glyphs = Glyphs {
     caret: "",
     meter: None,
     heading: ["# ", "## ", "### "],
+    workspace: "",
+    branch: "",
     cursor: "▸",
     footer: "",
 };
@@ -190,6 +236,8 @@ pub static GLYPH: Glyphs = Glyphs {
     caret: "▏",
     meter: Some(('━', '─')),
     heading: ["┃ ", "│ ", ""],
+    workspace: "\u{2302}",
+    branch: "\u{2442}",
     cursor: "›",
     footer: "",
 };
@@ -211,6 +259,54 @@ mod tests {
             assert!(!g.cursor.is_empty());
             assert!(g.heading.iter().take(2).all(|h| !h.is_empty()));
             assert_eq!(style, UiStyle::from_slug(style.slug()).unwrap());
+        }
+    }
+
+    /// The status bar's place segment: one reading in both styles, with
+    /// the marked one nesting the branch instead of adding a segment.
+    #[test]
+    fn the_workspace_names_a_place_in_both_styles() {
+        assert_eq!(MINIMAL.workspace_label("orca", Some("main")), "orca · main");
+        assert_eq!(MINIMAL.workspace_label("orca", None), "orca");
+        assert_eq!(
+            GLYPH.workspace_label("orca", Some("main")),
+            "⌂ orca (⑂ main)"
+        );
+        assert_eq!(GLYPH.workspace_label("orca", None), "⌂ orca");
+    }
+
+    /// The folder name is the first thing the row gives up, so the
+    /// compact form keeps the branch — the half that changes.
+    #[test]
+    fn the_workspace_compacts_to_its_branch() {
+        assert_eq!(MINIMAL.workspace_compact("orca", Some("main")), "main");
+        assert_eq!(MINIMAL.workspace_compact("orca", None), "orca");
+        assert_eq!(GLYPH.workspace_compact("orca", Some("main")), "⑂ main");
+        assert_eq!(GLYPH.workspace_compact("orca", None), "⌂ orca");
+        for style in UiStyle::ALL {
+            let g = style.glyphs();
+            assert!(
+                crate::view::cell_width(&g.workspace_compact("orca", Some("main")))
+                    <= crate::view::cell_width(&g.workspace_label("orca", Some("main"))),
+                "{} compact is not shorter",
+                style.label()
+            );
+        }
+    }
+
+    /// A mark replaces the word rather than joining it: a marked count is
+    /// never wider than the text-only one it stands in for.
+    #[test]
+    fn a_counted_mark_never_costs_more_than_its_word() {
+        assert_eq!(MINIMAL.counted(MINIMAL.done, "todo", "2/5"), "todo 2/5");
+        assert_eq!(GLYPH.counted(GLYPH.done, "todo", "2/5"), "✓ 2/5");
+        assert_eq!(MINIMAL.counted(MINIMAL.waiting, "q", "3"), "q 3");
+        assert_eq!(GLYPH.counted(GLYPH.waiting, "q", "3"), "□ 3");
+        for (word, body) in [("todo", "2/5"), ("q", "3")] {
+            assert!(
+                crate::view::cell_width(&GLYPH.counted(GLYPH.done, word, body))
+                    <= crate::view::cell_width(&MINIMAL.counted(MINIMAL.done, word, body))
+            );
         }
     }
 
@@ -274,7 +370,7 @@ mod tests {
         // state mark. Its test fixture also uses `○` as a connector.
         // `!` is ordinary Rust syntax and `□` is the shared Minimal waiting
         // mark, so the table-level tests cover their assigned values.
-        let marks = ['⬚', '■', '›', '▏', '━'];
+        let marks = ['⬚', '■', '›', '▏', '━', '⌂', '⑂'];
         for (name, source) in sources {
             for mark in marks {
                 assert!(

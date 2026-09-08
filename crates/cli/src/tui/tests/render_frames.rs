@@ -329,8 +329,12 @@ fn glyph_style_marks_the_stream_and_meters_the_context() {
         let glyph = rendered_rows(app, 140, 20);
         assert!(glyph.iter().any(|row| row.ends_with("Streaming words▏")), "{glyph:?}");
         let status = last_row(&glyph);
-        assert!(status.contains("ctx ━━──── 30%"), "{status}");
-        // The meter is decoration: it goes before any segment does.
+        // The meter is the label: the marked style drops the word.
+        assert!(status.contains("━━──── 30%") && !status.contains("ctx"), "{status}");
+        assert!(status.contains("⌂ workspace"), "{status}");
+        // The meter is decoration, but the workspace name is the first
+        // thing to go: it compacts to the branch, or to nothing when the
+        // checkout has none, before the meter is touched.
         let tight = rendered_rows(app, 64, 20);
         let status = last_row(&tight);
         assert!(status.contains("ctx 30%") && !status.contains('━'), "{status}");

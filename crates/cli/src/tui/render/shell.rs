@@ -16,7 +16,6 @@ use crate::tui::components::welcome::Welcome;
 use crate::view::glyphs::glyphs;
 use crate::view::theme;
 
-use super::super::format::workspace_status_name;
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
@@ -414,17 +413,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             queue_segment(app.prompt_queue.len()),
             status_bar::COUNTS,
         ))
-        .push(Segment::new(hint, status_bar::HINT).with_compact(shorter_hint(hint)))
-        .trailing(Segment::new(
-            match &app.git_branch {
-                Some(branch) => format!(
-                    "{} · {branch}",
-                    workspace_status_name(&app.cfg.workspace_name)
-                ),
-                None => workspace_status_name(&app.cfg.workspace_name).to_string(),
-            },
-            status_bar::WORKSPACE,
-        ));
+        .push(Segment::new(hint, status_bar::HINT).with_compact(shorter_hint(hint)));
+    let (workspace, workspace_compact) =
+        workspace_segment(&app.cfg.workspace_name, app.git_branch.as_deref());
+    status.trailing(Segment::new(workspace, status_bar::WORKSPACE).with_compact(workspace_compact));
     frame.render_widget(
         Paragraph::new(status.line(left_width, theme().dim)),
         status_area,

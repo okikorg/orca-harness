@@ -294,7 +294,8 @@ pub(crate) fn context_segment(tokens: u64, window: Option<u64>, compact: bool) -
         .then(|| crate::view::glyphs::glyphs().meter_bar(6, tokens as f64 / window as f64))
         .flatten();
     match meter {
-        Some(bar) => format!("ctx {bar} {percent}%"),
+        // The meter is the label; the word would only repeat it.
+        Some(bar) => format!("{bar} {percent}%"),
         None => format!("ctx {percent}%"),
     }
 }

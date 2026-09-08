@@ -41,8 +41,22 @@ pub(crate) fn queue_segment(queued: usize) -> String {
     if queued == 0 {
         String::new()
     } else {
-        format!("q {queued}")
+        let g = glyphs();
+        g.counted(g.waiting, "q", &queued.to_string())
     }
+}
+
+/// Where the session is running: the workspace root and, when the
+/// checkout has one, its branch. Returned as (full, compact) so the bar
+/// can shed the folder name before it sheds anything that carries a
+/// number.
+pub(crate) fn workspace_segment(workspace: &str, branch: Option<&str>) -> (String, String) {
+    let g = glyphs();
+    let name = crate::tui::format::workspace_status_name(workspace);
+    (
+        g.workspace_label(name, branch),
+        g.workspace_compact(name, branch),
+    )
 }
 
 /// Plan mode is a restriction the user cannot be allowed to forget: it
@@ -76,7 +90,10 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
 pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
     match todos.progress() {
         (_, 0) => String::new(),
-        (done, total) => format!("todo {done}/{total}"),
+        (done, total) => {
+            let g = glyphs();
+            g.counted(g.done, "todo", &format!("{done}/{total}"))
+        }
     }
 }
 
