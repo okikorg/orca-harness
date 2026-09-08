@@ -93,7 +93,8 @@ OPTIONS:
                      default: api.openai.com if OPENAI_API_KEY is set,
                      otherwise http://localhost:11434/v1)
   --api-key KEY      bearer token (provider environment variable, including
-                     AI_GATEWAY_API_KEY for Vercel AI Gateway)
+                     AI_GATEWAY_API_KEY for Vercel AI Gateway,
+                     CHEAPERINFERENCE_API_KEY for CheaperInference)
   --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
                      web_search and web_crawl tools
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
@@ -133,9 +134,10 @@ OPTIONS:
   -h, --help         show this help
   -v, -V, --version  print the version and exit
 
-In the TUI, /provider selects local, OpenAI API, OpenRouter, Vercel AI Gateway, or the
-OpenAI Codex ChatGPT-subscription provider. Selecting openai-codex starts
-Orcacode's device login; an existing official Codex login is also imported.
+In the TUI, /provider selects local, OpenAI API, OpenRouter, Vercel AI Gateway,
+CheaperInference, or the OpenAI Codex ChatGPT-subscription provider.
+Selecting openai-codex starts Orcacode's device login; an existing
+official Codex login is also imported.
 No API key is required. /models [filter] opens the model catalog,
 and /settings changes the provider, model, theme, and API key.
 API keys entered in the TUI, the active provider, the theme, and the
@@ -397,6 +399,9 @@ impl Endpoint {
             Provider::Vercel => {
                 orca_harness_model_providers::vercel::list_models(self.api_key.as_deref()).await
             }
+            Provider::CheaperInference => {
+                orca_harness_model_providers::cheaperinference::list_models().await
+            }
             Provider::OpenRouter | Provider::OpenAi | Provider::Local => {
                 openrouter::list_models(&self.base_url, self.api_key.as_deref()).await
             }
@@ -464,7 +469,7 @@ impl Endpoint {
                 }
                 Arc::new(model)
             }
-            Provider::Vercel | Provider::OpenAi | Provider::Local => {
+            Provider::Vercel | Provider::CheaperInference | Provider::OpenAi | Provider::Local => {
                 let mut model = OpenAiModel::new(self.model.as_str())
                     .base_url(self.base_url.clone())
                     .user_agent(ORCACODE_USER_AGENT);
@@ -548,7 +553,10 @@ fn spawn_window_probe(
     let endpoint = endpoint.clone();
     tokio::spawn(async move {
         let window = match endpoint.provider {
-            Provider::OpenAiCodex | Provider::OpenRouter | Provider::Vercel => endpoint
+            Provider::OpenAiCodex
+            | Provider::OpenRouter
+            | Provider::Vercel
+            | Provider::CheaperInference => endpoint
                 .list_models()
                 .await
                 .ok()

@@ -231,7 +231,8 @@ pub(crate) enum Overlay {
     Locations(LocationPicker),
     /// Enabled skill selector opened by typing `$` in the composer.
     SkillMentions(SkillMentionPicker),
-    /// Provider selector (OpenRouter, Vercel AI Gateway, OpenAI, Codex, local).
+    /// Provider selector (OpenRouter, Vercel AI Gateway, CheaperInference,
+    /// OpenAI, Codex, local).
     Providers { picker: ListPicker },
     /// Theme selector over `view::ThemeName::ALL`.
     Themes { picker: ListPicker },

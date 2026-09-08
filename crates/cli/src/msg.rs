@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 pub enum Provider {
     OpenRouter,
     Vercel,
+    CheaperInference,
     OpenAi,
     OpenAiCodex,
     Local,
@@ -25,9 +26,10 @@ pub enum ProviderAuth {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 5] = [
+    pub const ALL: [Provider; 6] = [
         Provider::OpenRouter,
         Provider::Vercel,
+        Provider::CheaperInference,
         Provider::OpenAi,
         Provider::OpenAiCodex,
         Provider::Local,
@@ -37,6 +39,7 @@ impl Provider {
         match self {
             Provider::OpenRouter => "openrouter",
             Provider::Vercel => "vercel",
+            Provider::CheaperInference => "cheaperinference",
             Provider::OpenAi => "openai",
             Provider::OpenAiCodex => "openai-codex",
             Provider::Local => "local",
@@ -52,6 +55,9 @@ impl Provider {
         match self {
             Provider::OpenRouter => orca_harness_model_providers::openrouter::OPENROUTER_BASE_URL,
             Provider::Vercel => orca_harness_model_providers::vercel::VERCEL_GATEWAY_BASE_URL,
+            Provider::CheaperInference => {
+                orca_harness_model_providers::cheaperinference::CHEAPERINFERENCE_BASE_URL
+            }
             Provider::OpenAi => "https://api.openai.com/v1",
             Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL,
             Provider::Local => "http://localhost:11434/v1",
@@ -65,6 +71,9 @@ impl Provider {
             },
             Provider::Vercel => ProviderAuth::ApiKey {
                 environment: "AI_GATEWAY_API_KEY",
+            },
+            Provider::CheaperInference => ProviderAuth::ApiKey {
+                environment: "CHEAPERINFERENCE_API_KEY",
             },
             Provider::OpenAi => ProviderAuth::ApiKey {
                 environment: "OPENAI_API_KEY",
@@ -104,7 +113,11 @@ impl Provider {
     pub fn supports_images(self) -> bool {
         matches!(
             self,
-            Provider::OpenRouter | Provider::Vercel | Provider::OpenAi | Provider::OpenAiCodex
+            Provider::OpenRouter
+                | Provider::Vercel
+                | Provider::CheaperInference
+                | Provider::OpenAi
+                | Provider::OpenAiCodex
         )
     }
 }
@@ -127,6 +140,25 @@ mod tests {
             }
         );
         assert!(Provider::Vercel.supports_images());
+    }
+
+    #[test]
+    fn cheaperinference_provider_has_expected_configuration() {
+        assert_eq!(
+            Provider::from_label("cheaperinference"),
+            Some(Provider::CheaperInference)
+        );
+        assert_eq!(
+            Provider::CheaperInference.base_url(),
+            "https://api.cheaperinference.com/v1"
+        );
+        assert_eq!(
+            Provider::CheaperInference.auth(),
+            ProviderAuth::ApiKey {
+                environment: "CHEAPERINFERENCE_API_KEY"
+            }
+        );
+        assert!(Provider::CheaperInference.supports_images());
     }
 }
 
