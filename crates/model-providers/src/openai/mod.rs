@@ -167,7 +167,7 @@ impl OpenAiModel {
         let response = request
             .send()
             .await
-            .map_err(|e| ModelError::Request(e.to_string()))?;
+            .map_err(|e| crate::http_error::transport_error(&e))?;
         crate::http_error::check_response(response).await
     }
 
@@ -383,7 +383,7 @@ impl Model for OpenAiModel {
         let body = response
             .text()
             .await
-            .map_err(|e| ModelError::Request(e.to_string()))?;
+            .map_err(|e| crate::http_error::transport_error(&e))?;
 
         let completion: ChatCompletion = serde_json::from_str(&body)
             .map_err(|e| ModelError::InvalidResponse(format!("{e}: {body}")))?;
@@ -463,7 +463,7 @@ impl Model for OpenAiModel {
         let mut done_observed = false;
 
         'body: while let Some(chunk) = bytes.next().await {
-            let chunk = chunk.map_err(|e| ModelError::Request(e.to_string()))?;
+            let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
             for payload in lines.push(&chunk) {
                 if payload == "[DONE]" {
                     done_observed = true;

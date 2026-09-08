@@ -13,7 +13,7 @@ pub async fn list_models(api_key: Option<&str>) -> Result<Vec<ModelInfo>, ModelE
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|error| ModelError::Request(error.to_string()))?;
+        .map_err(|error| crate::http_error::transport_error(&error))?;
     let mut request = client.get(format!("{VERCEL_GATEWAY_BASE_URL}/models"));
     if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
@@ -21,12 +21,12 @@ pub async fn list_models(api_key: Option<&str>) -> Result<Vec<ModelInfo>, ModelE
     let response = request
         .send()
         .await
-        .map_err(|error| ModelError::Request(error.to_string()))?;
+        .map_err(|error| crate::http_error::transport_error(&error))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| ModelError::Request(error.to_string()))?;
+        .map_err(|error| crate::http_error::transport_error(&error))?;
     if !status.is_success() {
         return Err(ModelError::Request(format!("HTTP {status}: {body}")));
     }
