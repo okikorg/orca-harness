@@ -10,6 +10,7 @@ informational or deterministic evaluation suites:
 | startup    | `./benchmarks/startup/run.sh` | fixed cost the `orcacode` host pays before accepting input     |
 | MCP search | `benchmarks/mcp/`          | metadata-search cutoff distribution and labeled query accuracy  |
 | subagent   | `benchmarks/subagent/`     | fake-model in-flight concurrency, latency, and failure observations |
+| workflow   | `benchmarks/workflow/`     | fake-model graph scale, dispatch latency, and deterministic engine-correctness defects |
 | core tool mutations | `./benchmarks/core-tools/run.sh` | real-file latency, throughput, accuracy, and distinct-path concurrency for `apply_patch` and `multi_edit` |
 | harness comparison | [`benchmarks/harness-comparison/`](harness-comparison/README.md) | informational live-model cost, cache, tool, turn, correctness, and wall-time comparison |
 
@@ -37,6 +38,10 @@ and both end with a budget check that fails the run on regression.
 
 ./benchmarks/core-tools/run.sh           # 20 release samples after accuracy tests
 ./benchmarks/core-tools/run.sh --quick   # 3 release samples
+
+./benchmarks/workflow/run.sh             # shapes, scale sweep, one limited case
+./benchmarks/workflow/run.sh --quick     # five shapes at 8 and 32 stages
+./benchmarks/workflow/run.sh --boundary  # 4,096 concurrent stages, 512-deep chains
 ```
 
 `startup/run.sh` needs [hyperfine](https://github.com/sharkdp/hyperfine)
@@ -49,12 +54,16 @@ The reporting layer has its own tests:
 python3 benchmarks/shared/check_budgets_test.py
 python3 benchmarks/kernel/report_test.py
 python3 -m unittest discover -s benchmarks/mcp -p '*_test.py' -v
+python3 -m unittest discover -s benchmarks/workflow -p '*_test.py' -v
 ```
 
 MCP search benchmark details and standalone reports live in
 [`benchmarks/mcp/`](mcp/README.md). The informational fake-worker stress suite
 lives in [`benchmarks/subagent/`](subagent/README.md); its high-memory boundary
-mode is deliberately excluded from CI and performance budgets.
+mode is deliberately excluded from CI and performance budgets. The graph suite
+lives in [`benchmarks/workflow/`](workflow/README.md); its latency and scale
+numbers are informational, but its defect counts are deterministic and fail the
+run.
 
 ## The kernel suite
 
