@@ -1167,6 +1167,7 @@ dependencies = [
 name = "orca-harness-dag"
 version = "0.5.0"
 dependencies = [
+ "criterion",
  "serde",
  "serde_json",
 ]
@@ -1246,6 +1247,7 @@ name = "orca-harness-tools"
 version = "0.5.0"
 dependencies = [
  "async-trait",
+ "criterion",
  "orca-harness-core",
  "orca-harness-dag",
  "orca-harness-extensions",

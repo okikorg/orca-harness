@@ -101,6 +101,20 @@ criterion's own estimates into the summary, so the microbenchmarks in
 reads whatever `target/criterion` holds — which is why it runs the full
 workspace bench first rather than trusting what is already there.
 
+The criterion suite covers the paths a session pays for repeatedly, each
+beside the code it exercises:
+
+| Bench                                         | Path                                                             |
+| :-------------------------------------------- | :--------------------------------------------------------------- |
+| `harness-core/benches/dispatch.rs`             | tool dispatch, fan-out, extension hooks                          |
+| `harness-core/benches/harness_loop.rs`         | steady-state agent round-trips against a reproducing model        |
+| `harness-dag/benches/workflow.rs`              | graph admission, per-stage scheduling, map expansion, stage keys  |
+| `extensions/benches/memory.rs`                 | memory recall and management against a populated store            |
+| `extensions/benches/context_window.rs`         | truncation, `read_tool_result` paging, compaction                 |
+| `extensions/benches/session.rs`                | transcript append, post-compaction rewrite, resume, session list   |
+| `tools/benches/core_tools.rs`                  | `read_file`, `edit_file`, `grep`, `glob` on a synthetic tree      |
+| `tool-extensions/benches/skills.rs`            | skill discovery, schema build, load, toggle, delete                |
+
 ## The startup suite
 
 `startup/run.sh` benchmarks the `orcacode` binary against a fixture tree built

@@ -21,3 +21,9 @@ tokio = { workspace = true }
 orca-harness-model-providers = { path = "../model-providers" }
 orca-harness-extensions = { path = "../extensions" }
 tokio = { version = "1", features = ["full"] }
+
+criterion = { workspace = true }
+
+[[bench]]
+name = "core_tools"
+harness = false
