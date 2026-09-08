@@ -22,11 +22,11 @@ const ORCACODE_USER_AGENT: &str = concat!("orcacode/", env!("CARGO_PKG_VERSION")
 // It is deliberately independent of Orcacode's package version.
 const CODEX_PROTOCOL_VERSION: &str = "0.144.1";
 
+/// The shared process client. Codex's user agent rides on each request
+/// instead of the client, because the client is shared with every other
+/// provider.
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(ORCACODE_USER_AGENT)
-        .build()
-        .expect("the static Orcacode user agent is valid")
+    crate::http::client()
 }
 
 fn catalog_url(base_url: &str) -> String {
@@ -104,6 +104,7 @@ async fn send_catalog_request(
 ) -> Result<reqwest::Response, ModelError> {
     client
         .get(catalog_url(CODEX_BASE_URL))
+        .header(reqwest::header::USER_AGENT, ORCACODE_USER_AGENT)
         .bearer_auth(credential.bearer.access_token)
         .header("chatgpt-account-id", credential.account_id)
         .header("OpenAI-Beta", "responses=experimental")
@@ -160,7 +161,6 @@ pub trait CodexCredentialSource: CredentialSource {
 }
 
 pub struct OpenAiCodexModel {
-    client: reqwest::Client,
     base_url: String,
     model: String,
     reasoning_effort: Option<String>,
@@ -172,7 +172,6 @@ pub struct OpenAiCodexModel {
 impl OpenAiCodexModel {
     pub fn new(model: impl Into<String>, credentials: Arc<dyn CodexCredentialSource>) -> Self {
         Self {
-            client: client(),
             base_url: CODEX_BASE_URL.into(),
             model: model.into(),
             reasoning_effort: None,
@@ -234,9 +233,9 @@ impl OpenAiCodexModel {
     ) -> Result<reqwest::Response, ModelError> {
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
         let continuation = self.continuation_for(context).await;
-        let mut request = self
-            .client
+        let mut request = client()
             .post(url)
+            .header(reqwest::header::USER_AGENT, ORCACODE_USER_AGENT)
             .bearer_auth(credential.bearer.access_token)
             .header("OpenAI-Beta", "responses=experimental")
             .header("originator", "orcacode")

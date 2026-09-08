@@ -37,7 +37,6 @@ fn parse_tool_arguments(
 }
 
 pub struct OpenAiModel {
-    client: reqwest::Client,
     base_url: String,
     api_key: Option<String>,
     model: String,
@@ -56,7 +55,6 @@ pub struct OpenAiModel {
 impl OpenAiModel {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
             base_url: "https://api.openai.com/v1".into(),
             api_key: None,
             model: model.into(),
@@ -157,7 +155,7 @@ impl OpenAiModel {
 
     async fn post(&self, body: &Value) -> Result<reqwest::Response, ModelError> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let mut request = self.client.post(&url).json(body);
+        let mut request = crate::http::client().post(&url).json(body);
         if let Some(api_key) = &self.api_key {
             request = request.bearer_auth(api_key);
         }

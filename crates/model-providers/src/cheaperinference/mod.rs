@@ -14,12 +14,10 @@ const CHEAPERINFERENCE_MODELS_URL: &str = "https://api.cheaperinference.com/publ
 /// Fetch CheaperInference's advertised catalog and map its per-million
 /// prices into the provider-neutral per-token metadata.
 pub async fn list_models() -> Result<Vec<ModelInfo>, ModelError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|error| crate::http_error::transport_error(&error))?;
+    let client = crate::http::client();
     let response = client
         .get(CHEAPERINFERENCE_MODELS_URL)
+        .timeout(crate::http::CATALOG_TIMEOUT)
         .send()
         .await
         .map_err(|error| crate::http_error::transport_error(&error))?;

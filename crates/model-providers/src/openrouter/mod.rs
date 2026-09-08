@@ -141,11 +141,8 @@ pub async fn list_models(
     api_key: Option<&str>,
 ) -> Result<Vec<crate::catalog::ModelInfo>, ModelError> {
     let url = format!("{}/models", base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| crate::http_error::transport_error(&e))?;
-    let mut request = client.get(&url);
+    let client = crate::http::client();
+    let mut request = client.get(&url).timeout(crate::http::CATALOG_TIMEOUT);
     if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
     }

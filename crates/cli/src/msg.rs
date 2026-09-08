@@ -110,6 +110,22 @@ impl Provider {
         self.env_key().or_else(|| self.stored_key())
     }
 
+    /// The model a session starts on when nothing is selected: no flag, no
+    /// `ORCA_MODEL`, no saved choice. A static answer on purpose — asking the
+    /// provider's catalog for one would put a network round trip in front of
+    /// every cold start, and the picker and the window probe both refresh the
+    /// real catalog in the background once the session is up.
+    pub fn default_model(self) -> &'static str {
+        match self {
+            Provider::OpenRouter => "openrouter/auto",
+            Provider::Vercel => "anthropic/claude-haiku-4.5",
+            Provider::CheaperInference => "anthropic/claude-haiku-4.5",
+            Provider::OpenAi => "gpt-4o-mini",
+            Provider::OpenAiCodex => "gpt-5.4",
+            Provider::Local => "qwen3.5:9b",
+        }
+    }
+
     pub fn supports_images(self) -> bool {
         matches!(
             self,

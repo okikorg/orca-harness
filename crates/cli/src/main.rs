@@ -616,5 +616,9 @@ pub(crate) use runtime::shutdown_signal;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Loading the operating system's trust store is ~100ms of CPU, and the
+    // first HTTPS request needs it. Start it on its own thread here so it
+    // overlaps the cold-start path instead of sitting in front of it.
+    orca_harness_model_providers::http::warm();
     runtime::entrypoint().await
 }
