@@ -358,7 +358,7 @@ fn glyph_style_reads_every_mark_from_the_table() {
         let g = UiStyle::Glyph.glyphs();
         assert!(screen.contains(&format!("{} Work ·", g.active[0])), "{screen}");
         assert!(
-            screen.contains(&format!("└─ {} Run · $ true", g.running[0])),
+            screen.contains(&format!("└─ {} Shell · $ true", g.running[0])),
             "{screen}"
         );
         assert_eq!(g.running, &['□']);

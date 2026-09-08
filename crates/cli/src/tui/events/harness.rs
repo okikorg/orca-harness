@@ -3,6 +3,7 @@ use crate::tui::components::transcript::BlockSpacing;
 use crate::tui::state::subagent_history::{
     append_display_text, bounded_text, compact_activity, display_value,
 };
+use crate::tui::state::workflow::{StageState, WorkflowRun};
 use crate::tui::state::{
     SpawnActivity, SubagentDisplay, SubagentTranscript, SubagentTranscriptEntry,
     SubagentTranscriptStatus, ToolRecord,
@@ -104,6 +105,24 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
                 .unwrap_or_else(|| tool_name.clone());
             let inner = if let Some(id) = detached_spawn_id(&tool_name, &output) {
                 mark_subagent_detached(app, id);
+                if tool_name == "workflow" {
+                    if let Some(transcript) = app.subagent_transcripts.get_mut(&id) {
+                        if transcript.status == SubagentTranscriptStatus::Queued {
+                            transcript.status = SubagentTranscriptStatus::Running;
+                        }
+                    }
+                    // The submitted graph is already here, in the call this
+                    // result answers; the run never has to send it back.
+                    if let Some(graph) = index
+                        .and_then(|index| app.activity_tools.get(index))
+                        .and_then(|activity| activity.input.get("graph"))
+                    {
+                        if let Some(plan) = WorkflowRun::from_graph(graph) {
+                            app.workflows.insert(id, plan);
+                        }
+                    }
+                    app.invalidate_agent_list();
+                }
                 Vec::new()
             } else if tool_name == "subagent" {
                 fold_subagent_activity(app, &tool_call_id)
@@ -461,17 +480,55 @@ fn record_subagent_event(
     }
     transcript.compact_activity();
     let status_changed = previous_status != Some(transcript.status);
+    let status = transcript.status;
     let terminal = !transcript.status.is_active();
     let terminal_detached = transcript.detached && !transcript.status.is_active();
     if terminal_detached {
         app.subagent_activity.remove(&id);
     }
     if status_changed {
+        advance_workflow_stage(app, id, status, None);
         app.invalidate_agent_list();
     }
     if terminal {
         app.retain_agent_history();
     }
+}
+
+/// Join a spawned agent to the graph stage it executes. Called for workflow
+/// stages only; ordinary subagents have no stage to bind.
+pub(crate) fn bind_workflow_stage(app: &mut App, spawn: u64, run: u64, stage: &str) {
+    let Some(workflow) = app.workflows.get_mut(&run) else {
+        return;
+    };
+    let Some(at) = workflow.position(stage) else {
+        return;
+    };
+    workflow.spawned(stage, spawn);
+    app.workflow_stages.insert(spawn, (run, at));
+}
+
+/// Mirror an executing agent's status onto the stage it runs, so the graph
+/// panel and the agent list can never disagree about one stage.
+fn advance_workflow_stage(
+    app: &mut App,
+    spawn: u64,
+    status: SubagentTranscriptStatus,
+    detail: Option<String>,
+) {
+    let Some((run, at)) = app.workflow_stages.get(&spawn).copied() else {
+        return;
+    };
+    let Some(workflow) = app.workflows.get_mut(&run) else {
+        return;
+    };
+    let state = match status {
+        SubagentTranscriptStatus::Queued => StageState::Queued,
+        SubagentTranscriptStatus::Running => StageState::Running,
+        SubagentTranscriptStatus::Completed => StageState::Done,
+        SubagentTranscriptStatus::Failed => StageState::Failed,
+    };
+    workflow.advance(at, state, detail);
 }
 
 fn mark_subagent_detached(app: &mut App, id: u64) {
@@ -488,13 +545,19 @@ fn mark_subagent_detached(app: &mut App, id: u64) {
 }
 
 fn detached_spawn_id(tool_name: &str, output: &serde_json::Value) -> Option<u64> {
-    if tool_name == "subagent"
+    if matches!(tool_name, "subagent" | "workflow")
         && output
             .get("termination")
             .and_then(serde_json::Value::as_str)
             == Some("detached")
     {
-        output.get("spawnId").and_then(serde_json::Value::as_u64)
+        output
+            .get(if tool_name == "workflow" {
+                "runId"
+            } else {
+                "spawnId"
+            })
+            .and_then(serde_json::Value::as_u64)
     } else {
         None
     }

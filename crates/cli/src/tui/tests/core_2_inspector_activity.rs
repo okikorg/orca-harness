@@ -268,8 +268,8 @@ fn tool_results_connect_under_their_calls() {
         80,
     );
     let joined = flat_lines(&activity_lines(&app, 80, true));
-    assert!(joined.contains("Run · $ ls"));
-    assert!(joined.contains("✓ Run · $ ls · exit 0 · a.rs"));
+    assert!(joined.contains("Shell · $ ls"));
+    assert!(joined.contains("✓ Shell · $ ls · exit 0 · a.rs"));
 }
 
 fn flat_lines(lines: &[Line]) -> String {

@@ -92,6 +92,8 @@ impl App {
             inspector_area: None,
             subagent_activity: std::collections::HashMap::new(),
             subagent_transcripts: std::collections::HashMap::new(),
+            workflows: std::collections::HashMap::new(),
+            workflow_stages: std::collections::HashMap::new(),
             evicted_agent_histories: 0,
             agent_list_cache: std::cell::RefCell::new(None),
             agent_browser: None,

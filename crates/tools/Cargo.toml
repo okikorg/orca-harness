@@ -10,6 +10,7 @@ description = "Core host/target execution tools for Orca Harness: shell, file I/
 name = "orca_harness_tools"
 
 [dependencies]
+orca-harness-dag = { path = "../harness-dag" }
 orca-harness-core = { path = "../harness-core" }
 async-trait = { workspace = true }
 serde = { workspace = true }

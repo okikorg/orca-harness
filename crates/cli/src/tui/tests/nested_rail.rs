@@ -129,8 +129,8 @@ mod nested_rail_tests {
         );
         let text = rail_text(&app);
         assert!(text.contains("Subagent"), "rail: {text}");
-        assert!(text.contains("List · "), "rail: {text}");
-        let inner_line = text.lines().find(|l| l.contains("List · ")).unwrap();
+        assert!(text.contains("List directory · "), "rail: {text}");
+        let inner_line = text.lines().find(|l| l.contains("List directory · ")).unwrap();
         assert!(
             inner_line.starts_with("      "),
             "inner line must be indented: {inner_line:?}"
@@ -160,7 +160,7 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let inner_line = text.lines().find(|l| l.contains("List · ")).unwrap();
+        let inner_line = text.lines().find(|l| l.contains("List directory · ")).unwrap();
         assert!(inner_line.contains("✓"), "completed glyph: {inner_line:?}");
     }
 

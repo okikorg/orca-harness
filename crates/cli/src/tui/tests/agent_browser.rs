@@ -16,6 +16,8 @@ fn start_named_test_subagent(
     handle_ui_msg(
         app,
         UiMsg::SubagentStarted {
+            run: None,
+            stage: None,
             id,
             parent_id,
             depth,
@@ -62,11 +64,11 @@ fn agent_browser_orders_concurrent_spawns_as_parent_linked_trees() {
 
     app.agent_browser = Some(crate::tui::state::AgentBrowser::new(rows.len()));
     let rendered = rendered_rows(&mut app, 160, 36).join("\n");
-    assert!(rendered.contains("□ #10 root a"), "{rendered}");
+    assert!(rendered.contains("- #10 root a"), "{rendered}");
     assert!(rendered.lines().any(|line| line.contains("#10 root a") && line.contains("queued ·")), "{rendered}");
-    assert!(rendered.contains("├─ □ #30 child a"), "{rendered}");
-    assert!(rendered.contains("│  └─ □ #40 grandchild a"), "{rendered}");
-    assert!(rendered.contains("└─ □ #50 child b"), "{rendered}");
+    assert!(rendered.contains("├─ - #30 child a"), "{rendered}");
+    assert!(rendered.contains("│  └─ - #40 grandchild a"), "{rendered}");
+    assert!(rendered.contains("└─ - #50 child b"), "{rendered}");
 }
 
 fn finish_test_subagent(

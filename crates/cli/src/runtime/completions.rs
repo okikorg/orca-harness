@@ -40,6 +40,9 @@ pub(crate) struct CompletionInbox {
     manager: SubagentManager,
     ready: Arc<Mutex<ReadyBatch>>,
     wake_pending: Arc<AtomicBool>,
+    /// Cleared with the conversation, so stage outputs never outlive the
+    /// transcript that asked for them. Absent in hosts without workflows.
+    workflows: Option<orca_harness_tools::WorkflowStore>,
 }
 
 impl CompletionInbox {
@@ -47,11 +50,18 @@ impl CompletionInbox {
         Self::with_capacity(manager, COMPLETION_CAPACITY)
     }
 
+    /// Share the session's workflow outputs so `reset` can discard them.
+    pub(crate) fn with_workflow_store(mut self, store: orca_harness_tools::WorkflowStore) -> Self {
+        self.workflows = Some(store);
+        self
+    }
+
     fn with_capacity(manager: SubagentManager, capacity: usize) -> Self {
         Self {
             manager: manager.with_completion_capacity(capacity),
             ready: Arc::default(),
             wake_pending: Arc::default(),
+            workflows: None,
         }
     }
 
@@ -86,6 +96,9 @@ impl CompletionInbox {
                 Err(error) => error.clone(),
             },
         });
+        if notification.spawn.run.is_some() {
+            return;
+        }
         if self.push(notification) && self.request_wakeup() {
             let _ = worker.send(WorkerCmd::BackgroundSubagentsReady);
         }
@@ -136,7 +149,13 @@ impl CompletionInbox {
 
     /// Reset the detached-work boundary when replacing the conversation.
     pub(crate) fn reset(&self) {
+        // cancel_all runs each live run's on_cancel, which finishes its DAG;
+        // dropping the outputs afterwards leaves nothing behind for a run the
+        // replaced conversation can no longer name.
         self.manager.cancel_all();
+        if let Some(workflows) = &self.workflows {
+            workflows.clear();
+        }
         *self.ready.lock().unwrap() = ReadyBatch::default();
     }
 }

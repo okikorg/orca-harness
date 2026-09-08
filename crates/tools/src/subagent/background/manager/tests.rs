@@ -3,6 +3,8 @@ use std::future::Future;
 
 fn spawn(id: u64) -> SubagentSpawn {
     SubagentSpawn {
+        run: None,
+        stage: None,
         id,
         parent_id: None,
         depth: 0,

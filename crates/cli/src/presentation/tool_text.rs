@@ -25,6 +25,7 @@ pub fn tool_action_label(name: &str) -> &'static str {
         "pykernel" => "PyKernel",
         "bun_repl" => "Bun REPL",
         "subagent" => "Subagent",
+        "workflow" => "Workflow",
         "todo_write" => "Todo",
         "ask" => "Ask",
         "web_fetch" => "Fetch web page",
@@ -73,6 +74,22 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
                 .unwrap_or_else(|| name.to_string())
         }),
         "subagent" => args.get("task").and_then(Value::as_str).map(str::to_string),
+        "workflow" => Some(
+            match args.get("action").and_then(Value::as_str).unwrap_or("run") {
+                "run" => format!(
+                    "{} stages",
+                    args.get("graph")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len)
+                ),
+                action => format!(
+                    "{action}{}",
+                    args.get("runId")
+                        .map(|id| format!(" #{id}"))
+                        .unwrap_or_default()
+                ),
+            },
+        ),
         "web_fetch" | "web_crawl" => args.get("url").and_then(Value::as_str).map(str::to_string),
         "web_search" => args
             .get("query")

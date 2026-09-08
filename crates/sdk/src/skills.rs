@@ -23,6 +23,7 @@ pub struct Skills {
     workspace_root: PathBuf,
     disabled: Arc<RwLock<HashSet<String>>>,
     discovered: Arc<RwLock<Discovered>>,
+    additional: Arc<Discovered>,
 }
 
 impl Skills {
@@ -41,6 +42,7 @@ impl Skills {
             workspace_root: workspace.join(".orca/skills"),
             disabled: Arc::default(),
             discovered: Arc::default(),
+            additional: Arc::default(),
         }
     }
 
@@ -55,11 +57,38 @@ impl Skills {
             workspace_root,
             disabled: Arc::default(),
             discovered: Arc::default(),
+            additional: Arc::default(),
         }
     }
 
+    /// Add a fixed discovery snapshot behind ordinary roots. Reload rescans the
+    /// roots but retains this snapshot, including its shadow/failure diagnostics.
+    /// This starts an independent catalog and enablement handle.
+    pub fn with_additional_skills(mut self, additional: Discovered) -> Self {
+        self.additional = Arc::new(additional);
+        self.discovered = Arc::default();
+        self.disabled = Arc::default();
+        self
+    }
+
     pub fn reload(&self) -> Discovered {
-        let found = discover(&self.roots);
+        let mut found = discover(&self.roots);
+        for skill in &self.additional.skills {
+            if let Some(winner) = found.skills.iter().find(|s| s.name == skill.name) {
+                found
+                    .shadowed
+                    .push(orca_harness_tool_extensions::skills::Shadowed {
+                        name: skill.name.clone(),
+                        root: skill.root.clone(),
+                        by: winner.root.clone(),
+                        dir: skill.dir.clone(),
+                    });
+            } else {
+                found.skills.push(skill.clone());
+            }
+        }
+        found.shadowed.extend(self.additional.shadowed.clone());
+        found.failures.extend(self.additional.failures.clone());
         *self.discovered.write().expect("skills lock") = found.clone();
         found
     }

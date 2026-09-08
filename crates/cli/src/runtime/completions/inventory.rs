@@ -30,7 +30,7 @@ impl orca_harness_core::Extension for ActiveInventory {
 }
 
 pub(super) fn refresh(context: &mut Context, manager: &SubagentManager) {
-    let jobs = manager.active();
+    let jobs = manager.active_for_parent();
     let running = jobs
         .iter()
         .filter(|job| job.status == BackgroundStatus::Running)

@@ -361,6 +361,8 @@ mod main_tests {
         let (ui, _rx) = mpsc::unbounded_channel();
         let mode = ModeHandle::new(Mode::Normal);
         let spawn = SubagentSpawn {
+            stage: None,
+            run: None,
             id: 1,
             parent_id: None,
             depth: 0,

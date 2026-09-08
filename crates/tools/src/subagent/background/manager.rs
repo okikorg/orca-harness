@@ -61,9 +61,12 @@ struct ActiveSubagent {
     spawn: SubagentSpawn,
     cancellation: orca_harness_core::CancellationToken,
     status: BackgroundStatus,
+    on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+    peak_running: usize,
+    running_children: usize,
 }
 
-pub(super) struct SubagentManagerInner {
+pub(crate) struct SubagentManagerInner {
     state: std::sync::Mutex<SubagentManagerState>,
     /// Source of the live concurrency limit. Held here so its watch stays
     /// open for as long as any job may wait on it.
@@ -83,8 +86,8 @@ impl Drop for SubagentManagerInner {
 /// Session-owned lifetime and concurrency boundary for detached subagents.
 #[derive(Clone)]
 pub struct SubagentManager {
-    pub(super) inner: Arc<SubagentManagerInner>,
-    _lifetime: Arc<ManagerLifetime>,
+    pub(crate) inner: Arc<SubagentManagerInner>,
+    _lifetime: Option<Arc<ManagerLifetime>>,
 }
 
 struct ManagerLifetime(std::sync::Weak<SubagentManagerInner>);
@@ -105,7 +108,7 @@ impl Default for SubagentManager {
 
 /// A running slot. Dropping it frees the slot and wakes the queue, however
 /// the job ends.
-pub(crate) struct Slot(Arc<SubagentManagerInner>);
+pub(crate) struct Slot(Arc<SubagentManagerInner>, Option<u64>);
 
 /// Rolls registration back if host extension setup fails before detachment.
 pub(crate) struct Admission {
@@ -146,6 +149,9 @@ impl Drop for Slot {
     fn drop(&mut self) {
         let mut state = self.0.state.lock().unwrap();
         state.running = state.running.saturating_sub(1);
+        if let Some(root) = self.1.and_then(|run| state.jobs.get_mut(&run)) {
+            root.running_children = root.running_children.saturating_sub(1);
+        }
         drop(state);
         self.0.wake();
     }
@@ -178,7 +184,7 @@ impl SubagentManager {
             spawn_seq: Arc::new(AtomicU64::new(0)),
         });
         Self {
-            _lifetime: Arc::new(ManagerLifetime(Arc::downgrade(&inner))),
+            _lifetime: Some(Arc::new(ManagerLifetime(Arc::downgrade(&inner)))),
             inner,
         }
     }
@@ -205,6 +211,13 @@ impl SubagentManager {
         }
     }
 
+    pub(crate) fn worker_handle(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _lifetime: None,
+        }
+    }
+
     pub fn cancel_all(&self) -> usize {
         self.inner.cancel_all()
     }
@@ -214,6 +227,12 @@ impl SubagentManager {
     pub fn active(&self) -> Vec<BackgroundJob> {
         self.inner.active()
     }
+    /// Automatic parent context excludes workflow runs and their isolated stages.
+    /// Explicit inventories and the UI may still use `active`.
+    pub fn active_for_parent(&self) -> Vec<BackgroundJob> {
+        self.inner.active_visible(false)
+    }
+
     pub fn is_current(&self, generation: u64) -> bool {
         self.inner.is_current(generation)
     }
@@ -231,27 +250,66 @@ impl SubagentManagerInner {
         self: &Arc<Self>,
         spawn: &SubagentSpawn,
     ) -> Result<Admission, &'static str> {
+        self.admit_job(spawn, None, None)
+    }
+
+    pub(crate) fn admit_run(
+        self: &Arc<Self>,
+        spawn: &SubagentSpawn,
+        on_cancel: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Admission, &'static str> {
+        self.admit_job(spawn, Some(on_cancel), None)
+    }
+
+    pub(crate) fn admit_stage(
+        self: &Arc<Self>,
+        spawn: &SubagentSpawn,
+        generation: u64,
+    ) -> Result<Admission, &'static str> {
+        self.admit_job(spawn, None, Some(generation))
+    }
+
+    fn admit_job(
+        self: &Arc<Self>,
+        spawn: &SubagentSpawn,
+        on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+        expected: Option<u64>,
+    ) -> Result<Admission, &'static str> {
         let cap = self.settings.background_limit() as usize;
         let mut state = self.state.lock().unwrap();
-        if let Some(capacity) = state.completion_capacity {
+        if expected.is_some_and(|generation| generation != state.generation) {
+            return Err("workflow generation was cancelled");
+        }
+        if let Some(capacity) = state.completion_capacity.filter(|_| spawn.run.is_none()) {
             if state.unacknowledged.len() >= capacity {
                 return Err("background completion capacity reached; consume pending subagent results before spawning more");
             }
             state.unacknowledged.insert(spawn.id);
         }
         let cancellation = state.cancellation.child_token();
+        let no_slot = on_cancel.is_some();
         state.jobs.insert(
             spawn.id,
             ActiveSubagent {
                 spawn: spawn.clone(),
                 cancellation: cancellation.clone(),
-                status: BackgroundStatus::Queued,
+                status: if no_slot {
+                    BackgroundStatus::Running
+                } else {
+                    BackgroundStatus::Queued
+                },
+                on_cancel,
+                peak_running: 0,
+                running_children: 0,
             },
         );
-        state.queue.push_back(spawn.id);
+        if !no_slot {
+            state.queue.push_back(spawn.id);
+        }
         let generation = state.generation;
         drop(state);
-        let slot = self.try_start(spawn.id, cap).then(|| Slot(self.clone()));
+        let slot =
+            (!no_slot && self.try_start(spawn.id, cap)).then(|| Slot(self.clone(), spawn.run));
         Ok(Admission {
             manager: self.clone(),
             generation,
@@ -278,6 +336,12 @@ impl SubagentManagerInner {
         state.running += 1;
         if let Some(job) = state.jobs.get_mut(&spawn_id) {
             job.status = BackgroundStatus::Running;
+        }
+        if let Some(run) = state.jobs.get(&spawn_id).and_then(|job| job.spawn.run) {
+            if let Some(root) = state.jobs.get_mut(&run) {
+                root.running_children += 1;
+                root.peak_running = root.peak_running.max(root.running_children);
+            }
         }
         let next_can_start = !state.queue.is_empty() && (cap == 0 || state.running < cap);
         drop(state);
@@ -310,7 +374,14 @@ impl SubagentManagerInner {
             let cap = *limit.borrow_and_update() as usize;
             let _ = slots.borrow_and_update();
             if self.try_start(spawn_id, cap) {
-                return Some(Slot(self.clone()));
+                let run = self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .jobs
+                    .get(&spawn_id)
+                    .and_then(|job| job.spawn.run);
+                return Some(Slot(self.clone(), run));
             }
             tokio::select! {
                 biased;
@@ -331,12 +402,21 @@ impl SubagentManagerInner {
         state.cancellation.cancel();
         state.generation = state.generation.wrapping_add(1);
         state.cancellation = orca_harness_core::CancellationToken::new();
+        let callbacks: Vec<_> = state
+            .jobs
+            .values()
+            .filter_map(|job| job.on_cancel.clone())
+            .collect();
         state.jobs.clear();
         state.queue.clear();
         state.unacknowledged.clear();
         // Retain live slots: resetting this count would admit replacements
         // before cancelled workers exit, and their later drops would then
         // incorrectly release capacity held by those replacements.
+        drop(state);
+        for callback in callbacks {
+            callback();
+        }
         cancelled
     }
 
@@ -346,14 +426,24 @@ impl SubagentManagerInner {
             return false;
         };
         job.cancellation.cancel();
+        let callback = job.on_cancel.clone();
+        drop(state);
+        if let Some(callback) = callback {
+            callback();
+        }
         true
     }
 
     pub fn active(&self) -> Vec<BackgroundJob> {
+        self.active_visible(true)
+    }
+
+    fn active_visible(&self, workflows: bool) -> Vec<BackgroundJob> {
         let state = self.state.lock().unwrap();
         let mut jobs = state
             .jobs
             .values()
+            .filter(|job| workflows || (job.spawn.run.is_none() && job.on_cancel.is_none()))
             .map(|job| BackgroundJob {
                 spawn: job.spawn.clone(),
                 status: job.status,
@@ -367,10 +457,34 @@ impl SubagentManagerInner {
         self.state.lock().unwrap().generation == generation
     }
 
-    pub(super) fn finish(&self, generation: u64, spawn_id: u64) {
+    pub(crate) fn run_peak(&self, id: u64) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .jobs
+            .get(&id)
+            .map_or(0, |job| job.peak_running)
+    }
+
+    pub(crate) fn run_ids(&self) -> Vec<u64> {
+        let state = self.state.lock().unwrap();
+        let mut ids: Vec<_> = state
+            .jobs
+            .iter()
+            .filter(|(_, job)| job.on_cancel.is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    pub(crate) fn finish(&self, generation: u64, spawn_id: u64) {
         let mut state = self.state.lock().unwrap();
         if state.generation == generation {
             state.jobs.remove(&spawn_id);
+            state.queue.retain(|id| *id != spawn_id);
         }
+        drop(state);
+        self.wake();
     }
 }

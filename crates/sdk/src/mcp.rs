@@ -29,6 +29,27 @@ impl Mcp {
             return Err(SdkError::Config("MCP server name cannot be empty".into()));
         }
         let connection = McpClient::connect(name, command).await?;
+        self.register(name, connection)
+    }
+
+    /// Connect a structured stdio launch without shell/string conversion.
+    pub async fn connect_stdio(
+        &self,
+        name: &str,
+        launch: &orca_harness_tool_extensions::mcp::StdioLaunch,
+    ) -> Result<McpServerStatus, SdkError> {
+        if name.trim().is_empty() {
+            return Err(SdkError::Config("MCP server name cannot be empty".into()));
+        }
+        let connection = McpClient::connect_stdio(name, launch).await?;
+        self.register(name, connection)
+    }
+
+    fn register(
+        &self,
+        name: &str,
+        connection: orca_harness_tool_extensions::mcp::McpConnection,
+    ) -> Result<McpServerStatus, SdkError> {
         let count = connection.tools().len();
         self.catalog.insert(name.to_string(), connection)?;
         self.servers

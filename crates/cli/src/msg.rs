@@ -279,6 +279,10 @@ pub enum UiMsg {
         call_id: String,
         task: String,
         identity: Option<orca_harness_tools::SubagentIdentity>,
+        /// The workflow run this agent executes a stage of, and which stage.
+        /// Both `None` for an ordinary subagent.
+        run: Option<u64>,
+        stage: Option<String>,
     },
     /// Reconcile detached jobs that terminate before entering the agent loop.
     SubagentCompleted {
@@ -338,14 +342,21 @@ pub enum WorkerCmd {
     /// Drop the last `turns` user turns from the conversation and from
     /// the recorded session, so the conversation continues from an
     /// earlier point.
-    Rewind { turns: usize },
+    Rewind {
+        turns: usize,
+    },
     /// Branch: continue this conversation in a new session file, leaving
     /// the current file exactly where it was.
     Fork,
     /// Adopt a recorded session: replace the context and record there.
-    LoadSession { path: std::path::PathBuf },
+    LoadSession {
+        path: std::path::PathBuf,
+    },
     /// Fetch the endpoint's model catalog, keeping ids containing `filter`.
-    ListModels { request_id: u64, filter: String },
+    ListModels {
+        request_id: u64,
+        filter: String,
+    },
     ListSubagentModels {
         request_id: u64,
         provider: Provider,
@@ -356,7 +367,9 @@ pub enum WorkerCmd {
         model: String,
     },
     /// Run a provider-owned interactive OAuth flow, then activate it.
-    LoginProvider { provider: Provider },
+    LoginProvider {
+        provider: Provider,
+    },
     /// Result of a detached provider login; `attempt` rejects stale completions.
     LoginFinished {
         provider: Provider,
@@ -386,9 +399,14 @@ pub enum WorkerCmd {
     /// context is kept).
     ReloadSkills,
     /// Execute a bounded Agent Plugin MCP probe without blocking the TUI.
-    TestPlugin { path: std::path::PathBuf },
+    TestPlugin {
+        path: std::path::PathBuf,
+    },
     /// Copy skills in from a folder or a repository, then rescan and
     /// rebuild. Runs in the worker because cloning is slow and must not
     /// block the interface.
-    InstallSkill { source: String, here: bool },
+    InstallSkill {
+        source: String,
+        here: bool,
+    },
 }

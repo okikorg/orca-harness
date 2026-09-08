@@ -34,6 +34,7 @@ const LIST_PERCENT: u16 = 38;
 const HINT: &str = "↑↓ select · tab filter · esc close";
 
 mod list;
+mod workflow;
 #[cfg(test)]
 pub(crate) use list::agent_tree_rows;
 use list::{agent_browser_rows, agent_list_projection, agent_rows_on, agent_table};
@@ -101,14 +102,28 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
         .get(selected)
         .and_then(|row| app.subagent_transcripts.get(&row.id));
     let tab = app.agent_browser.as_ref().expect("browser open").tab;
-    let mut header = transcript.map_or_else(
-        || empty_transcript_lines(tab, projection.counts, transcript_width),
-        |transcript| transcript_header_lines(transcript, transcript_width),
-    );
+    // A workflow run drives ordinary subagents and has no transcript of its
+    // own; its pane is the submitted graph instead.
+    let workflow = rows
+        .get(selected)
+        .map(|row| row.id)
+        .filter(|id| workflow::is_workflow(app, Some(*id)));
+    let mut header = match workflow {
+        Some(id) => workflow::header_lines(app, id, transcript_width, app.spinner_frame),
+        None => transcript.map_or_else(
+            || empty_transcript_lines(tab, projection.counts, transcript_width),
+            |transcript| transcript_header_lines(transcript, transcript_width),
+        ),
+    };
     // Keep a short pane usable even when the selected task wraps.
     header.truncate(split.block(t.dim).inner(transcript_area).height as usize);
     let selected_id = transcript.map(|transcript| transcript.id);
-    let body = cached_transcript_body(app, selected_id, transcript_width);
+    let body = match workflow {
+        // Tens of rows that change on every stage transition: cheaper to
+        // build than to invalidate a cache for.
+        Some(id) => Arc::new(workflow::body_lines(app, id, transcript_width)),
+        None => cached_transcript_body(app, selected_id, transcript_width),
+    };
     let body_height =
         (split.block(t.dim).inner(transcript_area).height as usize).saturating_sub(header.len());
 
@@ -186,6 +201,9 @@ pub(crate) fn draw_agent_browser(frame: &mut Frame, app: &mut App) {
             status_bar::COUNTS,
         ));
     }
+    if let Some(summary) = workflow.and_then(|id| workflow::status_summary(app, id)) {
+        status.push(Segment::new(summary, status_bar::COUNTS));
+    }
     status
         .push(Segment::new("parent continues", status_bar::STATS))
         .push(Segment::new(HINT, status_bar::HINT).with_compact("↑↓ · tab · esc"))
@@ -255,7 +273,8 @@ fn status_label(status: SubagentTranscriptStatus) -> &'static str {
 fn status_mark(status: SubagentTranscriptStatus) -> char {
     let g = glyphs();
     match status {
-        SubagentTranscriptStatus::Queued | SubagentTranscriptStatus::Running => g.waiting,
+        SubagentTranscriptStatus::Queued => '-',
+        SubagentTranscriptStatus::Running => g.waiting,
         SubagentTranscriptStatus::Completed => g.done,
         SubagentTranscriptStatus::Failed => g.failed,
     }

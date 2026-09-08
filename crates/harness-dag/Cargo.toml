@@ -1,0 +1,11 @@
+[package]
+name = "orca-harness-dag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Synchronous validated DAG workflows and dynamic map expansion"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

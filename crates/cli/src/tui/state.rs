@@ -22,6 +22,7 @@ use super::format::TokenEstimator;
 mod activity;
 pub(crate) mod subagent_history;
 mod subagents;
+pub(crate) mod workflow;
 pub(crate) use activity::{ToolActivity, ToolStatus};
 pub(crate) use subagents::{
     AgentBodyCache, AgentBrowser, AgentTab, SpawnActivity, SubagentDisplay, SubagentTranscript,
@@ -76,7 +77,9 @@ pub(crate) struct ModelPicker {
 /// The picker to open when a model-catalog request completes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModelPickerTarget {
-    Models { filter: String },
+    Models {
+        filter: String,
+    },
     ActiveModelEffort,
     Subagent {
         tier: String,
@@ -545,6 +548,11 @@ pub(crate) struct App {
     pub(crate) subagent_activity: HashMap<u64, SpawnActivity>,
     /// Session-visible agent history used by the live transcript browser.
     pub(crate) subagent_transcripts: HashMap<u64, SubagentTranscript>,
+    /// Submitted workflow graphs, keyed by run id, so a run's stages are
+    /// visible before any of them spawns.
+    pub(crate) workflows: HashMap<u64, workflow::WorkflowRun>,
+    /// Spawn id to the (run, stage index) it executes, for workflow stages.
+    pub(crate) workflow_stages: HashMap<u64, (u64, usize)>,
     pub(crate) evicted_agent_histories: usize,
     pub(crate) agent_list_cache:
         std::cell::RefCell<Option<std::sync::Arc<super::render::AgentListCache>>>,
