@@ -108,3 +108,64 @@ fn prompt_cache_and_session_are_opt_in() {
     assert_eq!(openai["prompt_cache_key"], "run-456");
     assert!(openai.get("cache_control").is_none());
 }
+
+// Prompt caching only pays off when the front of the request is byte-stable
+// across the turns of one session: the provider matches a prefix, so a single
+// byte that moves turn to turn writes a fresh entry instead of reading the
+// previous one. That failure is invisible in output — the answers stay
+// correct, the bill goes up — so it is asserted here rather than left to the
+// live harness-comparison run, which needs an API key and cannot gate a PR.
+#[test]
+fn the_cached_request_prefix_is_byte_stable_across_turns() {
+    let model = OpenAiModel::new("m").prompt_cache(true);
+    let prefix = |context: &Context| {
+        let body = model.request_body(context, &schemas());
+        serde_json::to_string(&json!({
+            "model": body["model"],
+            "system": body["messages"][0],
+            "tools": body["tools"],
+        }))
+        .unwrap()
+    };
+
+    let mut context = Context::new();
+    context.push_system("you are a coding agent");
+    context.push_user("first question");
+    let turn_one = prefix(&context);
+
+    context.push_assistant_text("an answer");
+    context.push_user("second question");
+    let turn_two = prefix(&context);
+
+    context.push_assistant_text("another answer");
+    context.push_user("third question");
+    let turn_three = prefix(&context);
+
+    assert_eq!(turn_one, turn_two);
+    assert_eq!(turn_two, turn_three);
+}
+
+// Registration order is what makes the tool half of that prefix stable; a
+// registry that iterated a hash map would reshuffle it per process and cost
+// the cache on every first turn.
+#[test]
+fn tool_order_survives_into_the_request_verbatim() {
+    let tools: Vec<ToolSchema> = ["read_file", "list_dir", "grep", "glob"]
+        .iter()
+        .map(|name| ToolSchema {
+            name: (*name).into(),
+            description: "t".into(),
+            parameters: json!({"type": "object"}),
+        })
+        .collect();
+
+    let body = OpenAiModel::new("m").request_body(&context(), &tools);
+    let sent: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(sent, ["read_file", "list_dir", "grep", "glob"]);
+}

@@ -1,0 +1,106 @@
+name: bench-live
+
+# The half of the benchmark suite bench.yml deliberately leaves out: the
+# harness comparison, which needs a live model, an API key, and about half a
+# dollar a run. Those costs are why it is not a pull request gate -- it runs
+# nightly and on demand, so a regression is caught within a day without
+# putting a paid, network-variance job in front of every PR.
+#
+# The budgets live in benchmarks/harness-comparison/check_budgets.py and are
+# set to catch cliffs, not drift: a correctness collapse, an exploration
+# blowup, a blocking call in front of the loop, a prompt prefix that stopped
+# being cacheable. Only orcacode is gated; the other harnesses are measured
+# for comparison.
+#
+# Without OPENROUTER_API_KEY in the repository secrets, every step below is
+# skipped rather than failed -- a fork has no key and should not see a red X.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bench-live
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  harness-comparison:
+    name: harness comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: check for a key
+        id: key
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::OPENROUTER_API_KEY is not set; skipping the live comparison."
+          fi
+
+      - name: rust toolchain
+        if: steps.key.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache cargo
+        if: steps.key.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-live
+
+      # The analyzer and the gate decide the verdict, so they are tested
+      # before a single token is spent.
+      - name: analyzer and gate tests
+        if: steps.key.outputs.present == 'true'
+        run: |
+          python3 -m unittest discover -s benchmarks/harness-comparison -p '*_test.py' -v
+
+      - name: build
+        if: steps.key.outputs.present == 'true'
+        run: cargo build --release -p orcacode
+
+      # --harness orca: the comparison harnesses are node and python tools
+      # installed out of band, and a missing one must not fail our own gate.
+      - name: run the comparison
+        if: steps.key.outputs.present == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 benchmarks/harness-comparison/run.py --harness orca | tee run.log
+          # run.py names the directory on its own line, and also inside the
+          # "Analyze with:" hint that follows. Anchor on the first so the
+          # interpreter and script paths in the hint cannot be picked up.
+          sed -n 's/^Raw benchmark complete: //p' run.log | tail -1 > run-dir.txt
+          test -d "$(cat run-dir.txt)"
+          echo "measured $(cat run-dir.txt)"
+
+      - name: analyze
+        if: steps.key.outputs.present == 'true'
+        run: python3 benchmarks/harness-comparison/analyze.py "$(cat run-dir.txt)"
+
+      - name: enforce budgets
+        if: steps.key.outputs.present == 'true'
+        run: python3 benchmarks/harness-comparison/check_budgets.py "$(cat run-dir.txt)"
+
+      - name: upload results
+        if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-comparison-${{ github.sha }}
+          path: benchmarks/results/harness-comparison/
+          if-no-files-found: warn
+          retention-days: 30
