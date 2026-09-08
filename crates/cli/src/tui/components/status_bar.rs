@@ -104,14 +104,23 @@ impl StatusBar {
 
     fn layout_line(&self, width: usize, style: Style) -> Line<'static> {
         let mut kept: Vec<Segment> = self.segments.clone();
-        let mut trailing = self.trailing.as_ref();
+        let mut trailing: Option<Segment> = self.trailing.clone();
         loop {
             let body = 1
                 + kept.iter().map(|segment| segment.width()).sum::<usize>()
                 + view::cell_width(SEPARATOR) * kept.len().saturating_sub(1);
-            let total = body + trailing.map_or(0, |segment| TRAILING_GAP + segment.width());
+            let total = body
+                + trailing
+                    .as_ref()
+                    .map_or(0, |segment| TRAILING_GAP + segment.width());
             if total <= width {
-                return self.assemble(&kept, trailing, width.saturating_sub(body), style);
+                return self.assemble(&kept, trailing.as_ref(), width.saturating_sub(body), style);
+            }
+            // The workspace gives way first: its folder name is the most
+            // recoverable thing on the row.
+            if let Some(segment) = trailing.as_mut().filter(|s| s.compact.is_some()) {
+                segment.text = segment.compact.take().expect("checked above");
+                continue;
             }
             // Compact forms first, in bar order, so a tight row loses its
             // decoration (the context meter) before its key hints, and
@@ -127,7 +136,7 @@ impl StatusBar {
                 .rev()
                 .min_by_key(|(_, segment)| segment.priority)
                 .map(|(index, segment)| (segment.priority, Some(index)));
-            let trailing_priority = trailing.map(|segment| (segment.priority, None));
+            let trailing_priority = trailing.as_ref().map(|segment| (segment.priority, None));
             match [lowest, trailing_priority]
                 .into_iter()
                 .flatten()
@@ -211,6 +220,27 @@ mod tests {
         assert_eq!(tight.trim_end(), " idle · ctx 30% · effort high");
         let tighter = text(&bar.line(16, Style::default()));
         assert_eq!(tighter.trim_end(), " idle · ctx 30%");
+    }
+
+    /// The trailing segment compacts before anything in the body does:
+    /// the workspace name is the most recoverable thing on the row, and
+    /// giving it up early buys back the context meter and a key hint.
+    #[test]
+    fn the_trailing_segment_compacts_before_the_body_does() {
+        let mut bar = StatusBar::new();
+        bar.push(Segment::new("idle", KEEP))
+            .push(Segment::new("ctx [==      ] 30%", CONTEXT).with_compact("ctx 30%"))
+            .trailing(Segment::new("orca (main)", WORKSPACE).with_compact("main"));
+        let wide = text(&bar.line(40, Style::default()));
+        assert!(wide.contains("ctx [==      ] 30%"), "{wide}");
+        assert!(wide.ends_with("orca (main)"), "{wide}");
+        // Tight enough to lose the workspace name, not the meter.
+        let tight = text(&bar.line(32, Style::default()));
+        assert!(tight.contains("ctx [==      ] 30%"), "{tight}");
+        assert!(tight.ends_with("main"), "{tight}");
+        // Tighter still: now the meter goes, and the branch outlives it.
+        let tighter = text(&bar.line(22, Style::default()));
+        assert_eq!(tighter.trim_end(), " idle · ctx 30%   main");
     }
 
     #[test]

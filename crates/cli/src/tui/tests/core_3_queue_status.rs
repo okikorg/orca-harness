@@ -105,10 +105,19 @@
         });
         app.prompt_queue.push_back("inspect the failure".into());
 
-        let screen = rendered_rows(&mut app, 100, 24).join("\n");
-        assert!(screen.contains("queue paused · enter to resume"));
-        assert!(screen.contains("queued · 1"));
-        assert!(screen.contains("q 1 · enter resume · /queue clear"));
+        // The queue count is a word in the text-only style and a mark in
+        // the marked one; both say the same thing in the same width.
+        for (style, queued) in [
+            (UiStyle::Minimal, "q 1 · enter resume · /queue clear"),
+            (UiStyle::Glyph, "□ 1 · enter resume · /queue clear"),
+        ] {
+            set_ui_style(style);
+            let screen = rendered_rows(&mut app, 100, 24).join("\n");
+            assert!(screen.contains("queue paused · enter to resume"), "{screen}");
+            assert!(screen.contains("queued · 1"), "{screen}");
+            assert!(screen.contains(queued), "{screen}");
+        }
+        set_ui_style(UiStyle::Minimal);
     }
 
     #[test]
@@ -249,6 +258,13 @@
         assert_eq!(context_segment(2_350, Some(0), true), "ctx ~2.4k");
         // Minimal has no meter, so the full form is the compact one.
         assert_eq!(context_segment(41_881, Some(128_000), false), "ctx 32%");
+        // The marked style draws the meter and drops the word: the bar
+        // already says "context", and the compact form takes the word
+        // back once the bar is gone.
+        set_ui_style(UiStyle::Glyph);
+        assert_eq!(context_segment(41_881, Some(128_000), false), "━━──── 32%");
+        assert_eq!(context_segment(41_881, Some(128_000), true), "ctx 32%");
+        set_ui_style(UiStyle::Minimal);
     }
 
     #[test]
