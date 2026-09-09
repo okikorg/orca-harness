@@ -13,9 +13,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 repository = "https://github.com/okikorg/orca"
 
 [workspace.dependencies]
