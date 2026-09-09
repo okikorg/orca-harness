@@ -15,6 +15,7 @@ pub enum Provider {
     CheaperInference,
     OpenAi,
     OpenAiCodex,
+    Anthropic,
     Local,
 }
 
@@ -26,12 +27,13 @@ pub enum ProviderAuth {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 6] = [
+    pub const ALL: [Provider; 7] = [
         Provider::OpenRouter,
         Provider::Vercel,
         Provider::CheaperInference,
         Provider::OpenAi,
         Provider::OpenAiCodex,
+        Provider::Anthropic,
         Provider::Local,
     ];
 
@@ -42,6 +44,7 @@ impl Provider {
             Provider::CheaperInference => "cheaperinference",
             Provider::OpenAi => "openai",
             Provider::OpenAiCodex => "openai-codex",
+            Provider::Anthropic => "anthropic",
             Provider::Local => "local",
         }
     }
@@ -60,6 +63,7 @@ impl Provider {
             }
             Provider::OpenAi => "https://api.openai.com/v1",
             Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL,
+            Provider::Anthropic => orca_harness_model_providers::anthropic::ANTHROPIC_BASE_URL,
             Provider::Local => "http://localhost:11434/v1",
         }
     }
@@ -79,6 +83,9 @@ impl Provider {
                 environment: "OPENAI_API_KEY",
             },
             Provider::OpenAiCodex => ProviderAuth::OAuth,
+            Provider::Anthropic => ProviderAuth::ApiKey {
+                environment: "ANTHROPIC_API_KEY",
+            },
             Provider::Local => ProviderAuth::None,
         }
     }
@@ -122,6 +129,7 @@ impl Provider {
             Provider::CheaperInference => "anthropic/claude-haiku-4.5",
             Provider::OpenAi => "gpt-4o-mini",
             Provider::OpenAiCodex => "gpt-5.4",
+            Provider::Anthropic => "claude-haiku-4-5",
             Provider::Local => "qwen3.5:9b",
         }
     }
@@ -134,6 +142,7 @@ impl Provider {
                 | Provider::CheaperInference
                 | Provider::OpenAi
                 | Provider::OpenAiCodex
+                | Provider::Anthropic
         )
     }
 }

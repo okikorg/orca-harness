@@ -4,6 +4,7 @@
 
 ## Included adapters
 
+- `AnthropicModel` for the native Anthropic Messages API, with API-key authentication, text and image input, streamed tool calls, automatic prompt caching, and paginated model discovery. Tool schemas are sanitized for the Messages API, which rejects `oneOf`/`anyOf`/`allOf` at the top level of an `input_schema`; nested occurrences are preserved. No `thinking` key is sent, so each model applies its own default; signed thinking blocks are replayed on the assistant turn that produced them. Provider-hosted tools are not enabled.
 - `OpenAiModel` for OpenAI-compatible chat/completions endpoints, including configurable base URLs.
 - `OpenRouterModel` for OpenRouter; it reuses the OpenAI-compatible protocol and adds OpenRouter request metadata.
 - `OpenAiCodexModel` for the OpenAI Codex Responses protocol and credential-based device-login integration.

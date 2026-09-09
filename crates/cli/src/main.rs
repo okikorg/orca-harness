@@ -89,20 +89,23 @@ USAGE:
 OPTIONS:
   --model NAME       model id (env ORCA_MODEL; otherwise selected from the
                      provider's live catalog)
-  --base-url URL     OpenAI-compatible endpoint (env ORCA_BASE_URL;
+  --base-url URL     API root; native Messages API with --anthropic,
+                     otherwise OpenAI-compatible (env ORCA_BASE_URL;
                      default: api.openai.com if OPENAI_API_KEY is set,
                      otherwise http://localhost:11434/v1)
-  --api-key KEY      bearer token (provider environment variable, including
+  --api-key KEY      API key (provider environment variable, including
+                     ANTHROPIC_API_KEY for Anthropic,
                      AI_GATEWAY_API_KEY for Vercel AI Gateway,
                      CHEAPERINFERENCE_API_KEY for CheaperInference)
   --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
                      web_search and web_crawl tools
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
+  --anthropic        use the native Anthropic Messages API
   --list-models      print the endpoint's model catalog and exit
   --workspace DIR    tool workspace root (default: current directory)
   --max-steps N      model invocations per run (default 48)
   --max-output-tokens N
-                     OpenAI-compatible/OpenRouter output-token cap
+                     output-token cap (Anthropic default: 8192)
   --effort LEVEL     reasoning effort (for example low, medium, high)
   --prompt-cache     enable provider prompt-cache hints (default)
   --no-prompt-cache  disable provider prompt-cache hints
@@ -135,7 +138,7 @@ OPTIONS:
   -v, -V, --version  print the version and exit
 
 In the TUI, /provider selects local, OpenAI API, OpenRouter, Vercel AI Gateway,
-CheaperInference, or the OpenAI Codex ChatGPT-subscription provider.
+CheaperInference, Anthropic, or the OpenAI Codex ChatGPT-subscription provider.
 Selecting openai-codex starts Orcacode's device login; an existing
 official Codex login is also imported.
 No API key is required. /models [filter] opens the model catalog,
@@ -390,6 +393,13 @@ impl Endpoint {
         &self,
     ) -> Result<Vec<openrouter::ModelInfo>, orca_harness_core::ModelError> {
         match self.provider {
+            Provider::Anthropic => {
+                orca_harness_model_providers::anthropic::list_models(
+                    &self.base_url,
+                    self.api_key.as_deref(),
+                )
+                .await
+            }
             Provider::OpenAiCodex => {
                 orca_harness_model_providers::openai_codex::list_models(Arc::new(
                     auth::CodexCliCredential::discover(),
@@ -445,6 +455,21 @@ impl Endpoint {
         retry_label: Option<String>,
     ) -> Arc<dyn Model> {
         let model: Arc<dyn Model> = match self.provider {
+            Provider::Anthropic => {
+                let mut model = orca_harness_model_providers::AnthropicModel::new(&self.model)
+                    .base_url(&self.base_url)
+                    .prompt_cache(self.prompt_cache);
+                if let Some(key) = &self.api_key {
+                    model = model.api_key(key);
+                }
+                if let Some(max_tokens) = self.max_output_tokens {
+                    model = model.max_tokens(max_tokens);
+                }
+                if let Some(effort) = &self.reasoning_effort {
+                    model = model.reasoning_effort(effort);
+                }
+                Arc::new(model)
+            }
             Provider::OpenRouter => {
                 let mut model = OpenRouterModel::new(self.model.as_str())
                     .base_url(self.base_url.clone())
@@ -553,6 +578,16 @@ fn spawn_window_probe(
     let endpoint = endpoint.clone();
     tokio::spawn(async move {
         let window = match endpoint.provider {
+            // `/models` lists dated ids, so a configured alias never matches
+            // the catalog; resolve the one model instead of paging all of them.
+            Provider::Anthropic => orca_harness_model_providers::anthropic::retrieve_model(
+                &endpoint.base_url,
+                endpoint.api_key.as_deref(),
+                &endpoint.model,
+            )
+            .await
+            .ok()
+            .and_then(|model| model.context_length),
             Provider::OpenAiCodex
             | Provider::OpenRouter
             | Provider::Vercel

@@ -6,6 +6,7 @@
 
 mod sse;
 
+pub mod anthropic;
 pub mod catalog;
 pub mod cheaperinference;
 pub mod http;
@@ -15,6 +16,7 @@ pub mod openai_codex;
 pub mod openrouter;
 pub mod vercel;
 
+pub use anthropic::AnthropicModel;
 pub use catalog::{ModelInfo, Pricing, ReasoningCapabilities, SupportedEfforts};
 pub use openai::OpenAiModel;
 pub use openai_codex::OpenAiCodexModel;

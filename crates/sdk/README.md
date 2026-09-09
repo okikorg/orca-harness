@@ -22,6 +22,42 @@ cargo run -p orca-harness-sdk --example host_assembly
 
 Additional examples cover cancellation, custom events, local MCP, memory and skills, session lifecycle, and recovery through compaction and retries.
 
+## Anthropic
+
+The SDK re-exports the native Messages API adapter. Supply the API key explicitly;
+the SDK does not read environment variables on your behalf.
+
+```rust,no_run
+use orca_harness_sdk::{AnthropicModel, Harness, RunRequest};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let model = AnthropicModel::new("claude-haiku-4-5")
+    .api_key(std::env::var("ANTHROPIC_API_KEY")?)
+    .max_tokens(8192)
+    .prompt_cache(true);
+let harness = Harness::builder().workspace(".").build()?;
+let agent = harness.agent(model).system_prompt("You are a helpful assistant.").build()?;
+let result = agent.run(RunRequest::new("Hello")).await?;
+# Ok(())
+# }
+```
+
+Caching is opt-in in the SDK and uses Anthropic's automatic ephemeral cache.
+`Usage` exposes uncached input, cache reads, and cache creation separately.
+`base_url` accepts an API root including `/v1`; `models()` fetches the native
+catalog. `reasoning_effort` sets `output_config.effort` for models supporting it.
+No `thinking` key is sent, so each model applies its own default; a model that
+thinks streams reasoning as `ModelDelta::Reasoning`, and its signed thinking
+blocks are replayed on the assistant turn that produced them. Provider-hosted
+tools are not supported in this version.
+
+In the CLI, use `orcacode --anthropic -p "Hello"` with `ANTHROPIC_API_KEY`, or select
+`anthropic` through `/provider`. The CLI enables prompt-cache hints by default;
+`--no-prompt-cache` disables them.
+
+Protocol references: [Messages streaming](https://platform.claude.com/docs/en/build-with-claude/streaming)
+and [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+
 ## Workspace role
 
 Use this crate when building a Rust application that wants a supported composition surface rather than assembling every lower-level crate directly. It is a facade, not a second runtime: runs still execute through `orca-harness-core`, and optional tools and integrations remain subject to the host's policies.

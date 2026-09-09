@@ -1215,6 +1215,7 @@ dependencies = [
 name = "orca-harness-sdk"
 version = "0.6.1"
 dependencies = [
+ "async-trait",
  "orca-harness-core",
  "orca-harness-extensions",
  "orca-harness-model-providers",

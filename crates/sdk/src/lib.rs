@@ -29,7 +29,9 @@ pub use orca_harness_extensions::{
     CompactConfig, CompactReport, HarnessEvent, LongSessionConfig, MemoryRecord, PolicyOutcome,
     PolicyRule, SessionFile, ToolPolicy,
 };
-pub use orca_harness_model_providers::{OpenAiCodexModel, OpenAiModel, OpenRouterModel};
+pub use orca_harness_model_providers::{
+    AnthropicModel, OpenAiCodexModel, OpenAiModel, OpenRouterModel,
+};
 pub use orca_harness_provider_auth::{BearerCredential, CredentialSource, StaticCredential};
 pub use orca_harness_tool_extensions::web;
 pub use orca_harness_tools::{
