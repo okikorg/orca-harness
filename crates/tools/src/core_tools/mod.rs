@@ -29,7 +29,7 @@ pub use mutations::{ApplyPatchTool, MultiEditTool};
 pub use process::{ProcessNotification, ProcessNotificationKind, ProcessTool};
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
-pub use stats::BackgroundStats;
+pub use stats::{BackgroundProcess, BackgroundStats};
 pub use workspace::Workspace;
 
 /// The recommended default tool set: a local `shell` and `process`

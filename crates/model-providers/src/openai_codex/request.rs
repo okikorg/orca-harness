@@ -18,15 +18,15 @@ pub(crate) fn body(
             Message::User { content, images } => {
                 let mut parts = vec![json!({"type": "input_text", "text": content})];
                 parts.extend(images.iter().map(|image| {
-                    json!({
-                        "type": "input_image",
-                        "image_url": crate::image_data_url(image),
-                        "detail": "auto",
-                    })
+                    let mut part = json!({"type": "input_image", "detail": "auto"});
+                    part["image_url"] = Value::String(crate::image_data_url(image));
+                    part
                 }));
-                input.push(json!({
-                    "type": "message", "role": "user", "content": parts
-                }));
+                let mut message = json!({
+                    "type": "message", "role": "user", "content": null
+                });
+                message["content"] = Value::Array(parts);
+                input.push(message);
             }
             Message::Assistant {
                 content,
@@ -39,17 +39,17 @@ pub(crate) fn body(
                     }));
                 }
                 input.extend(tool_calls.iter().map(|call| {
-                    json!({
-                        "type": "function_call", "call_id": call.id,
-                        "name": call.name, "arguments": call.arguments.to_string()
-                    })
+                    let mut item = json!({
+                        "type": "function_call", "call_id": call.id, "name": call.name
+                    });
+                    item["arguments"] = Value::String(call.arguments.to_string());
+                    item
                 }));
             }
             Message::Tool { results } => input.extend(results.iter().map(|result| {
-                json!({
-                    "type": "function_call_output", "call_id": result.call_id,
-                    "output": result.output.to_string()
-                })
+                let mut item = json!({"type": "function_call_output", "call_id": result.call_id});
+                item["output"] = Value::String(result.output.to_string());
+                item
             })),
         }
     }
@@ -74,13 +74,15 @@ pub(crate) fn body(
     }
     let mut value = json!({
         "model": model,
-        "instructions": instructions.join("\n\n"),
-        "input": input,
+        "input": [],
         "stream": stream,
         "store": false,
+        "reasoning": {"summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "parallel_tool_calls": true
     });
+    value["instructions"] = Value::String(instructions.join("\n\n"));
+    value["input"] = Value::Array(input);
     if tools.is_empty() {
         value.as_object_mut().unwrap().remove("parallel_tool_calls");
     } else {
@@ -98,7 +100,7 @@ pub(crate) fn body(
         );
     }
     if let Some(effort) = reasoning_effort {
-        value["reasoning"] = json!({"effort": effort});
+        value["reasoning"]["effort"] = json!(effort);
     }
     if let Some(prompt_cache_key) = prompt_cache_key {
         value["prompt_cache_key"] = json!(prompt_cache_key);
@@ -134,6 +136,7 @@ mod tests {
         assert_eq!(value["input"][2]["type"], "function_call_output");
         assert_eq!(value["tools"][0]["name"], "shell");
         assert_eq!(value["store"], false);
+        assert_eq!(value["reasoning"], json!({"summary": "auto"}));
         assert_eq!(value["include"][0], "reasoning.encrypted_content");
     }
 
@@ -208,7 +211,10 @@ mod tests {
             Some("xhigh"),
             Some("run-123"),
         );
-        assert_eq!(value["reasoning"], json!({"effort": "xhigh"}));
+        assert_eq!(
+            value["reasoning"],
+            json!({"effort": "xhigh", "summary": "auto"})
+        );
         assert_eq!(value["prompt_cache_key"], "run-123");
     }
 }

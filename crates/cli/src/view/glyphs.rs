@@ -106,6 +106,8 @@ pub struct Glyphs {
     /// A section label at rest, and the idle run state. Distinct from
     /// `done` so a finished section does not read as one more tool.
     pub section: char,
+    /// A live background process count in the status bar.
+    pub process: char,
     /// The model is waiting on the person: approval, clarification.
     pub attention: char,
     /// Whether the status bar's run state carries a mark.
@@ -211,6 +213,7 @@ pub static MINIMAL: Glyphs = Glyphs {
     done: '✓',
     failed: '×',
     section: '•',
+    process: '•',
     attention: '?',
     status_marks: false,
     rail: "┃",
@@ -230,6 +233,7 @@ pub static GLYPH: Glyphs = Glyphs {
     done: '✓',
     failed: '×',
     section: '□',
+    process: '⚙',
     attention: '!',
     status_marks: true,
     rail: "┃",
@@ -302,6 +306,8 @@ mod tests {
         assert_eq!(GLYPH.counted(GLYPH.done, "todo", "2/5"), "✓ 2/5");
         assert_eq!(MINIMAL.counted(MINIMAL.waiting, "q", "3"), "q 3");
         assert_eq!(GLYPH.counted(GLYPH.waiting, "q", "3"), "□ 3");
+        assert_eq!(MINIMAL.counted(MINIMAL.process, "procs", "2"), "procs 2");
+        assert_eq!(GLYPH.counted(GLYPH.process, "procs", "2"), "⚙ 2");
         for (word, body) in [("todo", "2/5"), ("q", "3")] {
             assert!(
                 crate::view::cell_width(&GLYPH.counted(GLYPH.done, word, body))

@@ -236,6 +236,7 @@ impl Drop for Manager {
                 }
             }
             if proc.counted.swap(false, Ordering::Relaxed) {
+                self.stats.remove_process(&proc.id);
                 self.stats.dec_processes();
             }
         }

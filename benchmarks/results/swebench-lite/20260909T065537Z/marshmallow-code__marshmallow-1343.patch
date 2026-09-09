@@ -1,0 +1,173 @@
+diff --git a/test_issue.py b/test_issue.py
+new file mode 100644
+index 00000000..9f7bfdae
+--- /dev/null
++++ b/test_issue.py
+@@ -0,0 +1,20 @@
++from marshmallow import Schema, fields, validates
++
++
++class Bar(Schema):
++    value = fields.String()
++
++    @validates('value')  # <- issue here
++    def validate_value(self, value):
++        pass
++
++
++class Foo(Schema):
++    bar = fields.Nested(Bar)
++
++
++sch = Foo()
++
++sch.validate({
++    'bar': 'invalid',
++})
+diff --git a/test_issue_debug.py b/test_issue_debug.py
+new file mode 100644
+index 00000000..6fffe50c
+--- /dev/null
++++ b/test_issue_debug.py
+@@ -0,0 +1,28 @@
++from marshmallow import Schema, fields, validates, ValidationError
++import traceback
++
++class Bar(Schema):
++    value = fields.String()
++
++    @validates('value')
++    def validate_value(self, value):
++        print(f'validate_value called with: {value!r}')
++
++class Foo(Schema):
++    bar = fields.Nested(Bar)
++
++sch = Foo()
++
++# Test case from the issue using load
++try:
++    print('Calling load...')
++    result, errors = sch.load({
++        'bar': 'invalid',
++    })
++    print('Load result:', result)
++    print('Load errors:', errors)
++except TypeError as e:
++    print('TypeError caught:')
++    traceback.print_exc()
++except ValidationError as e:
++    print('ValidationError caught:', e)
+diff --git a/test_issue_load.py b/test_issue_load.py
+new file mode 100644
+index 00000000..cb3d722b
+--- /dev/null
++++ b/test_issue_load.py
+@@ -0,0 +1,26 @@
++from marshmallow import Schema, fields, validates, ValidationError
++
++class Bar(Schema):
++    value = fields.String()
++
++    @validates('value')
++    def validate_value(self, value):
++        pass
++
++class Foo(Schema):
++    bar = fields.Nested(Bar)
++
++sch = Foo()
++
++# Test case from the issue using load instead
++try:
++    result = sch.load({
++        'bar': 'invalid',
++    })
++    print('Load result:', result)
++except TypeError as e:
++    print('TypeError caught:', e)
++    import traceback
++    traceback.print_exc()
++except ValidationError as e:
++    print('ValidationError caught:', e)
+diff --git a/test_issue_nested.py b/test_issue_nested.py
+new file mode 100644
+index 00000000..b559dae7
+--- /dev/null
++++ b/test_issue_nested.py
+@@ -0,0 +1,26 @@
++from marshmallow import Schema, fields, validates, ValidationError
++
++class Bar(Schema):
++    value = fields.String()
++
++    @validates('value')
++    def validate_value(self, value):
++        pass
++
++class Foo(Schema):
++    bar = fields.Nested(Bar)
++
++sch = Foo()
++
++# Test case from the issue
++try:
++    result = sch.validate({
++        'bar': 'invalid',
++    })
++    print('Validation result:', result)
++except TypeError as e:
++    print('TypeError caught:', e)
++    import traceback
++    traceback.print_exc()
++except ValidationError as e:
++    print('ValidationError caught:', e)
+diff --git a/test_trace.py b/test_trace.py
+new file mode 100644
+index 00000000..f598aa45
+--- /dev/null
++++ b/test_trace.py
+@@ -0,0 +1,43 @@
++import sys
++sys.path.insert(0, '/var/folders/n7/shsj_t096d50t8dx465nkh3h0000gn/T/swebench-marshmallow-code__marshmallow-1343-vgu40atr/repo/src')
++
++from marshmallow import Schema, fields, validates, ValidationError
++import traceback
++from marshmallow import marshalling
++
++class Bar(Schema):
++    value = fields.String()
++
++    @validates('value')
++    def validate_value(self, value):
++        print(f'validate_value called with: {value!r}')
++
++class Foo(Schema):
++    bar = fields.Nested(Bar)
++
++sch = Foo()
++
++# Let's manually step through to understand the issue
++unmarshal = marshalling.Unmarshaller()
++
++try:
++    print('Calling unmarshaller directly...')
++    result = unmarshal({
++        'bar': 'invalid',
++    }, sch.fields, many=False)
++    print('Unmarshaller result:', result)
++except ValidationError as e:
++    print('ValidationError caught in unmarshaller:')
++    print('  Messages:', e.messages)
++    print('  Data:', e.data)
++    print('  Data type:', type(e.data))
++    result = e.data
++
++# Now if we call _invoke_field_validators with this result
++print('\nNow calling _invoke_field_validators with result:', result)
++try:
++    sch._invoke_field_validators(unmarshal, data=result, many=False)
++    print('_invoke_field_validators succeeded')
++except TypeError as te:
++    print('TypeError in _invoke_field_validators:')
++    traceback.print_exc()

@@ -12,7 +12,9 @@ use crate::view::{self, theme};
 use super::super::overlays::*;
 use super::super::pickers::*;
 use super::super::plugins::*;
-use super::super::transcript::{location_picker_lines, skill_mention_picker_lines, todo_lines};
+use super::super::transcript::{
+    location_picker_lines, process_lines, skill_mention_picker_lines, todo_lines,
+};
 
 /// Status-line segments for live background work; empty when idle so the
 /// line stays quiet. Each persistent compute tool is unnumbered (0 or 1).
@@ -22,7 +24,8 @@ pub(crate) fn stats_segments(
 ) -> Vec<String> {
     let mut out = Vec::new();
     if stats.processes() > 0 {
-        out.push(format!("procs {}", stats.processes()));
+        let g = glyphs();
+        out.push(g.counted(g.process, "procs", &stats.processes().to_string()));
     }
     if stats.kernels() > 0 {
         out.push("pykernel".to_string());
@@ -222,6 +225,8 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
                 inspector_picker_lines(app.inspector_mode, picker, width)
             }
             Overlay::Usage => usage_lines(app, width),
+            Overlay::Todo => todo_lines(&app.cfg.todos, width),
+            Overlay::Processes => process_lines(&app.cfg.stats, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
             Overlay::Settings { picker } => settings_lines(app, picker, width),
             Overlay::Subagents { picker } => subagent_settings_lines(app, picker, width),
@@ -299,7 +304,6 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
     }
     if app.running() {
         let mut lines = queue_lines(app, width);
-        lines.extend(todo_lines(&app.cfg.todos, width));
         let spinner = glyphs().active_frame(app.spinner_frame);
         let verb = if !app.text.is_empty() || app.pending_assistant.is_some() {
             "writing"
@@ -309,7 +313,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             "working"
         };
         if let RunState::Running { started, .. } = &app.run {
-            let token_io = if app.turn_tokens_in == 0 && app.turn_tokens_out == 0 {
+            let mut token_io = if app.turn_tokens_in == 0 && app.turn_tokens_out == 0 {
                 String::new()
             } else {
                 format!(
@@ -318,6 +322,9 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
                     fmt_tokens(app.turn_tokens_out)
                 )
             };
+            if let Some(tokens) = app.turn_thinking_tokens {
+                token_io.push_str(&format!(" · thinking {}", fmt_tokens(tokens)));
+            }
             lines.push(Line::from(vec![
                 Span::styled(format!("  {spinner} "), t.accent),
                 Span::styled(
@@ -334,8 +341,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             anchor: LiveAnchor::Bottom,
         };
     }
-    let mut lines = queue_lines(app, width);
-    lines.extend(todo_lines(&app.cfg.todos, width));
+    let lines = queue_lines(app, width);
     LiveRegion {
         lines,
         anchor: LiveAnchor::Bottom,

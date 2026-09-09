@@ -140,6 +140,10 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
             app.tokens_in += usage.input_tokens;
             app.tokens_out += usage.output_tokens;
             app.reconcile_turn_output(usage.output_tokens);
+            if let Some(tokens) = usage.reasoning_tokens {
+                app.turn_thinking_tokens =
+                    Some(app.turn_thinking_tokens.unwrap_or(0).saturating_add(tokens));
+            }
             app.cache_read_total += usage.cache_read_tokens;
             app.cache_write_total += usage.cache_create_tokens;
             app.usage_steps += 1;
@@ -456,6 +460,14 @@ fn record_subagent_event(
         HarnessEvent::Usage { usage } => {
             transcript.input_tokens = transcript.input_tokens.saturating_add(usage.input_tokens);
             transcript.output_tokens = transcript.output_tokens.saturating_add(usage.output_tokens);
+            if let Some(tokens) = usage.reasoning_tokens {
+                transcript.reasoning_tokens = Some(
+                    transcript
+                        .reasoning_tokens
+                        .unwrap_or(0)
+                        .saturating_add(tokens),
+                );
+            }
         }
         HarnessEvent::Result { message } => {
             transcript.finish_activity();

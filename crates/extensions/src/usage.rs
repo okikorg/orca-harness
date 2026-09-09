@@ -7,7 +7,7 @@
 //! can read the final figure after the run returns (the extension is owned
 //! by the Agent and not otherwise reachable).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -20,6 +20,8 @@ use orca_harness_core::{Context, Extension, ExtensionError, ModelResponse, Subsc
 pub struct UsageHandle {
     input: Arc<AtomicU64>,
     output: Arc<AtomicU64>,
+    reasoning: Arc<AtomicU64>,
+    reasoning_reported: Arc<AtomicBool>,
     cache_read: Arc<AtomicU64>,
     cache_create: Arc<AtomicU64>,
     steps: Arc<AtomicU64>,
@@ -38,6 +40,10 @@ impl UsageHandle {
             .fetch_add(usage.cache_read_tokens, Ordering::Relaxed);
         self.cache_create
             .fetch_add(usage.cache_create_tokens, Ordering::Relaxed);
+        if let Some(tokens) = usage.reasoning_tokens {
+            self.reasoning.fetch_add(tokens, Ordering::Relaxed);
+            self.reasoning_reported.store(true, Ordering::Relaxed);
+        }
         self.steps.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -48,6 +54,10 @@ impl UsageHandle {
             output_tokens: self.output.load(Ordering::Relaxed),
             cache_read_tokens: self.cache_read.load(Ordering::Relaxed),
             cache_create_tokens: self.cache_create.load(Ordering::Relaxed),
+            reasoning_tokens: self
+                .reasoning_reported
+                .load(Ordering::Relaxed)
+                .then(|| self.reasoning.load(Ordering::Relaxed)),
         }
     }
 
@@ -94,5 +104,36 @@ impl Extension for UsageMeter {
             self.handle.add(usage);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_breakdown_is_optional_and_never_added_to_output() {
+        let handle = UsageHandle::new();
+        assert_eq!(handle.total().reasoning_tokens, None);
+        let mut total = Usage::default();
+        for reasoning_tokens in [Some(20), None, Some(30)] {
+            let usage = Usage {
+                output_tokens: 50,
+                reasoning_tokens,
+                ..Usage::default()
+            };
+            handle.add(&usage);
+            total.add(&usage);
+        }
+        assert_eq!(handle.total(), total);
+        assert_eq!(total.reasoning_tokens, Some(50));
+        assert_eq!(total.context_tokens(), 150);
+        let legacy = serde_json::json!({"inputTokens": 0, "outputTokens": 50, "cacheReadTokens": 0, "cacheCreateTokens": 0});
+        assert_eq!(
+            serde_json::from_value::<Usage>(legacy)
+                .unwrap()
+                .reasoning_tokens,
+            None
+        );
     }
 }

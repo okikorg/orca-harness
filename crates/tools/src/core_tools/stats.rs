@@ -5,12 +5,29 @@
 //! increment/decrement methods are public so tests and custom tools can
 //! participate).
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// One process-tool child that is still running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BackgroundProcess {
+    pub id: String,
+    pub command: String,
+    pub running_for: Duration,
+}
+
+#[derive(Debug)]
+struct ProcessEntry {
+    command: String,
+    started: Instant,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct BackgroundStats {
     processes: Arc<AtomicUsize>,
+    process_list: Arc<Mutex<BTreeMap<String, ProcessEntry>>>,
     kernels: Arc<AtomicUsize>,
     bun_repls: Arc<AtomicUsize>,
     agents: Arc<AtomicUsize>,
@@ -32,6 +49,40 @@ impl BackgroundStats {
     }
     pub fn agents(&self) -> usize {
         self.agents.load(Ordering::Relaxed)
+    }
+
+    pub fn process_list(&self) -> Vec<BackgroundProcess> {
+        self.process_list
+            .lock()
+            .expect("background process list lock")
+            .iter()
+            .map(|(id, process)| BackgroundProcess {
+                id: id.clone(),
+                command: process.command.clone(),
+                running_for: process.started.elapsed(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn add_process(&self, id: String, command: String) {
+        self.process_list
+            .lock()
+            .expect("background process list lock")
+            .insert(
+                id,
+                ProcessEntry {
+                    command,
+                    started: Instant::now(),
+                },
+            );
+        self.inc_processes();
+    }
+
+    pub(crate) fn remove_process(&self, id: &str) {
+        self.process_list
+            .lock()
+            .expect("background process list lock")
+            .remove(id);
     }
 
     pub fn inc_processes(&self) {

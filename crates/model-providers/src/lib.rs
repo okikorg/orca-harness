@@ -4,6 +4,8 @@
 //! OpenRouter delegates generation to the OpenAI-compatible adapter, and
 //! Codex owns its distinct Responses protocol and credential lifecycle.
 
+mod sse;
+
 pub mod catalog;
 pub mod cheaperinference;
 pub mod http;
@@ -21,3 +23,6 @@ pub use openrouter::OpenRouterModel;
 fn image_data_url(image: &orca_harness_core::Image) -> String {
     format!("data:{};base64,{}", image.media_type, image.data)
 }
+
+#[cfg(test)]
+mod request_bench;

@@ -7,41 +7,8 @@ use serde::Deserialize;
 
 use super::{parse_tool_arguments, WireUsage};
 
-/// Reassembles SSE `data:` payloads from arbitrarily-split byte chunks.
-#[derive(Default)]
-pub(crate) struct SseLineBuffer {
-    buf: Vec<u8>,
-}
-
-impl SseLineBuffer {
-    /// Feed raw body bytes; returns every complete `data:` payload found.
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        // Decode only complete lines: a network chunk can split a UTF-8 codepoint.
-        self.buf.extend_from_slice(bytes);
-        let mut payloads = Vec::new();
-        while let Some(pos) = self.buf.iter().position(|byte| *byte == b'\n') {
-            if let Some(payload) = Self::payload(&self.buf[..pos]) {
-                payloads.push(payload);
-            }
-            self.buf.drain(..=pos);
-        }
-        payloads
-    }
-
-    /// Consume a final SSE line when the connection omitted its trailing
-    /// newline. Non-`data:` remainder is ignored, matching `push`.
-    pub(crate) fn finish(&mut self) -> Vec<String> {
-        let line = std::mem::take(&mut self.buf);
-        Self::payload(&line).into_iter().collect()
-    }
-
-    fn payload(line: &[u8]) -> Option<String> {
-        String::from_utf8_lossy(line)
-            .trim()
-            .strip_prefix("data:")
-            .map(|payload| payload.trim().to_string())
-    }
-}
+#[cfg(test)]
+use crate::sse::SseLineBuffer;
 
 #[derive(Deserialize)]
 struct WireChunk {

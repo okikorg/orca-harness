@@ -327,7 +327,7 @@ mod mode_rewind_todo_tests {
     }
 
     #[tokio::test]
-    async fn todo_progress_pins_the_full_plan_in_the_live_region() {
+    async fn todo_progress_expands_from_the_status_row() {
         let todos = TodoList::new();
         set_todos(
             &todos,
@@ -338,7 +338,8 @@ mod mode_rewind_todo_tests {
             ]),
         )
         .await;
-        let app = app_with(ModeHandle::default(), todos);
+        let mut app = app_with(ModeHandle::default(), todos);
+        app.overlay = Some(Overlay::Todo);
 
         let rendered = live_lines(&app, 80)
             .iter()
@@ -368,7 +369,8 @@ mod mode_rewind_todo_tests {
             ]),
         )
         .await;
-        let app = app_with(ModeHandle::default(), todos);
+        let mut app = app_with(ModeHandle::default(), todos);
+        app.overlay = Some(Overlay::Todo);
 
         let rendered = live_lines(&app, 80)
             .iter()

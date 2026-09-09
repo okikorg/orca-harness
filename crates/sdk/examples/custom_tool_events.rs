@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output_tokens: 10,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
         ModelResponse::Final {
@@ -70,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output_tokens: 12,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
     ]);

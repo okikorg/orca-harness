@@ -403,6 +403,9 @@ pub(crate) fn handle_ui_msg(
                             fmt_tokens(app.turn_tokens_out)
                         ));
                     }
+                    if let Some(tokens) = app.turn_thinking_tokens {
+                        parts.push(format!("thinking {}", fmt_tokens(tokens)));
+                    }
                     push_turn_footer(app, &parts);
                 }
                 start_next_queued_prompt(app, worker, width);

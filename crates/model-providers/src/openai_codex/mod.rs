@@ -9,18 +9,21 @@ pub use orca_harness_provider_auth::{
 };
 
 use crate::catalog::{ModelInfo, ReasoningCapabilities, SupportedEfforts};
+use crate::sse::SseBuffer;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
 use std::{collections::HashMap, sync::Arc};
-use stream::{Accumulator, SseBuffer};
+use stream::Accumulator;
 use tokio::sync::Mutex;
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const ORCACODE_USER_AGENT: &str = concat!("orcacode/", env!("CARGO_PKG_VERSION"));
 // Codex uses this protocol-client version for catalog compatibility filtering.
 // It is deliberately independent of Orcacode's package version.
-const CODEX_PROTOCOL_VERSION: &str = "0.144.1";
+// Verified against the authenticated catalog: 0.144.1 omits gpt-6-astra,
+// while 0.153.3 advertises it for the same account.
+const CODEX_PROTOCOL_VERSION: &str = "0.153.3";
 
 /// The shared process client. Codex's user agent rides on each request
 /// instead of the client, because the client is shared with every other
@@ -166,7 +169,7 @@ pub struct OpenAiCodexModel {
     reasoning_effort: Option<String>,
     prompt_cache_key: Option<String>,
     credentials: Arc<dyn CodexCredentialSource>,
-    reasoning_by_call: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    reasoning_by_call: Mutex<HashMap<String, Arc<[serde_json::Value]>>>,
 }
 
 impl OpenAiCodexModel {
@@ -231,8 +234,33 @@ impl OpenAiCodexModel {
         stream: bool,
         credential: CodexCredential,
     ) -> Result<reqwest::Response, ModelError> {
+        let request = {
+            let continuation = self.continuation_for(context).await;
+            let body = request::body(
+                &self.model,
+                context,
+                tools,
+                stream,
+                &continuation,
+                self.reasoning_effort.as_deref(),
+                self.prompt_cache_key.as_deref(),
+            );
+            self.prepare_request(&body, stream, credential)
+        };
+        // Only serialized request bytes survive while the HTTP call is pending.
+        request
+            .send()
+            .await
+            .map_err(|e| crate::http_error::transport_error(&e))
+    }
+
+    fn prepare_request(
+        &self,
+        body: &serde_json::Value,
+        stream: bool,
+        credential: CodexCredential,
+    ) -> reqwest::RequestBuilder {
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
-        let continuation = self.continuation_for(context).await;
         let mut request = client()
             .post(url)
             .header(reqwest::header::USER_AGENT, ORCACODE_USER_AGENT)
@@ -247,20 +275,9 @@ impl OpenAiCodexModel {
                     "application/json"
                 },
             )
-            .json(&request::body(
-                &self.model,
-                context,
-                tools,
-                stream,
-                &continuation,
-                self.reasoning_effort.as_deref(),
-                self.prompt_cache_key.as_deref(),
-            ));
+            .json(body);
         request = request.header("chatgpt-account-id", credential.account_id);
         request
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))
     }
 }
 
@@ -295,7 +312,7 @@ impl Model for OpenAiCodexModel {
 }
 
 impl OpenAiCodexModel {
-    async fn continuation_for(&self, context: &Context) -> Vec<serde_json::Value> {
+    async fn continuation_for(&self, context: &Context) -> Arc<[serde_json::Value]> {
         let pending = self.reasoning_by_call.lock().await;
         context
             .messages()
@@ -329,7 +346,7 @@ impl OpenAiCodexModel {
 
 struct Collected {
     response: ModelResponse,
-    reasoning: Vec<serde_json::Value>,
+    reasoning: Arc<[serde_json::Value]>,
 }
 
 async fn collect_stream(
@@ -352,7 +369,7 @@ async fn collect_stream(
             }
         }
     }
-    let reasoning = accumulator.reasoning().to_vec();
+    let reasoning = accumulator.take_reasoning().into();
     let response = accumulator.finish()?;
     Ok(Collected {
         response,
@@ -368,7 +385,7 @@ mod catalog_tests {
     fn catalog_identifies_the_client_version() {
         assert_eq!(
             super::catalog_url("https://example.test/codex/"),
-            "https://example.test/codex/models?client_version=0.144.1"
+            "https://example.test/codex/models?client_version=0.153.3"
         );
     }
 
@@ -406,3 +423,9 @@ mod catalog_tests {
         assert_eq!(model.priority, 0);
     }
 }
+
+#[cfg(test)]
+mod continuation_tests;
+
+#[cfg(test)]
+mod request_bench;

@@ -25,6 +25,10 @@ pub struct Usage {
     pub input_tokens: u64,
     /// Completion tokens, including any provider-reported reasoning.
     pub output_tokens: u64,
+    /// Provider-reported reasoning tokens, already included in output_tokens.
+    /// None means the provider omitted this breakdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
     pub cache_read_tokens: u64,
     pub cache_create_tokens: u64,
 }
@@ -33,6 +37,9 @@ impl Usage {
     pub fn add(&mut self, other: &Usage) {
         self.input_tokens += other.input_tokens;
         self.output_tokens += other.output_tokens;
+        if let Some(tokens) = other.reasoning_tokens {
+            self.reasoning_tokens = Some(self.reasoning_tokens.unwrap_or(0).saturating_add(tokens));
+        }
         self.cache_read_tokens += other.cache_read_tokens;
         self.cache_create_tokens += other.cache_create_tokens;
     }

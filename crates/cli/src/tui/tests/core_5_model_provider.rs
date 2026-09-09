@@ -126,6 +126,11 @@
             })
             .collect();
 
+        assert_eq!(lines.len(), catalog().len() + 2, "help must reuse the spacer");
+        assert!(text[1].contains("Missing models?"));
+        let narrow = crate::tui::render::model_picker_lines(&picker, PICKER_ROWS + 2, 40);
+        assert_eq!(narrow.len(), lines.len(), "help must not wrap");
+        assert!(narrow[1].width() <= 40);
         assert!(text[0].contains("1/3"), "{}", text[0]);
         let fast = text.iter().find(|line| line.contains("acme/fast-1")).unwrap();
         let smart = text

@@ -216,6 +216,7 @@
                         output_tokens: output,
                         cache_read_tokens: 0,
                         cache_create_tokens: 0,
+                        reasoning_tokens: None,
                     },
                 }),
                 &tx,
@@ -294,6 +295,90 @@
         assert!(rx.try_recv().is_err(), "the tray never talks to the worker");
     }
 
+    #[tokio::test]
+    async fn status_row_opens_context_and_todo_overlays_and_esc_collapses_them() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        let tool = orca_harness_tools::TodoWriteTool::new(app.cfg.todos.clone());
+        let ctx = orca_harness_core::ToolContext {
+            call_id: "todo-status".into(),
+            tool_name: "todo_write".into(),
+            cancellation: CancellationToken::new(),
+            deadline: None,
+        };
+        orca_harness_core::Tool::call(
+            &tool,
+            serde_json::json!({"todos": [
+                {"content": "inspect status navigation", "status": "in_progress"},
+                {"content": "add overlays", "status": "pending"}
+            ]}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        press(&mut app, &tx, KeyCode::Down);
+        assert_eq!(app.status_focus, Some(StatusFocus::Context));
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Usage)));
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(app.overlay.is_none());
+
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Right);
+        assert_eq!(app.status_focus, Some(StatusFocus::Todo));
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Todo)));
+        let text = flat_lines(&live_lines(&app, 100));
+        assert!(text.contains("inspect status navigation"), "{text}");
+        assert!(text.contains("add overlays"), "{text}");
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn status_row_opens_the_running_process_list() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        let process = orca_harness_tools::ProcessTool::local().stats(app.cfg.stats.clone());
+        let ctx = orca_harness_core::ToolContext {
+            call_id: "status-process".into(),
+            tool_name: "process".into(),
+            cancellation: CancellationToken::new(),
+            deadline: None,
+        };
+        let spawned = orca_harness_core::Tool::call(
+            &process,
+            serde_json::json!({"action": "spawn", "command": "sleep 239.4"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Right);
+        assert_eq!(app.status_focus, Some(StatusFocus::Processes));
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::Processes)));
+        let text = flat_lines(&live_lines(&app, 100));
+        assert!(text.contains("processes · 1 running"), "{text}");
+        assert!(text.contains("p1  sleep 239.4"), "{text}");
+        assert!(
+            text.contains("ms") || text.contains("0s") || text.contains("1s"),
+            "{text}"
+        );
+        press(&mut app, &tx, KeyCode::Esc);
+        assert!(app.overlay.is_none());
+
+        orca_harness_core::Tool::call(
+            &process,
+            serde_json::json!({"action": "kill", "id": spawned["id"]}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    }
+
     #[test]
     fn later_turns_have_no_divider_or_trailing_spine() {
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -352,4 +437,66 @@
         let joined = flat_lines(&activity_lines(&app, 80, true));
         assert!(joined.contains("Shell · $ ls"));
         assert!(joined.contains("□ Shell · $ ls · approved"));
+    }
+
+    #[test]
+    fn codex_thinking_text_and_usage_reach_live_display_and_footer() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        handle_harness_event(
+            &mut app,
+            HarnessEvent::ReasoningDelta {
+                text: "Checking the code.".into(),
+            },
+            120,
+        );
+        let activity = activity_lines(&app, 120, true)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(activity.contains("Checking the code."), "{activity}");
+        assert!(app.turn_tokens_out > 0, "summary chunks advance live output before final usage");
+        assert_eq!(app.turn_thinking_tokens, None, "exact thinking usage is not yet reported");
+        for reasoning_tokens in [Some(200), None, Some(400)] {
+            handle_harness_event(
+                &mut app,
+                HarnessEvent::Usage {
+                    usage: orca_harness_core::Usage {
+                        output_tokens: 300,
+                        reasoning_tokens,
+                        ..Default::default()
+                    },
+                },
+                120,
+            );
+        }
+        let live = live_lines(&app, 120)
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(live.contains("thinking 600"), "{live}");
+        assert_eq!(app.turn_tokens_out, 900);
+        let screen = rendered_rows(&mut app, 120, 24).join("\n");
+        assert!(screen.contains("thinking 600"), "{screen}");
+        assert!(screen.contains("Checking the code."), "{screen}");
+        handle_ui_msg(
+            &mut app,
+            UiMsg::RunDone {
+                id: crate::msg::RunId::User(1),
+                result: Ok(String::new()),
+            },
+            &tx,
+            120,
+        );
+        let footer = pending_texts(&app).join("\n");
+        assert!(footer.contains("thinking 600"), "{footer}");
+        app.reset_activity();
+        assert_eq!(app.turn_thinking_tokens, None);
     }

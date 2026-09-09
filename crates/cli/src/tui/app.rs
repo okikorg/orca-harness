@@ -65,6 +65,7 @@ impl App {
             tokens_out: 0,
             turn_tokens_in: 0,
             turn_tokens_out: 0,
+            turn_thinking_tokens: None,
             turn_output_settled: 0,
             turn_reasoning_tokens: Default::default(),
             turn_text_tokens: Default::default(),
@@ -97,7 +98,7 @@ impl App {
             evicted_agent_histories: 0,
             agent_list_cache: std::cell::RefCell::new(None),
             agent_browser: None,
-            agents_status_focused: false,
+            status_focus: None,
             subagent_display: std::collections::HashMap::new(),
             palette_picker: ListPicker::new(super::command_catalog::COMMANDS.len()),
             overlay: None,
@@ -222,6 +223,7 @@ impl App {
         self.turn_tool_calls = 0;
         self.turn_tokens_in = 0;
         self.turn_tokens_out = 0;
+        self.turn_thinking_tokens = None;
         self.turn_output_settled = 0;
         self.turn_reasoning_tokens = Default::default();
         self.turn_text_tokens = Default::default();

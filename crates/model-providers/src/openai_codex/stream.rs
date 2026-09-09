@@ -2,50 +2,6 @@ use orca_harness_core::{ModelDelta, ModelError, ModelResponse, ToolCall, Usage};
 use serde_json::Value;
 
 #[derive(Default)]
-pub(crate) struct SseBuffer {
-    buf: Vec<u8>,
-}
-
-impl SseBuffer {
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, ModelError> {
-        self.buf.extend_from_slice(bytes);
-        let mut out = Vec::new();
-        while let Some((end, delimiter_len)) = frame_end(&self.buf) {
-            let frame: Vec<u8> = self.buf.drain(..end + delimiter_len).collect();
-            let frame = std::str::from_utf8(&frame).map_err(|_| {
-                ModelError::InvalidResponse("Codex SSE frame is not valid UTF-8".into())
-            })?;
-            let data = frame
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !data.is_empty() {
-                out.push(data);
-            }
-        }
-        Ok(out)
-    }
-}
-
-fn frame_end(bytes: &[u8]) -> Option<(usize, usize)> {
-    let crlf = bytes
-        .windows(4)
-        .position(|part| part == b"\r\n\r\n")
-        .map(|at| (at, 4));
-    let lf = bytes
-        .windows(2)
-        .position(|part| part == b"\n\n")
-        .map(|at| (at, 2));
-    match (crlf, lf) {
-        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
-        (Some(found), None) | (None, Some(found)) => Some(found),
-        (None, None) => None,
-    }
-}
-
-#[derive(Default)]
 pub(crate) struct Accumulator {
     text: String,
     calls: Vec<ToolCall>,
@@ -160,8 +116,8 @@ impl Accumulator {
         }
     }
 
-    pub(crate) fn reasoning(&self) -> &[Value] {
-        &self.reasoning
+    pub(crate) fn take_reasoning(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.reasoning)
     }
 }
 
@@ -177,12 +133,50 @@ fn parse_usage(value: &Value) -> Option<Usage> {
         output_tokens: value["output_tokens"].as_u64().unwrap_or(0),
         cache_read_tokens: cached,
         cache_create_tokens: 0,
+        reasoning_tokens: value
+            .pointer("/output_tokens_details/reasoning_tokens")
+            .and_then(Value::as_u64),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sse::SseBuffer;
+
+    #[test]
+    fn streams_summary_and_preserves_exact_reasoning_usage() {
+        let mut acc = Accumulator::default();
+        let deltas = acc
+            .apply(
+                r#"{"type":"response.reasoning_summary_text.delta","delta":"Checking the code."}"#,
+            )
+            .unwrap();
+        assert!(
+            matches!(deltas.as_slice(), [ModelDelta::Reasoning { text }] if text == "Checking the code.")
+        );
+        acc.apply(r#"{"type":"response.output_text.delta","delta":"Done."}"#)
+            .unwrap();
+        acc.apply(r#"{"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":850,"output_tokens_details":{"reasoning_tokens":600}}}}"#).unwrap();
+        let response = acc.finish().unwrap();
+        let usage = response.usage().unwrap();
+        assert_eq!(usage.reasoning_tokens, Some(600));
+        assert_eq!(usage.output_tokens, 850);
+        assert_eq!(usage.context_tokens(), 950);
+        assert!(matches!(response, ModelResponse::Final { text, .. } if text == "Done."));
+        assert_eq!(
+            parse_usage(&serde_json::json!({"output_tokens": 3}))
+                .unwrap()
+                .reasoning_tokens,
+            None
+        );
+        assert_eq!(
+            parse_usage(&serde_json::json!({"output_tokens_details": {"reasoning_tokens": 0}}))
+                .unwrap()
+                .reasoning_tokens,
+            Some(0)
+        );
+    }
 
     #[test]
     fn stream_errors_preserve_provider_retry_policy() {
@@ -281,7 +275,10 @@ mod tests {
     fn captures_encrypted_reasoning_and_rejects_incomplete_tool_calls() {
         let mut accumulator = Accumulator::default();
         accumulator.apply(r#"{"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[],"encrypted_content":"opaque"}}"#).unwrap();
-        assert_eq!(accumulator.reasoning()[0]["encrypted_content"], "opaque");
+        assert_eq!(
+            accumulator.take_reasoning()[0]["encrypted_content"],
+            "opaque"
+        );
         let error = accumulator.apply(
             r#"{"type":"response.output_item.done","item":{"type":"function_call","name":"shell","arguments":"{}"}}"#,
         ).unwrap_err();

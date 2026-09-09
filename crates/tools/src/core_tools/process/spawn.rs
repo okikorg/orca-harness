@@ -120,7 +120,9 @@ impl ProcessTool {
             }));
         }
 
-        self.manager.stats.inc_processes();
+        self.manager
+            .stats
+            .add_process(id.clone(), command_str.to_string());
 
         // The waiter owns the child: reap on exit or kill on demand, then
         // give the readers a moment to drain before signalling `done`.
@@ -140,6 +142,7 @@ impl ProcessTool {
             };
             *p.exit.lock().unwrap() = Some(status.ok().and_then(|s| s.code()));
             if p.counted.swap(false, Ordering::Relaxed) {
+                stats.remove_process(&p.id);
                 stats.dec_processes();
             }
             let _ = tokio::time::timeout(Duration::from_millis(200), async {

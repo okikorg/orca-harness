@@ -19,7 +19,7 @@ use crate::view::theme;
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
-use super::super::{App, InspectorBodyCache, ViewMode};
+use super::super::{App, InspectorBodyCache, StatusFocus, ViewMode};
 use super::agents::draw_agent_browser;
 use super::overlays::context_segment;
 use super::transcript::*;
@@ -316,8 +316,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     });
     let hint = if let Some(hint) = approval_hint.as_deref() {
         hint
-    } else if app.agents_status_focused {
-        "enter open agents · up composer"
+    } else if app.status_focus.is_some() {
+        "←→ move · enter open · ↑/esc composer"
     } else if app.scroll > 0 {
         // Fresh scroll: name the two ways to get text out, since capture
         // means a plain drag will not select. Then it settles back to the
@@ -355,6 +355,15 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         "enter send · @ paths · ctrl+o expand · wheel scroll"
     };
     let mut status = StatusBar::new();
+    let context = Segment::new(
+        context_segment(app.context_tokens, app.context_window, false),
+        status_bar::CONTEXT,
+    )
+    .with_compact(context_segment(
+        app.context_tokens,
+        app.context_window,
+        true,
+    ));
     status
         .push(Segment::new(
             format!("{}:{}", app.cfg.provider.label(), app.cfg.model_name),
@@ -372,24 +381,26 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             mode_segment(&app.cfg.mode, &app.cfg.plan),
             status_bar::KEEP,
         ))
-        .push(
-            Segment::new(
-                context_segment(app.context_tokens, app.context_window, false),
-                status_bar::CONTEXT,
-            )
-            .with_compact(context_segment(
-                app.context_tokens,
-                app.context_window,
-                true,
-            )),
-        );
+        .push(if app.status_focus == Some(StatusFocus::Context) {
+            context.with_style(theme().select)
+        } else {
+            context
+        });
     let active_agents = app
         .subagent_transcripts
         .values()
         .filter(|agent| agent.status.is_active())
         .count();
+    let process_stat = g.counted(g.process, "procs", &app.cfg.stats.processes().to_string());
     for stat in stats_segments(&app.cfg.stats, active_agents) {
-        let focused = app.agents_status_focused && stat.starts_with("agents ");
+        let focus = if stat == process_stat {
+            Some(StatusFocus::Processes)
+        } else if stat.starts_with("agents ") {
+            Some(StatusFocus::Agents)
+        } else {
+            None
+        };
+        let focused = focus == app.status_focus;
         let segment = Segment::new(
             stat,
             if focused {
@@ -405,10 +416,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         });
     }
     status
-        .push(Segment::new(
-            todo_segment(&app.cfg.todos),
-            status_bar::COUNTS,
-        ))
+        .push({
+            let segment = Segment::new(todo_segment(&app.cfg.todos), status_bar::COUNTS);
+            if app.status_focus == Some(StatusFocus::Todo) {
+                segment.with_style(theme().select)
+            } else {
+                segment
+            }
+        })
         .push(Segment::new(
             queue_segment(app.prompt_queue.len()),
             status_bar::COUNTS,

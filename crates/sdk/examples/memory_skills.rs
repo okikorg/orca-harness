@@ -200,6 +200,7 @@ async fn auto_recall_agent(harness: &Harness) {
                 output_tokens: 6,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
         ModelResponse::Final {
@@ -209,6 +210,7 @@ async fn auto_recall_agent(harness: &Harness) {
                 output_tokens: 12,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
     ]));

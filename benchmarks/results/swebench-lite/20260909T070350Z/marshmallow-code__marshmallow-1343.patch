@@ -1,0 +1,38 @@
+diff --git a/src/marshmallow/marshalling.py b/src/marshmallow/marshalling.py
+index feb7d1aa..fc603893 100644
+--- a/src/marshmallow/marshalling.py
++++ b/src/marshmallow/marshalling.py
+@@ -10,10 +10,8 @@ and from primitive types.
+ 
+ from __future__ import unicode_literals
+ 
+-import collections
+-
+ from marshmallow.utils import is_collection, missing, set_value
+-from marshmallow.compat import text_type, iteritems
++from marshmallow.compat import text_type, iteritems, Mapping
+ from marshmallow.exceptions import (
+     ValidationError,
+ )
+@@ -250,7 +248,7 @@ class Unmarshaller(ErrorStore):
+ 
+         ret = dict_class()
+ 
+-        if not isinstance(data, collections.Mapping):
++        if not isinstance(data, Mapping):
+             errors = self.get_errors(index=index)
+             msg = 'Invalid input type.'
+             self.error_field_names = [SCHEMA]
+diff --git a/src/marshmallow/schema.py b/src/marshmallow/schema.py
+index 085c509b..5dea2853 100644
+--- a/src/marshmallow/schema.py
++++ b/src/marshmallow/schema.py
+@@ -861,6 +861,8 @@ class BaseSchema(base.SchemaABC):
+         return data
+ 
+     def _invoke_field_validators(self, unmarshal, data, many):
++        if data is None:
++            return
+         for attr_name in self.__processors__[(VALIDATES, False)]:
+             validator = getattr(self, attr_name)
+             validator_kwargs = validator.__marshmallow_kwargs__[(VALIDATES, False)]

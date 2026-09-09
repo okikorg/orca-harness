@@ -5,6 +5,7 @@
 //! contains no provider-specific logic; this crate is where the protocol
 //! mapping lives.
 
+mod request;
 mod stream;
 
 use async_trait::async_trait;
@@ -13,10 +14,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use orca_harness_core::{
-    Context, DeltaSink, Message, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
+    Context, DeltaSink, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
 };
 
-use self::stream::{ChunkAccumulator, SseLineBuffer};
+use self::stream::ChunkAccumulator;
+use crate::sse::SseLineBuffer;
+#[cfg(test)]
+use request::encode_messages;
 
 fn parse_tool_arguments(
     tool_name: &str,
@@ -153,7 +157,7 @@ impl OpenAiModel {
         self.header(reqwest::header::USER_AGENT.as_str(), user_agent)
     }
 
-    async fn post(&self, body: &Value) -> Result<reqwest::Response, ModelError> {
+    fn prepare_request(&self, body: &Value) -> reqwest::RequestBuilder {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let mut request = crate::http::client().post(&url).json(body);
         if let Some(api_key) = &self.api_key {
@@ -162,130 +166,20 @@ impl OpenAiModel {
         for (name, value) in &self.headers {
             request = request.header(name.as_str(), value.as_str());
         }
+        request
+    }
+
+    async fn post(&self, body: Value) -> Result<reqwest::Response, ModelError> {
+        let request = self.prepare_request(&body);
+        // RequestBuilder owns the serialized bytes; release the JSON tree
+        // before waiting for a potentially long provider response.
+        drop(body);
         let response = request
             .send()
             .await
             .map_err(|e| crate::http_error::transport_error(&e))?;
         crate::http_error::check_response(response).await
     }
-
-    fn request_body(&self, context: &Context, tools: &[ToolSchema]) -> Value {
-        let mut body = json!({
-            "model": self.model,
-            "messages": encode_messages(context),
-        });
-        if !tools.is_empty() {
-            body["tools"] = Value::Array(
-                tools
-                    .iter()
-                    .map(|t| {
-                        json!({
-                            "type": "function",
-                            "function": {
-                                "name": t.name,
-                                "description": t.description,
-                                "parameters": t.parameters,
-                            }
-                        })
-                    })
-                    .collect(),
-            );
-            if let Some(enabled) = self.parallel_tool_calls {
-                body["parallel_tool_calls"] = json!(enabled);
-            }
-        }
-        if let Some(temperature) = self.temperature {
-            body["temperature"] = json!(temperature);
-        }
-        if let Some(max_tokens) = self.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
-        }
-        if let Some(effort) = &self.reasoning_effort {
-            if self.nested_reasoning {
-                body["reasoning"] = json!({"effort": effort});
-            } else {
-                body["reasoning_effort"] = json!(effort);
-            }
-        }
-        if self.usage_accounting {
-            body["usage"] = json!({"include": true});
-        }
-        if self.prompt_cache {
-            body["cache_control"] = json!({"type": "ephemeral"});
-        }
-        if let Some(session_id) = &self.session_id {
-            body["session_id"] = json!(session_id);
-        }
-        if let Some(prompt_cache_key) = &self.prompt_cache_key {
-            body["prompt_cache_key"] = json!(prompt_cache_key);
-        }
-        body
-    }
-}
-
-fn encode_messages(context: &Context) -> Vec<Value> {
-    let mut out = Vec::new();
-    for message in context.messages() {
-        match message {
-            Message::System { content } => {
-                out.push(json!({"role": "system", "content": content}));
-            }
-            Message::User { content, images } => {
-                if images.is_empty() {
-                    out.push(json!({"role": "user", "content": content}));
-                } else {
-                    let mut parts = vec![json!({"type": "text", "text": content})];
-                    parts.extend(images.iter().map(|image| {
-                        json!({
-                            "type": "image_url",
-                            "image_url": {"url": crate::image_data_url(image)},
-                        })
-                    }));
-                    out.push(json!({"role": "user", "content": parts}));
-                }
-            }
-            Message::Assistant {
-                content,
-                tool_calls,
-            } => {
-                let mut m = json!({"role": "assistant"});
-                m["content"] = match content {
-                    Some(text) => json!(text),
-                    None => Value::Null,
-                };
-                if !tool_calls.is_empty() {
-                    m["tool_calls"] = Value::Array(
-                        tool_calls
-                            .iter()
-                            .map(|c| {
-                                json!({
-                                    "id": c.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": c.name,
-                                        // The wire format carries arguments
-                                        // as a JSON-encoded string.
-                                        "arguments": c.arguments.to_string(),
-                                    }
-                                })
-                            })
-                            .collect(),
-                    );
-                }
-                out.push(m);
-            }
-            Message::Tool { results } => {
-                for result in results {
-                    out.push(json!({
-                        "role": "tool",
-                        "tool_call_id": result.call_id,
-                        "content": result.output.to_string(),
-                    }));
-                }
-            }
-        }
-    }
-    out
 }
 
 #[derive(Deserialize)]
@@ -341,6 +235,7 @@ impl WireUsage {
             output_tokens: self.completion_tokens,
             cache_read_tokens: cache_read,
             cache_create_tokens: cache_write,
+            reasoning_tokens: None,
         }
     }
 }
@@ -377,7 +272,7 @@ impl Model for OpenAiModel {
         context: &Context,
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
-        let response = self.post(&self.request_body(context, tools)).await?;
+        let response = self.post(self.request_body(context, tools)).await?;
         let body = response
             .text()
             .await
@@ -454,7 +349,7 @@ impl Model for OpenAiModel {
         body["stream"] = json!(true);
         body["stream_options"] = json!({"include_usage": true});
 
-        let response = self.post(&body).await?;
+        let response = self.post(body).await?;
         let mut bytes = response.bytes_stream();
         let mut lines = SseLineBuffer::default();
         let mut accumulator = ChunkAccumulator::new();
@@ -491,3 +386,6 @@ impl Model for OpenAiModel {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod request_bench;

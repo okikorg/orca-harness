@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 pub type StageId = String;
 pub const DEFAULT_STAGE_CAP: usize = 256;
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -35,7 +35,7 @@ impl std::fmt::Display for GraphError {
 impl std::error::Error for GraphError {}
 
 pub(crate) fn validate(
-    mut stages: Vec<Stage>,
+    stages: Vec<Stage>,
     cap: usize,
 ) -> Result<BTreeMap<StageId, Stage>, GraphError> {
     let error = |s: String| GraphError(s);
@@ -43,7 +43,7 @@ pub(crate) fn validate(
         return Err(error(format!("graph must contain 1..={cap} stages")));
     }
     let mut graph = BTreeMap::new();
-    for stage in &mut stages {
+    for mut stage in stages {
         if stage.id.is_empty()
             || !stage
                 .id
@@ -80,8 +80,13 @@ pub(crate) fn validate(
         }
         stage.needs.sort();
         stage.needs.dedup();
-        if graph.insert(stage.id.clone(), stage.clone()).is_some() {
-            return Err(error(format!("duplicate stage `{}`", stage.id)));
+        match graph.entry(stage.id.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(stage);
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => {
+                return Err(error(format!("duplicate stage `{}`", entry.key())));
+            }
         }
     }
     for stage in graph.values() {
@@ -96,30 +101,54 @@ pub(crate) fn validate(
             }
         }
     }
-    let mut ancestors: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    while ancestors.len() < graph.len() {
-        let before = ancestors.len();
-        for stage in graph.values() {
-            if ancestors.contains_key(&stage.id)
-                || !stage.needs.iter().all(|id| ancestors.contains_key(id))
+    // Compact ancestor bits avoid copying stage IDs for every transitive edge.
+    // Keep the validation waves in their original order to preserve diagnostics.
+    let indices: BTreeMap<_, _> = graph
+        .keys()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+    let mut ancestors: Vec<Option<Vec<u64>>> = vec![None; graph.len()];
+    let mut validated = 0;
+    while validated < graph.len() {
+        let before = validated;
+        for (index, stage) in graph.values().enumerate() {
+            if ancestors[index].is_some()
+                || !stage
+                    .needs
+                    .iter()
+                    .all(|id| ancestors[indices[id.as_str()]].is_some())
             {
                 continue;
             }
-            let mut upstream = BTreeSet::new();
+            let mut upstream = vec![0u64; graph.len().div_ceil(64)];
             for dep in &stage.needs {
-                upstream.insert(dep.clone());
-                upstream.extend(ancestors[dep].iter().cloned());
+                let dep = indices[dep.as_str()];
+                upstream[dep / 64] |= 1 << (dep % 64);
+                for (word, inherited) in upstream.iter_mut().zip(ancestors[dep].as_ref().unwrap()) {
+                    *word |= inherited;
+                }
             }
-            super::template::validate(&stage.prompt, &upstream, stage.kind == Kind::Map)?;
-            ancestors.insert(stage.id.clone(), upstream);
+            super::template::validate(
+                &stage.prompt,
+                |id| {
+                    indices
+                        .get(id)
+                        .is_some_and(|&i| upstream[i / 64] & (1 << (i % 64)) != 0)
+                },
+                stage.kind == Kind::Map,
+            )?;
+            ancestors[index] = Some(upstream);
+            validated += 1;
         }
-        if before == ancestors.len() {
+        if before == validated {
             return Err(error(format!(
                 "cycle involving: {}",
                 graph
                     .keys()
-                    .filter(|id| !ancestors.contains_key(*id))
-                    .cloned()
+                    .enumerate()
+                    .filter(|(i, _)| ancestors[*i].is_none())
+                    .map(|(_, id)| id.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             )));

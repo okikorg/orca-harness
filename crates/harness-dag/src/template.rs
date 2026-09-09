@@ -1,5 +1,5 @@
 use crate::GraphError;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 fn parts(prompt: &str) -> Result<Vec<(&str, Option<&str>)>, GraphError> {
     let mut rest = prompt;
     let mut result = Vec::new();
@@ -19,7 +19,7 @@ fn reference(expr: &str) -> Option<&str> {
 }
 pub(crate) fn validate(
     prompt: &str,
-    ancestors: &BTreeSet<String>,
+    is_ancestor: impl Fn(&str) -> bool,
     item: bool,
 ) -> Result<(), GraphError> {
     for (_, expr) in parts(prompt)? {
@@ -27,7 +27,7 @@ pub(crate) fn validate(
             if expr == "item" && item {
                 continue;
             }
-            if reference(expr).is_some_and(|id| ancestors.contains(id)) {
+            if reference(expr).is_some_and(&is_ancestor) {
                 continue;
             }
             return Err(GraphError(format!(
@@ -42,7 +42,7 @@ pub(crate) fn render(
     outputs: &BTreeMap<String, String>,
     item: Option<&str>,
 ) -> Result<String, GraphError> {
-    let mut text = String::new();
+    let mut text = String::with_capacity(prompt.len());
     for (literal, expr) in parts(prompt)? {
         text.push_str(literal);
         if let Some(expr) = expr {

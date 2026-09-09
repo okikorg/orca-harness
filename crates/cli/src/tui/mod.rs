@@ -43,7 +43,7 @@ pub(crate) use crate::prompt::strip_location_mentions;
 
 pub(crate) use self::state::{
     App, EffortPicker, InspectorBodyCache, InspectorMode, LocationPicker, ModelPicker, Overlay,
-    RunState, SkillMentionPicker, ToolActivity, TuiConfig, ViewMode,
+    RunState, SkillMentionPicker, StatusFocus, ToolActivity, TuiConfig, ViewMode,
 };
 #[cfg(test)]
 pub(crate) use self::state::{

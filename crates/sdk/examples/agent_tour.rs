@@ -86,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output_tokens: 8,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
         orca_harness_core::ModelResponse::Final {
@@ -96,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output_tokens: 18,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
     ]);

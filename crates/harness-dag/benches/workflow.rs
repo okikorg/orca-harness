@@ -16,10 +16,9 @@
 //! run reports chain dispatch growing linearly with chain length. This
 //! bench is the unit underneath that observation: it drives the same
 //! engine with no executor, no model, and no timer, so the curve is the
-//! engine's and nothing else's. Both `graph::validate`'s ancestor closure
-//! and `emit`'s ready-set rescan are O(stages) per stage, which predicts a
-//! quadratic in the shapes below; the numbers say whether that prediction
-//! is real and at what size it starts to matter.
+//! engine's and nothing else's. Admission uses compact ancestor bits; scheduling uses an ordered ready
+//! queue and counts map completions. These shapes track their scaling and
+//! guard against reintroducing full pending-stage or child-output rescans.
 //!
 //! Sizes stop at `DEFAULT_STAGE_CAP` (256) because that is the largest
 //! graph the shipped tool will admit — a curve past it would measure code
@@ -40,9 +39,8 @@ Be specific, cite the file you changed, and return only the artefact itself \
 with no preamble, no restatement of this instruction, and no trailing notes.";
 
 /// `s0 -> s1 -> ... -> s(n-1)`, each stage templating its predecessor.
-/// The worst case for both O(n) paths: every stage's ancestor set is the
-/// whole prefix, and every completion re-scans a pending map that shrinks
-/// by one.
+/// Every stage inherits the whole prefix, and each completion releases
+/// exactly one dependent. This separates admission from scheduling costs.
 fn chain(n: usize) -> Vec<Value> {
     (0..n)
         .map(|i| {
@@ -110,7 +108,7 @@ fn items(count: usize) -> String {
 /// Run a validated graph to completion, answering every stage the moment
 /// it is spawned. The `Dag` is handed back rather than dropped so its
 /// teardown lands outside `iter_batched`'s timer. This is the whole scheduling cost of a workflow with the
-/// model's time removed: `n` completions, each re-deriving the ready set.
+/// model's time removed: `n` completions, each releasing newly ready work.
 ///
 /// Answers are the map-source payload throughout — a plain JSON array —
 /// so a schema'd stage parses on the first try and no shape pays a retry

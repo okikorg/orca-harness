@@ -566,6 +566,28 @@ async fn process_stats_track_live_children() {
 }
 
 #[tokio::test]
+async fn process_stats_expose_running_process_identity_and_command() {
+    let stats = BackgroundStats::new();
+    let tool = ProcessTool::local().stats(stats.clone());
+    let out = tool
+        .call(json!({"action": "spawn", "command": "sleep 257.2"}), &ctx())
+        .await
+        .unwrap();
+    let id = out["id"].as_str().unwrap().to_string();
+
+    let listed = stats.process_list();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, id);
+    assert_eq!(listed[0].command, "sleep 257.2");
+    assert!(listed[0].running_for < Duration::from_secs(5));
+
+    tool.call(json!({"action": "kill", "id": id}), &ctx())
+        .await
+        .unwrap();
+    assert!(stats.process_list().is_empty());
+}
+
+#[tokio::test]
 async fn process_stats_zero_after_tool_drop() {
     let stats = BackgroundStats::new();
     {

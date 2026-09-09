@@ -58,6 +58,7 @@ fn detached_agent_keeps_a_bounded_semantic_transcript_until_clear() {
                 usage: orca_harness_core::Usage {
                     input_tokens: 12,
                     output_tokens: 4,
+                    reasoning_tokens: Some(3),
                     ..Default::default()
                 },
             },
@@ -88,6 +89,7 @@ fn detached_agent_keeps_a_bounded_semantic_transcript_until_clear() {
     );
     assert_eq!(transcript.input_tokens, 12);
     assert_eq!(transcript.output_tokens, 4);
+    assert_eq!(transcript.reasoning_tokens, Some(3));
     assert_eq!(
         transcript.entries.len(),
         1,
@@ -183,7 +185,7 @@ fn queued_background_agent_reads_as_queued_until_its_inner_loop_starts() {
 }
 
 #[test]
-fn down_focuses_agents_and_enter_opens_the_live_browser() {
+fn down_enters_the_status_row_and_arrows_reach_agents() {
     let (worker, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     start_test_subagent(&mut app, &worker);
@@ -197,10 +199,17 @@ fn down_focuses_agents_and_enter_opens_the_live_browser() {
         &worker,
         120,
     );
-    assert!(app.agents_status_focused);
+    assert_eq!(app.status_focus, Some(StatusFocus::Context));
+    handle_terminal_event(
+        &mut app,
+        CtEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        &worker,
+        120,
+    );
+    assert_eq!(app.status_focus, Some(StatusFocus::Agents));
     let status = rendered_rows(&mut app, 120, 30).join("\n");
     assert!(status.contains("agents 1"), "{status}");
-    assert!(status.contains("enter open agents"), "{status}");
+    assert!(status.contains("enter open"), "{status}");
 
     handle_terminal_event(
         &mut app,
@@ -269,7 +278,9 @@ fn status_line_counts_only_running_and_queued_agents() {
         "history remains available"
     );
     press_in_browser(&mut app, &worker, KeyCode::Down);
-    assert!(app.agents_status_focused);
+    assert_eq!(app.status_focus, Some(StatusFocus::Context));
+    press_in_browser(&mut app, &worker, KeyCode::Right);
+    assert_eq!(app.status_focus, Some(StatusFocus::Agents));
     press_in_browser(&mut app, &worker, KeyCode::Enter);
     assert!(app.agent_browser.is_some());
 }
@@ -346,7 +357,7 @@ fn down_keeps_history_behavior_when_the_composer_has_a_draft() {
         100,
     );
 
-    assert!(!app.agents_status_focused);
+    assert!(app.status_focus.is_none());
     assert_eq!(app.composer, "unfinished prompt");
 }
 

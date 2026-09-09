@@ -251,6 +251,10 @@ pub(crate) enum Overlay {
     Inspector { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
     Usage,
+    /// The current structured task list, expanded from the status line.
+    Todo,
+    /// Process-tool children that are still running.
+    Processes,
     /// Masked API-key entry for a provider whose key is not in the env.
     ApiKey { provider: Provider, input: String },
     /// Settings menu: shows the persisted preferences and jumps into
@@ -435,6 +439,15 @@ pub(crate) enum RunState {
     },
 }
 
+/// One status-line item reached by pressing down from an empty composer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusFocus {
+    Context,
+    Processes,
+    Agents,
+    Todo,
+}
+
 pub(crate) enum HeldInput {
     Text(String),
     Image { label: String, image: Image },
@@ -502,6 +515,7 @@ pub(crate) struct App {
     /// once, plus generated output reconciled to provider usage per step.
     pub(crate) turn_tokens_in: u64,
     pub(crate) turn_tokens_out: u64,
+    pub(crate) turn_thinking_tokens: Option<u64>,
     pub(super) turn_output_settled: u64,
     pub(super) turn_reasoning_tokens: TokenEstimator,
     pub(super) turn_text_tokens: TokenEstimator,
@@ -558,8 +572,8 @@ pub(crate) struct App {
         std::cell::RefCell<Option<std::sync::Arc<super::render::AgentListCache>>>,
     /// The dedicated read-only agent browser, when open.
     pub(crate) agent_browser: Option<AgentBrowser>,
-    /// Down from an empty newest composer focuses the actionable agent count.
-    pub(crate) agents_status_focused: bool,
+    /// Down from an empty newest composer focuses the interactive status row.
+    pub(crate) status_focus: Option<StatusFocus>,
     /// Resolved top-level worker identity retained until the work phase commits,
     /// including when a failed tool result has no structured identity payload.
     pub(crate) subagent_display: HashMap<String, SubagentDisplay>,

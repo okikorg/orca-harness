@@ -201,7 +201,7 @@ pub(crate) fn reset_conversation_ui(app: &mut App) {
     app.evicted_agent_histories = 0;
     app.invalidate_agent_list();
     app.agent_browser = None;
-    app.agents_status_focused = false;
+    app.status_focus = None;
     app.split_snapshot = None;
     // The answer is gone from the transcript; leaving it copyable would
     // hand back content the user just asked to be rid of.
@@ -215,6 +215,13 @@ pub(crate) fn model_picker_lines(
     let t = theme();
     let filtered = picker.filtered();
     let mut lines = Vec::new();
+    let help = Line::from(Span::styled(
+        view::truncate_line(
+            "  Missing models? Update Orcacode or check account access.",
+            width,
+        ),
+        t.dim,
+    ));
 
     let filter_note = if picker.filter.is_empty() {
         "type to filter".to_string()
@@ -248,11 +255,12 @@ pub(crate) fn model_picker_lines(
             "  no models match — backspace to widen",
             t.dim,
         )));
+        lines.push(help);
         return lines;
     }
 
     let rows = height.saturating_sub(2).max(1);
-    picker.picker.windowed_table_lines(
+    lines = picker.picker.windowed_table_lines(
         &format!("{title} · {filter_note} · →/enter {action} · esc close"),
         filtered.into_iter().map(|model| {
             let summary = model.summary();
@@ -266,7 +274,10 @@ pub(crate) fn model_picker_lines(
         [(8, 48), (0, usize::MAX)],
         width,
         rows,
-    )
+    );
+    // Reuse the table spacer so help never displaces a model row.
+    lines[1] = help;
+    lines
 }
 
 pub(crate) fn effort_picker_lines(picker: &EffortPicker, width: usize) -> Vec<Line<'static>> {

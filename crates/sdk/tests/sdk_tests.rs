@@ -51,6 +51,7 @@ async fn run_text_events_and_custom_tool() {
                 output_tokens: 5,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
         ModelResponse::Final {
@@ -60,6 +61,7 @@ async fn run_text_events_and_custom_tool() {
                 output_tokens: 10,
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
+                reasoning_tokens: None,
             }),
         },
     ]);

@@ -1,5 +1,7 @@
 use crate::{graph, template, GraphError, Kind, Stage, StageId, DEFAULT_STAGE_CAP};
 use serde::Serialize;
+mod maps;
+use maps::parse_items;
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -43,6 +45,8 @@ pub struct Dag {
     graph: BTreeMap<StageId, Stage>,
     edges: BTreeMap<StageId, Vec<StageId>>,
     pending: BTreeMap<StageId, usize>,
+    ready: BTreeSet<StageId>,
+    map_remaining: BTreeMap<StageId, usize>,
     output: BTreeMap<StageId, String>,
     in_flight: BTreeSet<StageId>,
     status: BTreeMap<StageId, StageStatus>,
@@ -62,8 +66,7 @@ impl Dag {
     pub fn with_cap(values: &[serde_json::Value], cap: usize) -> Result<Self, GraphError> {
         let stages = values
             .iter()
-            .cloned()
-            .map(serde_json::from_value)
+            .map(serde::Deserialize::deserialize)
             .collect::<Result<Vec<Stage>, _>>()
             .map_err(|e| GraphError(e.to_string()))?;
         let graph = graph::validate(stages, cap)?;
@@ -82,6 +85,12 @@ impl Dag {
                 .keys()
                 .map(|id| (id.clone(), StageStatus::Pending))
                 .collect(),
+            ready: graph
+                .values()
+                .filter(|s| s.needs.is_empty())
+                .map(|s| s.id.clone())
+                .collect(),
+            map_remaining: BTreeMap::new(),
             graph,
             edges,
             output: BTreeMap::new(),
@@ -172,6 +181,7 @@ impl Dag {
             }
         }
         self.settle(id, answer);
+        self.settle_parent(id);
         self.emit()
     }
     pub fn cancel(&mut self) -> Advance {
@@ -187,95 +197,41 @@ impl Dag {
         for next in self.edges.get(id).into_iter().flatten() {
             if let Some(n) = self.pending.get_mut(next) {
                 *n = n.saturating_sub(1);
+                if *n == 0 {
+                    self.ready.insert(next.clone());
+                }
             }
         }
     }
     fn emit(&mut self) -> Advance {
         let mut ready = Vec::new();
-        loop {
-            let ids: Vec<_> = self
-                .pending
-                .iter()
-                .filter(|(id, n)| {
-                    **n == 0 && !self.in_flight.contains(*id) && !self.maps.contains_key(*id)
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
-            if ids.is_empty() {
-                break;
-            }
+        while !self.ready.is_empty() {
+            // Drain a whole wave before admitting work unlocked by empty maps.
+            let ids = std::mem::take(&mut self.ready);
+            let mut empty_maps = Vec::new();
             for id in ids {
                 let mut stage = self.graph[&id].clone();
                 if stage.kind == Kind::Map {
-                    let source = stage.over.as_ref().unwrap();
-                    let schema = self.graph[source].schema.as_deref().unwrap_or("json[]");
-                    let items = match parse_items(&self.output[source], schema) {
-                        Ok(items) => items,
-                        Err(e) => return self.finish(RunState::Failed, Some(e)),
-                    };
-                    if self.graph.len().saturating_add(items.len()) > self.cap {
-                        return self.finish(
-                            RunState::Failed,
-                            Some(format!("map {id} exceeds stage cap {}", self.cap)),
-                        );
+                    match self.expand_map(&stage, &mut ready) {
+                        Ok(true) => empty_maps.push(id),
+                        Ok(false) => {}
+                        Err(error) => return self.finish(RunState::Failed, Some(error)),
                     }
-                    self.degraded |= items.is_empty();
-                    let mut children = Vec::new();
-                    for (index, item) in items.iter().enumerate() {
-                        let child_id = format!("{id}[{index}]");
-                        let item = item
-                            .as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| item.to_string());
-                        let prompt =
-                            match template::render(&stage.prompt, &self.output, Some(&item)) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    return self.finish(RunState::Failed, Some(e.to_string()))
-                                }
-                            };
-                        let child = Stage {
-                            id: child_id.clone(),
-                            prompt,
-                            needs: stage.needs.clone(),
-                            kind: Kind::Agent,
-                            over: None,
-                            schema: stage.schema.clone(),
-                            model: stage.model.clone(),
-                        };
-                        self.children.insert(child_id.clone(), id.clone());
-                        self.graph.insert(child_id.clone(), child.clone());
-                        self.status.insert(child_id.clone(), StageStatus::Running);
-                        self.in_flight.insert(child_id.clone());
-                        self.prompts.insert(child_id.clone(), child.prompt.clone());
-                        children.push(child_id);
-                        ready.push(child);
-                    }
-                    self.maps.insert(id.clone(), children);
-                    self.status.insert(id.clone(), StageStatus::Running);
                 } else {
                     stage.prompt = match template::render(&stage.prompt, &self.output, None) {
                         Ok(p) => p,
                         Err(e) => return self.finish(RunState::Failed, Some(e.to_string())),
                     };
-                    self.prompts.insert(id.clone(), stage.prompt.clone());
+                    if stage.schema.is_some() {
+                        self.prompts.insert(id.clone(), stage.prompt.clone());
+                    }
                     self.in_flight.insert(id.clone());
                     self.status.insert(id, StageStatus::Running);
                     ready.push(stage);
                 }
             }
-            self.settle_maps();
-        }
-        self.settle_maps();
-        // Settling a map may have unlocked normal downstream nodes.
-        if self
-            .pending
-            .iter()
-            .any(|(id, n)| *n == 0 && !self.in_flight.contains(id) && !self.maps.contains_key(id))
-        {
-            match self.emit() {
-                Advance::Spawn(more) => ready.extend(more),
-                other => return other,
+            for id in empty_maps {
+                self.settle(&id, "[]".into());
             }
         }
         if self.pending.is_empty() && self.in_flight.is_empty() {
@@ -289,31 +245,6 @@ impl Dag {
             ));
         }
         Advance::Spawn(ready)
-    }
-    fn settle_maps(&mut self) {
-        let done: Vec<_> = self
-            .maps
-            .iter()
-            .filter(|(id, children)| {
-                !self.output.contains_key(*id)
-                    && children.iter().all(|child| self.output.contains_key(child))
-            })
-            .map(|(id, children)| {
-                (
-                    id.clone(),
-                    serde_json::to_string(
-                        &children
-                            .iter()
-                            .map(|child| &self.output[child])
-                            .collect::<Vec<_>>(),
-                    )
-                    .unwrap(),
-                )
-            })
-            .collect();
-        for (id, output) in done {
-            self.settle(&id, output);
-        }
     }
     fn finish(&mut self, state: RunState, error: Option<String>) -> Advance {
         self.state = state.clone();
@@ -344,14 +275,6 @@ impl Dag {
         })
     }
 }
-fn parse_items(answer: &str, schema: &str) -> Result<Vec<serde_json::Value>, String> {
-    let values: Vec<serde_json::Value> = serde_json::from_str(answer).map_err(|e| e.to_string())?;
-    if schema == "string[]" && values.iter().any(|v| !v.is_string()) {
-        return Err("expected an array of strings".into());
-    }
-    Ok(values)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +282,7 @@ mod tests {
     fn lost_decrement_stalls_instead_of_waiting_forever() {
         let mut dag = Dag::validate(&[serde_json::json!({"id":"a","prompt":"a"})]).unwrap();
         dag.pending.insert("a".into(), 1);
+        dag.ready.clear();
         assert!(matches!(dag.start(), Advance::Stalled(_)));
     }
 }

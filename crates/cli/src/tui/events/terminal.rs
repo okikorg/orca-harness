@@ -23,7 +23,7 @@ use super::super::render::{
     agent_ids, cycle_agent_tab, selected_agent_copy, transcript_content_width,
 };
 use super::super::state::{
-    AgentBrowser, App, LocationPicker, Overlay, RunState, SkillMentionPicker,
+    AgentBrowser, App, LocationPicker, Overlay, RunState, SkillMentionPicker, StatusFocus,
 };
 use super::super::PALETTE_ROWS;
 use super::super::{
@@ -168,19 +168,36 @@ pub(crate) fn handle_terminal_event(
             return;
         }
     }
-    if app.agents_status_focused {
+    if let Some(focus) = app.status_focus {
+        let items = status_items(app);
+        let index = items.iter().position(|item| *item == focus).unwrap_or(0);
         match key.code {
-            KeyCode::Enter | KeyCode::Right => {
-                app.agent_browser = Some(AgentBrowser::new(agent_ids(app).len()));
-                app.agents_status_focused = false;
+            KeyCode::Enter => {
+                match focus {
+                    StatusFocus::Context => app.overlay = Some(Overlay::Usage),
+                    StatusFocus::Processes => app.overlay = Some(Overlay::Processes),
+                    StatusFocus::Agents => {
+                        app.agent_browser = Some(AgentBrowser::new(agent_ids(app).len()))
+                    }
+                    StatusFocus::Todo => app.overlay = Some(Overlay::Todo),
+                }
+                app.status_focus = None;
                 return;
             }
             KeyCode::Up | KeyCode::Esc => {
-                app.agents_status_focused = false;
+                app.status_focus = None;
                 return;
             }
-            KeyCode::Left | KeyCode::Down => return,
-            _ => app.agents_status_focused = false,
+            KeyCode::Left => {
+                app.status_focus = Some(items[index.saturating_sub(1)]);
+                return;
+            }
+            KeyCode::Right => {
+                app.status_focus = Some(items[(index + 1).min(items.len() - 1)]);
+                return;
+            }
+            KeyCode::Down => return,
+            _ => app.status_focus = None,
         }
     }
     let content_width = transcript_content_width(app, width);
@@ -376,15 +393,26 @@ pub(crate) fn handle_terminal_event(
         KeyCode::Down => {
             if app.palette_query().is_some() {
                 palette_move(app, 1);
-            } else if app.composer.is_empty()
-                && app.history_pos.is_none()
-                && !app.subagent_transcripts.is_empty()
-            {
-                app.agents_status_focused = true;
+            } else if app.composer.is_empty() && app.history_pos.is_none() {
+                app.status_focus = status_items(app).first().copied();
             } else {
                 history_nav(app, 1);
             }
         }
         _ => {}
     }
+}
+
+fn status_items(app: &App) -> Vec<StatusFocus> {
+    let mut items = vec![StatusFocus::Context];
+    if app.cfg.stats.processes() > 0 {
+        items.push(StatusFocus::Processes);
+    }
+    if !app.subagent_transcripts.is_empty() {
+        items.push(StatusFocus::Agents);
+    }
+    if !app.cfg.todos.is_empty() {
+        items.push(StatusFocus::Todo);
+    }
+    items
 }

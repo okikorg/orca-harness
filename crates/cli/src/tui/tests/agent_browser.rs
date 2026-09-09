@@ -168,7 +168,7 @@ fn agent_browser_tab_cycles_running_done_failed_and_all() {
 
     press_in_browser(&mut app, &worker, KeyCode::Tab);
     press_in_browser(&mut app, &worker, KeyCode::Esc);
-    app.agents_status_focused = true;
+    app.status_focus = Some(StatusFocus::Agents);
     press_in_browser(&mut app, &worker, KeyCode::Enter);
     assert_eq!(visible(&mut app), [true, false, false], "reopens on running");
     assert!(rendered_cell_is_bold(&mut app, 160, 36, "Running"));

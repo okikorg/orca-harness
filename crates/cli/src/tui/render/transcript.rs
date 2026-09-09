@@ -11,7 +11,7 @@ use crate::tui::state::{SubagentDisplay, ToolStatus};
 use crate::view::glyphs::glyphs;
 use crate::view::{self, theme};
 
-use super::super::format::tool_timing_label;
+use super::super::format::{elapsed_label, tool_timing_label};
 use super::super::{App, LocationPicker, SkillMentionPicker, ToolActivity, PICKER_ROWS};
 mod activity;
 pub(crate) use activity::*;
@@ -32,6 +32,36 @@ pub(crate) fn todo_lines(todos: &orca_harness_tools::TodoList, width: usize) -> 
         })
         .collect();
     progress_list("todo", &items, width)
+}
+
+pub(crate) fn process_lines(
+    stats: &orca_harness_tools::BackgroundStats,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let processes = stats.process_list();
+    let t = theme();
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  processes", t.strong),
+        Span::styled(format!(" · {} running", processes.len()), t.dim),
+    ])];
+    for (index, process) in processes.iter().enumerate() {
+        let branch = TreeBranch {
+            indent: "  ",
+            last: index + 1 == processes.len(),
+        };
+        let prefix = format!("{}{}  ", branch.prefix(), process.id);
+        let runtime = elapsed_label(process.running_for);
+        let detail_width = width
+            .saturating_sub(view::cell_width(&prefix) + view::cell_width(&runtime) + 2)
+            .min(72);
+        let command = view::truncate_line(&process.command, detail_width);
+        lines.push(Line::from(vec![
+            Span::styled(prefix, t.dim),
+            Span::styled(command, t.strong),
+            Span::styled(format!("  {runtime}"), t.dim),
+        ]));
+    }
+    lines
 }
 
 pub(crate) fn location_picker_lines(picker: &LocationPicker, width: usize) -> Vec<Line<'static>> {
