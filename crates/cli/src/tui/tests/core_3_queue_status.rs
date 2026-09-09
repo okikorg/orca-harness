@@ -440,7 +440,7 @@
     }
 
     #[test]
-    fn codex_thinking_text_and_usage_reach_live_display_and_footer() {
+    fn codex_thinking_text_is_visible_and_usage_is_in_output_total() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
         app.run = RunState::Running {
@@ -481,10 +481,13 @@
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(live.contains("thinking 600"), "{live}");
+        assert!(live.contains("↑0 ↓900"), "{live}");
+        assert!(!live.contains("thinking 600"), "{live}");
         assert_eq!(app.turn_tokens_out, 900);
+        assert_eq!(app.turn_thinking_tokens, Some(600));
         let screen = rendered_rows(&mut app, 120, 24).join("\n");
-        assert!(screen.contains("thinking 600"), "{screen}");
+        assert!(screen.contains("↑0 ↓900"), "{screen}");
+        assert!(!screen.contains("thinking 600"), "{screen}");
         assert!(screen.contains("Checking the code."), "{screen}");
         handle_ui_msg(
             &mut app,
@@ -496,7 +499,8 @@
             120,
         );
         let footer = pending_texts(&app).join("\n");
-        assert!(footer.contains("thinking 600"), "{footer}");
+        assert!(footer.contains("↑0 ↓900"), "{footer}");
+        assert!(!footer.contains("thinking 600"), "{footer}");
         app.reset_activity();
         assert_eq!(app.turn_thinking_tokens, None);
     }

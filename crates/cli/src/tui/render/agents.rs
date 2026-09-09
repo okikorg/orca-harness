@@ -339,13 +339,9 @@ fn transcript_header_lines(transcript: &SubagentTranscript, width: usize) -> Vec
         width,
         t.dim,
     ));
-    let thinking = transcript
-        .reasoning_tokens
-        .map(|tokens| format!(" · thinking {}", fmt_tokens(tokens)))
-        .unwrap_or_default();
     lines.push(agent_line(
         &format!(
-            "Tokens: in {} · out {}{thinking} · depth {}",
+            "Tokens: in {} · out {} · depth {}",
             fmt_tokens(transcript.input_tokens),
             fmt_tokens(transcript.output_tokens),
             transcript.depth

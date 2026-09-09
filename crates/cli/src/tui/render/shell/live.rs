@@ -313,7 +313,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             "working"
         };
         if let RunState::Running { started, .. } = &app.run {
-            let mut token_io = if app.turn_tokens_in == 0 && app.turn_tokens_out == 0 {
+            let token_io = if app.turn_tokens_in == 0 && app.turn_tokens_out == 0 {
                 String::new()
             } else {
                 format!(
@@ -322,9 +322,6 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
                     fmt_tokens(app.turn_tokens_out)
                 )
             };
-            if let Some(tokens) = app.turn_thinking_tokens {
-                token_io.push_str(&format!(" · thinking {}", fmt_tokens(tokens)));
-            }
             lines.push(Line::from(vec![
                 Span::styled(format!("  {spinner} "), t.accent),
                 Span::styled(
