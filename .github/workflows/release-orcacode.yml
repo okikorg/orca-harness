@@ -56,7 +56,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
 
       # The tag names the version (orcacode-v0.1.0 releases 0.1.0) and has to
       # agree with the workspace version the binary reports via --version,
@@ -141,7 +141,7 @@ jobs:
       # `targets` runs rustup target add, which is how the x86_64 darwin
       # build gets its std on the arm64 macos-14 runner.
       - name: rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
 
