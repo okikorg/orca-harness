@@ -1152,7 +1152,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "orca-harness-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "criterion",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "orca-harness-dag"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "criterion",
  "serde",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "orca-harness-extensions"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "criterion",
@@ -1191,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "orca-harness-model-providers"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1206,14 +1206,14 @@ dependencies = [
 
 [[package]]
 name = "orca-harness-provider-auth"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
 ]
 
 [[package]]
 name = "orca-harness-sdk"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "orca-harness-core",
  "orca-harness-extensions",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "orca-harness-tool-extensions"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "criterion",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "orca-harness-tools"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "criterion",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "orcacode"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
