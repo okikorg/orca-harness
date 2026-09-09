@@ -35,56 +35,15 @@ pub async fn run(
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(cfg);
-    let mut input = CtEventStream::new();
-    let mut ticker = tokio::time::interval(Duration::from_millis(120));
-    let shutdown = crate::shutdown_signal();
-    tokio::pin!(shutdown);
-
-    while !app.quit {
-        let width = terminal.size()?.width as usize;
-        app.absorb_pending();
-        terminal.draw(|frame| draw(frame, &mut app))?;
-
-        tokio::select! {
-            maybe_key = input.next() => {
-                match maybe_key {
-                    Some(Ok(event)) => handle_terminal_event(&mut app, event, &worker, width),
-                    // A dead input stream (stdin closed, terminal gone)
-                    // would otherwise make this select spin forever.
-                    Some(Err(_)) | None => app.quit = true,
-                }
-            }
-            maybe_msg = ui_rx.recv() => {
-                match maybe_msg {
-                    Some(msg) => {
-                        let content_width = transcript_content_width(&app, width);
-                        handle_ui_msg(&mut app, msg, &worker, content_width)
-                    },
-                    None => app.quit = true,
-                }
-            }
-            // Also tick while background processes live so their count
-            // stays fresh in the status line between runs, and while the
-            // scroll hint is up so it expires on its own rather than
-            // waiting for whatever the reader happens to press next.
-            _ = ticker.tick(), if app.running()
-                || app.cfg.stats.processes() > 0
-                || app.scroll_hint_live() => {
-                app.spinner_frame = app.spinner_frame.wrapping_add(1);
-            }
-            // SIGTERM/SIGHUP: leave through the normal quit path so tool
-            // destructors kill the child process groups. The guard keeps
-            // the completed future from being polled again.
-            _ = &mut shutdown, if !app.quit => {
-                app.quit = true;
-            }
-        }
-
-        // Between frames, never inside `draw`: these sequences produce no
-        // cells, so a renderer interleaving its own writes with them can
-        // split one mid-payload and leave the terminal parsing garbage.
-        flush_terminal_requests(&mut app)?;
-    }
+    super::event_loop::run_loop(
+        &mut terminal,
+        &mut app,
+        &worker,
+        &mut ui_rx,
+        CtEventStream::new(),
+        crate::shutdown_signal(),
+    )
+    .await?;
 
     crossterm::execute!(
         io::stdout(),

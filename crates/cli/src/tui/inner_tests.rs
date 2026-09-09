@@ -15,6 +15,7 @@ mod tests {
     include!("tests/agent_browser_cache.rs");
     include!("tests/subagent_history.rs");
     include!("tests/render_frames.rs");
+    include!("tests/streaming_performance.rs");
 }
 
 include!("tests/theme_subagent_mode.rs");

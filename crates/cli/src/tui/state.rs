@@ -491,6 +491,7 @@ pub(crate) struct App {
     pub(crate) reasoning_started: Option<Instant>,
     pub(crate) thinking_log: Vec<ThinkingRecord>,
     pub(crate) text: String,
+    pub(crate) streaming_markdown: std::cell::RefCell<super::render::StreamingMarkdownCache>,
     pub(crate) pending_assistant: Option<String>,
     pub(crate) assistant_started: bool,
     pub(crate) run: RunState,

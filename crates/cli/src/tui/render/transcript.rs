@@ -14,7 +14,9 @@ use crate::view::{self, theme};
 use super::super::format::{elapsed_label, tool_timing_label};
 use super::super::{App, LocationPicker, SkillMentionPicker, ToolActivity, PICKER_ROWS};
 mod activity;
+mod cache;
 pub(crate) use activity::*;
+pub(crate) use cache::StreamingMarkdownCache;
 
 /// The task list belongs beside the live run state, where the complete
 /// plan stays visible instead of disappearing into a clipped status line.
@@ -169,6 +171,7 @@ pub(crate) fn projected_tail(
 ) -> Vec<Line<'static>> {
     let mut tail = Vec::new();
     if !app.running() {
+        app.streaming_markdown.borrow_mut().clear();
         return tail;
     }
     let activity = activity_lines_selected(app, width, true, selected_tool);
@@ -184,7 +187,12 @@ pub(crate) fn projected_tail(
     let prior = (!committed_transcript(app, true).is_empty()).then_some(false);
     append_block(&mut tail, activity, BlockSpacing::Section, prior);
     if let Some(answer) = answer {
-        let mut lines = view::markdown_lines(answer, width, "  ");
+        let mut lines = app
+            .streaming_markdown
+            .borrow_mut()
+            .lines(answer, width)
+            .as_ref()
+            .clone();
         // The caret marks where the stream is; only while text is still
         // arriving, never on a message waiting for its result.
         let caret = glyphs().caret;
@@ -194,6 +202,8 @@ pub(crate) fn projected_tail(
             }
         }
         append_block(&mut tail, lines, BlockSpacing::Section, prior);
+    } else {
+        app.streaming_markdown.borrow_mut().clear();
     }
     tail
 }

@@ -62,7 +62,6 @@ use crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use futures_util::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::text::{Line, Span};
 use ratatui::Terminal;

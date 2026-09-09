@@ -49,6 +49,7 @@ impl App {
             reasoning_started: None,
             thinking_log: Vec::new(),
             text: String::new(),
+            streaming_markdown: Default::default(),
             pending_assistant: None,
             assistant_started: false,
             run: RunState::Idle,

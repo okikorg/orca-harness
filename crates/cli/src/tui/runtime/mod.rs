@@ -1,3 +1,4 @@
+pub(super) mod event_loop;
 mod submission;
 mod terminal;
 
