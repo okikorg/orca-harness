@@ -22,3 +22,24 @@ tokio.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+async-trait.workspace = true
+
+[[example]]
+name = "provider_anthropic"
+path = "examples/providers/anthropic.rs"
+
+[[example]]
+name = "provider_openai"
+path = "examples/providers/openai.rs"
+
+[[example]]
+name = "provider_openrouter"
+path = "examples/providers/openrouter.rs"
+
+[[example]]
+name = "provider_codex"
+path = "examples/providers/codex.rs"
+
+[[example]]
+name = "provider_gateway"
+path = "examples/providers/gateway.rs"

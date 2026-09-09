@@ -13,6 +13,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut api_key: Option<String> = None;
     let mut firecrawl_key: Option<String> = None;
     let mut openrouter = false;
+    let mut anthropic = false;
     let mut list_models = false;
     let mut workspace = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut prompt = None;
@@ -49,6 +50,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             "--api-key" => api_key = Some(value("--api-key")?),
             "--firecrawl-key" => firecrawl_key = Some(value("--firecrawl-key")?),
             "--openrouter" => openrouter = true,
+            "--anthropic" => anthropic = true,
             "--list-models" => list_models = true,
             "--workspace" => workspace = PathBuf::from(value("--workspace")?),
             "--max-steps" => {
@@ -107,13 +109,20 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         }
     }
 
-    let stored_provider = if openrouter || base_url.is_some() {
+    if openrouter && anthropic {
+        return Err("--anthropic and --openrouter cannot be combined".into());
+    }
+    let stored_provider = if openrouter || anthropic || base_url.is_some() {
         None
     } else {
         config::stored_provider().and_then(|label| Provider::from_label(&label))
     };
     let openrouter = openrouter || stored_provider == Some(Provider::OpenRouter);
-    let provider = select_provider(openrouter, base_url.is_some(), stored_provider);
+    let provider = if anthropic {
+        Provider::Anthropic
+    } else {
+        select_provider(openrouter, base_url.is_some(), stored_provider)
+    };
 
     if max_output_tokens.is_some() && provider == Provider::OpenAiCodex {
         return Err("--max-output-tokens is not supported by openai-codex".into());
@@ -126,6 +135,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         Provider::Vercel => Provider::Vercel.base_url().into(),
         Provider::CheaperInference => Provider::CheaperInference.base_url().into(),
         Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL.into(),
+        Provider::Anthropic => Provider::Anthropic.base_url().into(),
         Provider::OpenAi if api_key.is_some() => "https://api.openai.com/v1".into(),
         Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),
     });
