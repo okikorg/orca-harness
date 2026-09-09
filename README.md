@@ -738,9 +738,9 @@ is what makes it cheap to embed as a system's execution primitive
 
 ## Develop
 
-Local development and CI use Rust 1.98.1, pinned in `rust-toolchain.toml`
-and the GitHub Actions workflows. Rustup installs the pinned toolchain,
-including Clippy and rustfmt, when you run Cargo in this checkout.
+Local development and CI use the current Rust stable toolchain, selected by
+`rust-toolchain.toml`. Rustup installs it, including Clippy and rustfmt, when
+you run Cargo in this checkout.
 
 ```bash
 cd orca-harness
