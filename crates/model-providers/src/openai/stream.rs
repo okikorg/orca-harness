@@ -493,24 +493,30 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_cache_writes_are_split_out_of_cached_tokens() {
-        // OpenRouter usage accounting: cached_tokens can be hits + writes;
-        // reads and writes must separate and never double-count input.
+    fn openrouter_cache_reads_and_writes_are_disjoint() {
+        // OpenRouter usage accounting: cached_tokens (reads) and
+        // cache_write_tokens are separate, non-overlapping counts, not
+        // reads-plus-writes folded into one field. Numbers below are a
+        // real captured OpenRouter/Bedrock response for a request that
+        // both read an existing cache prefix and wrote a new one:
+        // prompt_tokens=19848, cached_tokens=9923, cache_write_tokens=9913
+        // (see #19). The two sum to prompt_tokens minus a small genuine
+        // uncached remainder; they must not be subtracted from each other.
         let mut acc = ChunkAccumulator::new();
         let _ = apply_all(
             &mut acc,
             &[
                 r#"{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}"#,
-                r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":60,"cache_write_tokens":40}}}"#,
+                r#"{"choices":[],"usage":{"prompt_tokens":19848,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":9923,"cache_write_tokens":9913}}}"#,
             ],
         );
         match acc.finish(true).unwrap() {
             ModelResponse::Final { usage, .. } => {
                 let usage = usage.expect("usage captured");
-                assert_eq!(usage.cache_read_tokens, 20, "60 reported minus 40 written");
-                assert_eq!(usage.cache_create_tokens, 40);
-                assert_eq!(usage.input_tokens, 40, "100 minus read minus write");
-                assert_eq!(usage.context_tokens(), 110);
+                assert_eq!(usage.cache_read_tokens, 9923);
+                assert_eq!(usage.cache_create_tokens, 9913);
+                assert_eq!(usage.input_tokens, 12, "19848 minus read minus write");
+                assert_eq!(usage.context_tokens(), 19848 + 5);
             }
             other => panic!("expected Final, got {other:?}"),
         }

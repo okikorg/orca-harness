@@ -214,19 +214,17 @@ impl WireUsage {
     pub(crate) fn into_usage(self) -> Usage {
         // OpenAI-style `prompt_tokens` INCLUDES cached tokens; harness
         // Usage semantics keep them separate, so subtract to avoid
-        // double-counting. Some providers (observed on OpenRouter) fold
-        // cache writes into `cached_tokens` too — remove them from the
-        // read figure. Matches pi-ai's normalization.
-        let reported_cached = match self.prompt_tokens_details.cached_tokens {
+        // double-counting. `cached_tokens` is reads-only and disjoint
+        // from `cache_write_tokens`, confirmed against live OpenRouter
+        // traffic: a request that both reads and writes cache reports
+        // both fields independently, summing to prompt_tokens. Do not
+        // subtract cache_write from cached_tokens here again; that
+        // double-counted every cache write into input_tokens (#19).
+        let cache_read = match self.prompt_tokens_details.cached_tokens {
             0 => self.prompt_cache_hit_tokens,
             cached => cached,
         };
         let cache_write = self.prompt_tokens_details.cache_write_tokens;
-        let cache_read = if cache_write > 0 {
-            reported_cached.saturating_sub(cache_write)
-        } else {
-            reported_cached
-        };
         Usage {
             input_tokens: self
                 .prompt_tokens
