@@ -6,7 +6,7 @@
 
 mod catalog;
 mod request;
-mod stream;
+pub(crate) mod stream;
 
 #[cfg(test)]
 mod tests;

@@ -2,7 +2,7 @@
 //! This is deliberately separate from OpenAI API-key billing.
 
 mod request;
-mod stream;
+pub(crate) mod stream;
 
 pub use orca_harness_provider_auth::{
     BearerCredential, CredentialError, CredentialErrorKind, CredentialSource, StaticCredential,

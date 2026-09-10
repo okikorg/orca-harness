@@ -5,7 +5,7 @@ use orca_harness_core::{ModelDelta, ModelError, ModelResponse, ToolCall, Usage};
 use serde_json::Value;
 
 #[derive(Default)]
-pub(super) struct Accumulator {
+pub(crate) struct Accumulator {
     started: bool,
     stopped: bool,
     stop_reason: Option<String>,
@@ -14,9 +14,9 @@ pub(super) struct Accumulator {
 }
 
 /// A finished response plus the signed thinking blocks that produced it.
-pub(super) struct Collected {
-    pub(super) response: ModelResponse,
-    pub(super) thinking: Arc<[Value]>,
+pub(crate) struct Collected {
+    pub(crate) response: ModelResponse,
+    pub(crate) thinking: Arc<[Value]>,
 }
 
 struct Block {
@@ -34,7 +34,7 @@ impl Accumulator {
         self.stopped
     }
 
-    pub(super) fn apply(&mut self, payload: &str) -> Result<Vec<ModelDelta>, ModelError> {
+    pub(crate) fn apply(&mut self, payload: &str) -> Result<Vec<ModelDelta>, ModelError> {
         let event: Value =
             serde_json::from_str(payload).map_err(|error| invalid(&error.to_string()))?;
         let mut deltas = Vec::new();
@@ -176,7 +176,7 @@ impl Accumulator {
         }
     }
 
-    pub(super) fn finish(self) -> Result<Collected, ModelError> {
+    pub(crate) fn finish(self) -> Result<Collected, ModelError> {
         match self.stop_reason.as_deref() {
             Some("max_tokens" | "model_context_window_exceeded") => {
                 return Err(ModelError::OutputLimit {

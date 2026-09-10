@@ -121,7 +121,7 @@ impl Accumulator {
     }
 }
 
-fn parse_usage(value: &Value) -> Option<Usage> {
+pub(crate) fn parse_usage(value: &Value) -> Option<Usage> {
     value.as_object()?;
     let input = value["input_tokens"].as_u64().unwrap_or(0);
     let cached = value
