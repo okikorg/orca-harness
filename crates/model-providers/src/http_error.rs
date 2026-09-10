@@ -6,6 +6,7 @@ use orca_harness_core::ModelError;
 use serde::{Deserialize, Serialize};
 
 const PREFIX: &str = "provider HTTP error: ";
+const AUTH_PREFIX: &str = "HTTP 401: ";
 
 #[derive(Serialize, Deserialize)]
 struct HttpFailure {
@@ -124,6 +125,136 @@ fn encode_failure(failure: HttpFailure) -> ModelError {
     ))
 }
 
+/// A provider failure rendered for a human instead of a JSON dump.
+///
+/// The wire payload is doubly encoded (`HttpFailure.message` is the raw body,
+/// which is itself JSON) and reaches the UI wrapped in `HarnessError`'s
+/// Display, so nothing downstream can read it without this.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Explained {
+    /// One-line headline, e.g. "HTTP 404 · no endpoint available".
+    pub headline: String,
+    /// The provider's own message, cleaned of nesting.
+    pub detail: String,
+    /// What the operator can do about it, when we know.
+    pub hint: Option<String>,
+}
+
+/// Parse a run failure string into something worth showing a person.
+///
+/// Returns `None` for anything that is not an encoded provider failure —
+/// cancellations and plain messages must render unchanged.
+pub fn explain(error: &str) -> Option<Explained> {
+    // `encode_failure` diverts 401 into `ModelError::Authentication`, which
+    // carries the raw body rather than the encoded failure, so that shape has
+    // to be recognised separately or the most common misconfiguration of all
+    // would still reach the screen as JSON.
+    let failure = match error.find(PREFIX) {
+        Some(start) => {
+            serde_json::from_str::<HttpFailure>(error[start + PREFIX.len()..].trim()).ok()?
+        }
+        None => {
+            let start = error.find(AUTH_PREFIX)? + AUTH_PREFIX.len();
+            HttpFailure {
+                status: Some(401),
+                code: None,
+                retry_after: None,
+                message: error[start..].trim().to_owned(),
+            }
+        }
+    };
+
+    // The body carried in `message` is itself a JSON error envelope, and some
+    // providers (OpenRouter) nest a second one inside its `message` field.
+    let mut body: serde_json::Value =
+        serde_json::from_str(&failure.message).unwrap_or(serde_json::Value::Null);
+    let mut detail = String::new();
+    let mut configure_url = None;
+    for _ in 0..3 {
+        let error = &body["error"];
+        if let Some(url) = error["metadata"]["ineligibility_reasons"]
+            .as_array()
+            .and_then(|reasons| reasons.iter().find_map(|r| r["configure_url"].as_str()))
+        {
+            configure_url = Some(url.to_owned());
+        }
+        let Some(message) = error["message"].as_str() else {
+            break;
+        };
+        detail = message.to_owned();
+        match serde_json::from_str::<serde_json::Value>(message) {
+            Ok(nested) if nested["error"].is_object() => body = nested,
+            _ => break,
+        }
+    }
+    // Falling back to the raw body is only an improvement when the body is not
+    // itself JSON; otherwise the dump this function exists to prevent returns.
+    if detail.trim().is_empty() {
+        detail = match serde_json::from_str::<serde_json::Value>(&failure.message) {
+            Ok(serde_json::Value::Object(_) | serde_json::Value::Array(_)) => {
+                "the provider gave no explanation".to_owned()
+            }
+            _ => failure.message.clone(),
+        };
+    }
+    detail = collapse(&detail);
+
+    let status = failure.status;
+    let summary = match status {
+        Some(400) => "malformed request",
+        Some(401) => "not authenticated",
+        Some(402) => "out of credits",
+        Some(403) => "blocked by policy",
+        Some(404) => "no endpoint available",
+        Some(408) | Some(429) => "rate limited",
+        Some(413) => "request too large",
+        Some(500..=599) => "provider outage",
+        _ => "request rejected",
+    };
+    let headline = match status {
+        Some(status) => format!("HTTP {status} · {summary}"),
+        None => format!("provider error · {summary}"),
+    };
+
+    let hint = configure_url
+        .map(|url| format!("adjust your provider settings at {url}, or pick another model"))
+        .or_else(|| {
+            Some(
+                match status {
+                    Some(401) => "check the API key for this provider (/model to switch)",
+                    Some(402) => "top up the provider account, or switch to another model",
+                    Some(403) => "the account or region is not allowed to use this model",
+                    Some(404) => "no provider can serve this model right now — try another one",
+                    Some(408) | Some(429) => {
+                        if let Some(delay) = failure.retry_after {
+                            return Some(format!("retry in {}s", delay.as_secs().max(1)));
+                        }
+                        "wait a moment and retry, or switch models"
+                    }
+                    Some(413) => "shorten the conversation (/clear) or send fewer files",
+                    Some(500..=599) => "the provider is failing — retry, or switch models",
+                    _ => return None,
+                }
+                .to_string(),
+            )
+        });
+
+    Some(Explained {
+        headline,
+        detail,
+        hint,
+    })
+}
+
+/// Provider messages arrive with escaped newlines and runs of whitespace.
+fn collapse(text: &str) -> String {
+    let flattened: String = text
+        .chars()
+        .map(|ch| if ch.is_whitespace() { ' ' } else { ch })
+        .collect();
+    flattened.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Provider policy for RetryModel: None is permanent; Some is a minimum wait.
 /// Unstructured transport failures retain the existing retry behavior.
 pub fn retry_delay(error: &ModelError) -> Option<Duration> {
@@ -164,6 +295,92 @@ pub fn retry_delay(error: &ModelError) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explain_unwraps_a_nested_openrouter_data_policy_rejection() {
+        let inner = serde_json::json!({
+            "error": {
+                "message": "No endpoints found matching your data policy (Paid model training).",
+                "code": 404,
+                "metadata": {
+                    "ineligibility_reasons": [{
+                        "reason": "paid-model-training-violation",
+                        "endpoint_count": 1,
+                        "configure_url": "https://openrouter.ai/settings/privacy"
+                    }]
+                }
+            }
+        });
+        let body = serde_json::json!({ "error": { "message": inner.to_string(), "code": 404 } });
+        let ModelError::Request(wire) = request_error(404, None, &body.to_string()) else {
+            panic!("expected Request");
+        };
+        // The UI sees the HarnessError Display wrapping, not the bare error.
+        let explained = explain(&format!("model error: request failed: {wire}")).unwrap();
+        assert_eq!(explained.headline, "HTTP 404 · no endpoint available");
+        assert_eq!(
+            explained.detail,
+            "No endpoints found matching your data policy (Paid model training)."
+        );
+        assert_eq!(
+            explained.hint.unwrap(),
+            "adjust your provider settings at https://openrouter.ai/settings/privacy, or pick another model"
+        );
+    }
+
+    #[test]
+    fn explain_uses_status_hints_and_retry_after() {
+        let body = serde_json::json!({"error": {"message": "slow down"}}).to_string();
+        let ModelError::Request(wire) = request_error(429, Some("12"), &body) else {
+            panic!("expected Request");
+        };
+        let explained = explain(&wire).unwrap();
+        assert_eq!(explained.headline, "HTTP 429 · rate limited");
+        assert_eq!(explained.detail, "slow down");
+        assert_eq!(explained.hint.unwrap(), "retry in 12s");
+    }
+
+    #[test]
+    fn explain_reads_the_authentication_variant_401_is_diverted_into() {
+        let body = serde_json::json!({"error": {"message": "No auth credentials found"}});
+        let ModelError::Authentication(wire) = request_error(401, None, &body.to_string()) else {
+            panic!("expected Authentication");
+        };
+        let explained = explain(&format!("model error: authentication failed: {wire}")).unwrap();
+        assert_eq!(explained.headline, "HTTP 401 · not authenticated");
+        assert_eq!(explained.detail, "No auth credentials found");
+        assert_eq!(
+            explained.hint.unwrap(),
+            "check the API key for this provider (/model to switch)"
+        );
+    }
+
+    #[test]
+    fn explain_never_falls_back_to_a_json_body_it_could_not_read() {
+        let body = serde_json::json!({"error": {"code": 500}}).to_string();
+        let ModelError::Request(wire) = request_error(500, None, &body) else {
+            panic!("expected Request");
+        };
+        let explained = explain(&wire).unwrap();
+        assert_eq!(explained.detail, "the provider gave no explanation");
+    }
+
+    #[test]
+    fn explain_leaves_plain_messages_alone() {
+        for text in ["cancelled", "model endpoint unavailable", ""] {
+            assert!(explain(text).is_none());
+        }
+    }
+
+    #[test]
+    fn explain_falls_back_to_the_raw_body_when_it_is_not_json() {
+        let ModelError::Request(wire) = request_error(500, None, "upstream exploded\n\n") else {
+            panic!("expected Request");
+        };
+        let explained = explain(&wire).unwrap();
+        assert_eq!(explained.headline, "HTTP 500 · provider outage");
+        assert_eq!(explained.detail, "upstream exploded");
+    }
 
     #[test]
     fn http_retry_classification_and_timing() {

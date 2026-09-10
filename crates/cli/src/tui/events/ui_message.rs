@@ -380,13 +380,35 @@ pub(crate) fn handle_ui_msg(
             app.approval = None;
             app.ask = None;
             if let Err(err) = result {
-                let (style, label) = if err.to_lowercase().contains("cancel") {
-                    (theme().dim, "interrupted".to_string())
-                } else {
-                    (theme().error, format!("run failed: {err}"))
-                };
                 let mut lines = Vec::new();
-                push_wrapped_lines(&mut lines, &label, "  ", style, width);
+                // A structured provider failure is never an interruption, so it
+                // takes precedence over the "cancel" substring check below.
+                if let Some(explained) = orca_harness_model_providers::http_error::explain(&err) {
+                    push_wrapped_lines(
+                        &mut lines,
+                        &format!("run failed · {}", explained.headline),
+                        "  ",
+                        theme().error,
+                        width,
+                    );
+                    push_wrapped_lines(&mut lines, &explained.detail, "  ", theme().dim, width);
+                    if let Some(hint) = &explained.hint {
+                        push_wrapped_lines(
+                            &mut lines,
+                            &format!("fix: {hint}"),
+                            "  ",
+                            theme().dim,
+                            width,
+                        );
+                    }
+                } else {
+                    let (style, label) = if err.to_lowercase().contains("cancel") {
+                        (theme().dim, "interrupted".to_string())
+                    } else {
+                        (theme().error, format!("run failed: {err}"))
+                    };
+                    push_wrapped_lines(&mut lines, &label, "  ", style, width);
+                }
                 app.push_transcript_block(lines, BlockSpacing::Tight);
             }
             if completed {

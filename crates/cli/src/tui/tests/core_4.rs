@@ -271,6 +271,58 @@
     }
 
     #[test]
+    fn provider_failures_render_as_headline_detail_and_fix() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.run = RunState::Running {
+            id: crate::msg::RunId::User(1),
+            started: Instant::now(),
+            cancel: CancellationToken::new(),
+        };
+        let inner = serde_json::json!({
+            "error": {
+                "message": "No endpoints found matching your data policy (Paid model training).",
+                "code": 404,
+                "metadata": {
+                    "ineligibility_reasons": [{
+                        "reason": "paid-model-training-violation",
+                        "configure_url": "https://openrouter.ai/settings/privacy"
+                    }]
+                }
+            }
+        });
+        let body = serde_json::json!({"error": {"message": inner.to_string(), "code": 404}});
+        let orca_harness_core::ModelError::Request(wire) =
+            orca_harness_model_providers::http_error::request_error(404, None, &body.to_string())
+        else {
+            panic!("expected Request");
+        };
+        handle_ui_msg(
+            &mut app,
+            UiMsg::RunDone {
+                id: crate::msg::RunId::User(1),
+                result: Err(format!("model error: request failed: {wire}")),
+            },
+            &tx,
+            80,
+        );
+        let joined = pending_texts(&app).join("\n");
+        assert!(
+            joined.contains("run failed · HTTP 404 · no endpoint available"),
+            "headline: {joined}"
+        );
+        assert!(
+            joined.contains("No endpoints found matching your data policy"),
+            "provider message unwrapped from its double encoding: {joined}"
+        );
+        assert!(
+            joined.contains("fix: adjust your provider settings at https://openrouter.ai/settings/privacy"),
+            "actionable link: {joined}"
+        );
+        assert!(!joined.contains("{\""), "no raw JSON reaches the screen: {joined}");
+    }
+
+    #[test]
     fn immediate_model_failure_renders_without_assistant_label() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
