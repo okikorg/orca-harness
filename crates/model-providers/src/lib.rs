@@ -28,3 +28,6 @@ fn image_data_url(image: &orca_harness_core::Image) -> String {
 
 #[cfg(test)]
 mod request_bench;
+
+#[cfg(test)]
+mod usage_reconciliation;
