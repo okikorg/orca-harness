@@ -1,6 +1,7 @@
 //! A single run: assembles the core agent from the session's definition
 //! and tools, drives it to completion, then persists transcript and
-//! recovery store.
+//! recovery store. Reports a [`RunOutcome`] whichever way the run ended,
+//! so partial usage and transcript survive failure and cancellation.
 
 use std::sync::Arc;
 
@@ -14,10 +15,11 @@ use orca_harness_extensions::{
 use orca_harness_tool_extensions::skills::SkillOnce;
 use tokio::sync::Mutex;
 
+use super::events::{EventFanout, RunObserver};
 use super::persistence::save_session_store;
 use super::BusyGuard;
 use crate::extensions::Compaction;
-use crate::{Agent, HarnessEvent, RunRequest, RunResult, SdkError};
+use crate::{Agent, RunOutcome, RunRequest, SdkError};
 
 pub(super) struct RunExecution {
     pub(super) definition: Agent,
@@ -28,7 +30,9 @@ pub(super) struct RunExecution {
     pub(super) store: TruncationStore,
     pub(super) request: RunRequest,
     pub(super) cancellation: CancellationToken,
-    pub(super) event_send: Option<tokio::sync::mpsc::UnboundedSender<HarnessEvent>>,
+    /// The observation channel of a background run; `None` for
+    /// [`Session::run`](super::Session::run).
+    pub(super) observer: Option<RunObserver>,
     pub(super) _busy: BusyGuard,
 }
 
@@ -48,7 +52,9 @@ fn ensure_continuable(context: &Context) -> Result<(), SdkError> {
     }
 }
 
-pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
+/// Drive one run. `Err` only when nothing ran: a continuation with nothing
+/// to continue. Every other way the run can end is inside the outcome.
+pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
     let RunExecution {
         definition,
         tools,
@@ -57,7 +63,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
         store,
         request,
         cancellation,
-        event_send,
+        observer,
         _busy,
     } = run;
     let mut context = context.lock().await;
@@ -72,15 +78,8 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
         limits.deadline = Some(tokio::time::Instant::now() + duration);
     }
     let (meter, usage) = UsageMeter::new();
-    let callback = request.on_event;
-    let events = EventStream::from_fn(move |event| {
-        if let Some(callback) = &callback {
-            callback(event.clone());
-        }
-        if let Some(send) = &event_send {
-            let _ = send.send(event);
-        }
-    });
+    let fanout = Arc::new(EventFanout::new(request.on_event, observer));
+    let events = EventStream::new(fanout.clone());
 
     let continue_at_step_limit = request.continue_at_step_limit && limits.max_steps > 0;
     let mut agent = CoreAgent::new(definition.inner.model.clone()).limits(limits);
@@ -132,24 +131,20 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
             result => break result,
         }
     };
-    let persistence_result = match &recorder {
+    let dropped_events = fanout.finish();
+    let persistence = match &recorder {
         Some(recorder) => {
             recorder.sync(&context);
             save_session_store(&store, &recorder.path())
         }
         None => Ok(()),
     };
-    let text = match run_result {
-        Ok(text) => {
-            persistence_result?;
-            text
-        }
-        Err(error) => return Err(error.into()),
-    };
-    Ok(RunResult {
-        text,
+    Ok(RunOutcome {
+        execution: run_result.map_err(SdkError::from),
         usage: usage.total(),
         metered_steps: usage.metered_steps(),
         messages: context.messages().to_vec(),
+        persistence,
+        dropped_events,
     })
 }

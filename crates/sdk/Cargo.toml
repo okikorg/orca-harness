@@ -16,6 +16,7 @@ orca-harness-provider-auth = { path = "../provider-auth" }
 orca-harness-tools = { path = "../tools" }
 orca-harness-tool-extensions = { path = "../tool-extensions" }
 orca-harness-extensions = { path = "../extensions" }
+async-trait.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

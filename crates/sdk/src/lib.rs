@@ -17,7 +17,9 @@ pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig}
 pub use harness::{Harness, HarnessBuilder};
 pub use mcp::{Mcp, McpServerStatus};
 pub use memory::{Memory, MemoryConfig};
-pub use run::{EventCallback, RunHandle, RunRequest, RunResult};
+pub use run::{
+    EventCallback, RunEvent, RunHandle, RunOutcome, RunRequest, RunResult, DEFAULT_EVENT_CAPACITY,
+};
 pub use session::{Session, SessionBuilder, SessionMode, Sessions};
 pub use skills::{SkillDestination, Skills};
 pub use tools::ToolPreset;

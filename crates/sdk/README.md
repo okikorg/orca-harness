@@ -6,7 +6,7 @@
 
 - `Harness` and `HarnessBuilder` assemble models, tools, extensions, callbacks, and host configuration.
 - `Agent` and `AgentBuilder` define reusable agent behavior and tool presets.
-- `RunRequest`, `RunHandle`, `RunResult`, and `EventCallback` start runs and consume streamed events or cancellation.
+- `RunRequest`, `RunHandle`, `RunResult`, `RunOutcome`, `RunEvent`, and `EventCallback` start runs, consume the bounded event stream or cancellation, and report detailed outcomes with partial usage on failure.
 - `Sessions`, `SessionBuilder`, and `Session` support persistent, forkable session workflows.
 - `Memory` configures explicit global/workspace memory; `Skills` manages skill sources and destinations.
 - `Mcp` reports MCP server status and coordinates MCP integration.

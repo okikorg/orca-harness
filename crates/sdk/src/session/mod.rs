@@ -1,6 +1,7 @@
 //! Session lifecycle: open/resume/fork/clear/reset, the session-owned tool
 //! state, and the busy guard that serializes operations on one session.
 
+mod events;
 mod execution;
 mod import;
 mod persistence;
@@ -14,12 +15,12 @@ use orca_harness_extensions::{
     compact, CompactConfig, CompactReport, SessionFile, SessionHandler, TruncationStore,
 };
 use orca_harness_tools::{FileGuard, TodoList};
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
 use crate::tools::SessionTools;
-use crate::{Agent, HarnessEvent, RunHandle, RunRequest, RunResult, SdkError};
+use crate::{Agent, RunHandle, RunOutcome, RunRequest, RunResult, SdkError};
 
+use events::RunObserver;
 use execution::{execute, RunExecution};
 use import::imported_context;
 use persistence::{load_session_store, save_session_store, session_store};
@@ -215,7 +216,23 @@ impl Session {
 
     /// Run one request to completion on this session. A request built with
     /// [`RunRequest::continuation`] behaves as [`continue_run`](Self::continue_run).
+    /// The convenience view of [`run_outcome`](Self::run_outcome): a run
+    /// or persistence failure is the `Err`, and the partial accounting
+    /// is dropped with it.
     pub async fn run(&self, request: impl Into<RunRequest>) -> Result<RunResult, SdkError> {
+        self.run_outcome(request).await?.into_result()
+    }
+
+    /// Run one request to completion and report its detailed
+    /// [`RunOutcome`], including usage and transcript when the run failed
+    /// or was cancelled. `Err` only when the run never started: the
+    /// session is busy, the request shape cannot run (a continuation with
+    /// a prompt, images, or nothing to continue), or an image cannot be
+    /// read.
+    pub async fn run_outcome(
+        &self,
+        request: impl Into<RunRequest>,
+    ) -> Result<RunOutcome, SdkError> {
         let busy = BusyGuard::acquire(self.busy.clone())?;
         execute(self.prepare_run(request.into(), None, busy)?).await
     }
@@ -242,14 +259,19 @@ impl Session {
     ///
     /// A continuation on a transcript with nothing beyond the system prompt
     /// is not rejected here: the run fails with [`SdkError::InvalidContext`]
-    /// from [`RunHandle::finish`] before any model call.
+    /// from [`RunHandle::finish`] or [`RunHandle::outcome`] before any
+    /// model call.
+    ///
+    /// The handle's event stream is bounded by
+    /// [`RunRequest::event_capacity`] and never blocks the run.
     pub fn start(&self, request: impl Into<RunRequest>) -> Result<RunHandle, SdkError> {
         let busy = BusyGuard::acquire(self.busy.clone())?;
-        let (send, receive) = tokio::sync::mpsc::unbounded_channel();
-        let run = self.prepare_run(request.into(), Some(send), busy)?;
+        let request = request.into();
+        let (observer, receiver, dropped) = RunObserver::channel(request.event_capacity);
+        let run = self.prepare_run(request, Some(observer), busy)?;
         let cancellation = run.cancellation.clone();
         let task = tokio::spawn(execute(run));
-        Ok(RunHandle::new(cancellation, receive, task))
+        Ok(RunHandle::new(cancellation, receiver, dropped, task))
     }
 
     /// The single construction site for a run over this session's state.
@@ -258,7 +280,7 @@ impl Session {
     fn prepare_run(
         &self,
         request: RunRequest,
-        event_send: Option<UnboundedSender<HarnessEvent>>,
+        observer: Option<RunObserver>,
         busy: BusyGuard,
     ) -> Result<RunExecution, SdkError> {
         if request.continuation && !request.prompt.is_empty() {
@@ -280,7 +302,7 @@ impl Session {
             store: self.truncation_store.clone(),
             request,
             cancellation,
-            event_send,
+            observer,
             _busy: busy,
         })
     }
