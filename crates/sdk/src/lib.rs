@@ -1,7 +1,8 @@
 //! High-level, CLI-independent Rust facade for Orca Harness.
 //!
-//! Everything a host needs is reachable from this crate alone. The most
-//! common types live at the top level; the rest are grouped by purpose:
+//! Everything a host needs is reachable from this crate alone. Each
+//! namespace below is the complete grouping for its area; the top level is
+//! a curated convenience subset of them.
 //!
 //! - [`contracts`]: companion types for implementing `Model`, `Tool`, and
 //!   `Extension`.
@@ -9,7 +10,8 @@
 //!   (including Codex).
 //! - [`orchestration`]: subagent, background process, and workflow handles.
 //! - [`integrations`]: MCP, skills, web, memory, session recording, and the
-//!   reusable extension handles (events, usage, retries, truncation).
+//!   reusable extension handles (events, policy, usage, retries,
+//!   truncation, compaction).
 
 mod agent;
 mod error;
@@ -34,9 +36,9 @@ pub use skills::{SkillDestination, Skills};
 pub use tools::ToolPreset;
 
 pub use orca_harness_core::{
-    CancellationToken, Context, Extension, ExtensionError, FnTool, HarnessError, Image, Limits,
-    Message, Model, ModelDelta, ModelError, ModelResponse, Subscriptions, Tool, ToolCall,
-    ToolContext, ToolError, ToolResult, ToolSchema, Usage,
+    CancellationToken, Concurrency, Context, Extension, ExtensionError, FnTool, HarnessError,
+    Image, Limits, Message, Model, ModelDelta, ModelError, ModelResponse, Next, Subscriptions,
+    Tool, ToolCall, ToolContext, ToolDecision, ToolError, ToolResult, ToolSchema, Usage,
 };
 pub use orca_harness_extensions::{
     CompactConfig, CompactReport, HarnessEvent, LongSessionConfig, MemoryRecord, PolicyOutcome,
@@ -86,19 +88,21 @@ pub mod orchestration {
         BackgroundJob, BackgroundProcess, BackgroundStats, BackgroundStatus, ProcessNotification,
         ProcessNotificationKind, ProcessTool, SpawnExtensions, SubagentDepth, SubagentIdentity,
         SubagentManager, SubagentModel, SubagentNotification, SubagentSpawn, SubagentTool,
-        WorkflowStore, WorkflowTool, DEFAULT_BACKGROUND_SUBAGENT_LIMIT, DEFAULT_SUBAGENT_MAX_STEPS,
-        DEFAULT_SUBAGENT_TIMEOUT, MIN_SUBAGENT_DEPTH, MIN_SUBAGENT_MAX_STEPS,
+        WorkflowStore, WorkflowTool,
     };
 }
 
 /// Optional integrations (MCP, skills, web, memory, session recording) and
-/// the reusable extension handles a host can register directly.
+/// the reusable extension handles a host can register directly, with the
+/// error types those handles return.
 pub mod integrations {
     pub use orca_harness_extensions::{
-        EventSink, EventStream, HarnessEvent, LoadedSession, MemoryExtension, MemoryManageTool,
+        CompactConfig, CompactError, CompactReport, EventSink, EventStream, HarnessEvent,
+        LoadedSession, LongSessionConfig, MemoryError, MemoryExtension, MemoryManageTool,
         MemoryModel, MemoryRecord, MemoryScope, MemorySearchTool, MemoryStore, ModelGate,
-        ModelRetryConfig, RetryModel, SessionError, SessionFile, SessionHandler, SessionMeta,
-        ToolExecutionEvents, ToolRetry, Truncation, TruncationStore, UsageHandle, UsageMeter,
+        ModelRetryConfig, PolicyOutcome, PolicyRule, RetryModel, SessionError, SessionFile,
+        SessionHandler, SessionMeta, ToolExecutionEvents, ToolPolicy, ToolRetry, Truncation,
+        TruncationStore, UsageHandle, UsageMeter,
     };
     pub use orca_harness_tool_extensions::{mcp, skills, web};
 }

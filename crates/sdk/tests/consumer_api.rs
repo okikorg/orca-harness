@@ -12,14 +12,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use orca_harness_sdk::contracts::{Concurrency, ModelError, Next, ToolDecision, ToolName};
+use orca_harness_sdk::contracts::ToolName;
 use orca_harness_sdk::providers::{
     CodexCredential, CodexCredentialSource, ModelInfo, OpenAiCodexModel,
 };
 use orca_harness_sdk::{
-    BearerCredential, Context, CredentialError, CredentialSource, Extension, ExtensionError,
-    Harness, HarnessError, Message, Model, ModelDelta, ModelResponse, Subscriptions, Tool,
-    ToolCall, ToolContext, ToolError, ToolResult, ToolSchema, Usage,
+    BearerCredential, Concurrency, Context, CredentialError, CredentialSource, Extension,
+    ExtensionError, Harness, HarnessError, Message, Model, ModelError, ModelResponse, Next,
+    Subscriptions, Tool, ToolCall, ToolContext, ToolDecision, ToolError, ToolResult, ToolSchema,
+    Usage,
 };
 use serde_json::{json, Value};
 
@@ -91,7 +92,7 @@ struct ShoutTool;
 impl Tool for ShoutTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: ToolName::from("shout"),
+            name: "shout".into(),
             description: "Uppercase the given text".into(),
             parameters: json!({
                 "type": "object",
@@ -114,13 +115,12 @@ impl Tool for ShoutTool {
     }
 }
 
-/// A custom extension that observes every tool hook and streaming delta.
+/// A custom extension that observes every tool hook.
 #[derive(Default)]
 struct Observer {
     before: AtomicUsize,
     around: AtomicUsize,
     after: AtomicUsize,
-    deltas: AtomicUsize,
 }
 
 #[async_trait]
@@ -134,18 +134,9 @@ impl Extension for Observer {
             .before_tool()
             .around_tool()
             .after_tool()
-            .model_delta()
-            .on_error()
     }
 
-    async fn on_model_delta(&self, _delta: &ModelDelta) {
-        self.deltas.fetch_add(1, Ordering::SeqCst);
-    }
-
-    async fn before_tool(&self, call: &ToolCall) -> Result<ToolDecision, ExtensionError> {
-        if call.name == "forbidden" {
-            return Err(ExtensionError::new(self.name(), "blocked"));
-        }
+    async fn before_tool(&self, _call: &ToolCall) -> Result<ToolDecision, ExtensionError> {
         self.before.fetch_add(1, Ordering::SeqCst);
         Ok(ToolDecision::Continue)
     }
@@ -169,8 +160,6 @@ impl Extension for Observer {
         self.after.fetch_add(1, Ordering::SeqCst);
         Ok(result)
     }
-
-    async fn on_error(&self, _error: &HarnessError) {}
 }
 
 /// A host-owned credential source that also satisfies the Codex contract.
@@ -226,19 +215,19 @@ async fn consumer_can_implement_every_contract_and_run() {
     assert_eq!(observer.before.load(Ordering::SeqCst), 1);
     assert_eq!(observer.around.load(Ordering::SeqCst), 1);
     assert_eq!(observer.after.load(Ordering::SeqCst), 1);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn consumer_can_configure_codex_credentials() {
     // Construction only; no network access.
-    let model = OpenAiCodexModel::new("gpt-5-codex", Arc::new(HostCredentials));
-    let _model = model.reasoning_effort("low");
+    let _ = OpenAiCodexModel::new("gpt-5-codex", Arc::new(HostCredentials)).reasoning_effort("low");
 }
 
 #[test]
 fn consumer_can_name_catalog_and_error_types() {
-    fn takes_info(_: Option<ModelInfo>) {}
-    takes_info(None);
+    let _: Option<ModelInfo> = None;
+    let _: ToolName = "shout".into();
 
     let err: HarnessError = ToolError::msg("boom").into();
     assert!(matches!(err, HarnessError::Tool(_)));
