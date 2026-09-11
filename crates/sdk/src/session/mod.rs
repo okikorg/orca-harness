@@ -8,14 +8,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use orca_harness_core::{CancellationToken, Context, Tool};
+use orca_harness_core::{CancellationToken, Context};
 use orca_harness_extensions::{
     compact, CompactConfig, CompactReport, SessionFile, SessionHandler, TruncationStore,
 };
 use orca_harness_tools::{FileGuard, TodoList};
 use tokio::sync::Mutex;
 
-use crate::tools::session_tools;
+use crate::tools::SessionTools;
 use crate::{Agent, RunHandle, RunRequest, RunResult, SdkError};
 
 use execution::{execute, RunExecution};
@@ -75,39 +75,6 @@ impl SessionBuilder {
     }
 }
 
-/// The tools one session runs with, plus the mutable built-in state they
-/// share. Built at open/resume/fork so two sessions never share a process
-/// manager, REPL, guard, or todo list unless the agent was configured
-/// with a caller-owned instance.
-struct SessionTools {
-    file_guard: FileGuard,
-    todo_list: Option<TodoList>,
-    tools: Vec<Arc<dyn Tool>>,
-}
-
-impl SessionTools {
-    fn new(agent: &Agent) -> Self {
-        let definition = &agent.inner;
-        let file_guard = definition.shared_file_guard.clone().unwrap_or_default();
-        let todo_list = definition
-            .wants_todos()
-            .then(|| definition.shared_todo_list.clone().unwrap_or_default());
-        let tools = session_tools(definition, &file_guard, todo_list.as_ref());
-        Self {
-            file_guard,
-            todo_list,
-            tools,
-        }
-    }
-
-    fn clear(&self) {
-        self.file_guard.clear();
-        if let Some(todos) = &self.todo_list {
-            todos.clear();
-        }
-    }
-}
-
 pub struct Session {
     agent: Agent,
     tools: SessionTools,
@@ -139,7 +106,7 @@ impl Session {
         };
         let truncation_store = session_store(&agent);
         Ok(Self {
-            tools: SessionTools::new(&agent),
+            tools: SessionTools::new(&agent.inner),
             agent,
             context: Arc::new(Mutex::new(context)),
             recorder,
@@ -165,7 +132,7 @@ impl Session {
         let (handler, loaded) = SessionHandler::resume(&path)?;
         let truncation_store = load_session_store(&agent, Some(&path))?;
         Ok(Self {
-            tools: SessionTools::new(&agent),
+            tools: SessionTools::new(&agent.inner),
             agent,
             context: Arc::new(Mutex::new(loaded.context)),
             recorder: Some(Arc::new(handler)),
@@ -187,12 +154,13 @@ impl Session {
         &self.load_warnings
     }
 
-    /// The read-before-write guard this session's file tools consult.
-    /// Session-owned unless the agent set [`AgentBuilder::file_guard`].
+    /// The read-before-write guard this session's file tools consult (a
+    /// shared handle). Session-owned unless the agent set
+    /// [`AgentBuilder::file_guard`].
     ///
     /// [`AgentBuilder::file_guard`]: crate::AgentBuilder::file_guard
-    pub fn file_guard(&self) -> &FileGuard {
-        &self.tools.file_guard
+    pub fn file_guard(&self) -> FileGuard {
+        self.tools.file_guard.clone()
     }
 
     /// The todo list behind this session's `todo_write` tool, when the
@@ -274,7 +242,7 @@ impl Session {
             save_session_store(&fork_store, &fork_path)?;
             let (new_handler, loaded) = SessionHandler::resume(&fork_path)?;
             Ok(Self {
-                tools: SessionTools::new(&self.agent),
+                tools: SessionTools::new(&self.agent.inner),
                 agent: self.agent.clone(),
                 context: Arc::new(Mutex::new(loaded.context)),
                 recorder: Some(Arc::new(new_handler)),

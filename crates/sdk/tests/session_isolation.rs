@@ -175,6 +175,41 @@ async fn fork_and_clear_reset_builtin_state() {
 }
 
 #[tokio::test]
+async fn resume_restores_transcript_but_not_builtin_state() {
+    let root = temp_dir("resume-fresh-state");
+    std::fs::write(root.join("notes.txt"), "original").unwrap();
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let model = ScriptedModel::tool_round(
+        vec![
+            call("r1", "read_file", json!({"path": "notes.txt"})),
+            todo_call("t1"),
+        ],
+        "planned",
+    );
+    let agent = harness
+        .agent(model)
+        .tools(ToolPreset::ShellLess)
+        .todos()
+        .build()
+        .unwrap();
+
+    let session = agent.new_session().persistent().open().unwrap();
+    let id = session.id().unwrap();
+    session.run("read and plan").await.unwrap();
+    assert_eq!(session.todo_list().unwrap().items().len(), 1);
+    assert_eq!(session.file_guard().len(), 1);
+    let turns = session.messages().await.len();
+    drop(session);
+
+    let resumed = agent.resume_session(&id).unwrap();
+    assert_eq!(resumed.messages().await.len(), turns);
+    assert!(resumed.todo_list().unwrap().items().is_empty());
+    assert!(resumed.file_guard().is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
 async fn process_manager_is_per_session() {
     let root = temp_dir("process-per-session");
     let harness = Harness::builder().workspace(&root).build().unwrap();
@@ -221,5 +256,8 @@ async fn process_manager_is_per_session() {
         "session B must not see session A's process: {tool_results:?}"
     );
 
+    // Dropping `a` drops its sole ProcessTool, whose Manager Drop kills the
+    // process group, so `sleep 5` does not leak past the test.
+    drop(a);
     let _ = std::fs::remove_dir_all(&root);
 }

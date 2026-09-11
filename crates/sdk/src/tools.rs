@@ -23,10 +23,10 @@ pub enum ToolPreset {
     ShellLess,
 }
 
-/// One builder call that contributes tools, recorded in call order so a
-/// session registers them exactly as the agent-level list used to.
-/// `Custom` tools are caller-owned and shared by every session; the other
-/// variants are built fresh per session.
+/// One builder call that contributes tools, recorded so a session
+/// registers them in builder call order. `Custom` tools are caller-owned
+/// and shared by every session; the other variants are built fresh per
+/// session.
 pub(crate) enum ToolSource {
     Custom(Arc<dyn Tool>),
     Python,
@@ -63,29 +63,51 @@ pub(crate) fn preset_tools(
     }
 }
 
-/// Builds the full tool list for one session: preset tools wired to the
-/// session's `guard`, then the builder-ordered sources, then the
-/// agent-level tools (skills, MCP, memory) that are shared by design.
-/// `todos` must be `Some` when the recipe contains [`ToolSource::Todos`].
-pub(crate) fn session_tools(
-    definition: &AgentDefinition,
-    guard: &FileGuard,
-    todos: Option<&TodoList>,
-) -> Vec<Arc<dyn Tool>> {
-    let workspace = definition.harness.workspace();
-    let working_dir = || workspace.root().display().to_string();
-    let mut tools = preset_tools(definition.preset, workspace, guard);
-    for source in &definition.tool_sources {
-        tools.push(match source {
-            ToolSource::Custom(tool) => tool.clone(),
-            ToolSource::Python => Arc::new(PyKernelTool::new().working_dir(working_dir())),
-            ToolSource::Bun => Arc::new(BunReplTool::new().working_dir(working_dir())),
-            ToolSource::Todos => {
-                let list = todos.expect("todo list is created whenever the recipe asks for todos");
-                Arc::new(TodoWriteTool::new(list.clone()))
-            }
-        });
+/// The tools one session runs with, plus the mutable built-in state
+/// behind them. Built at open/resume/fork so two sessions never share a
+/// process manager, REPL, guard, or todo list unless the agent was
+/// configured with a caller-owned instance.
+pub(crate) struct SessionTools {
+    pub(crate) file_guard: FileGuard,
+    pub(crate) todo_list: Option<TodoList>,
+    pub(crate) tools: Vec<Arc<dyn Tool>>,
+}
+
+impl SessionTools {
+    /// Materializes the recipe: preset tools wired to the session's guard,
+    /// then the builder-ordered sources, then the agent-level tools
+    /// (skills, MCP, memory) that are shared by design.
+    pub(crate) fn new(definition: &AgentDefinition) -> Self {
+        let workspace = definition.harness.workspace();
+        let working_dir = || workspace.root().display().to_string();
+        let file_guard = definition.shared_file_guard.clone().unwrap_or_default();
+        let mut todo_list: Option<TodoList> = None;
+        let mut tools = preset_tools(definition.preset, workspace, &file_guard);
+        for source in &definition.tool_sources {
+            tools.push(match source {
+                ToolSource::Custom(tool) => tool.clone(),
+                ToolSource::Python => Arc::new(PyKernelTool::new().working_dir(working_dir())),
+                ToolSource::Bun => Arc::new(BunReplTool::new().working_dir(working_dir())),
+                ToolSource::Todos => {
+                    let list = todo_list.get_or_insert_with(|| {
+                        definition.shared_todo_list.clone().unwrap_or_default()
+                    });
+                    Arc::new(TodoWriteTool::new(list.clone()))
+                }
+            });
+        }
+        tools.extend(definition.shared_tools.iter().cloned());
+        Self {
+            file_guard,
+            todo_list,
+            tools,
+        }
     }
-    tools.extend(definition.shared_tools.iter().cloned());
-    tools
+
+    pub(crate) fn clear(&self) {
+        self.file_guard.clear();
+        if let Some(todos) = &self.todo_list {
+            todos.clear();
+        }
+    }
 }

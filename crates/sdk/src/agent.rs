@@ -21,7 +21,7 @@ pub(crate) struct AgentDefinition {
     pub system_prompt: Option<String>,
     pub limits: Limits,
     /// The tool recipe: sessions materialize `preset` and `tool_sources`
-    /// themselves (see [`crate::tools::session_tools`]) so mutable
+    /// themselves (see [`crate::tools::SessionTools`]) so mutable
     /// built-ins are session-owned; `shared_tools` (skills, MCP, memory)
     /// are built once here and appended after them.
     pub preset: ToolPreset,
@@ -38,14 +38,6 @@ pub(crate) struct AgentDefinition {
     /// its own. `None` means each session gets a fresh one.
     pub shared_file_guard: Option<FileGuard>,
     pub shared_todo_list: Option<TodoList>,
-}
-
-impl AgentDefinition {
-    pub(crate) fn wants_todos(&self) -> bool {
-        self.tool_sources
-            .iter()
-            .any(|source| matches!(source, ToolSource::Todos))
-    }
 }
 
 pub struct AgentBuilder {
@@ -120,7 +112,8 @@ impl AgentBuilder {
     }
 
     /// Use one caller-owned read-before-write guard for every session
-    /// instead of giving each session its own.
+    /// instead of giving each session its own (and
+    /// [`Session::clear`](crate::Session::clear) clears it).
     pub fn file_guard(mut self, guard: FileGuard) -> Self {
         self.shared_file_guard = Some(guard);
         self
