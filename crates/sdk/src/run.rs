@@ -1,13 +1,19 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use orca_harness_core::{CancellationToken, Image, Message, Usage};
 use orca_harness_extensions::HarnessEvent;
+use tokio::sync::mpsc;
 
 use crate::SdkError;
 
 pub type EventCallback = Arc<dyn Fn(HarnessEvent) + Send + Sync>;
+
+/// Default capacity of the observation channel behind
+/// [`RunHandle::events`]; see [`RunRequest::event_capacity`].
+pub const DEFAULT_EVENT_CAPACITY: usize = 1024;
 
 #[derive(Clone)]
 pub struct RunRequest {
@@ -20,6 +26,7 @@ pub struct RunRequest {
     pub(crate) continuation: bool,
     /// A caller-owned token; the run gets a child of it.
     pub(crate) cancellation: Option<CancellationToken>,
+    pub(crate) event_capacity: usize,
 }
 
 impl RunRequest {
@@ -32,6 +39,7 @@ impl RunRequest {
             continue_at_step_limit: false,
             continuation: false,
             cancellation: None,
+            event_capacity: DEFAULT_EVENT_CAPACITY,
         }
     }
 
@@ -129,6 +137,20 @@ impl RunRequest {
         self.on_event = Some(Arc::new(callback));
         self
     }
+
+    /// Capacity of the observation channel a background run feeds (see
+    /// [`RunHandle::events`]); default [`DEFAULT_EVENT_CAPACITY`], and a
+    /// value below one is raised to one. The stream is observational and
+    /// lossy under backpressure: the run never waits for a reader, so
+    /// events that arrive while the channel is full are dropped and
+    /// reported through [`RunEvent::Overflow`] and
+    /// [`RunOutcome::dropped_events`]. The terminal outcome is
+    /// authoritative regardless. Ignored by
+    /// [`Session::run`](crate::Session::run), which has no channel.
+    pub fn event_capacity(mut self, capacity: usize) -> Self {
+        self.event_capacity = capacity.max(1);
+        self
+    }
 }
 
 impl From<&str> for RunRequest {
@@ -143,6 +165,8 @@ impl From<String> for RunRequest {
     }
 }
 
+/// The convenience view of a successful run; see [`RunOutcome`] for the
+/// detailed one.
 #[derive(Debug, Clone)]
 pub struct RunResult {
     pub text: String,
@@ -151,21 +175,102 @@ pub struct RunResult {
     pub messages: Vec<Message>,
 }
 
+/// Everything a run reports when it ends, whichever way it ended. The
+/// accounting fields are filled in on failure and cancellation as well as
+/// on success, and a persistence failure is reported next to the run's
+/// own result rather than in its place.
+#[derive(Debug)]
+pub struct RunOutcome {
+    /// The final assistant text, or why the run stopped: the kernel's
+    /// [`HarnessError`](crate::HarnessError) (`Cancelled`,
+    /// `DeadlineExceeded`, `StepLimitExceeded`, `Model`, ...) wrapped in
+    /// [`SdkError::Harness`].
+    pub execution: Result<String, SdkError>,
+    /// Token usage metered over the whole run, including the steps that
+    /// completed before a failure.
+    pub usage: Usage,
+    /// Model steps the usage meter saw.
+    pub metered_steps: u64,
+    /// The transcript as the run left it, including a partial tool
+    /// exchange when the run stopped mid-step.
+    pub messages: Vec<Message>,
+    /// Whether the transcript and recovery store were saved (always `Ok`
+    /// for an ephemeral session). Attempted after every run, whatever
+    /// `execution` holds.
+    pub persistence: Result<(), SdkError>,
+    /// Events the observation channel could not hold; see
+    /// [`RunRequest::event_capacity`]. Always zero for a run without a
+    /// [`RunHandle`].
+    pub dropped_events: u64,
+}
+
+impl RunOutcome {
+    /// Both the run and its persistence succeeded.
+    pub fn is_success(&self) -> bool {
+        self.execution.is_ok() && self.persistence.is_ok()
+    }
+
+    /// Collapse to the convenience result: the execution error if any,
+    /// otherwise the persistence error if any, otherwise the
+    /// [`RunResult`]. The partial accounting is lost on the error paths.
+    pub fn into_result(self) -> Result<RunResult, SdkError> {
+        let text = self.execution?;
+        self.persistence?;
+        Ok(RunResult {
+            text,
+            usage: self.usage,
+            metered_steps: self.metered_steps,
+            messages: self.messages,
+        })
+    }
+}
+
+/// One item of a background run's observation stream.
+#[derive(Debug, Clone)]
+pub enum RunEvent {
+    /// A lifecycle event, in emission order.
+    Harness(HarnessEvent),
+    /// `dropped` events were discarded between the previous delivered
+    /// event and the next one because the channel was full (see
+    /// [`RunRequest::event_capacity`]). Emitted once per gap, as soon as
+    /// capacity is available again; a gap still open when the run ends is
+    /// reported by a final marker that always fits, so the markers in a
+    /// fully drained stream sum to [`RunOutcome::dropped_events`].
+    Overflow { dropped: u64 },
+}
+
+impl RunEvent {
+    /// The lifecycle event, if this is one.
+    pub fn harness(self) -> Option<HarnessEvent> {
+        match self {
+            Self::Harness(event) => Some(event),
+            Self::Overflow { .. } => None,
+        }
+    }
+}
+
+/// A background run started with [`Session::start`](crate::Session::start).
+/// Dropping the handle cancels the run.
 pub struct RunHandle {
     cancellation: CancellationToken,
-    events: tokio::sync::mpsc::UnboundedReceiver<HarnessEvent>,
-    task: Option<tokio::task::JoinHandle<Result<RunResult, SdkError>>>,
+    events: mpsc::Receiver<RunEvent>,
+    events_taken: bool,
+    dropped: Arc<AtomicU64>,
+    task: Option<tokio::task::JoinHandle<Result<RunOutcome, SdkError>>>,
 }
 
 impl RunHandle {
     pub(crate) fn new(
         cancellation: CancellationToken,
-        events: tokio::sync::mpsc::UnboundedReceiver<HarnessEvent>,
-        task: tokio::task::JoinHandle<Result<RunResult, SdkError>>,
+        events: mpsc::Receiver<RunEvent>,
+        dropped: Arc<AtomicU64>,
+        task: tokio::task::JoinHandle<Result<RunOutcome, SdkError>>,
     ) -> Self {
         Self {
             cancellation,
             events,
+            events_taken: false,
+            dropped,
             task: Some(task),
         }
     }
@@ -174,11 +279,42 @@ impl RunHandle {
         self.cancellation.clone()
     }
 
-    pub fn events(&mut self) -> &mut tokio::sync::mpsc::UnboundedReceiver<HarnessEvent> {
+    /// The observation stream: lifecycle events as they happen, with an
+    /// [`RunEvent::Overflow`] marker wherever a full channel lost some.
+    /// The run never waits for this receiver; the terminal outcome is
+    /// authoritative. After [`take_events`](Self::take_events) this is a
+    /// closed receiver that yields `None`.
+    pub fn events(&mut self) -> &mut mpsc::Receiver<RunEvent> {
         &mut self.events
     }
 
-    pub async fn finish(mut self) -> Result<RunResult, SdkError> {
+    /// Move the observation receiver out, to read it from another task
+    /// or to drop it: a dropped receiver ends observation without
+    /// counting anything as dropped. `None` once already taken.
+    pub fn take_events(&mut self) -> Option<mpsc::Receiver<RunEvent>> {
+        if self.events_taken {
+            return None;
+        }
+        self.events_taken = true;
+        let (_closed, replacement) = mpsc::channel(1);
+        Some(std::mem::replace(&mut self.events, replacement))
+    }
+
+    /// Events dropped by the observation channel so far.
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped.load(Ordering::Acquire)
+    }
+
+    /// Wait for the run and collapse its outcome as
+    /// [`RunOutcome::into_result`] does.
+    pub async fn finish(self) -> Result<RunResult, SdkError> {
+        self.outcome().await?.into_result()
+    }
+
+    /// Wait for the run's detailed outcome. `Err` only when the run never
+    /// executed: the task panicked or was aborted, or a continuation had
+    /// nothing to continue ([`SdkError::InvalidContext`]).
+    pub async fn outcome(mut self) -> Result<RunOutcome, SdkError> {
         self.task
             .take()
             .expect("run task available")

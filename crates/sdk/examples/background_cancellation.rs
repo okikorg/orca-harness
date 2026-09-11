@@ -3,7 +3,8 @@
 //!
 //! Demonstrates:
 //! 1. Starting a background agent run via `Session::start()`.
-//! 2. Consuming real-time lifecycle events from `RunHandle::events()`.
+//! 2. Consuming real-time lifecycle events from `RunHandle::events()` (a
+//!    bounded, observational stream: `RunEvent::Overflow` marks any gap).
 //! 3. Verifying that a concurrent `run()` or `start()` is rejected with `SdkError::BusySession`.
 //! 4. Cooperatively cancelling a long-running tool via `RunHandle::cancellation_token()`.
 //! 5. Verifying successful completion behavior on subsequent non-cancelled background runs.
@@ -17,7 +18,7 @@ use std::time::Duration;
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{FnTool, HarnessError};
 use orca_harness_extensions::HarnessEvent;
-use orca_harness_sdk::{Harness, SdkError};
+use orca_harness_sdk::{Harness, RunEvent, SdkError};
 use serde_json::json;
 use support::TempWorkspace;
 
@@ -121,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
+    assert_eq!(handle.dropped_events(), 0, "a drained stream loses nothing");
 
     // 6. Await finish and verify cancellation error
     let finish_result = handle.finish().await;
@@ -172,10 +174,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Ok(event) =
         tokio::time::timeout(Duration::from_millis(50), handle_complete.events().recv()).await
     {
-        if let Some(ev) = event {
-            completion_events.push(ev);
-        } else {
-            break;
+        match event {
+            Some(RunEvent::Harness(ev)) => completion_events.push(ev),
+            Some(RunEvent::Overflow { dropped }) => println!("  [Event Stream] dropped {dropped}"),
+            None => break,
         }
     }
 
