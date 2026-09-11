@@ -48,23 +48,18 @@ impl Processes {
         !self.closed.load(Ordering::Acquire) && self.controller.is_open()
     }
 
-    /// Start a process; see [`ProcessSpawn`]. A `wait_for_exit` spawn
-    /// returns when the process exits and cannot be interrupted; use
-    /// [`spawn_with`](Self::spawn_with) to bound the wait.
-    pub async fn spawn(&self, spawn: ProcessSpawn) -> Result<ProcessSnapshot, SdkError> {
-        self.spawn_with(spawn, CancellationToken::new()).await
-    }
-
-    /// [`spawn`](Self::spawn) whose wait follows `cancellation`:
-    /// cancelling abandons the call, never the process.
-    pub async fn spawn_with(
+    /// Start a process; see [`ProcessSpawn`]. The call's wait (a
+    /// `wait_for_exit` spawn in particular) follows `cancellation` when
+    /// one is given: cancelling abandons the call, never the process.
+    /// Without a token the call can only end on its own.
+    pub async fn spawn(
         &self,
         spawn: ProcessSpawn,
-        cancellation: CancellationToken,
+        cancellation: Option<CancellationToken>,
     ) -> Result<ProcessSnapshot, SdkError> {
         self.ensure_open()?;
         self.controller
-            .spawn(spawn, cancellation)
+            .spawn(spawn, cancellation.unwrap_or_default())
             .await
             .map_err(process_error)
     }

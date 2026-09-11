@@ -99,13 +99,14 @@ async fn typed_write_eof_and_kill_match_the_tool() {
 
 #[tokio::test]
 async fn typed_output_is_bounded() {
-    let tool = ProcessTool::local().max_output_bytes(64);
+    let tool = ProcessTool::local().max_output_bytes(64).buffer_cap(1024);
     let controller = tool.controller();
 
-    // 10 KB in one go: a single response returns at most 64 bytes.
+    // 512 bytes, under the cap: a single response still returns at
+    // most 64 bytes, and nothing is dropped.
     let snapshot = controller
         .spawn(
-            ProcessSpawn::new("head -c 10240 /dev/zero | tr '\\0' x").wait_for_exit(true),
+            ProcessSpawn::new("head -c 512 /dev/zero | tr '\\0' x").wait_for_exit(true),
             CancellationToken::new(),
         )
         .await
@@ -115,18 +116,19 @@ async fn typed_output_is_bounded() {
     assert!(snapshot.more_output);
     assert_eq!(snapshot.dropped_bytes, 0);
 
-    // Beyond the default 512 KB unread cap, the oldest bytes are dropped
-    // and the drop is reported exactly once.
+    // Beyond the 1 KB unread cap, the oldest bytes are dropped: a 4 KB
+    // burst leaves the cap's worth buffered and reports the rest as
+    // dropped, exactly once.
     let flooded = controller
         .spawn(
-            ProcessSpawn::new("head -c 600000 /dev/zero | tr '\\0' y").wait_for_exit(true),
+            ProcessSpawn::new("head -c 4096 /dev/zero | tr '\\0' y").wait_for_exit(true),
             CancellationToken::new(),
         )
         .await
         .unwrap();
     assert_eq!(flooded.output.len(), 64);
     assert!(flooded.more_output);
-    assert!(flooded.dropped_bytes > 0, "{flooded:?}");
+    assert_eq!(flooded.dropped_bytes, 4096 - 1024, "{flooded:?}");
     let again = controller
         .poll(&flooded.id, Some(Duration::ZERO), CancellationToken::new())
         .await

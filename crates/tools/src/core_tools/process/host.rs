@@ -158,6 +158,9 @@ impl ProcessEntry {
 /// children (and lets in-flight controller calls return), after which
 /// every operation here fails with "process manager is closed" and
 /// [`is_open`](Self::is_open) reports false.
+///
+/// Controller calls bypass the tool's keyed concurrency gating;
+/// concurrent drains of one process split its output between callers.
 #[derive(Clone)]
 pub struct ProcessController {
     config: ProcessConfig,
@@ -172,12 +175,13 @@ impl ProcessController {
         }
     }
 
-    /// False once the tool that owns the manager has been dropped.
+    /// False once the tool that owns the manager has been dropped or
+    /// shut down.
     pub fn is_open(&self) -> bool {
-        self.open().is_ok()
+        self.live_manager().is_ok()
     }
 
-    fn open(&self) -> Result<Arc<Manager>, ToolError> {
+    fn live_manager(&self) -> Result<Arc<Manager>, ToolError> {
         self.manager
             .upgrade()
             .filter(|manager| !manager.shutdown.is_cancelled())
@@ -199,7 +203,7 @@ impl ProcessController {
         spawn: ProcessSpawn,
         cancellation: CancellationToken,
     ) -> Result<ProcessSnapshot, ToolError> {
-        let manager = self.open()?;
+        let manager = self.live_manager()?;
         self.core(&manager).spawn(spawn, &cancellation).await
     }
 
@@ -212,7 +216,7 @@ impl ProcessController {
         wait: Option<Duration>,
         cancellation: CancellationToken,
     ) -> Result<ProcessSnapshot, ToolError> {
-        let manager = self.open()?;
+        let manager = self.live_manager()?;
         self.core(&manager).poll(id, wait, &cancellation).await
     }
 
@@ -223,21 +227,21 @@ impl ProcessController {
         write: ProcessWrite,
         cancellation: CancellationToken,
     ) -> Result<ProcessSnapshot, ToolError> {
-        let manager = self.open()?;
+        let manager = self.live_manager()?;
         self.core(&manager).write(id, write, &cancellation).await
     }
 
     /// Terminate a process (its whole group) and forget it; the final
     /// snapshot carries its remaining output.
     pub async fn kill(&self, id: &str) -> Result<ProcessSnapshot, ToolError> {
-        let manager = self.open()?;
+        let manager = self.live_manager()?;
         self.core(&manager).kill(id).await
     }
 
     /// Every known process, running or exited but not yet killed,
     /// sorted by id.
     pub fn list(&self) -> Result<Vec<ProcessEntry>, ToolError> {
-        let manager = self.open()?;
+        let manager = self.live_manager()?;
         Ok(self.core(&manager).list())
     }
 }

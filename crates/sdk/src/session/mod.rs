@@ -159,8 +159,9 @@ impl Session {
     /// the tool preset ships the `process` tool ([`ToolPreset::Coding`]).
     /// The handle shares the session's process manager with the model
     /// tool, so both observe the same ids and state; processes are
-    /// session-owned and die with the session, and a fork or resume
-    /// starts with none. `None` for presets without a process tool.
+    /// session-owned and die with the session (once any in-flight run
+    /// finishes), and a fork or resume starts with none. `None` for
+    /// presets without a process tool.
     ///
     /// [`ToolPreset::Coding`]: crate::ToolPreset::Coding
     pub fn processes(&self) -> Option<Processes> {
