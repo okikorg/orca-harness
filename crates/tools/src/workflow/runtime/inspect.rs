@@ -1,10 +1,31 @@
 //! Read-only views over the runtime: every live run, one run live or
 //! finished, and one stage's stored output.
-use super::Runtime;
+use super::{Run, Runtime};
 use crate::workflow::host::{StageOutput, WorkflowStageJob, WorkflowStatus};
+use crate::BackgroundJob;
 use orca_harness_core::{Model, ToolError};
-use orca_harness_dag::{RunId, RunState};
+use orca_harness_dag::{RunId, RunState, StageId, StageStatus};
 use std::collections::BTreeMap;
+
+/// The stage workers of `run` among the manager's jobs.
+fn stage_jobs(jobs: &[BackgroundJob], run: RunId) -> Vec<WorkflowStageJob> {
+    jobs.iter()
+        .filter(|job| job.spawn.run == Some(run))
+        .map(|job| WorkflowStageJob {
+            spawn_id: job.spawn.id,
+            stage: job.spawn.stage.clone(),
+            status: job.status,
+        })
+        .collect()
+}
+
+/// A live run's state and per-stage statuses from its DAG; a run this
+/// runtime does not own (admitted by another tool over the same manager)
+/// reads as `Running` with none.
+fn live_state(run: Option<&Run>) -> (RunState, BTreeMap<StageId, StageStatus>) {
+    run.map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
+        .unwrap_or((RunState::Running, BTreeMap::new()))
+}
 
 impl<M: Model + Clone + 'static> Runtime<M> {
     /// Every run the manager still holds, in id order. Per-stage statuses
@@ -17,23 +38,12 @@ impl<M: Model + Clone + 'static> Runtime<M> {
         let runs = self.runs.lock().unwrap();
         ids.into_iter()
             .map(|id| {
-                let (state, stages) = runs
-                    .get(&id)
-                    .map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
-                    .unwrap_or((RunState::Running, BTreeMap::new()));
+                let (state, stages) = live_state(runs.get(&id));
                 WorkflowStatus {
                     run_id: id,
                     state,
                     stages,
-                    active: jobs
-                        .iter()
-                        .filter(|job| job.spawn.run == Some(id))
-                        .map(|job| WorkflowStageJob {
-                            spawn_id: job.spawn.id,
-                            stage: job.spawn.stage.clone(),
-                            status: job.status,
-                        })
-                        .collect(),
+                    active: stage_jobs(&jobs, id),
                     outcome: None,
                 }
             })
@@ -59,23 +69,8 @@ impl<M: Model + Clone + 'static> Runtime<M> {
         if !manager.inner.run_ids().contains(&id) {
             return None;
         }
-        let active = manager
-            .active()
-            .into_iter()
-            .filter(|job| job.spawn.run == Some(id))
-            .map(|job| WorkflowStageJob {
-                spawn_id: job.spawn.id,
-                stage: job.spawn.stage,
-                status: job.status,
-            })
-            .collect();
-        let (state, stages) = self
-            .runs
-            .lock()
-            .unwrap()
-            .get(&id)
-            .map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
-            .unwrap_or((RunState::Running, BTreeMap::new()));
+        let active = stage_jobs(&manager.active(), id);
+        let (state, stages) = live_state(self.runs.lock().unwrap().get(&id));
         Some(WorkflowStatus {
             run_id: id,
             state,

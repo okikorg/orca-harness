@@ -4,10 +4,14 @@
 //! and the parent: the run-level notification carries
 //! `serde_json::to_value(&outcome)` under `workflow` and, as `answer`, its
 //! string form. The JSON keys are the `harness-dag` outcome's plus the
-//! runtime's bookkeeping in camelCase, unchanged from the untyped document
-//! the CLI renders.
+//! runtime's bookkeeping in camelCase. For a run that finished `Done`,
+//! `Cancelled`, or `Failed` through its graph, and for every per-stage
+//! timing shape, the bytes are those of the untyped document the CLI
+//! renders; a run that stalled (failed outside its graph) now also carries
+//! empty `outputs` and `stages` and `degraded: false`, which the untyped
+//! document omitted.
 //!
-//! [`WorkflowStatus::outcome`]: super::WorkflowStatus
+//! [`WorkflowStatus::outcome`]: super::WorkflowStatus::outcome
 
 use orca_harness_dag::{RunOutcome, RunState, StageId, StageStatus};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

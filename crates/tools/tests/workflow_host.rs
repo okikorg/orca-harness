@@ -44,6 +44,15 @@ async fn typed_submit_matches_tool_run_json() {
     };
     assert_eq!(outputs(&typed_done), json!({"b":"beta alpha"}));
     assert_eq!(outputs(&typed_done), outputs(&tool_done));
+    for done in [&typed_done, &tool_done] {
+        let result = done.result.as_ref().unwrap();
+        assert_eq!(result["termination"], "completed", "{result}");
+        assert_eq!(
+            result["answer"],
+            result["workflow"].to_string(),
+            "the answer is the outcome's string form"
+        );
+    }
 }
 
 #[tokio::test]

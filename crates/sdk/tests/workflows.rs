@@ -9,20 +9,14 @@ use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{CancellationToken, Message, ModelResponse};
 use orca_harness_sdk::orchestration::{BackgroundStatus, RunState, StageStatus, SubagentRequest};
 use orca_harness_sdk::{
-    BackgroundNotification, Harness, SdkError, Stage, SubagentConfig, WorkflowSubmission,
+    BackgroundNotification, Harness, SdkError, SubagentConfig, WorkflowSubmission,
 };
 use serde_json::{json, Value};
 
 mod background_support;
 mod common;
-use background_support::{route_to_child, routed_agent, wait_until, Echo, Held};
+use background_support::{route_to_child, routed_agent, stage, wait_until, Echo, Held};
 use common::temp_dir;
-
-fn stage(id: &str, prompt: &str, needs: &[&str]) -> Stage {
-    let mut stage = Stage::new(id, prompt);
-    stage.needs = needs.iter().map(|need| need.to_string()).collect();
-    stage
-}
 
 #[tokio::test]
 async fn session_workflows_submit_and_receive_terminal_outcome() {

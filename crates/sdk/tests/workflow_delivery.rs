@@ -14,22 +14,16 @@ use orca_harness_core::{
 };
 use orca_harness_sdk::orchestration::{RunState, StageStatus, SubagentModel};
 use orca_harness_sdk::{
-    BackgroundNotification, Harness, Stage, SubagentConfig, ToolPolicy, WorkflowSubmission,
+    BackgroundNotification, Harness, SubagentConfig, ToolPolicy, WorkflowSubmission,
 };
 use serde_json::{json, Value};
 
 mod background_support;
 mod common;
 use background_support::{
-    completion_messages, route_to_child, routed_agent, wait_until, Echo, Held,
+    completion_messages, route_to_child, routed_agent, stage, wait_until, Echo, Held,
 };
 use common::temp_dir;
-
-fn stage(id: &str, prompt: &str, needs: &[&str]) -> Stage {
-    let mut stage = Stage::new(id, prompt);
-    stage.needs = needs.iter().map(|need| need.to_string()).collect();
-    stage
-}
 
 /// The one delivered batch's JSON, asserting there is exactly one.
 fn delivered_batch(messages: &[Message]) -> Value {
@@ -78,7 +72,9 @@ async fn stage_notifications_are_observed_but_only_the_run_outcome_is_delivered(
     let task = completion["task"].as_str().unwrap();
     assert!(task.starts_with("workflow"), "{task}");
     assert_eq!(completion["parentId"], Value::Null, "a run, not a stage");
-    let workflow = &completion["outcome"]["result"]["workflow"];
+    let result = &completion["outcome"]["result"];
+    assert_eq!(result["termination"], "completed", "{result}");
+    let workflow = &result["workflow"];
     assert_eq!(workflow["state"], "done", "{workflow}");
     assert_eq!(workflow["outputs"], json!({"b": "beta alpha"}));
     assert_eq!(workflow["stages"], json!({"a": "done", "b": "done"}));
