@@ -24,7 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 HERE = Path(__file__).resolve().parent
 DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
 OMP_DISCOVERY_PROVIDERS = (
@@ -56,7 +55,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=45.0)
     parser.add_argument("--max-steps", type=int, default=24)
     parser.add_argument("--max-output-tokens", type=int, default=1536)
-    parser.add_argument("--profile", choices=("all", "read", "edit"), default="all")
+    parser.add_argument(
+        "--profile", choices=("all", "read", "edit"), default="all"
+    )
     parser.add_argument(
         "--harness",
         choices=("all", "both", "orca", "pi", "omp", "claude"),
@@ -93,17 +94,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--input-usd-per-million", type=float, default=1.00)
     parser.add_argument("--output-usd-per-million", type=float, default=5.00)
-    parser.add_argument("--cache-read-usd-per-million", type=float, default=0.10)
-    parser.add_argument("--cache-write-usd-per-million", type=float, default=1.25)
+    parser.add_argument(
+        "--cache-read-usd-per-million", type=float, default=0.10
+    )
+    parser.add_argument(
+        "--cache-write-usd-per-million", type=float, default=1.25
+    )
     args = parser.parse_args()
     if args.repetitions < 1:
         parser.error("--repetitions must be at least 1")
-    if args.timeout_seconds <= 0 or args.max_steps < 1 or args.max_output_tokens < 1:
-        parser.error("timeout, max steps, and max output tokens must be positive")
+    if (
+        args.timeout_seconds <= 0
+        or args.max_steps < 1
+        or args.max_output_tokens < 1
+    ):
+        parser.error(
+            "timeout, max steps, and max output tokens must be positive"
+        )
     return args
 
 
-def load_tasks(path: Path, profile: str, selected_ids: set[str]) -> list[dict[str, Any]]:
+def load_tasks(
+    path: Path, profile: str, selected_ids: set[str]
+) -> list[dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     tasks = data.get("tasks")
     if not isinstance(tasks, list) or not tasks:
@@ -114,13 +127,17 @@ def load_tasks(path: Path, profile: str, selected_ids: set[str]) -> list[dict[st
         task_id = task.get("id")
         mode = task.get("mode")
         if not isinstance(task_id, str) or not task_id or task_id in seen:
-            raise ValueError(f"task ids must be unique non-empty strings: {task_id!r}")
+            raise ValueError(
+                f"task ids must be unique non-empty strings: {task_id!r}"
+            )
         seen.add(task_id)
         if mode not in {"read", "edit"}:
             raise ValueError(f"task {task_id}: mode must be read or edit")
         for field in ("category", "prompt", "expected"):
             if not isinstance(task.get(field), str) or not task[field]:
-                raise ValueError(f"task {task_id}: {field} must be a non-empty string")
+                raise ValueError(
+                    f"task {task_id}: {field} must be a non-empty string"
+                )
         if profile != "all" and mode != profile:
             continue
         if selected_ids and task_id not in selected_ids:
@@ -155,7 +172,9 @@ def harnesses(choice: str) -> list[str]:
     return [choice]
 
 
-def balanced_order(selected: list[str], repetition: int, task_index: int) -> list[str]:
+def balanced_order(
+    selected: list[str], repetition: int, task_index: int
+) -> list[str]:
     if len(selected) < 2:
         return selected
     offset = (repetition + task_index) % len(selected)
@@ -203,7 +222,9 @@ def build_command(
             "--max-steps",
             str(args.max_steps),
         ]
-        command.append("--prompt-cache" if args.prompt_cache else "--no-prompt-cache")
+        command.append(
+            "--prompt-cache" if args.prompt_cache else "--no-prompt-cache"
+        )
         if task["mode"] == "edit":
             command.append("--auto-approve")
         return [*command, "-p", prompt]
@@ -309,7 +330,9 @@ def prepare_environment(
     state_name = "omp-state" if name == "omp" else "pi-state"
     environment["PI_CODING_AGENT_DIR"] = str(temp_root / state_name)
     if name in {"pi", "omp"}:
-        environment["PI_CACHE_RETENTION"] = "short" if args.prompt_cache else "none"
+        environment["PI_CACHE_RETENTION"] = (
+            "short" if args.prompt_cache else "none"
+        )
     if name == "omp":
         environment["HOME"] = str(omp_runtime_home or temp_root / "omp-home")
         Path(environment["HOME"]).mkdir(parents=True, exist_ok=True)
@@ -362,7 +385,9 @@ def validate_workspace(
 ) -> dict[str, Any]:
     after = snapshot(root)
     changed = sorted(
-        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+        path
+        for path in before.keys() | after.keys()
+        if before.get(path) != after.get(path)
     )
     allowed = sorted(task.get("allowed_changes", []))
     errors: list[str] = []
@@ -388,7 +413,9 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def pump(stream: Any, name: str, events: queue.Queue[tuple[str, str | None]]) -> None:
+def pump(
+    stream: Any, name: str, events: queue.Queue[tuple[str, str | None]]
+) -> None:
     try:
         for line in stream:
             events.put((name, line.rstrip("\n")))
@@ -419,8 +446,12 @@ def run_process(
     assert process.stdout is not None and process.stderr is not None
     events: queue.Queue[tuple[str, str | None]] = queue.Queue()
     threads = [
-        threading.Thread(target=pump, args=(process.stdout, "stdout", events), daemon=True),
-        threading.Thread(target=pump, args=(process.stderr, "stderr", events), daemon=True),
+        threading.Thread(
+            target=pump, args=(process.stdout, "stdout", events), daemon=True
+        ),
+        threading.Thread(
+            target=pump, args=(process.stderr, "stderr", events), daemon=True
+        ),
     ]
     for thread in threads:
         thread.start()
@@ -429,7 +460,12 @@ def run_process(
     timed_out = False
     deadline = time.monotonic() + timeout_seconds
     with raw_path.open("w", encoding="utf-8") as raw:
-        raw.write(json.dumps({"record": "run_start", "timestamp": utc_now(), **metadata}) + "\n")
+        raw.write(
+            json.dumps(
+                {"record": "run_start", "timestamp": utc_now(), **metadata}
+            )
+            + "\n"
+        )
         while streams_closed < 2 or process.poll() is None:
             if process.poll() is None and time.monotonic() >= deadline:
                 timed_out = True
@@ -472,7 +508,9 @@ def run_process(
     return result
 
 
-def command_version(binary: str, environment: dict[str, str] | None = None) -> str:
+def command_version(
+    binary: str, environment: dict[str, str] | None = None
+) -> str:
     try:
         result = subprocess.run(
             [binary, "--version"],
@@ -556,7 +594,9 @@ def main() -> int:
                     "effort": args.effort,
                     "prompt_cache": args.prompt_cache,
                     "provider_route": "openrouter default; backend endpoint not pinned",
-                    "run_count": len(tasks) * args.repetitions * len(selected_harnesses),
+                    "run_count": len(tasks)
+                    * args.repetitions
+                    * len(selected_harnesses),
                     "plan": planned,
                 },
                 indent=2,
@@ -576,14 +616,19 @@ def main() -> int:
         "omp": args.omp_bin,
         "claude": args.claude_bin,
     }
-    binaries = {name: resolve_binary(binary_args[name]) for name in selected_harnesses}
+    binaries = {
+        name: resolve_binary(binary_args[name]) for name in selected_harnesses
+    }
     runtime_state = tempfile.TemporaryDirectory(prefix="orca-harness-runtime-")
     runtime_root = Path(runtime_state.name)
     omp_runtime_home = runtime_root / "omp-home"
     if "omp" in selected_harnesses:
         prepare_omp_runtime(binaries["omp"], omp_runtime_home)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = (args.output or HERE.parent / "results" / "harness-comparison" / timestamp).resolve()
+    output = (
+        args.output
+        or HERE.parent / "results" / "harness-comparison" / timestamp
+    ).resolve()
     output.mkdir(parents=True, exist_ok=False)
     pricing = {
         "input_usd_per_million": args.input_usd_per_million,
@@ -592,7 +637,9 @@ def main() -> int:
         "cache_write_usd_per_million": args.cache_write_usd_per_million,
     }
     version_environment = os.environ.copy()
-    with tempfile.TemporaryDirectory(prefix="orca-harness-version-") as version_state:
+    with tempfile.TemporaryDirectory(
+        prefix="orca-harness-version-"
+    ) as version_state:
         version_environment["PI_CODING_AGENT_DIR"] = version_state
         version_records = {
             name: {
@@ -625,14 +672,18 @@ def main() -> int:
         "tasks": tasks,
         "plan": planned,
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    (output / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
 
     run_number = 0
     for item in planned:
         task = next(task for task in tasks if task["id"] == item["task"])
         for name in item["order"]:
             run_number += 1
-            with tempfile.TemporaryDirectory(prefix=f"orca-harness-{task['id']}-") as temp:
+            with tempfile.TemporaryDirectory(
+                prefix=f"orca-harness-{task['id']}-"
+            ) as temp:
                 temp_root = Path(temp)
                 workspace = temp_root / "workspace"
                 shutil.copytree(args.fixture, workspace)
@@ -640,7 +691,9 @@ def main() -> int:
                 environment = prepare_environment(
                     name, temp_root, args, omp_runtime_home=omp_runtime_home
                 )
-                omp_config = write_omp_config(temp_root) if name == "omp" else None
+                omp_config = (
+                    write_omp_config(temp_root) if name == "omp" else None
+                )
                 command = build_command(
                     name,
                     binaries[name],
@@ -672,9 +725,16 @@ def main() -> int:
                 validation = validate_workspace(task, workspace, before)
                 with raw_path.open("a", encoding="utf-8") as raw:
                     raw.write(
-                        json.dumps({"record": "workspace_validation", **validation}) + "\n"
+                        json.dumps(
+                            {"record": "workspace_validation", **validation}
+                        )
+                        + "\n"
                     )
-                status = "timeout" if result["timed_out"] else f"exit={result['exit_code']}"
+                status = (
+                    "timeout"
+                    if result["timed_out"]
+                    else f"exit={result['exit_code']}"
+                )
                 print(
                     f"[{run_number}/{len(tasks) * args.repetitions * len(selected_harnesses)}] "
                     f"rep={item['repetition']} task={task['id']} harness={name} {status}",

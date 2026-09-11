@@ -8,7 +8,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -60,17 +59,12 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-static SESSION_SEQ: AtomicU32 = AtomicU32::new(0);
-
-/// Timestamp-prefixed (zero-padded, so lexical order is creation order)
-/// with pid and a process-local sequence to break same-second ties.
+/// Generates a unique session identifier using UUID v4.
+///
+/// This provides a cryptographically random 128-bit identifier that is
+/// universally unique across space and time, with no need for coordination.
 pub fn new_session_id() -> String {
-    let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "{:010}-{:05x}-{seq}",
-        unix_now(),
-        std::process::id() & 0xf_ffff
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// A filesystem-safe directory name for a workspace path: a readable
@@ -119,7 +113,7 @@ pub struct LoadedSession {
 }
 
 impl SessionFile {
-    /// Sessions under `dir`, newest first (ids are timestamp-prefixed).
+    /// Sessions under `dir`, newest first (sorted by created_at timestamp).
     /// Files whose header does not parse are skipped: list feeds
     /// pickers; load is where corruption is reported.
     pub fn list(dir: &Path) -> Vec<SessionFile> {
@@ -137,7 +131,7 @@ impl SessionFile {
                 Some(SessionFile { path, meta })
             })
             .collect();
-        sessions.sort_by(|a, b| b.meta.id.cmp(&a.meta.id));
+        sessions.sort_by(|a, b| b.meta.created_at.cmp(&a.meta.created_at));
         sessions
     }
 

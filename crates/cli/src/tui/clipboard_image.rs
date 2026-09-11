@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+pub(super) const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 #[cfg(target_os = "macos")]

@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dispatcher perf — current vs proposed</title>
+<style>
+:root{
+  --paper:#e8edf0; --paper2:#f6f8f9; --ink:#10232d; --muted:#526874;
+  --line:#aebdc4; --dark:#718994; --blue:#0a63d8; --cyan:#00a9b7;
+  --red:#cf3e30; --amber:#c07a09; --green:#0d7a4f; --navy:#071b26;
+  --code:#0b202b; --codeink:#d9f4f2; --codemut:#8fb4b8;
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth}
+body{margin:0;color:var(--ink);background:
+  linear-gradient(rgba(16,35,45,.05) 1px,transparent 1px),
+  linear-gradient(90deg,rgba(16,35,45,.05) 1px,transparent 1px),var(--paper);
+  background-size:24px 24px;font:16px/1.6 "Avenir Next",Avenir,"Segoe UI",sans-serif}
+code,pre,.mono,nav,.tag,th{font-family:"SFMono-Regular",Consolas,monospace}
+header{border-bottom:2px solid var(--ink);background:rgba(232,237,240,.95);backdrop-filter:blur(10px)}
+.mast{max-width:1300px;margin:0 auto;padding:18px 28px;display:flex;justify-content:space-between;align-items:end;gap:20px}
+.wordmark{margin:0;font:800 19px/1 "Arial Narrow",sans-serif;letter-spacing:.03em}
+.wordmark span{color:var(--blue)} .stamp{color:var(--muted);font-size:11px;letter-spacing:.06em;text-align:right}
+.wrap{max-width:1300px;margin:0 auto;display:grid;grid-template-columns:220px minmax(0,1fr)}
+nav{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:30px 20px;border-right:1px solid var(--dark);background:rgba(232,237,240,.9);font-size:12px}
+nav a{display:block;padding:4px 0;color:var(--muted);text-decoration:none} nav a:hover{color:var(--blue)}
+main{min-width:0;background:rgba(246,248,249,.85);border-right:1px solid var(--dark)}
+.hero{padding:64px clamp(24px,5vw,80px) 48px;border-bottom:1px solid var(--dark);position:relative;overflow:hidden}
+.hero::after{content:"PERF";position:absolute;right:-10px;bottom:-60px;color:transparent;-webkit-text-stroke:1px rgba(10,99,216,.22);font:900 clamp(120px,20vw,280px)/1 "Arial Narrow",sans-serif;pointer-events:none}
+.eyebrow{color:var(--blue);font-size:11px;letter-spacing:.15em;text-transform:uppercase}
+h1{margin:16px 0;font:800 clamp(40px,6vw,84px)/0.9 "Arial Narrow",sans-serif;letter-spacing:-.04em;text-transform:uppercase}
+h1 em{color:var(--blue);font-style:normal;display:block}
+.lede{max-width:760px;color:#304d5b;font-size:18px}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px;position:relative;z-index:1}
+.badge{font:12px "SFMono-Regular",monospace;padding:5px 10px;border:1px solid var(--dark);background:var(--paper2)}
+.badge b{color:var(--blue)} .badge .bad{color:var(--red)}
+section{padding:54px clamp(24px,5vw,80px);border-bottom:1px solid var(--dark)}
+section h2{margin:0 0 8px;font:800 clamp(28px,4vw,48px)/1 "Arial Narrow",sans-serif;text-transform:uppercase;letter-spacing:-.03em}
+.sub{color:var(--muted);max-width:820px;margin:0 0 24px}
+.kicker{color:var(--blue);border-top:3px solid var(--blue);display:inline-block;padding-top:6px;font:12px "SFMono-Regular",monospace;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;background:rgba(246,248,249,.75);font-size:14px;margin:18px 0 8px}
+th{color:var(--muted);text-align:left;text-transform:uppercase;letter-spacing:.07em;font-size:10px}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+td code{color:var(--blue);font-size:12px}
+.card{border:1px solid var(--dark);background:var(--paper2);padding:20px 22px;margin:18px 0;box-shadow:5px 5px 0 rgba(7,27,38,.08)}
+.card h3{margin:0 0 6px;font-size:21px;font-family:"Arial Narrow",sans-serif}
+.card p{margin:6px 0;color:var(--muted);font-size:14px;max-width:900px}
+.card p b{color:var(--ink)}
+.tag{display:inline-block;margin:0 8px 10px 0;padding:3px 8px;color:#fff;background:var(--blue);font-size:10px;letter-spacing:.07em}
+.tag.now{background:var(--green)} .tag.next{background:var(--amber)} .tag.file{background:var(--navy)}
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+@media(max-width:900px){.ba{grid-template-columns:1fr}.wrap{grid-template-columns:1fr}nav{display:none}}
+.pane{border:1px solid var(--dark);background:#fff}
+.pane-head{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;font:11px "SFMono-Regular",monospace;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--line)}
+.pane.before .pane-head{background:#fbe9e7;color:#8f2b21}
+.pane.after .pane-head{background:#e3f2ea;color:#0d5a3a}
+.pane-body{padding:14px 14px 16px}
+.lane{margin:7px 0}
+.lane .lbl{font:10px "SFMono-Regular",monospace;color:var(--muted);margin-bottom:3px}
+.bar{height:22px;border-radius:3px;position:relative;overflow:hidden}
+.bar.seq{background:repeating-linear-gradient(90deg,#efc9c4 0 8px,#f7ddd9 8px 16px);border:1px solid var(--red)}
+.bar.par{background:linear-gradient(90deg,var(--blue),var(--cyan));border:1px solid #084a9e}
+.bar.idle{background:#eef2f4;border:1px dashed var(--dark)}
+.bar.lock{background:repeating-linear-gradient(45deg,#ffe1b3 0 8px,#fff3df 8px 16px);border:1px solid var(--amber)}
+.bar.copy{background:repeating-linear-gradient(90deg,#d7c9f5 0 6px,#ece5fa 6px 12px);border:1px solid #5b4bc4}
+.bar.move{background:linear-gradient(90deg,#0d7a4f,#37b67f);border:1px solid #0a5a3b}
+.bar span{position:absolute;left:8px;top:2px;font:10px "SFMono-Regular",monospace;color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.4)}
+.bar.light span{color:#5a3f00;text-shadow:none}
+.bar.pale span{color:#3c4c53;text-shadow:none}
+.bar.anim{animation:grow 2.2s ease-in-out infinite alternate}
+@keyframes grow{from{filter:brightness(1)}to{filter:brightness(1.12)}}
+.thread{display:flex;gap:6px;align-items:center;margin:6px 0;font:10px "SFMono-Regular",monospace;color:var(--muted)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--blue);flex:none}
+.dot.r{background:var(--red)} .dot.g{background:var(--green)} .dot.a{background:var(--amber)}
+.note{font:12px "SFMono-Regular",monospace;color:var(--muted);margin-top:10px}
+.note b{color:var(--blue)}
+.code{margin:14px 0 4px;border:1px solid #0b3441;background:var(--code);box-shadow:5px 5px 0 rgba(7,27,38,.12)}
+.code-head{display:flex;justify-content:space-between;padding:7px 12px;color:var(--codemut);border-bottom:1px solid #21414b;font:10px "SFMono-Regular",monospace;letter-spacing:.08em;text-transform:uppercase}
+pre{margin:0;padding:16px 18px;overflow:auto;color:var(--codeink);font-size:12.5px;line-height:1.65}
+.kw{color:#70c8ff}.ty{color:#82e0bd}.str{color:#ffd58a}.cm{color:#77949b}.fn{color:#c9b8ff}
+.callout{padding:14px 18px;margin:18px 0;border-left:4px solid var(--blue);background:#dce9f1;font-size:14px}
+.callout.warn{border-color:var(--amber);background:#f2e8d5}
+.callout strong{display:block;font:11px "SFMono-Regular",monospace;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.sbs-wrap{max-width:1200px}
+.sbs-legend{display:flex;justify-content:space-between;gap:10px;margin:6px 0 16px;font:11px "SFMono-Regular",monospace;letter-spacing:.08em}
+.leg.ship{color:#0d5a3a} .leg.prop{color:#8a5a00}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:0 0 18px;border:2px solid var(--ink);background:#fff;box-shadow:6px 6px 0 rgba(7,27,38,.15)}
+@media(max-width:1000px){.row2{grid-template-columns:1fr}}
+.col{padding:20px 22px;min-width:0}
+.col.ship{background:#f2faf5;border-right:2px solid var(--ink)}
+.col.prop{background:#fffaef}
+.row2.single .col.prop.wide{grid-column:1/-1}
+.colhead{font:11px "SFMono-Regular",monospace;letter-spacing:.1em;color:#0d5a3a;margin-bottom:6px}
+.colhead.amber{color:#8a5a00}
+.filetag{display:inline-block;font:10px "SFMono-Regular",monospace;background:var(--navy);color:#fff;padding:3px 8px;margin-bottom:12px}
+.col.ship h2{font-size:26px} .col .code pre{font-size:11.5px}
+.p-title{font-family:"Arial Narrow",sans-serif;font-size:20px;color:var(--ink);margin:4px 0 6px}
+.col.prop p{color:var(--muted);font-size:13.5px}
+
+footer{padding:26px clamp(24px,5vw,80px);color:var(--muted);font:12px "SFMono-Regular",monospace}
+.pill{display:inline-block;min-width:64px;text-align:center;padding:2px 8px;border-radius:20px;font:11px "SFMono-Regular",monospace}
+.pill.win{background:#dff2e6;color:#0d5a3a;border:1px solid #0d7a4f}
+.pill.same{background:#eef2f4;color:#42575f;border:1px solid var(--dark)}
+.divider{padding:30px clamp(24px,5vw,80px);border-bottom:1px solid var(--dark)}
+.divider .row{display:flex;flex-wrap:wrap;gap:12px;align-items:stretch;max-width:1080px}
+.divider a{flex:1;min-width:260px;text-decoration:none;display:block;border:2px solid var(--ink);padding:16px 20px;background:var(--paper2);box-shadow:6px 6px 0 rgba(7,27,38,.15)}
+.divider a:hover{transform:translate(-1px,-1px);box-shadow:7px 7px 0 rgba(7,27,38,.18)}
+.divider a.shipped{background:#e3f2ea;border-color:#0d7a4f}
+.divider a.proposed{background:#fdf3e0;border-color:var(--amber)}
+.divider a b{display:block;font:800 26px/1 "Arial Narrow",sans-serif;letter-spacing:-.02em}
+.divider a.shipped b{color:#0d5a3a} .divider a.proposed b{color:#8a5a00}
+.divider a span{font:12px "SFMono-Regular",monospace;color:var(--muted)}
+.bigsec{padding:26px clamp(24px,5vw,80px);border-bottom:1px solid var(--dark)}
+.bigsec .inner{max-width:1080px;border:2px solid var(--ink);padding:20px 24px;background:var(--paper2);box-shadow:6px 6px 0 rgba(7,27,38,.15)}
+.bigsec.shipped .inner{background:#e3f2ea;border-color:#0d7a4f}
+.bigsec.proposed .inner{background:#fdf3e0;border-color:var(--amber)}
+.bigsec h2{margin:0;font:800 clamp(30px,4vw,52px)/1 "Arial Narrow",sans-serif;text-transform:uppercase;letter-spacing:-.03em}
+.bigsec.shipped h2{color:#0d5a3a} .bigsec.proposed h2{color:#8a5a00}
+.bigsec p{margin:8px 0 0;color:var(--muted);font-size:14px;max-width:900px}
+</style>
+</head>
+<body>
+<header><div class="mast">
+<div><p class="wordmark">ORCA<span>HARNESS</span> · DISPATCHER PERF</p></div>
+<div class="stamp">docs/internal/dispatcher-perf.html<br/>current vs proposed · harness-core/src/dispatcher.rs</div>
+</div></header>
+<div class="wrap">
+<nav>
+<div style="color:var(--muted);letter-spacing:.12em;font-size:10px;margin-bottom:10px">CONTENTS</div>
+<a href="#why">01 · Why it matters</a>
+<a href="#sec-shipped">02 · Shipped | Proposed</a>
+<a href="#prove">04 · How to prove it</a>
+</nav>
+<main>
+<div class="hero">
+<div class="eyebrow">harness-core · dispatcher.rs · agent_loop.rs · extension.rs</div>
+<h1>Make the kernel <em>invisible.</em></h1>
+<p class="lede">Every trick below answers one question: how do we turn a batch of tool calls into <b>max(latency)</b> instead of <b>sum(latencies)</b> — without taxing the common case? Each row is <b>left = SHIPPED</b> (in the code today) <b>| right = PROPOSED</b> (suggestion only, not built).</p>
+<div class="badges">
+<span class="badge"><b>1 call</b> dispatch ~0.4µs p50</span>
+<span class="badge"><b>100 calls</b> fan-out ~148µs p50</span>
+<span class="badge"><b>64 × shell 20ms</b> 1.28s → 66ms (19.5×)</span>
+<span class="badge"><span class="bad">naive +1ms/call</span> would add 100ms</span>
+</div>
+</div>
+
+<section id="why">
+<div class="kicker">01 · STAKES</div><h2>Why microseconds matter</h2>
+<p class="sub">Model steps cost seconds, tools cost milliseconds. If dispatch cost 1&nbsp;ms per call, a 100-file read batch pays 100&nbsp;ms of pure overhead — 70× the real 1.4&nbsp;ms of work. At ~0.4&nbsp;µs/call it pays ~40&nbsp;µs: nothing. The kernel disappears and you only pay for model + tools.</p>
+<table>
+<tr><th>Workload (one model turn)</th><th>Real work</th><th>Naive overhead</th><th>With tricks</th><th></th></tr>
+<tr><td>100 × <code>read_file</code></td><td>1.4 ms</td><td>+100 ms</td><td>+0.04 ms</td><td><span class="pill win">~2500× less</span></td></tr>
+<tr><td>64 × <code>shell</code> (20 ms each)</td><td>1.28 s serial</td><td>1.28 s</td><td>66 ms</td><td><span class="pill win">19.5× faster</span></td></tr>
+<tr><td>1 × tool call (common case)</td><td>~1 ms</td><td>+thread hop</td><td>+0.4 µs</td><td><span class="pill win">free</span></td></tr>
+<tr><td>Extensions registered, none firing</td><td>0</td><td>virtual-call chain</td><td>1 empty-slice check</td><td><span class="pill same">~0</span></td></tr>
+</table>
+</section>
+
+<div class="bigsec shipped" id="sec-shipped"><div class="inner">
+<h2>Shipped | Proposed — side by side</h2>
+<p>Left column is <b>already in the code</b> (green). Right column is the <b>paired proposal — suggestion only, nothing implemented</b> (amber). Each row pairs one shipped trick with its natural next step. #7 has no shipped counterpart and spans full width.</p>
+</div></div>
+
+<section id="compare">
+<div class="kicker">SHIPPED | PROPOSED — ROW BY ROW</div>
+<div class="sbs-wrap">
+<div class="sbs-legend"><span class="leg ship">◀ SHIPPED — already in code</span><span class="leg prop">PROPOSED — not built ▶</span></div>
+<div class="row2" id="t1">
+<div class="col ship"><div class="colhead">SHIPPED · Inline one unit</div><div class="filetag">dispatcher.rs · execute() — pop one single/chain, run inline</div>
+<div class="ba">
+<div class="pane before"><div class="pane-head"><span>❌ before — always spawn + join</span><span>+hop</span></div><div class="pane-body">
+<div class="thread"><span class="dot r"></span>dispatcher: spawn… then idle in join_next</div>
+<div class="lane"><div class="lbl">dispatcher thread</div><div class="bar idle pale"><span>idle, waiting</span></div></div>
+<div class="lane"><div class="lbl">worker thread (1 call)</div><div class="bar seq anim"><span>wake + run + send back</span></div></div>
+<div class="note">Cost even for <b>n = 1</b>: spawn, park, wake, channel, join.</div>
+</div></div>
+<div class="pane after"><div class="pane-head"><span>✓ after — hold one back, run inline</span><span>~0.4µs</span></div><div class="pane-body">
+<div class="thread"><span class="dot g"></span>dispatcher: spawn n−1, run 1 itself</div>
+<div class="lane"><div class="lbl">dispatcher thread</div><div class="bar move anim"><span>run_job(inline) — no handoff</span></div></div>
+<div class="lane"><div class="lbl">workers (n−1)</div><div class="bar par"><span>concurrent remainder</span></div></div>
+<div class="note">n = 1: <b>zero spawns</b>. n = 100: dispatcher does real work instead of idling.</div>
+</div></div>
+</div>
+<div class="code"><div class="code-head"><span>dispatcher.rs</span><span>pop one single / chain, run inline</span></div><pre><span class="kw">let</span> inline_single = grouping.singles.<span class="fn">pop</span>();
+<span class="kw">let</span> inline_chain = <span class="kw">if</span> inline_single.is_none() { grouping.chains.<span class="fn">pop</span>() } <span class="kw">else</span> { None };
+<span class="cm">// spawned tasks do the rest; this task runs its share inline,</span>
+<span class="cm">// then drains the JoinSet — it would otherwise idle in join_next.</span>
+<span class="kw">for</span> job <span class="kw">in</span> inline_jobs { shared.<span class="fn">run_job</span>(job).<span class="kw">await</span>; }</pre></div>
+</div>
+<div class="col prop"><div class="colhead amber">PROPOSED · next step</div><div class="filetag">validate_pairing() — linear scan n≤8, else HashSet</div>
+<p class="p-title">Small-batch pairing</p>
+<p>Removes hashing from the 1-call path (~50–100ns). The most common step gets cheaper.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — today</span></div><div class="pane-body"><div class="lane"><div class="bar copy light"><span>current cost (see left)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — with proposal</span></div><div class="pane-body"><div class="lane"><div class="bar move"><span>Small-batch pairing</span></div></div></div></div>
+<p class="note">Prove: <b>dispatch/noop_calls/1</b></p>
+</div></div>
+<div class="row2" id="t2">
+<div class="col ship"><div class="colhead">SHIPPED · Elided sync</div><div class="filetag">dispatcher.rs · SharedExecution — semaphore/RwLock as Option</div>
+<div class="ba">
+<div class="pane before"><div class="pane-head"><span>❌ before — always lock + semaphore</span><span>every batch pays</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">each of 100 cheap calls</div><div class="bar lock light"><span>acquire permit → acquire read lock → run → release ×2</span></div></div>
+<div class="note">2 atomic RMWs + waiter-list registration per call, even all-<b>Parallel</b>.</div>
+</div></div>
+<div class="pane after"><div class="pane-head"><span>✓ after — Option&lt;Semaphore&gt;, Option&lt;RwLock&gt;</span><span>elided</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">all-Parallel batch (the common case)</div><div class="bar move anim"><span>run — semaphore: None, lock: None</span></div></div>
+<div class="lane"><div class="lbl">batch with a Serial call</div><div class="bar lock light"><span>lock present only now: Parallel=read, Serial=write</span></div></div>
+<div class="note"><b>One</b> <code>Option</code> check per job replaces the lock dance.</div>
+</div></div>
+</div>
+<div class="code"><div class="code-head"><span>dispatcher.rs</span><span>sync exists only if it can constrain</span></div><pre>semaphore:   (job_count > max_parallel).<span class="fn">then</span>(|| Semaphore::new(max_parallel)),
+exclusivity: has_serial.<span class="fn">then</span>(RwLock::default),</pre></div>
+</div>
+<div class="col prop"><div class="colhead amber">PROPOSED · next step</div><div class="filetag">Registry stores Arc<[Arc<dyn Extension>]>; dispatch clones one Arc</div>
+<p class="p-title">Share extension chains</p>
+<p>Removes 2 allocs + k refcounts every model step, even when empty.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — today</span></div><div class="pane-body"><div class="lane"><div class="bar copy light"><span>current cost (see left)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — with proposal</span></div><div class="pane-body"><div class="lane"><div class="bar move"><span>Share extension chains</span></div></div></div></div>
+<p class="note">Prove: <b>extensions/ten_calls_with_exts/*</b></p>
+</div></div>
+<div class="row2" id="t3">
+<div class="col ship"><div class="colhead">SHIPPED · Move, don't copy</div><div class="filetag">dispatcher.rs · Phase 1 — Arc<[ToolCall]> + index, mem::take args</div>
+<div class="ba">
+<div class="pane before"><div class="pane-head"><span>❌ before — clone per task</span><span>O(n × payload)</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">task 1..100, each holding a full ToolCall</div><div class="bar copy light"><span>clone id + name + 1 MiB args × 100 = 100 MiB copied</span></div></div>
+<div class="note">Two <b>String</b>s + a <b>Value</b> cloned onto every task.</div>
+</div></div>
+<div class="pane after"><div class="pane-head"><span>✓ after — Arc batch + index, args moved</span><span>O(1)</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">shared Arc&lt;[ToolCall]&gt; + Job { index, input }</div><div class="bar move anim"><span>job → index 42 ──▶ shared batch ──▶ moved args (no copy)</span></div></div>
+<div class="note"><b>strip_arguments</b> = no around/after subscriber → <b>take</b>, else <b>clone</b> (hooks must observe).</div>
+</div></div>
+</div>
+<div class="code"><div class="code-head"><span>dispatcher.rs</span><span>phase 1: resolve, then move</span></div><pre><span class="kw">let</span> input = <span class="kw">match</span> rewritten {
+    Some(v) =&gt; v,
+    None <span class="kw">if</span> strip_arguments =&gt; std::mem::<span class="fn">take</span>(&amp;<span class="kw">mut</span> call.arguments), <span class="cm">// move</span>
+    None =&gt; call.arguments.<span class="fn">clone</span>(),                            <span class="cm">// hooks watching: copy</span>
+};
+<span class="kw">let</span> calls: Arc&lt;[ToolCall]&gt; = calls.<span class="fn">into</span>(); <span class="cm">// one shared batch, jobs hold `index`</span></pre></div>
+</div>
+<div class="col prop"><div class="colhead amber">PROPOSED · next step</div><div class="filetag">Single / pooled buffer instead of Vec<Option<..>> + Vec<bool></div>
+<p class="p-title">One result buffer</p>
+<p>Halves result-slot allocation; matters at n=64–100.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — today</span></div><div class="pane-body"><div class="lane"><div class="bar copy light"><span>current cost (see left)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — with proposal</span></div><div class="pane-body"><div class="lane"><div class="bar move"><span>One result buffer</span></div></div></div></div>
+<p class="note">Prove: <b>dispatch/noop_calls/100 + fanout_probe</b></p>
+</div></div>
+<div class="row2" id="t4">
+<div class="col ship"><div class="colhead">SHIPPED · Optimistic guard</div><div class="filetag">dispatcher.rs · guarded() — one poll before select!</div>
+<div class="ba">
+<div class="pane before"><div class="pane-head"><span>❌ before — select! every job</span><span>mutex × n</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">100 × noop (ready immediately)</div><div class="bar lock light"><span>register waiter → poll → remove waiter × 100</span></div></div>
+<div class="note">Mutex churn dwarfs the ~ns tool body.</div>
+</div></div>
+<div class="pane after"><div class="pane-head"><span>✓ after — one optimistic poll first</span><span>no mutex on Ready</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">Ready on first poll (cheap tools)</div><div class="bar move anim"><span>is_cancelled? no → poll → Ready → return</span></div></div>
+<div class="lane"><div class="lbl">Pending (real I/O)</div><div class="bar par"><span>fall through to biased select! { cancelled / timeout / work }</span></div></div>
+<div class="note">Wide fan-out of cheap tools never touches the waiter list.</div>
+</div></div>
+</div>
+<div class="code"><div class="code-head"><span>dispatcher.rs</span><span>guarded()</span></div><pre><span class="kw">if</span> <span class="kw">self</span>.cancellation.is_cancelled() { <span class="kw">return</span> Err(Cancelled); }
+<span class="kw">if let</span> Poll::Ready(out) = <span class="fn">poll_once</span>(fut).<span class="kw">await</span> { <span class="kw">return</span> Ok(out); } <span class="cm">// never touched the mutex</span>
+<span class="fn">select_biased!</span> { cancelled =&gt; Err(..), timeout_at(deadline, fut) =&gt; .., out = fut =&gt; Ok(out) }</pre></div>
+</div>
+<div class="col prop"><div class="colhead amber">PROPOSED · next step</div><div class="filetag">n ≤ cpus runs inline/scoped; else JoinSet</div>
+<p class="p-title">Spawn threshold</p>
+<p>Biggest remaining prize on n=4–16 cheap-tool batches.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — today</span></div><div class="pane-body"><div class="lane"><div class="bar copy light"><span>current cost (see left)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — with proposal</span></div><div class="pane-body"><div class="lane"><div class="bar move"><span>Spawn threshold</span></div></div></div></div>
+<p class="note">Prove: <b>harness_loop/round_trip_n_calls/{4,16}</b></p>
+</div></div>
+<div class="row2" id="t5">
+<div class="col ship"><div class="colhead">SHIPPED · Lock order + grouping</div><div class="filetag">dispatcher.rs · Grouping — singles + keyed/serial chains, permit→lock</div>
+<div class="ba">
+<div class="pane before"><div class="pane-head"><span>❌ before — one task per call, ad-hoc locks</span><span>risk + waste</span></div><div class="pane-body">
+<div class="thread"><span class="dot r"></span>call order not preserved per key; lock order varies → deadlock risk</div>
+<div class="lane"><div class="lbl">spawn × n, each locking independently</div><div class="bar seq"><span>task ──▶ lock? ▶ permit? ▶ run (order varies)</span></div></div>
+</div></div>
+<div class="pane after"><div class="pane-head"><span>✓ after — singles + chains, permit → lock</span><span>safe + lean</span></div><div class="pane-body">
+<div class="thread"><span class="dot g"></span>Parallel singles: concurrent</div>
+<div class="lane"><div class="lbl">singles (spawned directly)</div><div class="bar par anim"><span>permit → read-lock → run</span></div></div>
+<div class="thread"><span class="dot a"></span>Keyed(file-A): sequential chain · Serial: exclusive chain</div>
+<div class="lane"><div class="lbl">chain [A1 → A2 → A3]</div><div class="bar lock light"><span>one task, in call order, same key serialized</span></div></div>
+<div class="note"><b>Permit first, then lock</b> — waiters always hold a permit ⇒ no deadlock.</div>
+</div></div>
+</div>
+</div>
+<div class="col prop"><div class="colhead amber">PROPOSED · next step</div><div class="filetag">ctx borrows Arc<[ToolCall]> (or Arc<str>), 0 clones</div>
+<p class="p-title">Borrow ToolContext identity</p>
+<p>Removes 2 String allocs per call. Needs lifetime tied to batch Arc.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — today</span></div><div class="pane-body"><div class="lane"><div class="bar copy light"><span>current cost (see left)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — with proposal</span></div><div class="pane-body"><div class="lane"><div class="bar move"><span>Borrow ToolContext identity</span></div></div></div></div>
+<p class="note">Prove: <b>dispatch/noop_calls/100</b></p>
+</div></div>
+<div class="row2" id="t6">
+<div class="col ship"><div class="colhead">SHIPPED · Zero-cost extensions</div><div class="filetag">extension.rs + agent_loop.rs — per-event Vecs, direct call, ordered slots</div>
+<div class="ba">
+<div class="pane before"><div class="pane-head"><span>❌ before — pay for every hook</span><span>always on</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">10 hooks × n calls, even with zero extensions</div><div class="bar seq"><span>before → around(box Next) → after → result … ×n</span></div></div>
+<div class="lane"><div class="lbl">streaming</div><div class="bar copy light"><span>build sink + stream even if nobody listens</span></div></div>
+</div></div>
+<div class="pane after"><div class="pane-head"><span>✓ after — empty event = one slice check</span><span>~0</span></div><div class="pane-body">
+<div class="lane"><div class="lbl">no subscribers</div><div class="bar move anim"><span>is_empty? yes → direct tool.call(), plain generate()</span></div></div>
+<div class="lane"><div class="lbl">results: concurrent run, ordered land</div><div class="bar par"><span>task → slots[i] ──▶ post-hooks in call order 0,1,2…</span></div></div>
+<div class="note"><b>tool_finished</b> (live, id + bool only) is the one deliberate exception: completion order, no output.</div>
+</div></div>
+</div>
+<div class="callout"><strong>The residual cost</strong>The ~40&nbsp;µs T1−T0 at n=100 is tokio waking parked worker threads — not harness scheduling. On a busy server with hot workers it shrinks. Re-measure on target hardware with <span class="mono">cargo run --release --example fanout_probe -- 100 300</span>.</div>
+</div>
+<div class="col prop"><div class="colhead amber">PROPOSED · next step</div><div class="filetag">Parallels lock-free first, then serial chain</div>
+<p class="p-title">Phase-split locking</p>
+<p>Removes n read-locks on mixed batches; serials start later — wins when parallels dominate.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — today</span></div><div class="pane-body"><div class="lane"><div class="bar copy light"><span>current cost (see left)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — with proposal</span></div><div class="pane-body"><div class="lane"><div class="bar move"><span>Phase-split locking</span></div></div></div></div>
+<p class="note">Prove: <b>new mixed bench</b></p>
+</div></div>
+<div class="row2 single" id="p7">
+<div class="col prop wide"><div class="colhead amber">PROPOSED · no shipped counterpart</div><div class="filetag">agent_loop.rs · ExtensionDeltaSink</div>
+<p class="p-title">Concurrent delta emit</p>
+<p>emit() awaits delta subscribers sequentially — one slow render/telemetry hook stalls the stream. Fan out concurrently (or document must-be-fast + debug_assert timing). Streaming latency becomes <b>max</b>, not sum, of listeners.</p>
+<div class="ba"><div class="pane before"><div class="pane-head"><span>before — sequential emit</span></div><div class="pane-body"><div class="lane"><div class="bar seq"><span>ext1 → ext2 → ext3 (slowest gates all)</span></div></div></div></div>
+<div class="pane after"><div class="pane-head"><span>after — concurrent fan-out</span></div><div class="pane-body"><div class="lane"><div class="bar par"><span>ext1 ⫽ ext2 ⫽ ext3 (join)</span></div></div></div></div></div>
+</div></div>
+</div>
+</section>
+
+<section id="prove">
+<div class="kicker">PROOF · BENCHES FOR BOTH SECTIONS</div><h2>How to prove any of it</h2>
+<div class="grid2">
+<div class="card"><h3>Micro: dispatch</h3><p>Pure dispatcher overhead, batch built outside measurement.</p><div class="code"><div class="code-head"><span>run</span><span>criterion</span></div><pre>cargo bench -p orca-harness-core --bench dispatch</pre></div></div>
+<div class="card"><h3>Macro: full loop</h3><p>End-to-end Agent round-trips with Immediate vs Suspend tools.</p><div class="code"><div class="code-head"><span>run</span><span>criterion</span></div><pre>cargo bench -p orca-harness-core --bench harness_loop</pre></div></div>
+<div class="card"><h3>Latency: fan-out probe</h3><p>T0 = dispatch entry · T1 = first body start · T2 = last body start.</p><div class="code"><div class="code-head"><span>run</span><span>release</span></div><pre>cargo run --release --example fanout_probe -- 100 300</pre></div></div>
+<div class="card"><h3>Budget: kernel + startup</h3><p>Recorded JSON held to budget; fails CI on regression.</p><div class="code"><div class="code-head"><span>run</span><span>budgets</span></div><pre>./benchmarks/kernel/run.sh
+./benchmarks/startup/run.sh</pre></div></div>
+</div>
+<div class="callout warn"><strong>Noise floor</strong>Criterion's default 1% threshold sits below this machine's ~1.5% run-to-run drift — the workspace uses <span class="mono">noise_threshold(0.03)</span>. Real dispatcher changes measure 5–20%; don't chase phantoms under 3%.</div>
+</section>
+
+<footer>dispatcher-perf · current = shipped in harness-core · proposed = suggestions, no edits · sources: crates/harness-core/src/{dispatcher,agent_loop,extension}.rs · benches/{dispatch,harness_loop}.rs · examples/fanout_probe.rs</footer>
+</main>
+</div>
+</body>
+</html>

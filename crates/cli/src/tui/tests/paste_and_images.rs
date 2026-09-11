@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use super::input::insert_image_bytes_for_test;
 use super::state::HeldInput;
 use super::*;
@@ -208,13 +209,77 @@ fn delete_removes_an_image_pill_whole_from_its_start() {
 }
 
 #[test]
-fn pasted_image_path_remains_plain_text() {
+fn pasted_image_path_that_does_not_exist_remains_plain_text() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let mut app = test_app();
 
-    paste(&mut app, &tx, "/tmp/screenshot.png");
-    assert_eq!(app.composer, "/tmp/screenshot.png");
+    paste(&mut app, &tx, "/tmp/orca-no-such-screenshot.png");
+    assert_eq!(app.composer, "/tmp/orca-no-such-screenshot.png");
     assert!(app.pastes.is_empty());
+}
+
+/// Terminals that intercept an image paste write it to a temp file and
+/// hand the host the path. That path is an image, so it gets a pill.
+fn write_temp_image(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "orca-paste-test-{}-{name}",
+        std::process::id()
+    ));
+    std::fs::write(&path, bytes).expect("write temp image");
+    path
+}
+
+#[test]
+fn a_pasted_image_file_path_becomes_a_pill_carrying_the_file_bytes() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    app.cfg.provider = Provider::OpenAi;
+    let path = write_temp_image("clipboard.png", b"\x89PNG\r\n\x1a\nminimal");
+
+    paste(&mut app, &tx, path.to_str().unwrap());
+
+    assert_eq!(app.composer, "[▧ image.png]");
+    submit(&mut app, &tx, TEST_TERMINAL_WIDTH);
+    match rx.try_recv() {
+        Ok(WorkerCmd::Run { images, .. }) => {
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].media_type, "image/png");
+            assert_eq!(
+                images[0].data,
+                base64::engine::general_purpose::STANDARD
+                    .encode(b"\x89PNG\r\n\x1a\nminimal")
+            );
+        }
+        other => panic!("expected a run, got {:?}", other.is_ok()),
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_pasted_jpeg_path_keeps_its_own_media_type() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    let path = write_temp_image("shot.JPEG", b"\xff\xd8\xff jpeg bytes");
+
+    paste(&mut app, &tx, path.to_str().unwrap());
+
+    assert_eq!(app.composer, "[▧ image.jpeg]");
+    let images = prompt_images(&app.pastes, &app.composer);
+    assert_eq!(images[0].media_type, "image/jpeg");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_pasted_non_image_file_path_remains_plain_text() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    let path = write_temp_image("notes.txt", b"hello");
+
+    paste(&mut app, &tx, path.to_str().unwrap());
+
+    assert_eq!(app.composer, path.to_str().unwrap());
+    assert!(app.pastes.is_empty());
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -235,6 +300,22 @@ fn repeated_clipboard_images_get_distinct_pills() {
     add_test_image(&mut app);
     add_test_image(&mut app);
     assert_eq!(app.composer, "[▧ image.png][▧ image.png · 2]");
+}
+
+#[test]
+fn pills_are_numbered_per_image_kind() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    let jpeg = write_temp_image("numbered.jpg", b"\xff\xd8\xff one");
+    add_test_image(&mut app);
+    paste(&mut app, &tx, jpeg.to_str().unwrap());
+    paste(&mut app, &tx, jpeg.to_str().unwrap());
+
+    assert_eq!(
+        app.composer,
+        "[▧ image.png][▧ image.jpeg][▧ image.jpeg · 2]"
+    );
+    let _ = std::fs::remove_file(jpeg);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use super::*;
 use orca_harness_core::{ToolCall, ToolResult};
+use std::sync::atomic::Ordering;
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("orca-session-{name}-{}", std::process::id()));
@@ -156,12 +157,18 @@ fn assistant_tool_calls_with_results_survive_load() {
 #[test]
 fn list_is_newest_first_and_skips_non_sessions() {
     let dir = temp_dir("list");
-    write_session(&dir, &meta("0000000001-a-0"), &[], true);
-    write_session(&dir, &meta("0000000002-a-0"), &[], true);
+    // Use different created_at timestamps to test ordering
+    let mut m1 = meta("0000000001-a-0");
+    m1.created_at = 1000;
+    let mut m2 = meta("0000000002-a-0");
+    m2.created_at = 2000;
+    write_session(&dir, &m1, &[], true);
+    write_session(&dir, &m2, &[], true);
     fs::write(dir.join("junk.txt"), "junk").unwrap();
     fs::write(dir.join("bad.jsonl"), "not a header\n").unwrap();
     let sessions = SessionFile::list(&dir);
     assert_eq!(sessions.len(), 2);
+    // Newest (highest created_at) should come first
     assert_eq!(sessions[0].meta.id, "0000000002-a-0");
     assert_eq!(sessions[1].meta.id, "0000000001-a-0");
 }
@@ -176,11 +183,12 @@ fn workspace_key_is_stable_and_filesystem_safe() {
 }
 
 #[test]
-fn session_ids_sort_chronologically_and_never_collide() {
+fn session_ids_are_unique() {
     let a = new_session_id();
     let b = new_session_id();
     assert_ne!(a, b);
-    assert!(a < b || a.split('-').next() == b.split('-').next());
+    // UUIDs are not lexicographically sortable by time, so we just
+    // verify uniqueness.
 }
 
 #[test]
