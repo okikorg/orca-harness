@@ -1,29 +1,55 @@
 //! Session-owned background services: the subagent manager, the completion
-//! inbox detached results land in, and the `subagent` tool that feeds both.
+//! inbox detached results land in, the `subagent` tool that feeds both,
+//! and the notification channel hosts observe them through.
 //!
 //! Built once per session when the agent configured subagents (see
 //! [`AgentBuilder::subagents`](crate::AgentBuilder::subagents)), so two
-//! sessions never share live jobs or undelivered results. The host reaches
-//! them through [`Session::subagents`](crate::Session::subagents).
+//! sessions never share live jobs, undelivered results, or observers. A
+//! fork or a resume from disk builds fresh services: only the transcript
+//! carries over. The host reaches them through
+//! [`Session::subagents`](crate::Session::subagents) and
+//! [`Session::notifications`](crate::Session::notifications).
+//!
+//! Lifecycle: the end of a parent run is not a shutdown, and cancelling a
+//! run cancels that run only; detached workers continue. `clear`,
+//! `reset_in_place`, and [`Session::shutdown`](crate::Session::shutdown)
+//! cancel every worker and start a new generation, which invalidates
+//! results still on their way. Dropping the session does the same on a
+//! best-effort basis (see [`BackgroundServices`]'s `Drop`).
 
+mod notifications;
 mod subagents;
 
 use std::sync::Arc;
 
-use orca_harness_core::{Model, Tool};
+use orca_harness_core::{Extension, Model, Tool};
+use orca_harness_extensions::{EventStream, Truncation};
 use orca_harness_tools::{
-    CompletionInbox, FileGuard, SubagentDepth, SubagentManager, SubagentTool,
+    CompletionInbox, FileGuard, SpawnExtensions, SubagentDepth, SubagentManager, SubagentTool,
 };
+use tokio::sync::broadcast;
 
 use crate::agent::AgentDefinition;
 use crate::tools::{preset_tools, ToolSource};
 
-pub use subagents::{SubagentConfig, Subagents};
+pub use notifications::{BackgroundNotification, NOTIFICATION_CAPACITY};
+pub use subagents::{ChildEventCallback, SubagentConfig, Subagents};
+
+/// The handles one run needs to deliver completions and refresh the
+/// worker inventory at its model boundaries: small clones, not the
+/// services themselves.
+#[derive(Clone)]
+pub(crate) struct RunBackground {
+    pub(crate) inbox: CompletionInbox,
+    pub(crate) manager: SubagentManager,
+    pub(crate) events: broadcast::Sender<BackgroundNotification>,
+}
 
 pub(crate) struct BackgroundServices {
     inbox: CompletionInbox,
     settings: SubagentDepth,
     subagents: Arc<SubagentTool<Arc<dyn Model>>>,
+    events: broadcast::Sender<BackgroundNotification>,
 }
 
 impl BackgroundServices {
@@ -34,10 +60,17 @@ impl BackgroundServices {
     /// tools; they get no REPLs, todo list, skills, MCP, or memory tools.
     /// Nesting is governed by the shared [`SubagentDepth`] handle, as for
     /// the model tool.
+    ///
+    /// Child extensions come from [`child_extensions`] (see
+    /// [`SubagentConfig::inherit_extensions`] for the ordering). The
+    /// parent's per-run extensions (recorder, usage meter, event stream,
+    /// truncation store, compaction, `SkillOnce`, completion delivery) are
+    /// built inside each run, not here, so no child can ever share them.
     pub(crate) fn new(definition: &AgentDefinition, config: &SubagentConfig) -> Self {
         let settings = config.settings.clone();
         let manager = SubagentManager::from_settings(settings.clone());
         let inbox = CompletionInbox::new(manager.clone());
+        let (events, _) = broadcast::channel(NOTIFICATION_CAPACITY);
         let workspace = definition.harness.workspace().clone();
         let preset = definition.preset;
         let custom: Vec<Arc<dyn Tool>> = definition
@@ -53,7 +86,7 @@ impl BackgroundServices {
             tools.extend(custom.iter().cloned());
             tools
         });
-        let notify = inbox.clone();
+        let notifier = (inbox.clone(), events.clone());
         let (provider, model) = config.identity.clone().unwrap_or_else(|| {
             (
                 subagents::DEFAULT_IDENTITY_PROVIDER.to_string(),
@@ -64,21 +97,25 @@ impl BackgroundServices {
             .inherited_identity(provider, model)
             .models(config.models.iter().cloned())
             .background(manager, move |notification| {
-                notify.push(notification);
-            });
+                notifications::notify(&notifier.0, &notifier.1, notification);
+            })
+            .spawn_extensions(child_extensions(definition, config))
+            // Share the handle before applying explicit limits: `max_depth`
+            // publishes configured limits into the shared handle, and
+            // explicit limits are per spawn, not a rewrite of what every
+            // session of the agent sees.
+            .max_depth(settings.clone());
         if let Some(prompt) = &config.system_prompt {
             tool = tool.system_prompt(prompt.clone());
         }
         if let Some(limits) = &config.limits {
             tool = tool.limits(limits.clone());
         }
-        // B3: child policy inheritance (spawn_extensions from the agent's
-        // extensions) is deliberately not attached here.
-        let tool = tool.max_depth(settings.clone());
         Self {
             inbox,
             settings,
             subagents: Arc::new(tool),
+            events,
         }
     }
 
@@ -92,12 +129,80 @@ impl BackgroundServices {
             self.subagents.clone(),
             self.inbox.clone(),
             self.settings.clone(),
+            self.events.clone(),
         )
     }
 
-    /// Cancel every detached worker and drop undelivered results, as part
-    /// of replacing the session's conversation.
+    pub(crate) fn run_handles(&self) -> RunBackground {
+        RunBackground {
+            inbox: self.inbox.clone(),
+            manager: self.inbox.manager().clone(),
+            events: self.events.clone(),
+        }
+    }
+
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<BackgroundNotification> {
+        self.events.subscribe()
+    }
+
+    pub(crate) fn pending_completions(&self) -> usize {
+        self.inbox.pending()
+    }
+
+    pub(crate) fn manager(&self) -> &SubagentManager {
+        self.inbox.manager()
+    }
+
+    /// Cancel every detached worker, drop undelivered results, and start
+    /// a new generation so results of workers still winding down are
+    /// refused rather than delivered to the replaced conversation.
     pub(crate) fn clear(&self) {
         self.inbox.reset();
     }
+}
+
+/// Best-effort cleanup when the session goes away without an explicit
+/// shutdown. The notifier closure held by each in-flight job keeps the
+/// manager alive, so its own lifetime guard would not fire until the
+/// last worker exits; cancelling here makes that exit prompt for
+/// workers that honour their token.
+impl Drop for BackgroundServices {
+    fn drop(&mut self) {
+        self.inbox.reset();
+    }
+}
+
+/// The per-spawn extension factory installed on the session's `subagent`
+/// tool, in the order a child registers them: the host's event relay,
+/// the agent's inherited extensions, the host's per-spawn extensions,
+/// then output truncation sized from the live settings.
+fn child_extensions(definition: &AgentDefinition, config: &SubagentConfig) -> SpawnExtensions {
+    let inherited: Vec<Arc<dyn Extension>> = if config.inherit_extensions {
+        definition.extensions.clone()
+    } else {
+        Vec::new()
+    };
+    let host = config.child_extensions.clone();
+    let relay = config.on_child_event.clone();
+    let settings = config.settings.clone();
+    Arc::new(move |spawn| {
+        let mut extensions: Vec<Arc<dyn Extension>> = Vec::new();
+        if let Some(relay) = &relay {
+            let relay = relay.clone();
+            let spawn = spawn.clone();
+            extensions.push(Arc::new(EventStream::from_fn(move |event| {
+                relay(&spawn, event)
+            })));
+        }
+        extensions.extend(inherited.iter().cloned());
+        if let Some(host) = &host {
+            extensions.extend(host(spawn));
+        }
+        // Stateless and per child: never the parent's truncation store.
+        let output_chars = settings.output_chars();
+        if output_chars != 0 {
+            extensions.push(Arc::new(Truncation::new(output_chars as usize)));
+        }
+        extensions
+    })
 }

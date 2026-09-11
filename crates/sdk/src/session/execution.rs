@@ -2,6 +2,12 @@
 //! and tools, drives it to completion, then persists transcript and
 //! recovery store. Reports a [`RunOutcome`] whichever way the run ended,
 //! so partial usage and transcript survive failure and cancellation.
+//!
+//! Detached subagent results reach the parent here and only here: the
+//! completion delivery extension drains the session's inbox at each
+//! model boundary of a run, ahead of compaction and recording, so the
+//! delivered turn is budgeted and persisted like any other. No run is
+//! ever started on the session's own initiative.
 
 use std::sync::Arc;
 
@@ -13,11 +19,13 @@ use orca_harness_extensions::{
     Truncation, TruncationStore, UsageMeter,
 };
 use orca_harness_tool_extensions::skills::SkillOnce;
+use orca_harness_tools::{ActiveInventory, CompletionDelivery};
 use tokio::sync::Mutex;
 
 use super::events::{EventFanout, RunObserver};
 use super::persistence::save_session_store;
 use super::BusyGuard;
+use crate::background::{BackgroundNotification, RunBackground};
 use crate::extensions::Compaction;
 use crate::{Agent, RunOutcome, RunRequest, SdkError};
 
@@ -33,6 +41,9 @@ pub(super) struct RunExecution {
     /// The observation channel of a background run; `None` for
     /// [`Session::run`](super::Session::run).
     pub(super) observer: Option<RunObserver>,
+    /// The session's completion inbox and manager, when the agent
+    /// configured subagents.
+    pub(super) background: Option<RunBackground>,
     pub(super) _busy: BusyGuard,
 }
 
@@ -64,6 +75,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
         request,
         cancellation,
         observer,
+        background,
         _busy,
     } = run;
     let mut context = context.lock().await;
@@ -71,6 +83,12 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
         ensure_continuable(&context)?;
     } else {
         context.push_user_with_images(request.prompt, request.images);
+    }
+    if let Some(background) = &background {
+        // Whatever run follows a wake-up request is the one that answers
+        // it; a host that continued the session for another reason
+        // delivers the batch just the same.
+        background.inbox.consume_wakeup();
     }
 
     let mut limits: Limits = definition.inner.limits.clone();
@@ -92,6 +110,19 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
     if definition.inner.extension_config.events {
         agent = agent.extension(events);
     }
+    // Ahead of the meter, truncation, compaction, and the recorder: the
+    // delivered user turn is metered, budgeted, and persisted like one
+    // the host sent.
+    if let Some(background) = &background {
+        let events = background.events.clone();
+        agent = agent.extension(
+            CompletionDelivery::new(background.inbox.clone()).on_delivered(move |batch| {
+                let _ = events.send(BackgroundNotification::Delivered {
+                    spawn_ids: batch.iter().map(|n| n.spawn.id).collect(),
+                });
+            }),
+        );
+    }
     if definition.inner.extension_config.usage {
         agent = agent.extension(meter);
     }
@@ -112,6 +143,11 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
             long_session = long_session.on_compact(move |report| callback(report));
         }
         agent = agent.extension(long_session);
+    }
+    // After compaction: restores the worker inventory if compaction
+    // removed the snapshot delivery refreshed in this same step.
+    if let Some(background) = &background {
+        agent = agent.extension(ActiveInventory::new(background.manager.clone()));
     }
     // After compaction: it reads "already loaded" off the context the
     // model is about to see.

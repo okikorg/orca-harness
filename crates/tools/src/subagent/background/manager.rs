@@ -236,6 +236,34 @@ impl SubagentManager {
     pub fn is_current(&self, generation: u64) -> bool {
         self.inner.is_current(generation)
     }
+
+    /// Workers that have not exited: every admitted job, plus workers of
+    /// earlier generations that were cancelled but still hold a running
+    /// slot. Cancellation is cooperative, so this stays positive until
+    /// those workers observe their token and return.
+    pub fn live_workers(&self) -> usize {
+        self.inner.live_workers()
+    }
+
+    /// Resolve once [`live_workers`](Self::live_workers) reaches zero.
+    /// Driven by the same watch that frees slots and finishes jobs, so
+    /// there is no polling; a manager that is already idle resolves at
+    /// once. Bound the wait with a timeout when workers may ignore
+    /// cancellation.
+    pub async fn wait_idle(&self) {
+        let mut slots = self.inner.slots.subscribe();
+        loop {
+            // Mark the current epoch seen before checking, so a wake that
+            // lands between the check and the wait is not missed.
+            let _ = slots.borrow_and_update();
+            if self.inner.live_workers() == 0 {
+                return;
+            }
+            if slots.changed().await.is_err() {
+                return;
+            }
+        }
+    }
 }
 
 impl SubagentManagerInner {
@@ -455,6 +483,18 @@ impl SubagentManagerInner {
 
     pub fn is_current(&self, generation: u64) -> bool {
         self.state.lock().unwrap().generation == generation
+    }
+
+    fn live_workers(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        // Jobs with a slot are counted once through `running`; queued jobs
+        // and workflow roots (no slot) are counted through the map.
+        let slotted = state
+            .jobs
+            .values()
+            .filter(|job| job.on_cancel.is_none() && job.status == BackgroundStatus::Running)
+            .count();
+        state.jobs.len() + state.running.saturating_sub(slotted)
     }
 
     pub(crate) fn run_peak(&self, id: u64) -> usize {

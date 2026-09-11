@@ -124,3 +124,42 @@ fn abandoned_admission_releases_registration_and_completion_capacity() {
     let replacement = manager.inner.admit(&spawn(2)).unwrap();
     assert!(replacement.slot.is_some());
 }
+
+#[tokio::test]
+async fn wait_idle_resolves_when_last_job_finishes() {
+    let manager = SubagentManager::new(1);
+    let inner = &manager.inner;
+    assert_eq!(manager.live_workers(), 0);
+    tokio::time::timeout(std::time::Duration::from_secs(1), manager.wait_idle())
+        .await
+        .expect("an idle manager resolves at once");
+
+    let (generation, _cancel, slot) = inner.admit(&spawn(1)).unwrap().into_parts();
+    let (_, _, queued) = inner.admit(&spawn(2)).unwrap().into_parts();
+    assert!(slot.is_some() && queued.is_none());
+    assert_eq!(manager.live_workers(), 2);
+    let waiter = tokio::spawn({
+        let manager = manager.clone();
+        async move { manager.wait_idle().await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished(), "live workers keep the wait pending");
+
+    // Cancelling starts a new generation and empties the map, but the
+    // running worker still holds its slot until it exits.
+    assert_eq!(manager.cancel_all(), 2);
+    tokio::task::yield_now().await;
+    assert_eq!(manager.live_workers(), 1);
+    assert!(
+        !waiter.is_finished(),
+        "a cancelled worker holding a slot is still live"
+    );
+
+    inner.finish(generation, 1);
+    drop(slot);
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("the last slot release wakes the waiter")
+        .unwrap();
+    assert_eq!(manager.live_workers(), 0);
+}

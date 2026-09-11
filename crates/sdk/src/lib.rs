@@ -13,7 +13,9 @@ mod skills;
 mod tools;
 
 pub use agent::{Agent, AgentBuilder};
-pub use background::{SubagentConfig, Subagents};
+pub use background::{
+    BackgroundNotification, ChildEventCallback, SubagentConfig, Subagents, NOTIFICATION_CAPACITY,
+};
 pub use error::SdkError;
 pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig};
 pub use harness::{Harness, HarnessBuilder};

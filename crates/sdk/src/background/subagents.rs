@@ -4,12 +4,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orca_harness_core::{CancellationToken, Limits, Model};
+use orca_harness_extensions::HarnessEvent;
 use orca_harness_tools::{
-    BackgroundAcknowledgement, BackgroundJob, CompletionInbox, SubagentDepth, SubagentModel,
-    SubagentOutcome, SubagentRequest, SubagentTool,
+    BackgroundAcknowledgement, BackgroundJob, CompletionInbox, SpawnExtensions, SubagentDepth,
+    SubagentModel, SubagentOutcome, SubagentRequest, SubagentSpawn, SubagentTool,
 };
+use tokio::sync::broadcast;
 
+use super::BackgroundNotification;
 use crate::SdkError;
+
+/// Observes one child's harness events, tagged with the spawn they
+/// belong to; see [`SubagentConfig::on_child_event`].
+pub type ChildEventCallback = Arc<dyn Fn(&SubagentSpawn, HarnessEvent) + Send + Sync>;
 
 /// Provider recorded for inherited workers when the agent did not name one.
 pub(super) const DEFAULT_IDENTITY_PROVIDER: &str = "sdk";
@@ -21,7 +28,16 @@ pub(super) const DEFAULT_IDENTITY_PROVIDER: &str = "sdk";
 /// nesting cap, worker limits, routing, and the background concurrency
 /// limit can be adjusted mid-session through it); managers, queues, and
 /// completion inboxes are still built per session.
-#[derive(Clone, Default)]
+///
+/// What a child runs with, in registration order: the
+/// [`on_child_event`](Self::on_child_event) relay, the agent's own
+/// extensions when [`inherit_extensions`](Self::inherit_extensions) is on,
+/// the [`child_extensions`](Self::child_extensions) factory's output, and
+/// output truncation sized by the live `output_chars` setting. A child
+/// never gets the parent's session recorder, usage meter, event stream,
+/// truncation store, compaction, or skill tracking: those are built per
+/// parent run and are not reachable from here.
+#[derive(Clone)]
 pub struct SubagentConfig {
     pub(crate) settings: SubagentDepth,
     pub(crate) models: Vec<SubagentModel<Arc<dyn Model>>>,
@@ -30,11 +46,67 @@ pub struct SubagentConfig {
     pub(crate) identity: Option<(String, String)>,
     pub(crate) background_limit: Option<u32>,
     pub(crate) max_depth: Option<u32>,
+    pub(crate) inherit_extensions: bool,
+    pub(crate) child_extensions: Option<SpawnExtensions>,
+    pub(crate) on_child_event: Option<ChildEventCallback>,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            settings: SubagentDepth::default(),
+            models: Vec::new(),
+            system_prompt: None,
+            limits: None,
+            identity: None,
+            background_limit: None,
+            max_depth: None,
+            inherit_extensions: true,
+            child_extensions: None,
+            on_child_event: None,
+        }
+    }
 }
 
 impl SubagentConfig {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether every child gets the agent's own extensions (those added
+    /// with [`AgentBuilder::extension`], [`extension_arc`], and
+    /// [`policy`]). On by default, so a restriction that holds for the
+    /// parent holds for its workers too. The child receives the same
+    /// instances the parent runs with, not copies, so anything registered
+    /// on the agent must tolerate concurrent use from several agents
+    /// ([`ToolPolicy`](crate::ToolPolicy) does).
+    ///
+    /// [`AgentBuilder::extension`]: crate::AgentBuilder::extension
+    /// [`extension_arc`]: crate::AgentBuilder::extension_arc
+    /// [`policy`]: crate::AgentBuilder::policy
+    pub fn inherit_extensions(mut self, inherit: bool) -> Self {
+        self.inherit_extensions = inherit;
+        self
+    }
+
+    /// Build host extensions for each spawned child (nested ones too),
+    /// registered after the inherited agent extensions and before output
+    /// truncation. The factory runs once per spawn, on the spawning
+    /// task, and may return fresh instances every time.
+    pub fn child_extensions(mut self, factory: SpawnExtensions) -> Self {
+        self.child_extensions = Some(factory);
+        self
+    }
+
+    /// Observe each child's harness events (start, model turns, tool
+    /// calls, end) tagged with its [`SubagentSpawn`]. Installed as the
+    /// first extension of every child, so it sees the whole run.
+    pub fn on_child_event(
+        mut self,
+        callback: impl Fn(&SubagentSpawn, HarnessEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_child_event = Some(Arc::new(callback));
+        self
     }
 
     /// Share an existing live settings handle instead of a fresh default.
@@ -63,8 +135,10 @@ impl SubagentConfig {
         self
     }
 
-    /// Fixed worker limits. Without this, workers follow the live
-    /// `settings` step budget.
+    /// Fixed worker limits, applied to each spawn. Without this, workers
+    /// follow the live `settings` step budget. Explicit limits do not
+    /// rewrite the shared `settings` handle: a session opening with them
+    /// leaves the step budget other sessions read unchanged.
     pub fn limits(mut self, limits: Limits) -> Self {
         self.limits = Some(limits);
         self
@@ -118,6 +192,7 @@ pub struct Subagents {
     tool: Arc<SubagentTool<Arc<dyn Model>>>,
     inbox: CompletionInbox,
     settings: SubagentDepth,
+    events: broadcast::Sender<BackgroundNotification>,
 }
 
 impl Subagents {
@@ -125,11 +200,13 @@ impl Subagents {
         tool: Arc<SubagentTool<Arc<dyn Model>>>,
         inbox: CompletionInbox,
         settings: SubagentDepth,
+        events: broadcast::Sender<BackgroundNotification>,
     ) -> Self {
         Self {
             tool,
             inbox,
             settings,
+            events,
         }
     }
 
@@ -184,5 +261,11 @@ impl Subagents {
     /// Completed detached results not yet delivered to the conversation.
     pub fn pending_completions(&self) -> usize {
         self.inbox.pending()
+    }
+
+    /// A fresh observer of this session's detached work; the same channel
+    /// as [`Session::notifications`](crate::Session::notifications).
+    pub fn notifications(&self) -> broadcast::Receiver<BackgroundNotification> {
+        self.events.subscribe()
     }
 }
