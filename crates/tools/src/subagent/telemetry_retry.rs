@@ -57,21 +57,29 @@ impl Extension for Meter {
 /// extensions crate's `ToolRetry` semantics (crate-layering:
 /// `orca-harness-tools` must not depend on `orca-harness-extensions`):
 /// re-invoke a failing call up to `max_attempts` times, and treat an
-/// `Ok` result the [`OkFailureRule`] rejects as a failed attempt too.
+/// `Ok` result the [`OkFailureRule`] rejects as a failed attempt too,
+/// while an `Err` the [`ErrorRetryRule`] refuses is returned at once.
 #[derive(Clone)]
 struct SubagentRetry {
     max_attempts: u32,
     backoff: std::time::Duration,
     /// Data-failure rule for the inherited [`RetryPolicy`].
     ok_failure: Option<OkFailureRule>,
+    /// Error restriction; `None` retries every `Err`.
+    retry_error: Option<ErrorRetryRule>,
 }
 
 impl SubagentRetry {
-    fn new(policy: RetryPolicy, ok_failure: Option<OkFailureRule>) -> Self {
+    fn new(
+        policy: RetryPolicy,
+        ok_failure: Option<OkFailureRule>,
+        retry_error: Option<ErrorRetryRule>,
+    ) -> Self {
         Self {
             max_attempts: policy.0,
             backoff: policy.1,
             ok_failure,
+            retry_error,
         }
     }
 }
@@ -113,6 +121,13 @@ impl Extension for SubagentRetry {
                     return Ok(value);
                 }
                 Err(err) => {
+                    if self
+                        .retry_error
+                        .as_ref()
+                        .is_some_and(|rule| !rule(call, &err))
+                    {
+                        return Err(err);
+                    }
                     last_err = Some(err);
                     if attempt < self.max_attempts {
                         tokio::time::sleep(self.backoff).await;

@@ -195,22 +195,24 @@ impl SubagentConfig {
         self
     }
 
-    /// Retry each child's own tool calls inside the child, with the core
-    /// tools' data failures (`shell` / `process` `success: false`,
-    /// `web_fetch` 5xx) counted as failures; see
-    /// [`orca_harness_tools::retry::data_failure`]. Without this, children
-    /// get no retry: the parent's
-    /// [`AgentBuilder::tool_retry`](crate::AgentBuilder::tool_retry) wraps
-    /// only the parent's calls, and a child's failed run is retried there
-    /// as one `subagent` call.
+    /// Retry each child's own tool calls inside the child. Children
+    /// classify like the parent's layer: the core tools' data failures
+    /// (`shell` / `process` `success: false`, `web_fetch` 5xx) count as
+    /// failures and native file mutation errors are never replayed (see
+    /// [`orca_harness_tools::retry`]).
     ///
     /// The attempts and backoff are installed into the live `settings`
     /// handle as defaults when the agent is built
     /// ([`SubagentDepth::ensure_retry_defaults`]), so a handle the host
-    /// already configured keeps its values, and later live edits win.
-    /// Once set, the parent's tool retry stops replaying `subagent` and
-    /// `workflow` runs: a child's failure is retried in one layer, not
-    /// both.
+    /// already configured keeps its values, and later live edits win;
+    /// a host may equally set `tool_attempts` on the handle itself and
+    /// skip this. Children retry whenever the live `tool_attempts` is
+    /// above one, and the parent's
+    /// [`AgentBuilder::tool_retry`](crate::AgentBuilder::tool_retry) then
+    /// stops replaying `subagent` and `workflow` runs: a child's failure
+    /// is retried in one layer, not both. With `tool_attempts` at one a
+    /// child's failed run is a plain tool error the parent's layer may
+    /// retry as one `subagent` call.
     pub fn tool_retry(mut self, config: RetryConfig) -> Self {
         self.tool_retry = Some(config);
         self

@@ -14,7 +14,7 @@ use orca_harness_core::{
 };
 use orca_harness_sdk::orchestration::SubagentModel;
 use orca_harness_sdk::{
-    Harness, ModelRetryConfig, RetryConfig, Session, SubagentConfig, ToolRetryConfig,
+    Harness, ModelRetryOptions, RetryConfig, Session, SubagentConfig, ToolRetryOptions,
 };
 use serde_json::{json, Value};
 
@@ -51,9 +51,11 @@ impl Model for FlakyModel {
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let remaining = self.failures.load(Ordering::SeqCst);
-        if remaining > 0 {
-            self.failures.store(remaining - 1, Ordering::SeqCst);
+        let failing = self
+            .failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if failing {
             return Err(ModelError::Request("transient".into()));
         }
         self.script.generate(context, tools).await
@@ -104,7 +106,7 @@ async fn run_one_round(
     root: &std::path::Path,
     calls: Vec<orca_harness_core::ToolCall>,
     tools: Vec<FnTool>,
-    retry: ToolRetryConfig,
+    retry: ToolRetryOptions,
 ) -> orca_harness_sdk::RunResult {
     let harness = Harness::builder().workspace(root).build().unwrap();
     let mut builder = harness
@@ -127,7 +129,7 @@ async fn data_failures_are_retried_and_last_output_returned() {
         &root,
         vec![call("s1", "shell", json!({}))],
         vec![shell],
-        ToolRetryConfig::attempts(3).backoff_ms(0),
+        ToolRetryOptions::attempts(3).backoff_ms(0),
     )
     .await;
     assert_eq!(
@@ -148,7 +150,7 @@ async fn data_failures_are_retried_and_last_output_returned() {
         &root,
         vec![call("s1", "shell", json!({}))],
         vec![shell],
-        ToolRetryConfig::attempts(3)
+        ToolRetryOptions::attempts(3)
             .backoff_ms(0)
             .retry_data_failures(false),
     )
@@ -176,7 +178,7 @@ async fn non_idempotent_mutations_are_not_retried() {
             call("g1", "grep", json!({})),
         ],
         vec![write_file, grep],
-        ToolRetryConfig::attempts(3).backoff_ms(0),
+        ToolRetryOptions::attempts(3).backoff_ms(0),
     )
     .await;
     assert_eq!(
@@ -213,7 +215,7 @@ async fn custom_predicates_compose_with_builtins() {
             call("s1", "shell", json!({})),
         ],
         vec![write_file, grep, fetch, probe, shell],
-        ToolRetryConfig::attempts(3)
+        ToolRetryOptions::attempts(3)
             .backoff_ms(0)
             .retry_error_when(|call, _| call.name != "grep")
             .retry_ok_when(|call, out| call.name == "probe" && out["ok"] == false),
@@ -251,16 +253,21 @@ async fn retry_config_forwarding_keeps_old_calls_working() {
             Ok(json!({"invocation": n}))
         }
     });
+    let (write_file, writes) = counting_tool("write_file", always_err);
     let model = FlakyModel::new(
         1,
         vec![
-            ModelResponse::tool_calls(vec![call("c1", "count_it", json!({}))]),
+            ModelResponse::tool_calls(vec![
+                call("c1", "count_it", json!({})),
+                call("w1", "write_file", json!({})),
+            ]),
             ModelResponse::final_text("done"),
         ],
     );
     let agent = harness
         .agent(model.clone())
         .tool(count_it)
+        .tool(write_file)
         .tool_retry(RetryConfig::attempts(2).backoff_ms(0))
         .model_retry(RetryConfig::attempts(2).backoff_ms(0))
         .build()
@@ -272,6 +279,11 @@ async fn retry_config_forwarding_keeps_old_calls_working() {
         model.calls(),
         3,
         "one model retry, then the two-step script"
+    );
+    assert_eq!(
+        writes.load(Ordering::SeqCst),
+        1,
+        "the plain config classifies too: a mutation error is not replayed"
     );
 
     let _ = std::fs::remove_dir_all(&root);
@@ -287,7 +299,7 @@ async fn model_retry_notifies_and_honors_live_config() {
     let model = FlakyModel::new(2, vec![ModelResponse::final_text("recovered")]);
     let agent = harness
         .agent(model.clone())
-        .model_retry(ModelRetryConfig::attempts(3).backoff_ms(0).on_retry(
+        .model_retry(ModelRetryOptions::attempts(3).backoff_ms(0).on_retry(
             move |attempt, max, _error| {
                 assert_eq!(max, Some(3));
                 assert!(attempt >= 2);
@@ -306,7 +318,7 @@ async fn model_retry_notifies_and_honors_live_config() {
     let agent = harness
         .agent(model.clone())
         .model_retry(
-            ModelRetryConfig::attempts(3)
+            ModelRetryOptions::attempts(3)
                 .backoff_ms(0)
                 .on_retry(move |_, _, _| {
                     seen.fetch_add(1, Ordering::SeqCst);
@@ -359,7 +371,7 @@ fn delegating_session(
     let mut builder = harness
         .agent(delegating_parent())
         .subagents(subagents)
-        .tool_retry(ToolRetryConfig::attempts(3).backoff_ms(0));
+        .tool_retry(ToolRetryOptions::attempts(3).backoff_ms(0));
     for tool in tools {
         builder = builder.tool(tool);
     }
@@ -434,6 +446,77 @@ async fn parent_retry_does_not_replay_delegation_when_children_retry() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[tokio::test]
+async fn delegation_rule_follows_the_live_settings_handle() {
+    let root = temp_dir("retry-delegation-live");
+
+    // No `SubagentConfig::tool_retry`, but the host raised the live
+    // attempts: children retry, so the parent does not replay.
+    let child = FlakyModel::new(usize::MAX, vec![]);
+    let session = delegating_session(&root, child.clone(), vec![], None);
+    assert_eq!(
+        session.subagents().unwrap().settings().set_tool_attempts(3),
+        3
+    );
+    let result = session.run("delegate").await.unwrap();
+    assert_eq!(result.text, "parent done");
+    assert_eq!(child.calls(), 1, "live attempts above one: one child spawn");
+
+    // `tool_retry` set, then the host lowered the live attempts to one:
+    // children no longer retry, so the parent replays (CLI parity).
+    let child = FlakyModel::new(usize::MAX, vec![]);
+    let session = delegating_session(
+        &root,
+        child.clone(),
+        vec![],
+        Some(RetryConfig::attempts(3).backoff_ms(0)),
+    );
+    assert_eq!(
+        session.subagents().unwrap().settings().set_tool_attempts(1),
+        1
+    );
+    let result = session.run("delegate").await.unwrap();
+    assert_eq!(result.text, "parent done");
+    assert_eq!(child.calls(), 3, "live attempts at one: the parent replays");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn children_do_not_replay_non_idempotent_mutations() {
+    let root = temp_dir("retry-child-mutations");
+    let child = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tool_calls(vec![
+            call("w1", "write_file", json!({})),
+            call("g1", "grep", json!({})),
+        ]),
+        ModelResponse::final_text("child done"),
+    ]));
+    let (write_file, writes) = counting_tool("write_file", always_err);
+    let (grep, greps) = counting_tool("grep", always_err);
+    let session = delegating_session(
+        &root,
+        child.clone(),
+        vec![write_file, grep],
+        Some(RetryConfig::attempts(3).backoff_ms(0)),
+    );
+    let result = session.run("delegate").await.unwrap();
+    assert_eq!(result.text, "parent done");
+    assert_eq!(child.generate_calls(), 2, "one child spawn");
+    assert_eq!(
+        writes.load(Ordering::SeqCst),
+        1,
+        "the child never replays a mutation"
+    );
+    assert_eq!(
+        greps.load(Ordering::SeqCst),
+        3,
+        "the child retries other errors"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Time is paused, so the run's elapsed virtual time is exactly the retry
 /// backoff slept: zero when the call was not replayed.
 #[tokio::test(start_paused = true)]
@@ -455,7 +538,7 @@ async fn workflow_run_calls_follow_the_same_rule() {
         let agent = harness
             .agent(parent())
             .subagents(subagents)
-            .tool_retry(ToolRetryConfig::attempts(3).backoff_ms(backoff_ms))
+            .tool_retry(ToolRetryOptions::attempts(3).backoff_ms(backoff_ms))
             .build()
             .unwrap();
         async move {
