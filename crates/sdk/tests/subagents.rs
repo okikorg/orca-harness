@@ -3,37 +3,16 @@
 //! manager and inbox are session-owned (never shared, reset on clear).
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use async_trait::async_trait;
 use orca_harness_core::testing::ScriptedModel;
-use orca_harness_core::{CancellationToken, Context, Model, ModelError, ModelResponse, ToolSchema};
+use orca_harness_core::{CancellationToken, Model, ModelResponse};
 use orca_harness_sdk::orchestration::{BackgroundStatus, SubagentRequest};
 use orca_harness_sdk::{Harness, SdkError, SubagentConfig};
 
+mod background_support;
 mod common;
+use background_support::{wait_until, Held};
 use common::temp_dir;
-
-/// Blocks every worker until released, so tests can observe live jobs.
-struct Held(CancellationToken);
-
-#[async_trait]
-impl Model for Held {
-    async fn generate(&self, _: &Context, _: &[ToolSchema]) -> Result<ModelResponse, ModelError> {
-        self.0.cancelled().await;
-        Ok(ModelResponse::final_text("held done"))
-    }
-}
-
-async fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
-    for _ in 0..500 {
-        if condition() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("timed out waiting for {what}");
-}
 
 #[tokio::test]
 async fn session_subagents_run_foreground_returns_typed_outcome() {

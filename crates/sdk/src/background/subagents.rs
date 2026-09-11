@@ -1,5 +1,6 @@
 //! The agent-level subagent recipe and the session-level host handle.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -193,6 +194,10 @@ pub struct Subagents {
     inbox: CompletionInbox,
     settings: SubagentDepth,
     events: broadcast::Sender<BackgroundNotification>,
+    /// The session's shutdown flag; see [`Session::shutdown`].
+    ///
+    /// [`Session::shutdown`]: crate::Session::shutdown
+    closed: Arc<AtomicBool>,
 }
 
 impl Subagents {
@@ -201,20 +206,32 @@ impl Subagents {
         inbox: CompletionInbox,
         settings: SubagentDepth,
         events: broadcast::Sender<BackgroundNotification>,
+        closed: Arc<AtomicBool>,
     ) -> Self {
         Self {
             tool,
             inbox,
             settings,
             events,
+            closed,
+        }
+    }
+
+    fn ensure_open(&self) -> Result<(), SdkError> {
+        if self.closed.load(Ordering::Acquire) {
+            Err(SdkError::SessionClosed)
+        } else {
+            Ok(())
         }
     }
 
     /// Admit a detached worker and return at once. Its result lands in the
-    /// session's completion inbox (see [`pending_completions`]).
+    /// session's completion inbox (see [`pending_completions`]). Refused
+    /// with [`SdkError::SessionClosed`] once the session was shut down.
     ///
     /// [`pending_completions`]: Self::pending_completions
     pub fn spawn(&self, request: SubagentRequest) -> Result<BackgroundAcknowledgement, SdkError> {
+        self.ensure_open()?;
         self.tool
             .spawn_background(request)
             .map_err(|error| SdkError::Subagent(error.to_string()))
@@ -223,13 +240,15 @@ impl Subagents {
     /// Run one worker in the foreground and return its typed outcome. A
     /// missing `cancellation` means the run can only end on its own; the
     /// `deadline` is measured from now and combined with the configured
-    /// limits and the live worker timeout.
+    /// limits and the live worker timeout. Refused with
+    /// [`SdkError::SessionClosed`] once the session was shut down.
     pub async fn run(
         &self,
         request: SubagentRequest,
         cancellation: Option<CancellationToken>,
         deadline: Option<Duration>,
     ) -> Result<SubagentOutcome, SdkError> {
+        self.ensure_open()?;
         let deadline = deadline.map(|duration| tokio::time::Instant::now() + duration);
         self.tool
             .run_foreground(request, cancellation.unwrap_or_default(), deadline)

@@ -26,17 +26,18 @@ pub enum BackgroundNotification {
     /// enter the parent transcript. Boxed: the payload carries the
     /// worker's full result, the other variants a few words.
     SubagentFinished(Box<SubagentNotification>),
-    /// Results are waiting for the parent and no run is known to be on
-    /// its way to deliver them. Sent at most once per idle period: the
-    /// next run, whoever starts it, consumes the wake-up. A parent that
-    /// was mid-run may have delivered the batch by the time a host reads
-    /// this; check [`Session::pending_completions`] before continuing.
+    /// Results are waiting for the parent. Sent when a result is admitted
+    /// while no wake-up is outstanding, and again by a run that ends with
+    /// results still waiting. A running turn may deliver the batch before
+    /// a host reads this (a [`CompletionsDelivered`] follows); check
+    /// [`Session::pending_completions`] before continuing.
     ///
+    /// [`CompletionsDelivered`]: Self::CompletionsDelivered
     /// [`Session::pending_completions`]: crate::Session::pending_completions
     CompletionsReady { pending: usize },
     /// A batch entered the parent transcript as one user turn, at a model
     /// boundary of a running turn or a host-started continuation.
-    Delivered { spawn_ids: Vec<u64> },
+    CompletionsDelivered { spawn_ids: Vec<u64> },
 }
 
 /// The subagent notifier installed on a session's `subagent` tool: let
@@ -59,10 +60,67 @@ pub(crate) fn notify(
     }
 }
 
+/// Called when a run ends. A result admitted after the run's last model
+/// boundary found the wake-up still outstanding from a result that run
+/// delivered, so it announced nothing; the run's own wake-up consumption
+/// would then discard it. Clear the latch and, when results are still
+/// waiting, announce them: exactly one of the worker and the run sees
+/// the latch clear, so each waiting batch is announced once.
+pub(crate) fn rearm(inbox: &CompletionInbox, events: &broadcast::Sender<BackgroundNotification>) {
+    if inbox.consume_wakeup() && inbox.request_wakeup() {
+        let _ = events.send(BackgroundNotification::CompletionsReady {
+            pending: inbox.pending(),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use orca_harness_tools::{SubagentManager, SubagentSpawn};
+
+    fn ready_count(host: &mut broadcast::Receiver<BackgroundNotification>) -> usize {
+        let mut count = 0;
+        while let Ok(event) = host.try_recv() {
+            if matches!(event, BackgroundNotification::CompletionsReady { .. }) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn a_run_ending_with_waiting_results_announces_them_once() {
+        let inbox = CompletionInbox::new(SubagentManager::default());
+        let (events, mut host) = broadcast::channel(NOTIFICATION_CAPACITY);
+
+        // Run starts; A finishes mid-run and is delivered at a model boundary.
+        inbox.consume_wakeup();
+        notify(&inbox, &events, finished(0, 1, None));
+        assert_eq!(ready_count(&mut host), 1);
+        assert_eq!(inbox.drain().len(), 1);
+        // B finishes after the last boundary: the latch is still set.
+        notify(&inbox, &events, finished(0, 2, None));
+        assert_eq!(ready_count(&mut host), 0, "B found the wake-up outstanding");
+        assert_eq!(inbox.pending(), 1);
+
+        rearm(&inbox, &events);
+        assert_eq!(ready_count(&mut host), 1, "the run announces B");
+        rearm(&inbox, &events);
+        assert_eq!(
+            ready_count(&mut host),
+            1,
+            "a second rearm is silent, B is still latched"
+        );
+
+        // A run that ends with nothing waiting clears the latch silently,
+        // so the next idle result announces itself.
+        assert_eq!(inbox.drain().len(), 1);
+        rearm(&inbox, &events);
+        assert_eq!(ready_count(&mut host), 0);
+        notify(&inbox, &events, finished(0, 3, None));
+        assert_eq!(ready_count(&mut host), 1);
+    }
 
     fn finished(generation: u64, id: u64, run: Option<u64>) -> SubagentNotification {
         SubagentNotification {

@@ -30,7 +30,7 @@ use common::temp_dir;
 
 #[tokio::test]
 async fn child_inherits_agent_policy() {
-    let root = temp_dir("delivery-policy");
+    let root = temp_dir("lifecycle-policy");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let forbidden = || {
         FnTool::new(
@@ -130,7 +130,7 @@ async fn child_inherits_agent_policy() {
 
 #[tokio::test]
 async fn child_extension_factory_and_event_relay_run_per_spawn() {
-    let root = temp_dir("delivery-child-extensions");
+    let root = temp_dir("lifecycle-child-extensions");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let factory_calls = Arc::new(AtomicUsize::new(0));
     let started: Arc<Mutex<Vec<u64>>> = Arc::default();
@@ -179,7 +179,7 @@ async fn child_extension_factory_and_event_relay_run_per_spawn() {
 
 #[tokio::test]
 async fn dropping_a_session_cancels_its_background_subagents() {
-    let root = temp_dir("delivery-drop");
+    let root = temp_dir("lifecycle-drop");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let release = CancellationToken::new();
     let agent = harness
@@ -213,7 +213,7 @@ async fn dropping_a_session_cancels_its_background_subagents() {
 
 #[tokio::test]
 async fn explicit_limits_do_not_rewrite_shared_settings() {
-    let root = temp_dir("delivery-limits");
+    let root = temp_dir("lifecycle-limits");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let settings = SubagentDepth::default();
     let shared_steps = settings.max_steps();
@@ -267,7 +267,7 @@ async fn explicit_limits_do_not_rewrite_shared_settings() {
 
 #[tokio::test]
 async fn shutdown_awaits_workers_and_times_out_when_they_hang() {
-    let root = temp_dir("delivery-shutdown");
+    let root = temp_dir("lifecycle-shutdown");
     let harness = Harness::builder().workspace(&root).build().unwrap();
 
     let release = CancellationToken::new();
@@ -323,7 +323,7 @@ async fn shutdown_awaits_workers_and_times_out_when_they_hang() {
 
 #[tokio::test]
 async fn shutdown_while_a_run_is_active_touches_nothing() {
-    let root = temp_dir("delivery-shutdown-busy");
+    let root = temp_dir("lifecycle-shutdown-busy");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let release = CancellationToken::new();
     let child: Arc<dyn Model> = Arc::new(Held(release.clone()));
@@ -383,7 +383,7 @@ async fn shutdown_while_a_run_is_active_touches_nothing() {
 
 #[tokio::test]
 async fn cancelling_parent_run_does_not_cancel_detached_children() {
-    let root = temp_dir("delivery-parent-cancel");
+    let root = temp_dir("lifecycle-parent-cancel");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let parent = Arc::new(ScriptedModel::new(vec![
         spawn_call("c1", "look into it"),
@@ -443,6 +443,77 @@ async fn cancelling_parent_run_does_not_cancel_detached_children() {
     );
     assert_eq!(subagents.cancel_all(), 1);
     wait_until(|| subagents.active().is_empty(), "the child to stop").await;
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn shutdown_closes_the_session_to_runs_and_spawns() {
+    let root = temp_dir("lifecycle-closed");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let release = CancellationToken::new();
+    let agent = harness
+        .agent(Held(release.clone()))
+        .subagents(SubagentConfig::new())
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    subagents.spawn(SubagentRequest::new("before")).unwrap();
+    session.shutdown(Duration::from_secs(2)).await.unwrap();
+
+    let closed = |error: SdkError| assert!(matches!(error, SdkError::SessionClosed), "{error}");
+    closed(subagents.spawn(SubagentRequest::new("after")).unwrap_err());
+    closed(
+        subagents
+            .run(SubagentRequest::new("after"), None, None)
+            .await
+            .unwrap_err(),
+    );
+    closed(session.run("after").await.unwrap_err());
+    closed(
+        session
+            .continue_run(RunRequest::continuation())
+            .await
+            .unwrap_err(),
+    );
+    closed(session.start(RunRequest::new("after")).err().unwrap());
+    closed(session.clear().await.unwrap_err());
+    closed(session.shutdown(Duration::ZERO).await.unwrap_err());
+    assert!(subagents.active().is_empty());
+    assert!(!release.is_cancelled());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn spawns_during_the_grace_window_are_refused() {
+    let root = temp_dir("lifecycle-grace-window");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let release = CancellationToken::new();
+    let entered = Arc::new(Notify::new());
+    let agent = harness
+        .agent(Held(release.clone()))
+        .subagents(SubagentConfig::new().child_extensions({
+            let entered = entered.clone();
+            Arc::new(move |_spawn| vec![Arc::new(Stall(entered.clone())) as Arc<dyn Extension>])
+        }))
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    subagents.spawn(SubagentRequest::new("stalled")).unwrap();
+    entered.notified().await;
+
+    let (shutdown, refused) = tokio::join!(session.shutdown(Duration::from_millis(300)), async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        subagents.spawn(SubagentRequest::new("late")).unwrap_err()
+    });
+    assert!(matches!(refused, SdkError::SessionClosed), "{refused}");
+    assert!(
+        matches!(shutdown, Err(SdkError::ShutdownTimeout { still_active: 1 })),
+        "only the stalled worker was ever live: {shutdown:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

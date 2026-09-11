@@ -20,6 +20,7 @@
 mod notifications;
 mod subagents;
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use orca_harness_core::{Extension, Model, Tool};
@@ -35,13 +36,13 @@ use crate::tools::{preset_tools, ToolSource};
 pub use notifications::{BackgroundNotification, NOTIFICATION_CAPACITY};
 pub use subagents::{ChildEventCallback, SubagentConfig, Subagents};
 
+pub(crate) use notifications::rearm;
+
 /// The handles one run needs to deliver completions and refresh the
 /// worker inventory at its model boundaries: small clones, not the
 /// services themselves.
-#[derive(Clone)]
 pub(crate) struct RunBackground {
     pub(crate) inbox: CompletionInbox,
-    pub(crate) manager: SubagentManager,
     pub(crate) events: broadcast::Sender<BackgroundNotification>,
 }
 
@@ -61,7 +62,7 @@ impl BackgroundServices {
     /// Nesting is governed by the shared [`SubagentDepth`] handle, as for
     /// the model tool.
     ///
-    /// Child extensions come from [`child_extensions`] (see
+    /// Child extensions come from [`spawn_extensions`] (see
     /// [`SubagentConfig::inherit_extensions`] for the ordering). The
     /// parent's per-run extensions (recorder, usage meter, event stream,
     /// truncation store, compaction, `SkillOnce`, completion delivery) are
@@ -99,7 +100,7 @@ impl BackgroundServices {
             .background(manager, move |notification| {
                 notifications::notify(&notifier.0, &notifier.1, notification);
             })
-            .spawn_extensions(child_extensions(definition, config))
+            .spawn_extensions(spawn_extensions(definition, config))
             // Share the handle before applying explicit limits: `max_depth`
             // publishes configured limits into the shared handle, and
             // explicit limits are per spawn, not a rewrite of what every
@@ -124,19 +125,19 @@ impl BackgroundServices {
         self.subagents.clone()
     }
 
-    pub(crate) fn handle(&self) -> Subagents {
+    pub(crate) fn handle(&self, closed: Arc<AtomicBool>) -> Subagents {
         Subagents::new(
             self.subagents.clone(),
             self.inbox.clone(),
             self.settings.clone(),
             self.events.clone(),
+            closed,
         )
     }
 
     pub(crate) fn run_handles(&self) -> RunBackground {
         RunBackground {
             inbox: self.inbox.clone(),
-            manager: self.inbox.manager().clone(),
             events: self.events.clone(),
         }
     }
@@ -159,6 +160,13 @@ impl BackgroundServices {
     pub(crate) fn clear(&self) {
         self.inbox.reset();
     }
+
+    /// Refuse every later admission, then cancel and clear as
+    /// [`clear`](Self::clear) does.
+    pub(crate) fn close(&self) {
+        self.inbox.manager().close();
+        self.inbox.reset();
+    }
 }
 
 /// Best-effort cleanup when the session goes away without an explicit
@@ -176,7 +184,7 @@ impl Drop for BackgroundServices {
 /// tool, in the order a child registers them: the host's event relay,
 /// the agent's inherited extensions, the host's per-spawn extensions,
 /// then output truncation sized from the live settings.
-fn child_extensions(definition: &AgentDefinition, config: &SubagentConfig) -> SpawnExtensions {
+fn spawn_extensions(definition: &AgentDefinition, config: &SubagentConfig) -> SpawnExtensions {
     let inherited: Vec<Arc<dyn Extension>> = if config.inherit_extensions {
         definition.extensions.clone()
     } else {

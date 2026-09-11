@@ -163,3 +163,50 @@ async fn wait_idle_resolves_when_last_job_finishes() {
         .unwrap();
     assert_eq!(manager.live_workers(), 0);
 }
+
+#[tokio::test]
+async fn close_cancels_and_refuses_every_later_admission() {
+    use crate::{SubagentRequest, SubagentTool, Workspace};
+    use orca_harness_core::testing::ScriptedModel;
+    use orca_harness_core::{CancellationToken, Tool, ToolContext};
+
+    let manager = SubagentManager::new(1);
+    let inner = &manager.inner;
+    let (_, cancel, slot) = inner.admit(&spawn(1)).unwrap().into_parts();
+    assert_eq!(manager.close(), 1);
+    assert!(cancel.is_cancelled());
+    assert_eq!(
+        inner.admit(&spawn(2)).err(),
+        Some("session is shut down"),
+        "direct admission"
+    );
+    drop(slot);
+    tokio::time::timeout(std::time::Duration::from_secs(1), manager.wait_idle())
+        .await
+        .unwrap();
+
+    // The host and model-tool paths share that admission.
+    let tool = SubagentTool::new(
+        std::sync::Arc::new(ScriptedModel::new(Vec::new())),
+        &Workspace::new(std::env::temp_dir()),
+    )
+    .background(manager.clone(), |_| {});
+    let host = tool
+        .spawn_background(SubagentRequest::new("late"))
+        .unwrap_err();
+    assert!(host.to_string().contains("shut down"), "{host}");
+    let model = tool
+        .call(
+            serde_json::json!({"task": "late", "background": true}),
+            &ToolContext {
+                call_id: "late".into(),
+                tool_name: "subagent".into(),
+                cancellation: CancellationToken::new(),
+                deadline: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(model.to_string().contains("shut down"), "{model}");
+    assert!(manager.active().is_empty());
+}

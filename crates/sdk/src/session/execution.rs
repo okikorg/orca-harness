@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use super::events::{EventFanout, RunObserver};
 use super::persistence::save_session_store;
 use super::BusyGuard;
-use crate::background::{BackgroundNotification, RunBackground};
+use crate::background::{rearm, BackgroundNotification, RunBackground};
 use crate::extensions::Compaction;
 use crate::{Agent, RunOutcome, RunRequest, SdkError};
 
@@ -117,7 +117,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
         let events = background.events.clone();
         agent = agent.extension(
             CompletionDelivery::new(background.inbox.clone()).on_delivered(move |batch| {
-                let _ = events.send(BackgroundNotification::Delivered {
+                let _ = events.send(BackgroundNotification::CompletionsDelivered {
                     spawn_ids: batch.iter().map(|n| n.spawn.id).collect(),
                 });
             }),
@@ -147,7 +147,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
     // After compaction: restores the worker inventory if compaction
     // removed the snapshot delivery refreshed in this same step.
     if let Some(background) = &background {
-        agent = agent.extension(ActiveInventory::new(background.manager.clone()));
+        agent = agent.extension(ActiveInventory::new(background.inbox.manager().clone()));
     }
     // After compaction: it reads "already loaded" off the context the
     // model is about to see.
@@ -168,11 +168,10 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
         }
     };
     if let Some(background) = &background {
-        // The wake-up latch is set by the first result that arrives after
-        // it was consumed; a result that arrived mid-run was delivered by
-        // this run, so clear it again or the first result to arrive while
-        // idle would never announce itself.
-        background.inbox.consume_wakeup();
+        // A result delivered by this run left the wake-up outstanding;
+        // clear it, and announce anything that arrived after the last
+        // model boundary and found it still set.
+        rearm(&background.inbox, &background.events);
     }
     let dropped_events = fanout.flush();
     let persistence = match &recorder {
