@@ -207,7 +207,9 @@ impl Session {
     }
 
     /// Detached results waiting for the parent transcript; zero without
-    /// configured subagents.
+    /// configured subagents. A result counts only once admitted, which is
+    /// after its `SubagentFinished` notification; see the ordering notes on
+    /// [`BackgroundNotification`](crate::BackgroundNotification).
     pub fn pending_completions(&self) -> usize {
         self.tools
             .background

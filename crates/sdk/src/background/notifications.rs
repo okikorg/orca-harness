@@ -21,6 +21,21 @@ pub const NOTIFICATION_CAPACITY: usize = 256;
 /// here starts a model run: a host that wants the parent to react to
 /// [`CompletionsReady`](Self::CompletionsReady) continues the session
 /// itself.
+///
+/// # Ordering
+///
+/// [`SubagentFinished`](Self::SubagentFinished) is broadcast before the
+/// result is pushed into the inbox, so a
+/// [`Session::pending_completions`](crate::Session::pending_completions)
+/// read right after observing it may not count that result yet; wait for
+/// [`CompletionsReady`](Self::CompletionsReady) before relying on the
+/// count. `CompletionsReady` follows the first admission made while no
+/// wake-up is outstanding (the `notify` function below has the exact
+/// mechanics), so one `CompletionsReady` can stand for several
+/// `SubagentFinished`. A workflow records its
+/// [`Workflows::status`](crate::Workflows::status) `outcome` before its
+/// run-level `SubagentFinished` is sent, so a host that observes the run
+/// finish can read the outcome at once.
 #[derive(Clone, Debug)]
 pub enum BackgroundNotification {
     /// A detached worker finished, however it ended. Sent for every
