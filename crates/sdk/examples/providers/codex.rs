@@ -12,9 +12,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use orca_harness_model_providers::openai_codex::{CodexCredential, CodexCredentialSource};
-use orca_harness_provider_auth::CredentialError;
-use orca_harness_sdk::{BearerCredential, CredentialSource, Harness, OpenAiCodexModel, RunRequest};
+use orca_harness_sdk::{
+    BearerCredential, CodexCredential, CodexCredentialSource, CredentialError, CredentialSource,
+    Harness, OpenAiCodexModel, RunRequest,
+};
 
 struct EnvCodexCredentials {
     access_token: String,

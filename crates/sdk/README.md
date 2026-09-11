@@ -12,7 +12,14 @@
 - `Mcp` reports MCP server status and coordinates MCP integration.
 - `TruncationConfig`, `RetryConfig`, and `Compaction` configure common extensions without exposing host internals.
 
-The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually. Use `orcacode` when you want the reference terminal host rather than a Rust embedding API.
+The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually. The companion types needed to implement `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `HarnessError`, and the Codex credential contract) are exported at the top level, and the wider surface is grouped into four namespaces:
+
+- `contracts`: core traits plus every companion type needed to implement them.
+- `providers`: model adapters, the model catalog, and credentials including Codex.
+- `orchestration`: subagent, background process, and workflow handles.
+- `integrations`: MCP, skills, web, memory, session recording, and reusable extension handles.
+
+`tests/consumer_api.rs` is the baseline: it depends on `orca_harness_sdk` alone and implements every contract. Use `orcacode` when you want the reference terminal host rather than a Rust embedding API.
 
 ```bash
 cargo test -p orca-harness-sdk
