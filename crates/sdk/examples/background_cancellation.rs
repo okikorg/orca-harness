@@ -6,7 +6,10 @@
 //! 2. Consuming real-time lifecycle events from `RunHandle::events()` (a
 //!    bounded, observational stream: `RunEvent::Overflow` marks any gap).
 //! 3. Verifying that a concurrent `run()` or `start()` is rejected with `SdkError::BusySession`.
-//! 4. Cooperatively cancelling a long-running tool via `RunHandle::cancellation_token()`.
+//! 4. Cancelling a long-running tool via `RunHandle::cancellation_token()`:
+//!    the kernel stops the tool at the token, so the run ends `Cancelled`
+//!    and the tool never runs to completion. A cooperative tool may or
+//!    may not observe the token itself before the kernel drops it.
 //! 5. Verifying successful completion behavior on subsequent non-cancelled background runs.
 
 mod support;
@@ -39,6 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let saw_cancellation = Arc::new(AtomicBool::new(false));
     let saw_cancellation_tool = saw_cancellation.clone();
+    let completed = Arc::new(AtomicBool::new(false));
+    let completed_tool = completed.clone();
 
     let notify_started = Arc::new(tokio::sync::Notify::new());
     let notify_started_tool = notify_started.clone();
@@ -50,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         json!({ "type": "object" }),
         move |_args, ctx| {
             let saw = saw_cancellation_tool.clone();
+            let completed = completed_tool.clone();
             let started = notify_started_tool.clone();
             async move {
                 started.notify_one();
@@ -63,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     tokio::task::yield_now().await;
                 }
+                completed.store(true, Ordering::SeqCst);
                 Ok(json!({ "status": "completed" }))
             }
         },
@@ -136,8 +143,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         finish_result
     );
     assert!(
-        saw_cancellation.load(Ordering::SeqCst),
-        "cooperative tool must observe cancellation"
+        !completed.load(Ordering::SeqCst),
+        "a cancelled tool must not run to completion"
+    );
+    // Informational only: the kernel's dispatcher prefers the token, so the
+    // tool future is usually dropped before its loop sees the cancellation.
+    println!(
+        "Tool observed the token itself: {}",
+        saw_cancellation.load(Ordering::SeqCst)
     );
 
     // -------------------------------------------------------------------------
