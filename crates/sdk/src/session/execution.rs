@@ -1,6 +1,10 @@
+//! A single run: assembles the core agent from the session's definition
+//! and tools, drives it to completion, then persists transcript and
+//! recovery store.
+
 use std::sync::Arc;
 
-use orca_harness_core::{Agent as CoreAgent, CancellationToken, Context, Extension, Limits};
+use orca_harness_core::{Agent as CoreAgent, CancellationToken, Context, Extension, Limits, Tool};
 use orca_harness_extensions::{
     ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, ToolRetry,
     Truncation, TruncationStore, UsageMeter,
@@ -15,6 +19,8 @@ use crate::{Agent, HarnessEvent, RunRequest, RunResult, SdkError};
 
 pub(super) struct RunExecution {
     pub(super) definition: Agent,
+    /// The session's materialized tools (see `SessionTools`).
+    pub(super) tools: Vec<Arc<dyn Tool>>,
     pub(super) context: Arc<Mutex<Context>>,
     pub(super) recorder: Option<Arc<SessionHandler>>,
     pub(super) store: TruncationStore,
@@ -27,6 +33,7 @@ pub(super) struct RunExecution {
 pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
     let RunExecution {
         definition,
+        tools,
         context,
         recorder,
         store,
@@ -55,8 +62,8 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
 
     let continue_at_step_limit = request.continue_at_step_limit && limits.max_steps > 0;
     let mut agent = CoreAgent::new(definition.inner.model.clone()).limits(limits);
-    for tool in &definition.inner.tools {
-        agent = agent.tool_arc(tool.clone());
+    for tool in tools {
+        agent = agent.tool_arc(tool);
     }
     for extension in &definition.inner.extensions {
         agent = agent.extension_arc(extension.clone());

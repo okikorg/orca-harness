@@ -1,3 +1,6 @@
+//! Recovery-file plumbing for the truncation store that sits beside a
+//! session transcript.
+
 use std::path::{Path, PathBuf};
 
 use orca_harness_extensions::TruncationStore;

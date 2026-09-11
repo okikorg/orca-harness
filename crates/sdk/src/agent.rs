@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use orca_harness_core::{Extension, Limits, Model, Tool};
 use orca_harness_extensions::{LongSessionConfig, MemoryModel, RetryModel, ToolPolicy};
-use orca_harness_tools::{BunReplTool, FileGuard, PyKernelTool, TodoList, TodoWriteTool};
+use orca_harness_tools::{FileGuard, TodoList};
 
 use crate::extensions::{Compaction, ExtensionConfig, RetryConfig, TruncationConfig};
-use crate::tools::{preset_tools, ToolPreset};
+use crate::tools::{ToolPreset, ToolSource};
 use crate::{Harness, Mcp, MemoryConfig, RunRequest, RunResult, SdkError, SessionBuilder, Skills};
 
 #[derive(Clone)]
@@ -20,7 +20,13 @@ pub(crate) struct AgentDefinition {
     pub model_name: String,
     pub system_prompt: Option<String>,
     pub limits: Limits,
-    pub tools: Vec<Arc<dyn Tool>>,
+    /// The tool recipe: sessions materialize `preset` and `tool_sources`
+    /// themselves (see [`crate::tools::session_tools`]) so mutable
+    /// built-ins are session-owned; `shared_tools` (skills, MCP, memory)
+    /// are built once here and appended after them.
+    pub preset: ToolPreset,
+    pub tool_sources: Vec<ToolSource>,
+    pub shared_tools: Vec<Arc<dyn Tool>>,
     pub extensions: Vec<Arc<dyn Extension>>,
     /// The `skill` tool is registered, so each run pairs it with
     /// `SkillOnce`. Not in `extensions`: that list is registered ahead
@@ -28,8 +34,18 @@ pub(crate) struct AgentDefinition {
     pub skill_once: bool,
     pub extension_config: ExtensionConfig,
     pub context_capacity: Option<u64>,
-    pub file_guard: FileGuard,
-    pub todo_list: Option<TodoList>,
+    /// Caller-owned instances that every session uses instead of creating
+    /// its own. `None` means each session gets a fresh one.
+    pub shared_file_guard: Option<FileGuard>,
+    pub shared_todo_list: Option<TodoList>,
+}
+
+impl AgentDefinition {
+    pub(crate) fn wants_todos(&self) -> bool {
+        self.tool_sources
+            .iter()
+            .any(|source| matches!(source, ToolSource::Todos))
+    }
 }
 
 pub struct AgentBuilder {
@@ -39,12 +55,12 @@ pub struct AgentBuilder {
     system_prompt: Option<String>,
     limits: Limits,
     preset: ToolPreset,
-    tools: Vec<Arc<dyn Tool>>,
+    tool_sources: Vec<ToolSource>,
     extensions: Vec<Arc<dyn Extension>>,
     extension_config: ExtensionConfig,
     context_capacity: Option<u64>,
-    file_guard: FileGuard,
-    todo_list: Option<TodoList>,
+    shared_file_guard: Option<FileGuard>,
+    shared_todo_list: Option<TodoList>,
     mcp: Option<Mcp>,
     skills: Option<Skills>,
     memory: Option<MemoryConfig>,
@@ -59,12 +75,12 @@ impl AgentBuilder {
             system_prompt: None,
             limits: Limits::default(),
             preset: ToolPreset::None,
-            tools: Vec::new(),
+            tool_sources: Vec::new(),
             extensions: Vec::new(),
             extension_config: ExtensionConfig::default(),
             context_capacity: None,
-            file_guard: FileGuard::new(),
-            todo_list: None,
+            shared_file_guard: None,
+            shared_todo_list: None,
             mcp: None,
             skills: None,
             memory: None,
@@ -91,13 +107,22 @@ impl AgentBuilder {
         self
     }
 
-    pub fn tool(mut self, tool: impl Tool + 'static) -> Self {
-        self.tools.push(Arc::new(tool));
+    /// Register a custom tool. Custom tools are caller-owned: every
+    /// session opened from the agent shares this one instance.
+    pub fn tool(self, tool: impl Tool + 'static) -> Self {
+        self.tool_arc(Arc::new(tool))
+    }
+
+    /// Register a shared custom tool instance; see [`AgentBuilder::tool`].
+    pub fn tool_arc(mut self, tool: Arc<dyn Tool>) -> Self {
+        self.tool_sources.push(ToolSource::Custom(tool));
         self
     }
 
-    pub fn tool_arc(mut self, tool: Arc<dyn Tool>) -> Self {
-        self.tools.push(tool);
+    /// Use one caller-owned read-before-write guard for every session
+    /// instead of giving each session its own.
+    pub fn file_guard(mut self, guard: FileGuard) -> Self {
+        self.shared_file_guard = Some(guard);
         self
     }
 
@@ -170,25 +195,39 @@ impl AgentBuilder {
         }))
     }
 
+    /// Add the Python kernel tool. Each session starts its own kernel.
     pub fn python(mut self) -> Self {
-        let dir = self.harness.workspace().root().display().to_string();
-        self.tools
-            .push(Arc::new(PyKernelTool::new().working_dir(dir)));
+        self.tool_sources.push(ToolSource::Python);
         self
     }
 
+    /// Add the Bun REPL tool. Each session starts its own REPL.
     pub fn bun(mut self) -> Self {
-        let dir = self.harness.workspace().root().display().to_string();
-        self.tools
-            .push(Arc::new(BunReplTool::new().working_dir(dir)));
+        self.tool_sources.push(ToolSource::Bun);
         self
     }
 
+    /// Add the `todo_write` tool. Each session gets its own list, readable
+    /// through [`Session::todo_list`](crate::Session::todo_list).
     pub fn todos(mut self) -> Self {
-        let list = TodoList::new();
-        self.tools.push(Arc::new(TodoWriteTool::new(list.clone())));
-        self.todo_list = Some(list);
+        if !self.has_todos() {
+            self.tool_sources.push(ToolSource::Todos);
+        }
         self
+    }
+
+    /// Add the `todo_write` tool backed by one caller-owned `list` that
+    /// every session shares (and [`Session::clear`](crate::Session::clear)
+    /// clears).
+    pub fn todos_shared(mut self, list: TodoList) -> Self {
+        self.shared_todo_list = Some(list);
+        self.todos()
+    }
+
+    fn has_todos(&self) -> bool {
+        self.tool_sources
+            .iter()
+            .any(|source| matches!(source, ToolSource::Todos))
     }
 
     pub fn memory(mut self, config: MemoryConfig) -> Self {
@@ -207,13 +246,11 @@ impl AgentBuilder {
     }
 
     pub fn build(mut self) -> Result<Agent, SdkError> {
-        let custom_tools = std::mem::take(&mut self.tools);
-        self.tools = preset_tools(self.preset, self.harness.workspace(), &self.file_guard);
-        self.tools.extend(custom_tools);
+        let mut shared_tools: Vec<Arc<dyn Tool>> = Vec::new();
         let mut skill_once = false;
         if let Some(skills) = &self.skills {
             if let Some(tool) = skills.tool() {
-                self.tools.push(tool);
+                shared_tools.push(tool);
                 skill_once = true;
             }
         }
@@ -225,7 +262,7 @@ impl AgentBuilder {
             );
         }
         if let Some(mcp) = &self.mcp {
-            self.tools.extend(mcp.tools());
+            shared_tools.extend(mcp.tools());
             self.model = Arc::new(orca_harness_tool_extensions::mcp::McpModel::new(
                 self.model,
                 mcp.catalog(),
@@ -233,18 +270,16 @@ impl AgentBuilder {
         }
         if let Some(memory) = &self.memory {
             if memory.search_tool {
-                self.tools
-                    .push(Arc::new(orca_harness_extensions::MemorySearchTool::new(
-                        memory.memory.store().clone(),
-                        memory.memory.scope().clone(),
-                    )));
+                shared_tools.push(Arc::new(orca_harness_extensions::MemorySearchTool::new(
+                    memory.memory.store().clone(),
+                    memory.memory.scope().clone(),
+                )));
             }
             if memory.manage_tool {
-                self.tools
-                    .push(Arc::new(orca_harness_extensions::MemoryManageTool::new(
-                        memory.memory.store().clone(),
-                        memory.memory.scope().clone(),
-                    )));
+                shared_tools.push(Arc::new(orca_harness_extensions::MemoryManageTool::new(
+                    memory.memory.store().clone(),
+                    memory.memory.scope().clone(),
+                )));
             }
             if memory.automatic_recall {
                 let extension = memory.extension();
@@ -258,13 +293,15 @@ impl AgentBuilder {
                 model_name: self.model_name,
                 system_prompt: self.system_prompt,
                 limits: self.limits,
-                tools: self.tools,
+                preset: self.preset,
+                tool_sources: self.tool_sources,
+                shared_tools,
                 extensions: self.extensions,
                 skill_once,
                 extension_config: self.extension_config,
                 context_capacity: self.context_capacity,
-                file_guard: self.file_guard,
-                todo_list: self.todo_list,
+                shared_file_guard: self.shared_file_guard,
+                shared_todo_list: self.shared_todo_list,
             }),
         })
     }
@@ -289,8 +326,12 @@ impl Agent {
     /// processes, workflows) is neither cancelled nor awaited by this method
     /// and cannot be observed from the result. Open a `Session` to manage it.
     ///
-    /// Agent-level tool state ([`FileGuard`] and [`TodoList`]) persists
-    /// across calls until [`Session::clear`](crate::Session::clear).
+    /// Built-in mutable tool state (the read-before-write [`FileGuard`],
+    /// the [`TodoList`], background processes, Python/Bun REPLs) is owned by
+    /// the ephemeral session and released when the call returns. Only
+    /// explicitly shared instances persist across calls:
+    /// [`AgentBuilder::file_guard`], [`AgentBuilder::todos_shared`], and
+    /// custom tools registered with [`AgentBuilder::tool_arc`].
     ///
     /// ```rust,no_run
     /// # async fn example(agent: orca_harness_sdk::Agent) -> Result<(), orca_harness_sdk::SdkError> {
@@ -308,8 +349,17 @@ impl Agent {
         crate::Session::resume(self.clone(), id)
     }
 
+    /// The caller-owned todo list configured with
+    /// [`AgentBuilder::todos_shared`], if any. Lists created by
+    /// [`AgentBuilder::todos`] are session-owned, so this returns `None`
+    /// for them; read those through
+    /// [`Session::todo_list`](crate::Session::todo_list).
+    #[deprecated(
+        since = "0.6.3",
+        note = "todo state is session-owned; use Session::todo_list, or AgentBuilder::todos_shared to keep one caller-owned list"
+    )]
     pub fn todo_list(&self) -> Option<TodoList> {
-        self.inner.todo_list.clone()
+        self.inner.shared_todo_list.clone()
     }
 }
 

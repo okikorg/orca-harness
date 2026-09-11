@@ -1,3 +1,6 @@
+//! Session lifecycle: open/resume/fork/clear/reset, the session-owned tool
+//! state, and the busy guard that serializes operations on one session.
+
 mod execution;
 mod persistence;
 
@@ -5,12 +8,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use orca_harness_core::{CancellationToken, Context};
+use orca_harness_core::{CancellationToken, Context, Tool};
 use orca_harness_extensions::{
     compact, CompactConfig, CompactReport, SessionFile, SessionHandler, TruncationStore,
 };
+use orca_harness_tools::{FileGuard, TodoList};
 use tokio::sync::Mutex;
 
+use crate::tools::session_tools;
 use crate::{Agent, RunHandle, RunRequest, RunResult, SdkError};
 
 use execution::{execute, RunExecution};
@@ -70,8 +75,42 @@ impl SessionBuilder {
     }
 }
 
+/// The tools one session runs with, plus the mutable built-in state they
+/// share. Built at open/resume/fork so two sessions never share a process
+/// manager, REPL, guard, or todo list unless the agent was configured
+/// with a caller-owned instance.
+struct SessionTools {
+    file_guard: FileGuard,
+    todo_list: Option<TodoList>,
+    tools: Vec<Arc<dyn Tool>>,
+}
+
+impl SessionTools {
+    fn new(agent: &Agent) -> Self {
+        let definition = &agent.inner;
+        let file_guard = definition.shared_file_guard.clone().unwrap_or_default();
+        let todo_list = definition
+            .wants_todos()
+            .then(|| definition.shared_todo_list.clone().unwrap_or_default());
+        let tools = session_tools(definition, &file_guard, todo_list.as_ref());
+        Self {
+            file_guard,
+            todo_list,
+            tools,
+        }
+    }
+
+    fn clear(&self) {
+        self.file_guard.clear();
+        if let Some(todos) = &self.todo_list {
+            todos.clear();
+        }
+    }
+}
+
 pub struct Session {
     agent: Agent,
+    tools: SessionTools,
     context: Arc<Mutex<Context>>,
     recorder: Option<Arc<SessionHandler>>,
     truncation_store: TruncationStore,
@@ -100,6 +139,7 @@ impl Session {
         };
         let truncation_store = session_store(&agent);
         Ok(Self {
+            tools: SessionTools::new(&agent),
             agent,
             context: Arc::new(Mutex::new(context)),
             recorder,
@@ -109,6 +149,9 @@ impl Session {
         })
     }
 
+    /// Resume a persistent session from disk. The transcript and recovery
+    /// store are restored; live processes, REPL state, the read-before-write
+    /// guard, and todos start fresh.
     pub(crate) fn resume(agent: Agent, id: &str) -> Result<Self, SdkError> {
         let path = agent
             .inner
@@ -122,6 +165,7 @@ impl Session {
         let (handler, loaded) = SessionHandler::resume(&path)?;
         let truncation_store = load_session_store(&agent, Some(&path))?;
         Ok(Self {
+            tools: SessionTools::new(&agent),
             agent,
             context: Arc::new(Mutex::new(loaded.context)),
             recorder: Some(Arc::new(handler)),
@@ -143,6 +187,23 @@ impl Session {
         &self.load_warnings
     }
 
+    /// The read-before-write guard this session's file tools consult.
+    /// Session-owned unless the agent set [`AgentBuilder::file_guard`].
+    ///
+    /// [`AgentBuilder::file_guard`]: crate::AgentBuilder::file_guard
+    pub fn file_guard(&self) -> &FileGuard {
+        &self.tools.file_guard
+    }
+
+    /// The todo list behind this session's `todo_write` tool, when the
+    /// agent enabled todos. Session-owned unless the agent set
+    /// [`AgentBuilder::todos_shared`].
+    ///
+    /// [`AgentBuilder::todos_shared`]: crate::AgentBuilder::todos_shared
+    pub fn todo_list(&self) -> Option<TodoList> {
+        self.tools.todo_list.clone()
+    }
+
     pub async fn messages(&self) -> Vec<orca_harness_core::Message> {
         self.context.lock().await.messages().to_vec()
     }
@@ -153,6 +214,7 @@ impl Session {
         let cancellation = CancellationToken::new();
         execute(RunExecution {
             definition: self.agent.clone(),
+            tools: self.tools.tools.clone(),
             context: self.context.clone(),
             recorder: self.recorder.clone(),
             store: self.truncation_store.clone(),
@@ -171,6 +233,7 @@ impl Session {
         let (send, receive) = tokio::sync::mpsc::unbounded_channel();
         let task = tokio::spawn(execute(RunExecution {
             definition: self.agent.clone(),
+            tools: self.tools.tools.clone(),
             context: self.context.clone(),
             recorder: self.recorder.clone(),
             store: self.truncation_store.clone(),
@@ -194,6 +257,10 @@ impl Session {
         Ok(report)
     }
 
+    /// Copy this persistent session into a new one. The fork shares the
+    /// transcript and recovery store but not live processes, REPL state,
+    /// the read-before-write guard, or todos: those start fresh unless the
+    /// agent configured caller-owned instances.
     pub async fn fork(&self) -> Result<Self, SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -207,6 +274,7 @@ impl Session {
             save_session_store(&fork_store, &fork_path)?;
             let (new_handler, loaded) = SessionHandler::resume(&fork_path)?;
             Ok(Self {
+                tools: SessionTools::new(&self.agent),
                 agent: self.agent.clone(),
                 context: Arc::new(Mutex::new(loaded.context)),
                 recorder: Some(Arc::new(new_handler)),
@@ -223,6 +291,8 @@ impl Session {
         }
     }
 
+    /// Start a new conversation in this session and clear its
+    /// read-before-write guard and todo list.
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let mut fresh = Context::new();
@@ -238,10 +308,7 @@ impl Session {
             self.truncation_store.clear();
         }
         *context = fresh;
-        self.agent.inner.file_guard.clear();
-        if let Some(todos) = &self.agent.inner.todo_list {
-            todos.clear();
-        }
+        self.tools.clear();
         Ok(())
     }
 
