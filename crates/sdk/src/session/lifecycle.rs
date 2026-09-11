@@ -29,11 +29,12 @@ impl Session {
 
     /// Copy this persistent session into a new one. The fork shares the
     /// transcript and recovery store but not live processes, REPL state,
-    /// the read-before-write guard, todos, or detached subagents: those
-    /// start fresh unless the agent configured caller-owned instances. In
-    /// particular the fork has its own subagent manager, completion inbox,
-    /// and notification channel; results owed to this session never reach
-    /// the fork.
+    /// the read-before-write guard, todos, detached subagents, or workflow
+    /// runs: those start fresh unless the agent configured caller-owned
+    /// instances. In particular the fork has its own subagent manager,
+    /// completion inbox, workflow store, and notification channel; results
+    /// owed to this session never reach the fork, and a run this session
+    /// admitted is unknown to the fork's [`Workflows`](crate::Workflows).
     pub async fn fork(&self) -> Result<Self, SdkError> {
         let _busy = self.acquire()?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -67,12 +68,14 @@ impl Session {
 
     /// Start a new conversation in this session and clear its
     /// read-before-write guard and todo list, cancelling any detached
-    /// subagents and dropping their undelivered results, and killing the
+    /// subagents and workflow runs (with their stage workers), dropping
+    /// their undelivered results and stored stage outputs, and killing the
     /// session's background processes (host- and model-started alike,
     /// without exit notifications; the process handle keeps serving).
-    /// The subagent manager starts a new generation, so a worker that
-    /// finishes after this call has its result refused rather than
-    /// delivered to the new conversation.
+    /// The subagent manager starts a new generation, so a worker or run
+    /// that finishes after this call has its result refused rather than
+    /// delivered to the new conversation, and a cancelled run's id is no
+    /// longer known to [`Workflows`](crate::Workflows).
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         let fresh = fresh_context(&self.agent);
@@ -110,10 +113,10 @@ impl Session {
         Ok(())
     }
 
-    /// Stop this session for good: refuse every later run, spawn, and
-    /// conversation change, cancel its detached workers, kill its
-    /// background processes, and wait, up to `grace`, for all of them to
-    /// exit. Admission stops before the wait begins, so nothing can
+    /// Stop this session for good: refuse every later run, spawn,
+    /// workflow submission, and conversation change, cancel its detached
+    /// workers and workflow runs, kill its background processes, and wait,
+    /// up to `grace`, for all of them to exit. Admission stops before the wait begins, so nothing can
     /// extend it; undelivered results are dropped. Worker cancellation
     /// is cooperative: one that ignores its token keeps the wait going,
     /// and when `grace` runs out the error reports how many workers and
@@ -135,8 +138,13 @@ impl Session {
     ///
     /// Dropping a session instead of calling this cancels the same work
     /// but waits for nothing. [`processes`](Self::processes) refuses
-    /// every operation after a shutdown and reports closed; workflow
-    /// runs are not yet covered here.
+    /// every operation after a shutdown and reports closed. Workflow runs
+    /// are jobs of the same manager: closing it settles each live run as
+    /// cancelled (its run-level outcome is still observable on
+    /// [`notifications`](Self::notifications), though owed to no one),
+    /// the wait covers their stage workers, and
+    /// [`workflows`](Self::workflows) afterwards refuses submissions and
+    /// knows no runs.
     pub async fn shutdown(&self, grace: Duration) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         self.closed.store(true, Ordering::Release);

@@ -1,5 +1,7 @@
-//! Session lifecycle: open/resume/fork/clear/reset, the session-owned tool
-//! state, and the busy guard that serializes operations on one session.
+//! A session: its opening and resumption, the session-owned tool state and
+//! the typed handles over it, running requests on it, and the busy guard
+//! that serializes operations on one session. Forking, clearing, resetting,
+//! compaction, and shutdown live in `lifecycle`; the builder in `builder`.
 
 mod builder;
 mod events;

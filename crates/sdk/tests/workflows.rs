@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{CancellationToken, Message, ModelResponse};
-use orca_harness_sdk::orchestration::{BackgroundStatus, RunState, StageStatus};
+use orca_harness_sdk::orchestration::{BackgroundStatus, RunState, StageStatus, SubagentRequest};
 use orca_harness_sdk::{
     BackgroundNotification, Harness, SdkError, Stage, SubagentConfig, WorkflowSubmission,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
 mod background_support;
 mod common;
@@ -245,5 +245,151 @@ async fn clear_discards_workflow_outputs_with_the_conversation() {
             .unwrap_err(),
         SdkError::Workflow(message) if message == "resumeFrom run does not exist"
     ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The parent's latest worker inventory snapshot, as the model saw it.
+fn inventory(messages: &[Message]) -> Value {
+    messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::User { content, .. } if content.contains("background_subagent_inventory") => {
+                let json = content.split_once('\n').expect("a prefixed snapshot").1;
+                Some(serde_json::from_str(json).expect("a JSON snapshot"))
+            }
+            _ => None,
+        })
+        .expect("an inventory snapshot")
+}
+
+/// Workflows have no services of their own: a run and its stages are jobs
+/// of the session's one subagent manager, numbered on its spawn counter,
+/// queued by its concurrency limit, routed by its settings, hidden from the
+/// parent's inventory as stages, and stored where the model tool stores.
+#[tokio::test]
+async fn workflows_share_the_session_subagent_services() {
+    let root = temp_dir("workflows-shared-services");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let release = CancellationToken::new();
+    let parent = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::final_text("noted"),
+        ModelResponse::tool_calls(vec![call(
+            "w1",
+            "workflow",
+            json!({"action": "run", "graph": [{"id": "m", "prompt": "model stage"}]}),
+        )]),
+        ModelResponse::final_text("submitted"),
+    ]));
+    let agent = routed_agent(
+        &harness,
+        parent,
+        Arc::new(Held(release.clone())),
+        SubagentConfig::new().background_limit(1),
+    );
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    let workflows = session.workflows().unwrap();
+    route_to_child(&subagents.settings());
+
+    // One spawn counter: the run, its two stages, then the plain worker.
+    let ack = workflows
+        .submit(WorkflowSubmission::new([
+            stage("a", "held", &[]),
+            stage("b", "held too", &[]),
+        ]))
+        .unwrap();
+    let worker = subagents
+        .spawn(SubagentRequest::new("plain worker"))
+        .unwrap();
+    assert_eq!(worker.spawn_id, ack.run_id + 3);
+
+    // One manager: the host's full view holds the run, its stages, and
+    // the worker, in that order.
+    let active = subagents.active();
+    let ids: Vec<u64> = active.iter().map(|job| job.spawn.id).collect();
+    assert_eq!(
+        ids,
+        vec![ack.run_id, ack.run_id + 1, ack.run_id + 2, worker.spawn_id]
+    );
+    assert_eq!(
+        active
+            .iter()
+            .filter(|job| job.spawn.run == Some(ack.run_id))
+            .count(),
+        2,
+        "the stages are jobs of the run"
+    );
+
+    // One concurrency limit: `background_limit(1)` lets the first stage
+    // run and queues the second stage and the worker behind it.
+    let status = workflows.status(ack.run_id).unwrap();
+    let by_stage = |name: &str| {
+        status
+            .active
+            .iter()
+            .find(|job| job.stage.as_deref() == Some(name))
+            .unwrap()
+            .status
+    };
+    assert_eq!(by_stage("a"), BackgroundStatus::Running);
+    assert_eq!(by_stage("b"), BackgroundStatus::Queued);
+    assert_eq!(worker.status, BackgroundStatus::Queued);
+
+    // One route: the same rejection on both paths.
+    let mut routed = stage("r", "routed", &[]);
+    routed.model = Some("nope".into());
+    let via_workflow = workflows
+        .submit(WorkflowSubmission::new([routed]))
+        .unwrap_err();
+    let via_subagent = subagents
+        .spawn(SubagentRequest::new("routed").model("nope"))
+        .unwrap_err();
+    match (via_workflow, via_subagent) {
+        (SdkError::Workflow(workflow), SdkError::Subagent(subagent)) => {
+            assert_eq!(workflow, "unknown subagent model `nope`");
+            assert_eq!(subagent, workflow);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // The parent's inventory is the manager's parent view: the worker
+    // alone, never a run or its stages.
+    assert_eq!(session.run("what is running?").await.unwrap().text, "noted");
+    let snapshot = inventory(&session.messages().await);
+    assert_eq!(snapshot["count"], 1, "{snapshot}");
+    assert_eq!(snapshot["agents"][0]["spawnId"], worker.spawn_id);
+
+    // One store: the host reads what a model-submitted run wrote.
+    release.cancel();
+    wait_until(
+        || session.pending_completions() == 2,
+        "the run outcome and the worker",
+    )
+    .await;
+    assert_eq!(session.run("delegate").await.unwrap().text, "submitted");
+    let model_run = session
+        .messages()
+        .await
+        .into_iter()
+        .find_map(|message| match message {
+            Message::Tool { results } => results
+                .into_iter()
+                .find(|result| result.tool_name == "workflow")
+                .and_then(|result| result.output["runId"].as_u64()),
+            _ => None,
+        })
+        .expect("the model's acknowledgement");
+    wait_until(|| session.pending_completions() == 1, "the model's run").await;
+    assert_eq!(
+        workflows.stage_output(model_run, "m").unwrap().answer,
+        "held done"
+    );
+    assert_eq!(workflows.status(model_run).unwrap().state, RunState::Done);
+    assert_eq!(
+        workflows.stage_output(ack.run_id, "b").unwrap().answer,
+        "held done"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
