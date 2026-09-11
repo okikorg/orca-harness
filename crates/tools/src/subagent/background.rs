@@ -4,8 +4,14 @@ use orca_harness_core::{Agent, Limits, Model};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+mod completions;
+mod inventory;
 pub(crate) mod manager;
 mod protocol;
+pub use completions::{
+    completions_prompt, CompletionDelivery, CompletionInbox, DEFAULT_COMPLETION_CAPACITY,
+};
+pub use inventory::{refresh_inventory, ActiveInventory};
 pub use manager::{
     BackgroundJob, BackgroundStatus, SubagentManager, SubagentNotification,
     DEFAULT_BACKGROUND_SUBAGENT_LIMIT,

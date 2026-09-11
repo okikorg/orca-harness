@@ -12,9 +12,7 @@ use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{
     compact, CompactConfig, ContextCapacity, HarnessEvent, SessionHandler, TruncationStore,
 };
-use orca_harness_tools::{FileGuard, SubagentManager, TodoList};
-
-use super::completions::CompletionInbox;
+use orca_harness_tools::{CompletionInbox, FileGuard, SubagentManager, TodoList};
 
 use crate::msg::{RunId, UiMsg, WorkerCmd};
 use crate::{config, mcp, skills, spawn_window_probe, Endpoint, Planning};

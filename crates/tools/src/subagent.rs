@@ -44,13 +44,14 @@ type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
 type RetryPolicy = (u32, std::time::Duration);
 
 pub(crate) mod background;
+pub use background::{
+    completions_prompt, refresh_inventory, ActiveInventory, BackgroundJob, BackgroundStatus,
+    CompletionDelivery, CompletionInbox, SubagentManager, SubagentNotification,
+    DEFAULT_BACKGROUND_SUBAGENT_LIMIT, DEFAULT_COMPLETION_CAPACITY,
+};
 use background::{
     detach_subagent, execution_deadline, subagent_control, subagent_parameters, subagent_result,
     BackgroundConfig, InFlight,
-};
-pub use background::{
-    BackgroundJob, BackgroundStatus, SubagentManager, SubagentNotification,
-    DEFAULT_BACKGROUND_SUBAGENT_LIMIT,
 };
 
 enum ModelRoute {

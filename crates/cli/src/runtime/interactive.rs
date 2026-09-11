@@ -1,5 +1,5 @@
 use super::agent::subagent_extensions;
-use super::completions::{ActiveInventory, CompletionDelivery, CompletionInbox};
+use super::completions::{delivery, PublishCompletion};
 use super::session::open_session;
 use super::worker::worker;
 use std::process::ExitCode;
@@ -20,9 +20,9 @@ use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
 use orca_harness_tools::{
-    core_tools_with_guard, AskTool, BackgroundStats, BunReplTool, FileGuard, ProcessTool,
-    PyKernelTool, SubagentDepth, SubagentManager, SubagentSpawn, TodoList, TodoWriteTool,
-    Workspace,
+    core_tools_with_guard, ActiveInventory, AskTool, BackgroundStats, BunReplTool, CompletionInbox,
+    FileGuard, ProcessTool, PyKernelTool, SubagentDepth, SubagentManager, SubagentSpawn, TodoList,
+    TodoWriteTool, Workspace,
 };
 
 use crate::approval::Approval;
@@ -402,7 +402,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
-        .extension(CompletionDelivery::new(completions.clone(), ui.clone()))
+        .extension(delivery(completions.clone(), ui.clone()))
         .extension(PlanGate::new(mode.clone(), plan_area.clone()))
         .extension(orca_harness_tools::MutationPreflight)
         .extension(auto_approval.clone());
@@ -422,7 +422,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             }),
         );
     }
-    agent = agent.extension(ActiveInventory(subagent_manager.clone()));
+    agent = agent.extension(ActiveInventory::new(subagent_manager.clone()));
     if let Some(session) = session {
         agent = agent.extension_arc(session.clone());
     }
