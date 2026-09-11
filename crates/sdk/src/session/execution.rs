@@ -31,8 +31,11 @@ use crate::{Agent, RunOutcome, RunRequest, SdkError};
 
 pub(super) struct RunExecution {
     pub(super) definition: Agent,
-    /// The session's materialized tools (see [`crate::tools::SessionTools`]).
+    /// This run's tool set (see [`crate::tools::RunTools`]).
     pub(super) tools: Vec<Arc<dyn Tool>>,
+    /// The `skill` tool is in `tools`, so this run pairs it with
+    /// `SkillOnce`.
+    pub(super) skill_once: bool,
     pub(super) context: Arc<Mutex<Context>>,
     pub(super) recorder: Option<Arc<SessionHandler>>,
     pub(super) store: TruncationStore,
@@ -69,6 +72,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
     let RunExecution {
         definition,
         tools,
+        skill_once,
         context,
         recorder,
         store,
@@ -151,7 +155,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
     }
     // After compaction: it reads "already loaded" off the context the
     // model is about to see.
-    if definition.inner.skill_once {
+    if skill_once {
         agent = agent.extension(SkillOnce::new());
     }
     if let Some(recorder) = &recorder {

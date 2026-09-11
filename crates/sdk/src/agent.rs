@@ -23,16 +23,15 @@ pub(crate) struct AgentDefinition {
     pub limits: Limits,
     /// The tool recipe: sessions materialize `preset` and `tool_sources`
     /// themselves (see [`crate::tools::SessionTools`]) so mutable
-    /// built-ins are session-owned; `shared_tools` (skills, MCP, memory)
-    /// are built once here and appended after them.
+    /// built-ins are session-owned; the `skill` tool is read off
+    /// `skills` at each run boundary (see [`crate::tools::RunTools`]);
+    /// `shared_tools` (MCP, memory) are built once here and appended
+    /// after it.
     pub preset: ToolPreset,
     pub tool_sources: Vec<ToolSource>,
+    pub skills: Option<Skills>,
     pub shared_tools: Vec<Arc<dyn Tool>>,
     pub extensions: Vec<Arc<dyn Extension>>,
-    /// The `skill` tool is registered, so each run pairs it with
-    /// `SkillOnce`. Not in `extensions`: that list is registered ahead
-    /// of compaction, and `SkillOnce` has to run after it.
-    pub skill_once: bool,
     pub extension_config: ExtensionConfig,
     pub context_capacity: Option<u64>,
     /// Caller-owned instances that every session uses instead of creating
@@ -270,6 +269,11 @@ impl AgentBuilder {
         self
     }
 
+    /// Offer the `skill` tool over `skills`. The catalog is read at each
+    /// run boundary, so changes made through the handle (enable, disable,
+    /// reload, scaffold, install, uninstall) reach the next run of every
+    /// session and never a run in flight; a run offers no `skill` tool
+    /// when no skill is enabled at its start.
     pub fn skills(mut self, skills: Skills) -> Self {
         self.skills = Some(skills);
         self
@@ -283,13 +287,6 @@ impl AgentBuilder {
             )));
         }
         let mut shared_tools: Vec<Arc<dyn Tool>> = Vec::new();
-        let mut skill_once = false;
-        if let Some(skills) = &self.skills {
-            if let Some(tool) = skills.tool() {
-                shared_tools.push(tool);
-                skill_once = true;
-            }
-        }
         if let Some(config) = self.extension_config.model_retry {
             self.model = Arc::new(
                 RetryModel::new(self.model, config.attempts)
@@ -334,9 +331,9 @@ impl AgentBuilder {
                 limits: self.limits,
                 preset: self.preset,
                 tool_sources: self.tool_sources,
+                skills: self.skills,
                 shared_tools,
                 extensions: self.extensions,
-                skill_once,
                 extension_config: self.extension_config,
                 context_capacity: self.context_capacity,
                 shared_file_guard: self.shared_file_guard,

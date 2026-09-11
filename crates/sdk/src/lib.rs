@@ -26,7 +26,7 @@ pub use run::{
     EventCallback, RunEvent, RunHandle, RunOutcome, RunRequest, RunResult, DEFAULT_EVENT_CAPACITY,
 };
 pub use session::{Session, SessionBuilder, SessionMode, Sessions};
-pub use skills::{SkillDestination, Skills};
+pub use skills::{SkillDestination, SkillPreview, SkillSourceOutcome, Skills};
 pub use tools::ToolPreset;
 
 pub use orca_harness_core::{

@@ -17,6 +17,7 @@ use crate::agent::AgentDefinition;
 use crate::background::{
     BackgroundNotification, BackgroundServices, ProcessConfig, NOTIFICATION_CAPACITY,
 };
+use crate::Skills;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ToolPreset {
@@ -158,15 +159,29 @@ pub(crate) struct SessionTools {
     /// process tool report here, hosts subscribe through
     /// [`Session::notifications`](crate::Session::notifications).
     pub(crate) events: broadcast::Sender<BackgroundNotification>,
+    /// The session-owned tools, in registration order. A run appends the
+    /// agent-level tools behind them; see [`SessionTools::run_tools`].
     pub(crate) tools: Vec<Arc<dyn Tool>>,
+}
+
+/// The tools one run registers, and the run-scoped integrations they
+/// call for. Built at the run boundary, so a catalog that changes
+/// between runs (skills; MCP next) is read once per run: the kernel's
+/// tool set, and every schema in it, is fixed for the length of the run.
+pub(crate) struct RunTools {
+    pub(crate) tools: Vec<Arc<dyn Tool>>,
+    /// The `skill` tool is registered this run, so the run pairs it with
+    /// `SkillOnce`. Not an agent extension: that list is registered
+    /// ahead of compaction, and `SkillOnce` has to run after it.
+    pub(crate) skill_once: bool,
 }
 
 impl SessionTools {
     /// Materializes the recipe: preset tools wired to the session's guard,
     /// then the builder-ordered sources, then the session's `workflow`
     /// and `subagent` tools (registered last among the host-built tools,
-    /// in that order, as the CLI does), then the agent-level tools
-    /// (skills, MCP, memory) that are shared by design.
+    /// in that order, as the CLI does). The agent-level tools follow at
+    /// each run; see [`SessionTools::run_tools`].
     pub(crate) fn new(definition: &AgentDefinition) -> Self {
         let workspace = definition.harness.workspace();
         let working_dir = || workspace.root().display().to_string();
@@ -200,7 +215,6 @@ impl SessionTools {
         if let Some(services) = &background {
             tools.extend(services.tools());
         }
-        tools.extend(definition.shared_tools.iter().cloned());
         Self {
             file_guard,
             todo_list,
@@ -209,6 +223,18 @@ impl SessionTools {
             events,
             tools,
         }
+    }
+
+    /// The tool set for one run: the session-owned tools, then the
+    /// `skill` tool as the agent's catalog stands right now, then the
+    /// agent-level tools built once at agent build (MCP, memory).
+    pub(crate) fn run_tools(&self, definition: &AgentDefinition) -> RunTools {
+        let mut tools = self.tools.clone();
+        let skill = definition.skills.as_ref().and_then(Skills::tool);
+        let skill_once = skill.is_some();
+        tools.extend(skill);
+        tools.extend(definition.shared_tools.iter().cloned());
+        RunTools { tools, skill_once }
     }
 
     /// Reset every session-owned built-in: the guard, todos, detached

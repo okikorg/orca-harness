@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock};
 
 use orca_harness_core::Tool;
 use orca_harness_tool_extensions::skills::{
-    checkout, discover, find_candidates, install, parse_request, scaffold, uninstall, Discovered,
-    Installed, Skill, SkillRoot, SkillTool,
+    checkout, discover, find_candidates, install, parse_frontmatter, parse_request, scaffold,
+    uninstall, Candidate, Checkout, Discovered, Installed, Origin, Skill, SkillRoot, SkillTool,
 };
 
 use crate::SdkError;
@@ -16,6 +16,40 @@ pub enum SkillDestination {
     Workspace,
 }
 
+/// One skill a source holds, read without installing it. Owned data:
+/// nothing here points into the temporary checkout the source was read
+/// from, which is gone by the time this is returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillPreview {
+    /// The folder name, which is also what `--skill` filters on and what
+    /// an install names the copy.
+    pub name: String,
+    /// The frontmatter `description`, or empty when the file has none.
+    pub description: String,
+    /// The skill folder relative to the source root.
+    pub path: PathBuf,
+    /// Display form of the source it was read from.
+    pub origin: String,
+}
+
+/// What [`Skills::install`] did with a source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillSourceOutcome {
+    /// The request carried `--list`: the source was read and nothing was
+    /// written.
+    Previewed(Vec<SkillPreview>),
+    /// The skills copied into the destination.
+    Installed(Vec<Installed>),
+}
+
+/// The skill catalog an agent offers through its `skill` tool.
+///
+/// Clones share one catalog and one enablement set. Catalog changes
+/// (`reload`, `enable`, `disable`, `scaffold`, `install`, `uninstall`)
+/// take effect at the next run of any session built from an agent
+/// holding this handle: the tool set, and so the `skill` tool's schema,
+/// is fixed for the length of a run and read again at the next run
+/// boundary.
 #[derive(Clone)]
 pub struct Skills {
     roots: Arc<Vec<SkillRoot>>,
@@ -126,19 +160,38 @@ impl Skills {
         scaffold(self.destination(destination), name).map_err(SdkError::Skill)
     }
 
+    /// Read what `source` holds without installing any of it. `source`
+    /// takes the same syntax as [`install`](Self::install) (a `--list`
+    /// flag is accepted and ignored; `--skill` narrows the result). A
+    /// source holding no matching skill previews as empty rather than
+    /// failing; a source that cannot be read is an error.
+    pub async fn preview(&self, source: &str) -> Result<Vec<SkillPreview>, SdkError> {
+        let request = parse_request(source).map_err(SdkError::Skill)?;
+        let checkout = checkout(&request.origin).await.map_err(SdkError::Skill)?;
+        let candidates = matching_candidates(&checkout, request.filter.as_deref());
+        Ok(previews(&checkout, &candidates, &request.origin))
+    }
+
+    /// Copy the skills `source` holds into `destination`. With `--list`
+    /// in the request the source is only read, exactly as
+    /// [`preview`](Self::preview) reads it, and the outcome is
+    /// [`SkillSourceOutcome::Previewed`]; otherwise every matching skill
+    /// is copied and the outcome is [`SkillSourceOutcome::Installed`].
+    /// An install of nothing is an error; a preview of nothing is not.
     pub async fn install(
         &self,
         source: &str,
         destination: SkillDestination,
-    ) -> Result<Vec<Installed>, SdkError> {
+    ) -> Result<SkillSourceOutcome, SdkError> {
         let request = parse_request(source).map_err(SdkError::Skill)?;
         let checkout = checkout(&request.origin).await.map_err(SdkError::Skill)?;
-        let mut candidates = find_candidates(&checkout.root);
-        if let Some(filter) = request.filter {
-            candidates.retain(|candidate| candidate.name == filter);
-        }
+        let candidates = matching_candidates(&checkout, request.filter.as_deref());
         if request.list_only {
-            return Ok(Vec::new());
+            return Ok(SkillSourceOutcome::Previewed(previews(
+                &checkout,
+                &candidates,
+                &request.origin,
+            )));
         }
         if candidates.is_empty() {
             return Err(SdkError::Skill("no matching skills found".into()));
@@ -148,7 +201,8 @@ impl Skills {
             .map(|candidate| {
                 install(candidate, self.destination(destination)).map_err(SdkError::Skill)
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
+            .map(SkillSourceOutcome::Installed)
     }
 
     pub fn uninstall(&self, name: &str) -> Result<bool, SdkError> {
@@ -174,4 +228,49 @@ impl Skills {
             SkillDestination::Workspace => &self.workspace_root,
         }
     }
+}
+
+/// The source's skills, narrowed to `filter` when one was given.
+fn matching_candidates(checkout: &Checkout, filter: Option<&str>) -> Vec<Candidate> {
+    let mut candidates = find_candidates(&checkout.root);
+    if let Some(filter) = filter {
+        candidates.retain(|candidate| candidate.name == filter);
+    }
+    candidates
+}
+
+/// Owned previews of `candidates`, read while `checkout` is still on
+/// disk. A `SKILL.md` whose frontmatter is missing or unreadable
+/// previews with an empty description: the report is of what the
+/// source holds, and discovery reports the failure after an install.
+fn previews(checkout: &Checkout, candidates: &[Candidate], origin: &Origin) -> Vec<SkillPreview> {
+    let origin = match origin {
+        Origin::Local(path) => path.display().to_string(),
+        Origin::Git { url, subdir: None } => url.clone(),
+        Origin::Git {
+            url,
+            subdir: Some(subdir),
+        } => format!("{url} ({subdir})"),
+    };
+    candidates
+        .iter()
+        .map(|candidate| {
+            let description = std::fs::read_to_string(candidate.dir.join("SKILL.md"))
+                .ok()
+                .and_then(|text| parse_frontmatter(&text).ok())
+                .and_then(|front| front.description)
+                .unwrap_or_default();
+            let path = candidate
+                .dir
+                .strip_prefix(&checkout.root)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| PathBuf::from(&candidate.name));
+            SkillPreview {
+                name: candidate.name.clone(),
+                description,
+                path,
+                origin: origin.clone(),
+            }
+        })
+        .collect()
 }
