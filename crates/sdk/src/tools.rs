@@ -42,14 +42,14 @@ pub(crate) fn preset_tools(
     workspace: &Workspace,
     guard: &FileGuard,
 ) -> Vec<Arc<dyn Tool>> {
-    preset_tools_with_process(preset, workspace, guard).0
+    preset_tools_and_controller(preset, workspace, guard).0
 }
 
 /// The preset's tools plus, for a preset that ships the `process` tool,
 /// the typed controller over that same tool. The tool is configured once
 /// and registered as built, so the controller and the model tool share
 /// one manager.
-pub(crate) fn preset_tools_with_process(
+pub(crate) fn preset_tools_and_controller(
     preset: ToolPreset,
     workspace: &Workspace,
     guard: &FileGuard,
@@ -117,7 +117,7 @@ impl SessionTools {
         let file_guard = definition.shared_file_guard.clone().unwrap_or_default();
         let mut todo_list: Option<TodoList> = None;
         let (mut tools, process) =
-            preset_tools_with_process(definition.preset, workspace, &file_guard);
+            preset_tools_and_controller(definition.preset, workspace, &file_guard);
         for source in &definition.tool_sources {
             tools.push(match source {
                 ToolSource::Custom(tool) => tool.clone(),

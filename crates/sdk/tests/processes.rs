@@ -81,7 +81,7 @@ async fn host_spawn_is_visible_to_the_model_tool_and_vice_versa() {
     let processes = session.processes().unwrap();
 
     let host = processes
-        .spawn(ProcessSpawn::new("printf host-ready; sleep 5"))
+        .spawn(ProcessSpawn::new("printf host-ready; sleep 5"), None)
         .await
         .unwrap();
     assert!(host.running);
@@ -142,7 +142,7 @@ async fn processes_are_per_session_and_die_with_the_session() {
     let b_processes = b.processes().unwrap();
 
     let spawned = a_processes
-        .spawn(ProcessSpawn::new("sleep 271.3 & wait"))
+        .spawn(ProcessSpawn::new("sleep 271.3 & wait"), None)
         .await
         .unwrap();
     assert_eq!(a_processes.list().unwrap().len(), 1);
@@ -189,7 +189,7 @@ async fn shutdown_closes_processes() {
 
     session.shutdown(Duration::from_secs(1)).await.unwrap();
     assert!(matches!(
-        processes.spawn(ProcessSpawn::new("true")).await,
+        processes.spawn(ProcessSpawn::new("true"), None).await,
         Err(SdkError::SessionClosed)
     ));
     assert!(matches!(processes.list(), Err(SdkError::SessionClosed)));

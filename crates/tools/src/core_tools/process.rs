@@ -11,8 +11,9 @@
 //! `max_output_bytes` of it; anything beyond `buffer_cap` waiting unread
 //! is dropped oldest-first and reported via `droppedBytes`.
 //!
-//! Lifetime: children are killed when the tool (and thus its manager) is
-//! dropped, and a run's cancellation only interrupts the current call —
+//! Lifetime: children are killed when the tool is dropped (its shutdown
+//! token closes the manager), and a run's cancellation only interrupts
+//! the current call —
 //! processes deliberately survive between calls. There is no PTY here;
 //! programs that refuse to run without one need the host to provide a
 //! richer executor.
@@ -373,6 +374,13 @@ impl ProcessTool {
 
     pub fn max_output_bytes(mut self, bytes: usize) -> Self {
         self.config.max_output_bytes = bytes;
+        self
+    }
+
+    /// Cap on unread output retained per process; older bytes beyond it
+    /// are dropped and reported once as `droppedBytes`.
+    pub fn buffer_cap(mut self, bytes: usize) -> Self {
+        self.config.buffer_cap = bytes;
         self
     }
 
