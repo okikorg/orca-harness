@@ -9,17 +9,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use orca_harness_core::{CancellationToken, Context, Message};
+use orca_harness_core::{Context, Message};
 use orca_harness_extensions::{
     compact, CompactConfig, CompactReport, SessionFile, SessionHandler, TruncationStore,
 };
 use orca_harness_tools::{FileGuard, TodoList};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
 use crate::tools::SessionTools;
-use crate::{Agent, RunHandle, RunRequest, RunResult, SdkError};
+use crate::{Agent, HarnessEvent, RunHandle, RunRequest, RunResult, SdkError};
 
-use execution::{ensure_continuable, execute, RunExecution};
+use execution::{execute, RunExecution};
 use import::imported_context;
 use persistence::{load_session_store, save_session_store, session_store};
 
@@ -216,17 +217,16 @@ impl Session {
     /// [`RunRequest::continuation`] behaves as [`continue_run`](Self::continue_run).
     pub async fn run(&self, request: impl Into<RunRequest>) -> Result<RunResult, SdkError> {
         let busy = BusyGuard::acquire(self.busy.clone())?;
-        let request = request.into();
-        let cancellation = request.run_token();
-        execute(self.execution(request, cancellation, None, busy)?).await
+        execute(self.prepare_run(request.into(), None, busy)?).await
     }
 
     /// Continue the conversation from where it stands without appending a
     /// user message: the model produces the next assistant turn on the
     /// current transcript. Limits, the request deadline, and the busy guard
-    /// apply as for [`run`](Self::run). Fails with [`SdkError::Config`] when
-    /// the transcript holds nothing beyond the system prompt or when the
-    /// request carries images.
+    /// apply as for [`run`](Self::run). Fails with
+    /// [`SdkError::InvalidContext`] when the transcript holds nothing beyond
+    /// the system prompt, and with [`SdkError::Config`] when the request
+    /// carries a prompt or images.
     pub async fn continue_run(&self, request: RunRequest) -> Result<RunResult, SdkError> {
         self.run(RunRequest {
             continuation: true,
@@ -239,36 +239,39 @@ impl Session {
     /// own: cancelling it, or dropping the handle, cancels this run and
     /// nothing else, in particular not a caller token supplied through
     /// [`RunRequest::cancellation`].
+    ///
+    /// A continuation on a transcript with nothing beyond the system prompt
+    /// is not rejected here: the run fails with [`SdkError::InvalidContext`]
+    /// from [`RunHandle::finish`] before any model call.
     pub fn start(&self, request: impl Into<RunRequest>) -> Result<RunHandle, SdkError> {
         let busy = BusyGuard::acquire(self.busy.clone())?;
-        let request = request.into();
-        if request.continuation {
-            // Report an empty transcript here rather than from the task
-            // when the context is free; `execute` re-checks under the lock.
-            if let Ok(context) = self.context.try_lock() {
-                ensure_continuable(&context)?;
-            }
-        }
-        let cancellation = request.run_token();
         let (send, receive) = tokio::sync::mpsc::unbounded_channel();
-        let run = self.execution(request, cancellation.clone(), Some(send), busy)?;
+        let run = self.prepare_run(request.into(), Some(send), busy)?;
+        let cancellation = run.cancellation.clone();
         let task = tokio::spawn(execute(run));
         Ok(RunHandle::new(cancellation, receive, task))
     }
 
     /// The single construction site for a run over this session's state.
-    fn execution(
+    /// Rejects request shapes that cannot run, and derives the run's token
+    /// from the caller's when one was supplied.
+    fn prepare_run(
         &self,
         request: RunRequest,
-        cancellation: CancellationToken,
-        event_send: Option<tokio::sync::mpsc::UnboundedSender<crate::HarnessEvent>>,
+        event_send: Option<UnboundedSender<HarnessEvent>>,
         busy: BusyGuard,
     ) -> Result<RunExecution, SdkError> {
+        if request.continuation && !request.prompt.is_empty() {
+            return Err(SdkError::Config(
+                "a continuation carries no prompt; use RunRequest::new for a new turn".into(),
+            ));
+        }
         if request.continuation && !request.images.is_empty() {
             return Err(SdkError::Config(
                 "a continuation carries no user message to attach images to".into(),
             ));
         }
+        let cancellation = request.run_token();
         Ok(RunExecution {
             definition: self.agent.clone(),
             tools: self.tools.tools.clone(),

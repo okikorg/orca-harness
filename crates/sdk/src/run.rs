@@ -43,10 +43,10 @@ impl RunRequest {
     /// Limits, [`deadline`](Self::deadline), [`on_event`](Self::on_event),
     /// [`continue_at_step_limit`](Self::continue_at_step_limit), and
     /// [`cancellation`](Self::cancellation) apply as on any request.
-    /// Images cannot be attached (there is no message to carry them) and
-    /// are rejected with [`SdkError::Config`] when the run starts. A
-    /// session whose transcript holds nothing beyond the system prompt
-    /// rejects the request with [`SdkError::Config`].
+    /// A prompt or images cannot be attached (there is no user message to
+    /// carry them); either is rejected with [`SdkError::Config`] when the
+    /// run starts. A session whose transcript holds nothing beyond the
+    /// system prompt rejects the request with [`SdkError::InvalidContext`].
     ///
     /// ```rust,no_run
     /// # async fn example(session: orca_harness_sdk::Session) -> Result<(), orca_harness_sdk::SdkError> {
@@ -61,11 +61,6 @@ impl RunRequest {
             continuation: true,
             ..Self::new(String::new())
         }
-    }
-
-    /// Whether this request was built with [`RunRequest::continuation`].
-    pub fn is_continuation(&self) -> bool {
-        self.continuation
     }
 
     /// Tie the run to a caller-owned token. The run receives a child of

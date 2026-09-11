@@ -330,24 +330,56 @@ async fn continuation_on_empty_session_is_rejected() {
 
     let session = agent.new_session().open().unwrap();
     let result = session.continue_run(RunRequest::continuation()).await;
-    assert!(matches!(result, Err(SdkError::Config(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(SdkError::InvalidContext(_))),
+        "{result:?}"
+    );
     assert_eq!(shape(&session.messages().await), vec!["system:agent"]);
 
-    let started = session.start(RunRequest::continuation());
-    let result = match started {
-        Ok(handle) => handle.finish().await,
-        Err(error) => Err(error),
-    };
+    // A background continuation fails from `finish`, before any model call.
+    let handle = session.start(RunRequest::continuation()).unwrap();
+    let result = handle.finish().await;
+    assert!(
+        matches!(result, Err(SdkError::InvalidContext(_))),
+        "{result:?}"
+    );
+    assert_eq!(shape(&session.messages().await), vec!["system:agent"]);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn continuation_rejects_prompt_and_images() {
+    let root = temp_dir("continuation-payload");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let model = ScriptedModel::new(vec![ModelResponse::final_text("first")]);
+    let agent = harness.agent(model).build().unwrap();
+    let session = agent.new_session().open().unwrap();
+    session.run("hello").await.unwrap();
+    let before = shape(&session.messages().await);
+
+    // A prompt on a continuation would be silently dropped; reject it.
+    let result = session.continue_run(RunRequest::new("hello again")).await;
+    assert!(matches!(result, Err(SdkError::Config(_))), "{result:?}");
+    let mut with_prompt = RunRequest::continuation();
+    with_prompt.prompt = "late".into();
+    let result = session.run(with_prompt).await;
     assert!(matches!(result, Err(SdkError::Config(_))), "{result:?}");
 
     // Images have no message to attach to on a continuation.
-    session.run("hello").await.unwrap();
     let with_image = RunRequest::continuation().image(orca_harness_core::Image {
         media_type: "image/png".into(),
         data: "AAAA".into(),
     });
     let result = session.continue_run(with_image).await;
     assert!(matches!(result, Err(SdkError::Config(_))), "{result:?}");
+
+    // `start` rejects synchronously, and nothing was appended.
+    let mut with_prompt = RunRequest::continuation();
+    with_prompt.prompt = "late".into();
+    let result = session.start(with_prompt).err();
+    assert!(matches!(result, Some(SdkError::Config(_))), "{result:?}");
+    assert_eq!(shape(&session.messages().await), before);
 
     let _ = std::fs::remove_dir_all(&root);
 }
