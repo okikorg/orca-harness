@@ -16,6 +16,11 @@
 //! processes deliberately survive between calls. There is no PTY here;
 //! programs that refuse to run without one need the host to provide a
 //! richer executor.
+//!
+//! Hosts get the same five actions, typed, through
+//! [`ProcessController`] (see [`ProcessTool::controller`]): one
+//! implementation ([`ProcessCore`]) serves both the JSON tool and the
+//! controller, so neither path can drift from the other.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -34,7 +39,12 @@ use crate::pgroup;
 use crate::shell::Executor;
 use crate::BackgroundStats;
 
+mod host;
+mod output;
 mod spawn;
+
+pub use host::{ProcessController, ProcessEntry, ProcessSnapshot, ProcessSpawn, ProcessWrite};
+use output::OutBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessNotificationKind {
@@ -53,110 +63,6 @@ pub struct ProcessNotification {
 }
 
 type ProcessNotifier = Arc<dyn Fn(ProcessNotification) + Send + Sync>;
-
-struct MatchState {
-    pattern: String,
-    needle: Vec<u8>,
-    tail: Vec<u8>,
-    armed: bool,
-    notified: bool,
-}
-
-impl MatchState {
-    fn new(pattern: String) -> Self {
-        Self {
-            needle: pattern.as_bytes().to_vec(),
-            pattern,
-            tail: Vec::new(),
-            armed: false,
-            notified: false,
-        }
-    }
-
-    fn observe(&mut self, chunk: &[u8]) -> bool {
-        if !self.armed || self.notified {
-            return false;
-        }
-        let mut window = Vec::with_capacity(self.tail.len() + chunk.len());
-        window.extend_from_slice(&self.tail);
-        window.extend_from_slice(chunk);
-        if window
-            .windows(self.needle.len())
-            .any(|candidate| candidate == self.needle)
-        {
-            self.notified = true;
-            return true;
-        }
-        let keep = self.needle.len().saturating_sub(1).min(window.len());
-        self.tail.clear();
-        self.tail.extend_from_slice(&window[window.len() - keep..]);
-        false
-    }
-
-    fn arm(&mut self) {
-        self.tail.clear();
-        self.armed = true;
-    }
-}
-
-/// Merged, bounded, unread output of one process.
-struct OutBuf {
-    data: Vec<u8>,
-    dropped: u64,
-    cap: usize,
-    notification_data: Vec<u8>,
-    notification_dropped: u64,
-    notification_cap: usize,
-    notify_match: Option<MatchState>,
-}
-
-impl OutBuf {
-    fn push(&mut self, chunk: &[u8]) -> Option<String> {
-        let matched = self
-            .notify_match
-            .as_mut()
-            .and_then(|state| state.observe(chunk).then(|| state.pattern.clone()));
-        self.data.extend_from_slice(chunk);
-        if self.data.len() > self.cap {
-            let excess = self.data.len() - self.cap;
-            self.data.drain(..excess);
-            self.dropped += excess as u64;
-        }
-        if self.notification_cap > 0 {
-            self.notification_data.extend_from_slice(chunk);
-            if self.notification_data.len() > self.notification_cap {
-                let excess = self.notification_data.len() - self.notification_cap;
-                self.notification_data.drain(..excess);
-                self.notification_dropped += excess as u64;
-            }
-        }
-        matched
-    }
-
-    /// Take up to `max` bytes. Cuts may split a UTF-8 sequence; the lossy
-    /// conversion degrades that to a replacement char at the seam only.
-    fn drain(&mut self, max: usize) -> (String, u64, bool) {
-        let dropped = std::mem::take(&mut self.dropped);
-        let take = self.data.len().min(max);
-        let chunk: Vec<u8> = self.data.drain(..take).collect();
-        let more = !self.data.is_empty();
-        (String::from_utf8_lossy(&chunk).into_owned(), dropped, more)
-    }
-
-    fn drain_notification(&mut self) -> (String, u64) {
-        let output = String::from_utf8_lossy(&std::mem::take(&mut self.notification_data)).into();
-        let dropped = std::mem::take(&mut self.notification_dropped);
-        (output, dropped)
-    }
-
-    fn arm_notifications(&mut self) {
-        self.notification_data.clear();
-        self.notification_dropped = 0;
-        if let Some(state) = &mut self.notify_match {
-            state.arm();
-        }
-    }
-}
 
 struct Proc {
     id: String,
@@ -223,6 +129,17 @@ struct Manager {
     stats: BackgroundStats,
 }
 
+impl Manager {
+    fn new(stats: BackgroundStats) -> Arc<Self> {
+        Arc::new(Self {
+            seq: AtomicU64::new(0),
+            procs: Mutex::new(HashMap::new()),
+            shutdown: CancellationToken::new(),
+            stats,
+        })
+    }
+}
+
 impl Drop for Manager {
     fn drop(&mut self) {
         // Cancel wakes the waiters if the runtime still lives; the direct
@@ -243,7 +160,9 @@ impl Drop for Manager {
     }
 }
 
-pub struct ProcessTool {
+/// The tool's settings, shared by value with its controllers.
+#[derive(Clone)]
+struct ProcessConfig {
     executor: Executor,
     working_dir: Option<String>,
     /// Cap on output bytes returned per call.
@@ -255,92 +174,28 @@ pub struct ProcessTool {
     /// Upper bound on a poll's `waitMs`.
     max_wait: Duration,
     max_processes: usize,
-    manager: Arc<Manager>,
     notifier: Option<ProcessNotifier>,
 }
 
-impl Default for ProcessTool {
-    fn default() -> Self {
-        Self::new(Executor::local_sh())
-    }
+/// The single implementation of the five actions, borrowed from either
+/// the tool or a controller that upgraded its manager reference.
+struct ProcessCore<'a> {
+    config: &'a ProcessConfig,
+    manager: &'a Manager,
 }
 
-impl ProcessTool {
-    pub fn new(executor: Executor) -> Self {
-        Self {
-            executor,
-            working_dir: None,
-            max_output_bytes: 64 * 1024,
-            buffer_cap: 512 * 1024,
-            settle: Duration::from_millis(500),
-            max_wait: Duration::from_secs(30),
-            max_processes: 32,
-            manager: Arc::new(Manager {
-                seq: AtomicU64::new(0),
-                procs: Mutex::new(HashMap::new()),
-                shutdown: CancellationToken::new(),
-                stats: BackgroundStats::default(),
-            }),
-            notifier: None,
-        }
-    }
-
-    /// Adopt shared live counters. Call before any spawn.
-    pub fn stats(mut self, stats: BackgroundStats) -> Self {
-        self.manager = Arc::new(Manager {
-            seq: AtomicU64::new(0),
-            procs: Mutex::new(HashMap::new()),
-            shutdown: CancellationToken::new(),
-            stats,
-        });
-        self
-    }
-
-    /// Convenience: host-local processes.
-    pub fn local() -> Self {
-        Self::default()
-    }
-
-    pub fn working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.working_dir = Some(dir.into());
-        self
-    }
-
-    pub fn max_output_bytes(mut self, bytes: usize) -> Self {
-        self.max_output_bytes = bytes;
-        self
-    }
-
-    pub fn max_processes(mut self, n: usize) -> Self {
-        self.max_processes = n;
-        self
-    }
-
-    pub fn on_notification(
-        mut self,
-        notify: impl Fn(ProcessNotification) + Send + Sync + 'static,
-    ) -> Self {
-        self.notifier = Some(Arc::new(notify));
-        self
-    }
-
-    fn get(&self, input: &Value) -> Result<(String, Arc<Proc>), ToolError> {
-        let id = input
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::msg("`id` (string) is required for this action"))?;
-        let proc = self
-            .manager
+impl ProcessCore<'_> {
+    fn get(&self, id: &str) -> Result<Arc<Proc>, ToolError> {
+        self.manager
             .procs
             .lock()
             .unwrap()
             .get(id)
             .cloned()
-            .ok_or_else(|| ToolError::msg(format!("unknown process id: {id}")))?;
-        Ok((id.to_string(), proc))
+            .ok_or_else(|| ToolError::msg(format!("unknown process id: {id}")))
     }
 
-    fn snapshot(&self, id: &str, proc: &Proc, arm_exit: bool, arm_match: bool) -> Value {
+    fn snapshot(&self, id: &str, proc: &Proc, arm_exit: bool, arm_match: bool) -> ProcessSnapshot {
         // Read the exit slot once, and before draining: `running` and
         // `exitCode` must describe the same instant, and reading liveness
         // first means an exit racing this snapshot shows up as "still
@@ -349,7 +204,7 @@ impl ProcessTool {
         let exit_guard = proc.exit.lock().unwrap();
         let exit = *exit_guard;
         let mut buf = proc.buf.lock().unwrap();
-        let (output, dropped, more) = buf.drain(self.max_output_bytes);
+        let (output, dropped, more) = buf.drain(self.config.max_output_bytes);
         if arm_match {
             // The spawn result already carries everything drained above.
             // Start autonomous delivery after that exact boundary so output
@@ -360,57 +215,49 @@ impl ProcessTool {
             proc.notify_on_exit.store(true, Ordering::Release);
         }
         drop(exit_guard);
-        let mut out = json!({
-            "id": id,
-            "output": output,
-            "running": exit.is_none(),
-            "exitCode": exit.flatten(),
-            "moreOutput": more,
-        });
-        if dropped > 0 {
-            out["droppedBytes"] = json!(dropped);
+        ProcessSnapshot {
+            id: id.to_string(),
+            output,
+            running: exit.is_none(),
+            exit_code: exit.flatten(),
+            more_output: more,
+            dropped_bytes: dropped,
         }
-        out
     }
 
-    async fn poll(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let (id, proc) = self.get(input)?;
-        let wait = input
-            .get("waitMs")
-            .and_then(Value::as_u64)
-            .map(Duration::from_millis)
-            .unwrap_or(self.settle)
-            .min(self.max_wait);
+    async fn poll(
+        &self,
+        id: &str,
+        wait: Option<Duration>,
+        cancellation: &CancellationToken,
+    ) -> Result<ProcessSnapshot, ToolError> {
+        let proc = self.get(id)?;
+        let wait = wait.unwrap_or(self.config.settle).min(self.config.max_wait);
 
         let notified = proc.output_ready.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
-        let idle = proc.buf.lock().unwrap().data.is_empty();
+        let idle = proc.buf.lock().unwrap().is_empty();
         if idle && proc.running() {
             tokio::select! {
                 biased;
-                _ = ctx.cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
+                _ = cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
                 _ = proc.done.cancelled() => {}
                 _ = &mut notified => {}
                 _ = tokio::time::sleep(wait) => {}
             }
         }
         settle_exit(&proc).await;
-        Ok(self.snapshot(&id, &proc, false, false))
+        Ok(self.snapshot(id, &proc, false, false))
     }
 
-    async fn write(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let (id, proc) = self.get(input)?;
-        let text = input
-            .get("input")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::msg("`input` (string) is required for write"))?;
-        let newline = input
-            .get("newline")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let eof = input.get("eof").and_then(Value::as_bool).unwrap_or(false);
-
+    async fn write(
+        &self,
+        id: &str,
+        write: ProcessWrite,
+        cancellation: &CancellationToken,
+    ) -> Result<ProcessSnapshot, ToolError> {
+        let proc = self.get(id)?;
         if !proc.running() {
             return Err(ToolError::msg(format!("process {id} has exited")));
         }
@@ -419,10 +266,10 @@ impl ProcessTool {
             let stdin = guard
                 .as_mut()
                 .ok_or_else(|| ToolError::msg(format!("stdin of {id} is closed")))?;
-            let data = if newline {
-                format!("{text}\n")
+            let data = if write.newline {
+                format!("{}\n", write.input)
             } else {
-                text.to_string()
+                write.input
             };
             stdin
                 .write_all(data.as_bytes())
@@ -432,26 +279,22 @@ impl ProcessTool {
                 .flush()
                 .await
                 .map_err(|e| ToolError::msg(format!("flush stdin failed: {e}")))?;
-            if eof {
+            if write.eof {
                 *guard = None; // drop the handle → child sees EOF
             }
         }
 
         tokio::select! {
             biased;
-            _ = ctx.cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
+            _ = cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
             _ = proc.done.cancelled() => {}
-            _ = tokio::time::sleep(self.settle) => {}
+            _ = tokio::time::sleep(self.config.settle) => {}
         }
         settle_exit(&proc).await;
-        Ok(self.snapshot(&id, &proc, false, false))
+        Ok(self.snapshot(id, &proc, false, false))
     }
 
-    async fn kill(&self, input: &Value) -> Result<Value, ToolError> {
-        let id = input
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::msg("`id` (string) is required for kill"))?;
+    async fn kill(&self, id: &str) -> Result<ProcessSnapshot, ToolError> {
         let proc = self
             .manager
             .procs
@@ -467,21 +310,106 @@ impl ProcessTool {
         Ok(self.snapshot(id, &proc, false, false))
     }
 
-    fn list(&self) -> Value {
+    fn list(&self) -> Vec<ProcessEntry> {
         let procs = self.manager.procs.lock().unwrap();
-        let mut entries: Vec<Value> = procs
+        let mut entries: Vec<ProcessEntry> = procs
             .iter()
-            .map(|(id, p)| {
-                json!({
-                    "id": id,
-                    "command": p.command.chars().take(200).collect::<String>(),
-                    "running": p.running(),
-                    "exitCode": p.exit_code(),
-                })
+            .map(|(id, p)| ProcessEntry {
+                id: id.clone(),
+                command: p.command.chars().take(200).collect(),
+                running: p.running(),
+                exit_code: p.exit_code(),
             })
             .collect();
-        entries.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-        json!({ "processes": entries })
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
+        entries
+    }
+}
+
+pub struct ProcessTool {
+    config: ProcessConfig,
+    manager: Arc<Manager>,
+}
+
+impl Default for ProcessTool {
+    fn default() -> Self {
+        Self::new(Executor::local_sh())
+    }
+}
+
+impl ProcessTool {
+    pub fn new(executor: Executor) -> Self {
+        Self {
+            config: ProcessConfig {
+                executor,
+                working_dir: None,
+                max_output_bytes: 64 * 1024,
+                buffer_cap: 512 * 1024,
+                settle: Duration::from_millis(500),
+                max_wait: Duration::from_secs(30),
+                max_processes: 32,
+                notifier: None,
+            },
+            manager: Manager::new(BackgroundStats::default()),
+        }
+    }
+
+    /// Adopt shared live counters. Call before any spawn (and before
+    /// taking a controller: this replaces the manager).
+    pub fn stats(mut self, stats: BackgroundStats) -> Self {
+        self.manager = Manager::new(stats);
+        self
+    }
+
+    /// Convenience: host-local processes.
+    pub fn local() -> Self {
+        Self::default()
+    }
+
+    pub fn working_dir(mut self, dir: impl Into<String>) -> Self {
+        self.config.working_dir = Some(dir.into());
+        self
+    }
+
+    pub fn max_output_bytes(mut self, bytes: usize) -> Self {
+        self.config.max_output_bytes = bytes;
+        self
+    }
+
+    pub fn max_processes(mut self, n: usize) -> Self {
+        self.config.max_processes = n;
+        self
+    }
+
+    pub fn on_notification(
+        mut self,
+        notify: impl Fn(ProcessNotification) + Send + Sync + 'static,
+    ) -> Self {
+        self.config.notifier = Some(Arc::new(notify));
+        self
+    }
+
+    /// A typed host handle over this tool's processes. Take it after the
+    /// builders, since [`stats`](Self::stats) replaces the manager.
+    pub fn controller(&self) -> ProcessController {
+        ProcessController::new(self)
+    }
+
+    fn core(&self) -> ProcessCore<'_> {
+        ProcessCore {
+            config: &self.config,
+            manager: &self.manager,
+        }
+    }
+}
+
+/// Close the manager as soon as the tool goes: controllers report closed
+/// at once, and their in-flight calls (a `wait_for_exit`, say) return
+/// because the waiters kill the children when this token cancels, even
+/// while such a call still holds the manager.
+impl Drop for ProcessTool {
+    fn drop(&mut self) {
+        self.manager.shutdown.cancel();
     }
 }
 
@@ -495,6 +423,40 @@ async fn settle_exit(proc: &Proc) {
     if !proc.running() && !proc.done.is_cancelled() {
         let _ = tokio::time::timeout(Duration::from_secs(1), proc.done.cancelled()).await;
     }
+}
+
+fn required_str<'a>(input: &'a Value, key: &str, what: &str) -> Result<&'a str, ToolError> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::msg(format!("`{key}` (string) is required for {what}")))
+}
+
+fn parse_spawn(input: &Value) -> Result<ProcessSpawn, ToolError> {
+    let mut spawn = ProcessSpawn::new(required_str(input, "command", "spawn")?);
+    spawn.wait_for_exit = input
+        .get("waitForExit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    spawn.notify_on_exit = input
+        .get("notifyOnExit")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    spawn.notify_on_match = input
+        .get("notifyOnMatch")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok(spawn)
+}
+
+fn parse_write(input: &Value) -> Result<ProcessWrite, ToolError> {
+    let mut write = ProcessWrite::new(required_str(input, "input", "write")?);
+    write.newline = input
+        .get("newline")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    write.eof = input.get("eof").and_then(Value::as_bool).unwrap_or(false);
+    Ok(write)
 }
 
 #[async_trait]
@@ -546,40 +508,30 @@ impl Tool for ProcessTool {
             .get("action")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::msg("`action` (string) is required"))?;
-        match action {
-            "spawn" => self.spawn(&input, ctx).await,
-            "poll" => self.poll(&input, ctx).await,
-            "write" => self.write(&input, ctx).await,
-            "kill" => self.kill(&input).await,
-            "list" => Ok(self.list()),
-            other => Err(ToolError::msg(format!(
-                "unknown action `{other}`; expected spawn|poll|write|kill|list"
-            ))),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::MatchState;
-
-    #[test]
-    fn output_match_spans_chunks_and_notifies_once() {
-        let mut state = MatchState::new("server ready".into());
-        state.arm();
-
-        assert!(!state.observe(b"server rea"));
-        assert!(state.observe(b"dy on :3000"));
-        assert!(!state.observe(b" server ready again"));
-    }
-
-    #[test]
-    fn output_match_ignores_everything_before_it_is_armed() {
-        let mut state = MatchState::new("ready".into());
-
-        assert!(!state.observe(b"ready"));
-        state.arm();
-        assert!(!state.observe(b"ady"), "pre-arm tail is discarded");
-        assert!(state.observe(b"ready"));
+        let core = self.core();
+        let cancellation = &ctx.cancellation;
+        let snapshot = match action {
+            "spawn" => core.spawn(parse_spawn(&input)?, cancellation).await?,
+            "poll" => {
+                let id = required_str(&input, "id", "this action")?;
+                let wait = input
+                    .get("waitMs")
+                    .and_then(Value::as_u64)
+                    .map(Duration::from_millis);
+                core.poll(id, wait, cancellation).await?
+            }
+            "write" => {
+                let id = required_str(&input, "id", "this action")?;
+                core.write(id, parse_write(&input)?, cancellation).await?
+            }
+            "kill" => core.kill(required_str(&input, "id", "kill")?).await?,
+            "list" => return Ok(ProcessEntry::list_into_value(core.list())),
+            other => {
+                return Err(ToolError::msg(format!(
+                    "unknown action `{other}`; expected spawn|poll|write|kill|list"
+                )))
+            }
+        };
+        Ok(snapshot.into_value())
     }
 }

@@ -5,50 +5,48 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orca_harness_core::{CancellationToken, ToolContext, ToolError};
-use serde_json::Value;
+use orca_harness_core::{CancellationToken, ToolError};
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 
-use super::{settle_exit, MatchState, OutBuf, Proc, ProcessNotificationKind, ProcessTool};
+use super::output::OutBuf;
+use super::{
+    settle_exit, Proc, ProcessCore, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn,
+};
 use crate::pgroup;
 
-impl ProcessTool {
-    pub(super) async fn spawn(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
-        let command_str = input
-            .get("command")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::msg("`command` (string) is required for spawn"))?;
+impl ProcessCore<'_> {
+    pub(super) async fn spawn(
+        &self,
+        spawn: ProcessSpawn,
+        cancellation: &CancellationToken,
+    ) -> Result<ProcessSnapshot, ToolError> {
+        let ProcessSpawn {
+            command: command_str,
+            wait_for_exit,
+            notify_on_exit,
+            notify_on_match: notify_match,
+        } = spawn;
         if command_str.trim().is_empty() {
             return Err(ToolError::msg("`command` must not be empty"));
         }
-        let wait_for_exit = input
-            .get("waitForExit")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let notify_match = input
-            .get("notifyOnMatch")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
         if notify_match.as_deref() == Some("") {
             return Err(ToolError::msg("`notifyOnMatch` must not be empty"));
         }
-        let notify_on_exit = !wait_for_exit
-            && input
-                .get("notifyOnExit")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
+        let notify_on_exit = !wait_for_exit && notify_on_exit;
+        let config = self.config;
+        let manager = self.manager;
 
-        if self.manager.procs.lock().unwrap().len() >= self.max_processes {
+        if manager.procs.lock().unwrap().len() >= config.max_processes {
             return Err(ToolError::msg(format!(
                 "live process limit reached ({}); kill one first",
-                self.max_processes
+                config.max_processes
             )));
         }
 
-        let mut cmd = self
+        let mut cmd = config
             .executor
-            .build(command_str, self.working_dir.as_deref());
+            .build(&command_str, config.working_dir.as_deref());
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -62,35 +60,29 @@ impl ProcessTool {
         let stderr = child.stderr.take();
         let stdin = child.stdin.take();
 
-        let id = format!("p{}", self.manager.seq.fetch_add(1, Ordering::SeqCst) + 1);
+        let id = format!("p{}", manager.seq.fetch_add(1, Ordering::SeqCst) + 1);
+        let notification_cap = usize::from(
+            config.notifier.is_some()
+                && !wait_for_exit
+                && (notify_on_exit || notify_match.is_some()),
+        ) * config.max_output_bytes;
         let proc = Arc::new(Proc {
             id: id.clone(),
-            command: command_str.to_string(),
+            command: command_str.clone(),
             pgid,
             counted: AtomicBool::new(true),
-            buf: Mutex::new(OutBuf {
-                data: Vec::new(),
-                dropped: 0,
-                cap: self.buffer_cap,
-                notification_data: Vec::new(),
-                notification_dropped: 0,
-                notification_cap: usize::from(
-                    self.notifier.is_some()
-                        && !wait_for_exit
-                        && (notify_on_exit || notify_match.is_some()),
-                ) * self.max_output_bytes,
-                notify_match: (!wait_for_exit)
-                    .then_some(notify_match)
-                    .flatten()
-                    .map(MatchState::new),
-            }),
+            buf: Mutex::new(OutBuf::new(
+                config.buffer_cap,
+                notification_cap,
+                (!wait_for_exit).then_some(notify_match).flatten(),
+            )),
             output_ready: Notify::new(),
             stdin: tokio::sync::Mutex::new(stdin),
             exit: Mutex::new(None),
-            kill: self.manager.shutdown.child_token(),
+            kill: manager.shutdown.child_token(),
             done: CancellationToken::new(),
             notify_on_exit: AtomicBool::new(false),
-            notifier: self.notifier.clone(),
+            notifier: config.notifier.clone(),
         });
 
         let mut readers = Vec::new();
@@ -120,14 +112,12 @@ impl ProcessTool {
             }));
         }
 
-        self.manager
-            .stats
-            .add_process(id.clone(), command_str.to_string());
+        manager.stats.add_process(id.clone(), command_str);
 
         // The waiter owns the child: reap on exit or kill on demand, then
         // give the readers a moment to drain before signalling `done`.
         let p = proc.clone();
-        let stats = self.manager.stats.clone();
+        let stats = manager.stats.clone();
         tokio::spawn(async move {
             let status = tokio::select! {
                 biased;
@@ -160,7 +150,7 @@ impl ProcessTool {
             p.output_ready.notify_waiters();
         });
 
-        self.manager
+        manager
             .procs
             .lock()
             .unwrap()
@@ -169,12 +159,12 @@ impl ProcessTool {
         if wait_for_exit {
             tokio::select! {
                 biased;
-                _ = ctx.cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
+                _ = cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
                 _ = proc.done.cancelled() => {}
             }
         } else {
             // Give fast-failing commands a chance to report immediately.
-            let _ = tokio::time::timeout(self.settle, proc.done.cancelled()).await;
+            let _ = tokio::time::timeout(config.settle, proc.done.cancelled()).await;
         }
         settle_exit(&proc).await;
         Ok(self.snapshot(&id, &proc, notify_on_exit, !wait_for_exit))

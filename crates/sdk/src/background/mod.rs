@@ -18,6 +18,7 @@
 //! best-effort basis (see [`BackgroundServices`]'s `Drop`).
 
 mod notifications;
+mod processes;
 mod subagents;
 
 use std::sync::atomic::AtomicBool;
@@ -34,6 +35,7 @@ use crate::agent::AgentDefinition;
 use crate::tools::{preset_tools, ToolSource};
 
 pub use notifications::{BackgroundNotification, NOTIFICATION_CAPACITY};
+pub use processes::Processes;
 pub use subagents::{ChildEventCallback, SubagentConfig, Subagents};
 
 pub(crate) use notifications::rearm;

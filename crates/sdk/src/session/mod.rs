@@ -19,7 +19,7 @@ use orca_harness_extensions::{
 use orca_harness_tools::{FileGuard, TodoList};
 use tokio::sync::{broadcast, Mutex};
 
-use crate::background::{BackgroundNotification, Subagents};
+use crate::background::{BackgroundNotification, Processes, Subagents};
 use crate::tools::SessionTools;
 use crate::{Agent, RunHandle, RunOutcome, RunRequest, RunResult, SdkError};
 
@@ -153,6 +153,21 @@ impl Session {
             .background
             .as_ref()
             .map(|services| services.handle(self.closed.clone()))
+    }
+
+    /// Typed host access to this session's background processes, when
+    /// the tool preset ships the `process` tool ([`ToolPreset::Coding`]).
+    /// The handle shares the session's process manager with the model
+    /// tool, so both observe the same ids and state; processes are
+    /// session-owned and die with the session, and a fork or resume
+    /// starts with none. `None` for presets without a process tool.
+    ///
+    /// [`ToolPreset::Coding`]: crate::ToolPreset::Coding
+    pub fn processes(&self) -> Option<Processes> {
+        self.tools
+            .process
+            .as_ref()
+            .map(|controller| Processes::new(controller.clone(), self.closed.clone()))
     }
 
     /// Observe this session's detached subagents: worker exits, results
@@ -398,8 +413,10 @@ impl Session {
     /// that token.
     ///
     /// Dropping a session instead of calling this cancels the same work
-    /// but waits for nothing. Background processes and workflow runs are
-    /// not yet covered here.
+    /// but waits for nothing. [`processes`](Self::processes) refuses
+    /// every operation after a shutdown; live background processes are
+    /// killed when the session is dropped, and workflow runs are not yet
+    /// covered here.
     pub async fn shutdown(&self, grace: Duration) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         self.closed.store(true, Ordering::Release);

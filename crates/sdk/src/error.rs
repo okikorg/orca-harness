@@ -20,6 +20,12 @@ pub enum SdkError {
     /// was refused: routing, admission, or the worker itself failed.
     #[error("subagent error: {0}")]
     Subagent(String),
+    /// A typed background-process operation (see
+    /// [`Processes`](crate::Processes)) was refused: the process is
+    /// unknown or exited, the launch failed, the live process cap was
+    /// reached, or the session's process manager is gone.
+    #[error("process error: {0}")]
+    Process(String),
     #[error("session already has an active run")]
     BusySession,
     /// The session was shut down (see
