@@ -24,18 +24,8 @@ use orca_harness_sdk::{
 };
 use serde_json::{json, Value};
 
-fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "orca-sdk-consumer-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+mod common;
+use common::temp_dir;
 
 /// A scripted model: first turn calls the custom tool, second turn answers
 /// with whatever the tool returned.

@@ -276,47 +276,24 @@ impl Agent {
     }
 
     /// Run one request in a fresh ephemeral session and return its result.
+    /// The session is dropped when the call returns, on success or error.
     ///
-    /// This is the one-shot entry point: it is exactly
-    /// `self.new_session().ephemeral().open()?.run(request).await` with the
-    /// session dropped when the future completes, whether it succeeded or
-    /// failed. There is no separate execution path.
+    /// Each call is a fresh conversation: no history carries between calls.
+    /// Use a [`Session`](crate::Session) for multi-turn work.
     ///
-    /// Each call is a fresh conversation. No history carries between calls;
-    /// use a [`Session`](crate::Session) for multi-turn work.
-    ///
-    /// The ephemeral session owns every session-scoped resource for the
-    /// duration of the call and is dropped when it returns. Today that
-    /// session-scoped state is the conversation context and the truncation
-    /// store, so after `run` returns neither is reachable; the result's
-    /// `messages` is the only record.
+    /// Overlapping calls are allowed because each has its own session,
+    /// unlike [`Session::run`](crate::Session::run), which rejects overlap
+    /// with [`SdkError::BusySession`].
     ///
     /// Detached work started during the run (background subagents,
-    /// processes, workflows) has no session owner yet: those handles live in
-    /// agent-level tool state, so this method neither cancels nor awaits
-    /// them, and nothing returned here can observe them. Later phases make
-    /// that work session-owned; from then on dropping the ephemeral session
-    /// cancels it best-effort and it still cannot be observed or awaited
-    /// afterwards. Either way, hosts that need detached work to outlive a
-    /// run, or to be reported on, must open a `Session` explicitly and use
-    /// its lifecycle methods.
+    /// processes, workflows) is neither cancelled nor awaited by this method
+    /// and cannot be observed from the result. Open a `Session` to manage it.
     ///
-    /// Agent-level shared tool state is not reset by this method: the file
-    /// guard and the todo list are owned by the `Agent` in the current
-    /// design and persist across calls until `Session::clear` is invoked on
-    /// some session of this agent.
-    ///
-    /// Overlapping calls are allowed because each has its own session; this
-    /// differs from [`Session::run`](crate::Session::run), which rejects an
-    /// overlapping run with [`SdkError::BusySession`].
+    /// Agent-level tool state ([`FileGuard`] and [`TodoList`]) persists
+    /// across calls until [`Session::clear`](crate::Session::clear).
     ///
     /// ```rust,no_run
-    /// use orca_harness_sdk::{AnthropicModel, Harness};
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let harness = Harness::builder().workspace(".").build()?;
-    /// let model = AnthropicModel::new("claude-haiku-4-5").api_key("sk-ant-...");
-    /// let agent = harness.agent(model).build()?;
+    /// # async fn example(agent: orca_harness_sdk::Agent) -> Result<(), orca_harness_sdk::SdkError> {
     /// let result = agent.run("Summarise the README in one line.").await?;
     /// println!("{}", result.text);
     /// # Ok(())
