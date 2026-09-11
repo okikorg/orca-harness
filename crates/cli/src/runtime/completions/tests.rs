@@ -2,7 +2,7 @@ use super::*;
 use async_trait::async_trait;
 use orca_harness_core::{Context, Extension, ModelResponse};
 use orca_harness_tools::{
-    completions_prompt, refresh_inventory, ActiveInventory, SubagentManager, SubagentSpawn,
+    refresh_inventory, subagent_completions_prompt, ActiveInventory, SubagentManager, SubagentSpawn,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};

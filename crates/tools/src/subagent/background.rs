@@ -9,7 +9,7 @@ mod inventory;
 pub(crate) mod manager;
 mod protocol;
 pub use completions::{
-    completions_prompt, CompletionDelivery, CompletionInbox, DEFAULT_COMPLETION_CAPACITY,
+    subagent_completions_prompt, CompletionDelivery, CompletionInbox, DEFAULT_COMPLETION_CAPACITY,
 };
 pub use inventory::{refresh_inventory, ActiveInventory};
 pub use manager::{

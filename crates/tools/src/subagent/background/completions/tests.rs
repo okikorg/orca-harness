@@ -157,7 +157,8 @@ fn prompt_carries_every_result_as_untrusted_delimited_data() {
     failed.result = Err("subagent failed: boom".into());
     failed.spawn.identity = Some(crate::SubagentIdentity::new("test", "reviewer"));
     let batch = vec![notification(0, 4, "queue is ordered"), failed];
-    let value: serde_json::Value = serde_json::from_str(&completions_prompt(&batch)).unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(&subagent_completions_prompt(&batch)).unwrap();
 
     assert_eq!(value["event"], "background_subagent_completions");
     assert_eq!(value["count"], 2);
