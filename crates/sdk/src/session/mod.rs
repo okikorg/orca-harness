@@ -37,6 +37,9 @@ pub struct Session {
     recorder: Option<Arc<SessionHandler>>,
     truncation_store: TruncationStore,
     busy: Arc<AtomicBool>,
+    /// Set by [`shutdown`](Self::shutdown); every later operation is
+    /// refused with [`SdkError::SessionClosed`].
+    closed: Arc<AtomicBool>,
     load_warnings: Vec<String>,
 }
 
@@ -77,6 +80,7 @@ impl Session {
             recorder,
             truncation_store,
             busy: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
             load_warnings: Vec::new(),
         })
     }
@@ -103,6 +107,7 @@ impl Session {
             recorder: Some(Arc::new(handler)),
             truncation_store,
             busy: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
             load_warnings: loaded.warnings,
         })
     }
@@ -147,7 +152,7 @@ impl Session {
         self.tools
             .background
             .as_ref()
-            .map(|services| services.handle())
+            .map(|services| services.handle(self.closed.clone()))
     }
 
     /// Observe this session's detached subagents: worker exits, results
@@ -202,7 +207,7 @@ impl Session {
         &self,
         request: impl Into<RunRequest>,
     ) -> Result<RunOutcome, SdkError> {
-        let busy = BusyGuard::acquire(self.busy.clone())?;
+        let busy = self.acquire()?;
         execute(self.prepare_run(request.into(), None, busy)?).await
     }
 
@@ -234,7 +239,7 @@ impl Session {
     /// The handle's event stream is bounded by
     /// [`RunRequest::event_capacity`] and never blocks the run.
     pub fn start(&self, request: impl Into<RunRequest>) -> Result<RunHandle, SdkError> {
-        let busy = BusyGuard::acquire(self.busy.clone())?;
+        let busy = self.acquire()?;
         let request = request.into();
         let (observer, receiver, dropped) = RunObserver::channel(request.event_capacity);
         let run = self.prepare_run(request, Some(observer), busy)?;
@@ -282,7 +287,7 @@ impl Session {
     }
 
     pub async fn compact(&self, config: CompactConfig) -> Result<CompactReport, SdkError> {
-        let _busy = BusyGuard::acquire(self.busy.clone())?;
+        let _busy = self.acquire()?;
         let mut context = self.context.lock().await;
         let report = compact(&mut context, &self.truncation_store, &config)
             .map_err(|error| SdkError::Config(error.to_string()))?;
@@ -301,7 +306,7 @@ impl Session {
     /// and notification channel; results owed to this session never reach
     /// the fork.
     pub async fn fork(&self) -> Result<Self, SdkError> {
-        let _busy = BusyGuard::acquire(self.busy.clone())?;
+        let _busy = self.acquire()?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
         let context = self.context.lock().await.clone();
         let original_path = recorder.path();
@@ -319,6 +324,7 @@ impl Session {
                 recorder: Some(Arc::new(new_handler)),
                 truncation_store: fork_store,
                 busy: Arc::new(AtomicBool::new(false)),
+                closed: Arc::new(AtomicBool::new(false)),
                 load_warnings: loaded.warnings,
             })
         })();
@@ -337,7 +343,7 @@ impl Session {
     /// this call has its result refused rather than delivered to the new
     /// conversation.
     pub async fn clear(&self) -> Result<(), SdkError> {
-        let _busy = BusyGuard::acquire(self.busy.clone())?;
+        let _busy = self.acquire()?;
         let fresh = fresh_context(&self.agent);
         let mut context = self.context.lock().await;
         if let Some(recorder) = &self.recorder {
@@ -356,7 +362,7 @@ impl Session {
     /// id and file. Like [`clear`](Self::clear), the guard, todos, and
     /// detached subagents are reset with it.
     pub async fn reset_in_place(&self) -> Result<(), SdkError> {
-        let _busy = BusyGuard::acquire(self.busy.clone())?;
+        let _busy = self.acquire()?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
         let fresh = fresh_context(&self.agent);
         let mut context = self.context.lock().await;
@@ -369,27 +375,34 @@ impl Session {
         Ok(())
     }
 
-    /// Stop this session's detached work and wait, up to `grace`, for its
-    /// workers to exit. Admission stops and every worker is cancelled
-    /// first (their undelivered results are dropped), then the wait
-    /// begins. Cancellation is cooperative: a worker that ignores its
-    /// token keeps the wait going, and when `grace` runs out the error
-    /// reports how many are still winding down. Fails with
-    /// [`SdkError::BusySession`] while a run is active, touching nothing;
-    /// finish or cancel the run and call again. A session without
-    /// configured subagents returns at once. The session stays usable
-    /// afterwards, like after [`clear`](Self::clear): new spawns are
-    /// admitted into a fresh generation.
+    /// Stop this session for good: refuse every later run, spawn, and
+    /// conversation change, cancel its detached workers, and wait, up to
+    /// `grace`, for them to exit. Admission stops before the wait begins,
+    /// so nothing can extend it; undelivered results are dropped.
+    /// Cancellation is cooperative: a worker that ignores its token keeps
+    /// the wait going, and when `grace` runs out the error reports how
+    /// many are still winding down. A worker's exit notification may
+    /// still be in flight when this returns.
+    ///
+    /// Fails with [`SdkError::BusySession`] while a run is active,
+    /// touching nothing; finish or cancel the run and call again. Every
+    /// operation after a shutdown, this one included, fails with
+    /// [`SdkError::SessionClosed`]; [`subagents`](Self::subagents) and
+    /// [`notifications`](Self::notifications) still observe what is
+    /// winding down. A session without configured subagents closes at
+    /// once. Unlike [`clear`](Self::clear), which starts a fresh
+    /// conversation the session keeps serving, this is final.
     ///
     /// Dropping a session instead of calling this cancels the same work
     /// but waits for nothing. Background processes and workflow runs are
     /// not yet covered here.
     pub async fn shutdown(&self, grace: Duration) -> Result<(), SdkError> {
-        let _busy = BusyGuard::acquire(self.busy.clone())?;
+        let _busy = self.acquire()?;
+        self.closed.store(true, Ordering::Release);
         let Some(services) = &self.tools.background else {
             return Ok(());
         };
-        services.clear();
+        services.close();
         let manager = services.manager();
         match tokio::time::timeout(grace, manager.wait_idle()).await {
             Ok(()) => Ok(()),
@@ -397,6 +410,15 @@ impl Session {
                 still_active: manager.live_workers(),
             }),
         }
+    }
+
+    /// Serialize operations on this session: a closed session refuses
+    /// them, a busy one rejects overlap.
+    fn acquire(&self) -> Result<BusyGuard, SdkError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(SdkError::SessionClosed);
+        }
+        BusyGuard::acquire(self.busy.clone())
     }
 }
 

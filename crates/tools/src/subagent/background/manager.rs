@@ -55,6 +55,8 @@ struct SubagentManagerState {
     completion_capacity: Option<usize>,
     /// Reservations survive worker completion until the host consumes it.
     unacknowledged: std::collections::HashSet<u64>,
+    /// Set by [`SubagentManager::close`]: every later admission is refused.
+    closed: bool,
 }
 
 struct ActiveSubagent {
@@ -178,6 +180,7 @@ impl SubagentManager {
                 running: 0,
                 completion_capacity: None,
                 unacknowledged: std::collections::HashSet::new(),
+                closed: false,
             }),
             settings,
             slots: tokio::sync::watch::Sender::new(0),
@@ -221,6 +224,13 @@ impl SubagentManager {
     pub fn cancel_all(&self) -> usize {
         self.inner.cancel_all()
     }
+    /// Stop admitting work for good, then cancel every admitted job as
+    /// [`cancel_all`](Self::cancel_all) does. Every admission path (host
+    /// spawns, the model tool, workflow stages) is refused afterwards, so
+    /// [`wait_idle`](Self::wait_idle) cannot be extended by new work.
+    pub fn close(&self) -> usize {
+        self.inner.close()
+    }
     pub fn cancel(&self, spawn_id: u64) -> bool {
         self.inner.cancel(spawn_id)
     }
@@ -237,10 +247,11 @@ impl SubagentManager {
         self.inner.is_current(generation)
     }
 
-    /// Workers that have not exited: every admitted job, plus workers of
-    /// earlier generations that were cancelled but still hold a running
-    /// slot. Cancellation is cooperative, so this stays positive until
-    /// those workers observe their token and return.
+    /// Workers still holding a slot or an admitted job: every job in the
+    /// current generation, plus workers of earlier generations that were
+    /// cancelled but still hold a running slot. Cancellation is
+    /// cooperative, so this stays positive until those workers observe
+    /// their token and return.
     pub fn live_workers(&self) -> usize {
         self.inner.live_workers()
     }
@@ -249,7 +260,9 @@ impl SubagentManager {
     /// Driven by the same watch that frees slots and finishes jobs, so
     /// there is no polling; a manager that is already idle resolves at
     /// once. Bound the wait with a timeout when workers may ignore
-    /// cancellation.
+    /// cancellation. A worker releases its slot before its exit
+    /// notification is sent, so that notification may still be in
+    /// flight when this returns.
     pub async fn wait_idle(&self) {
         let mut slots = self.inner.slots.subscribe();
         loop {
@@ -305,6 +318,9 @@ impl SubagentManagerInner {
     ) -> Result<Admission, &'static str> {
         let cap = self.settings.background_limit() as usize;
         let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return Err("session is shut down");
+        }
         if expected.is_some_and(|generation| generation != state.generation) {
             return Err("workflow generation was cancelled");
         }
@@ -421,6 +437,11 @@ impl SubagentManagerInner {
                 _ = limit.changed() => {}
             }
         }
+    }
+
+    pub fn close(&self) -> usize {
+        self.state.lock().unwrap().closed = true;
+        self.cancel_all()
     }
 
     /// Cancel every admitted job and begin a fresh notification generation.

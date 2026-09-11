@@ -22,6 +22,11 @@ pub enum SdkError {
     Subagent(String),
     #[error("session already has an active run")]
     BusySession,
+    /// The session was shut down (see
+    /// [`Session::shutdown`](crate::Session::shutdown)); it admits no
+    /// runs, spawns, or conversation changes afterwards.
+    #[error("session is shut down")]
+    SessionClosed,
     /// [`Session::shutdown`](crate::Session::shutdown) cancelled every
     /// detached worker but `still_active` of them had not exited when the
     /// grace period ran out; cancellation is cooperative and they are
