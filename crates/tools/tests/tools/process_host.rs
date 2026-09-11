@@ -466,3 +466,71 @@ async fn core_tools_with_shell_and_process_keeps_file_tools_local() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- spawn cap ------------------------------------------------------------
+
+/// The cap bounds live processes, not the ids the manager still remembers:
+/// entries stay listed after exit, and must not consume a slot forever.
+#[tokio::test]
+async fn exited_processes_do_not_occupy_spawn_slots() {
+    let tool = ProcessTool::local().max_processes(2);
+    for _ in 0..4 {
+        tool.call(
+            json!({"action": "spawn", "command": "echo hi", "waitForExit": true}),
+            &ctx(),
+        )
+        .await
+        .expect("an exited process must free its slot");
+    }
+    assert_eq!(
+        tool.controller().list().unwrap().len(),
+        4,
+        "exited entries stay listed"
+    );
+}
+
+#[tokio::test]
+async fn live_processes_fill_the_spawn_cap() {
+    let tool = ProcessTool::local().max_processes(2);
+    for _ in 0..2 {
+        tool.call(json!({"action": "spawn", "command": "sleep 5"}), &ctx())
+            .await
+            .unwrap();
+    }
+    let err = tool
+        .call(json!({"action": "spawn", "command": "sleep 5"}), &ctx())
+        .await
+        .expect_err("the cap must refuse a third live process");
+    assert!(
+        err.to_string().contains("live process limit reached (2)"),
+        "{err}"
+    );
+    tool.controller().kill_all().await.unwrap();
+}
+
+/// The check and the claim on a slot are one atomic step: parallel spawns
+/// racing at the cap must not all pass a stale count. Needs real threads:
+/// the spawn path never yields between the count and the insert, so a
+/// current-thread runtime would let each call finish uncontended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_spawns_never_exceed_the_cap() {
+    let tool = Arc::new(ProcessTool::local().max_processes(2));
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let tool = tool.clone();
+        tasks.push(tokio::spawn(async move {
+            tool.call(json!({"action": "spawn", "command": "sleep 5"}), &ctx())
+                .await
+                .is_ok()
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        if task.await.unwrap() {
+            admitted += 1;
+        }
+    }
+    assert_eq!(admitted, 2, "exactly the cap may be admitted");
+    assert_eq!(tool.controller().running(), 2);
+    tool.controller().kill_all().await.unwrap();
+}

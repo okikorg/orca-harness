@@ -281,6 +281,7 @@ pub(crate) fn configure_tool_retry<M: orca_harness_core::Model + Clone + 'static
             crate::extensions::TOOL_RETRY_BACKOFF_MS,
         );
         tool.retry_ok_when(crate::extensions::data_failure)
+            .retry_error_when(crate::extensions::retryable_error)
     } else {
         tool
     }

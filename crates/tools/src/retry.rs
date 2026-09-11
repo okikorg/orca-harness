@@ -34,17 +34,21 @@ pub fn data_failure(call: &ToolCall, out: &Value) -> bool {
 /// Returned-error retry policy. Native file mutations are never replayed:
 /// their exact-match failures are deterministic, while retrying after an
 /// I/O error could repeat an operation whose rollback was incomplete.
-/// Subagent control actions (including unsupported legacy wait calls) are
-/// deterministic too, and the poll-guard error on a repeated `list` must
-/// reach the model, not be retried into a harness-side poll loop. Other
-/// tools retain the retry extension's historical retry-on-`Err` behavior,
-/// including a `subagent` run (see [`excludes_delegation`] for the case
-/// where the child retries on its own).
+/// Subagent and workflow control actions (including unsupported legacy
+/// wait calls) are deterministic too, and the poll-guard error on a
+/// repeated `list` must reach the model, not be retried into a
+/// harness-side poll loop. Other tools retain the retry extension's
+/// historical retry-on-`Err` behavior, including a `subagent` or
+/// `workflow` run (see [`excludes_delegation`] for the case where the
+/// child retries on its own).
 pub fn retryable_error(call: &ToolCall, _error: &ToolError) -> bool {
     if call.name == "subagent" {
         return call.arguments["action"]
             .as_str()
             .is_none_or(|action| action == "run");
+    }
+    if call.name == "workflow" {
+        return call.arguments["action"].as_str() == Some("run");
     }
     !NON_IDEMPOTENT.contains(&call.name.as_str())
 }
@@ -138,6 +142,23 @@ mod tests {
             &call("workflow", json!({"action": "run"})),
             &error
         ));
+    }
+
+    /// The poll-guard refusal on a repeated `workflow list` must reach the
+    /// model instead of being replayed, exactly as for `subagent`.
+    #[test]
+    fn workflow_control_errors_are_not_retryable() {
+        let error = ToolError::msg("workflow list unchanged; do not poll");
+        let control = |action: &str| call("workflow", json!({"action": action}));
+
+        assert!(!retryable_error(&control("list"), &error));
+        assert!(!retryable_error(&control("cancel"), &error));
+        assert!(!retryable_error(&control("output"), &error));
+        assert!(
+            !retryable_error(&call("workflow", json!({})), &error),
+            "a missing action is a deterministic schema failure"
+        );
+        assert!(retryable_error(&control("run"), &error));
     }
 
     #[test]

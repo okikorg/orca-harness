@@ -30,8 +30,7 @@ pub const NOTIFICATION_CAPACITY: usize = 256;
 /// read right after observing it may not count that result yet; wait for
 /// [`CompletionsReady`](Self::CompletionsReady) before relying on the
 /// count. `CompletionsReady` follows the first admission made while no
-/// wake-up is outstanding (the `notify` function below has the exact
-/// mechanics), so one `CompletionsReady` can stand for several
+/// wake-up is outstanding, so one `CompletionsReady` can stand for several
 /// `SubagentFinished`. A workflow records its
 /// [`Workflows::status`](crate::Workflows::status) `outcome` before its
 /// run-level `SubagentFinished` is sent, so a host that observes the run

@@ -24,7 +24,7 @@
 //! controller, so neither path can drift from the other.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -125,6 +125,10 @@ impl Proc {
 struct Manager {
     seq: AtomicU64,
     procs: Mutex<HashMap<String, Arc<Proc>>>,
+    /// Slots claimed by a spawn that has not inserted its process yet.
+    /// Written only while the `procs` guard is held, so the live count and
+    /// the claim on a slot move together.
+    reserved: AtomicUsize,
     shutdown: CancellationToken,
     stats: BackgroundStats,
 }
@@ -134,8 +138,30 @@ impl Manager {
         Arc::new(Self {
             seq: AtomicU64::new(0),
             procs: Mutex::new(HashMap::new()),
+            reserved: AtomicUsize::new(0),
             shutdown: CancellationToken::new(),
             stats,
+        })
+    }
+
+    /// Claim one of `max` slots, counting live processes plus slots other
+    /// spawns already claimed. Exited-but-not-killed entries stay listed
+    /// but hold no slot. The check and the claim happen under one guard,
+    /// so parallel spawns cannot all pass the same stale count.
+    fn reserve_slot(&self, max: usize) -> Result<Slot<'_>, ToolError> {
+        let procs = self.procs.lock().unwrap();
+        let live = procs.values().filter(|proc| proc.running()).count()
+            + self.reserved.load(Ordering::Relaxed);
+        if live >= max {
+            return Err(ToolError::msg(format!(
+                "live process limit reached ({max}); kill one first"
+            )));
+        }
+        self.reserved.fetch_add(1, Ordering::Relaxed);
+        drop(procs);
+        Ok(Slot {
+            manager: self,
+            committed: false,
         })
     }
 
@@ -148,6 +174,34 @@ impl Manager {
             .filter(|proc| proc.running())
             .cloned()
             .collect()
+    }
+}
+
+/// A claimed spawn slot. [`commit`](Slot::commit) hands it over to the
+/// inserted process; dropping it uncommitted (a failed `cmd.spawn`, an
+/// early return) releases it.
+struct Slot<'a> {
+    manager: &'a Manager,
+    committed: bool,
+}
+
+impl Slot<'_> {
+    /// Publish the process and release the reservation under one guard:
+    /// the slot is never counted twice, nor free for an instant.
+    fn commit(mut self, id: String, proc: Arc<Proc>) {
+        let mut procs = self.manager.procs.lock().unwrap();
+        procs.insert(id, proc);
+        self.manager.reserved.fetch_sub(1, Ordering::Relaxed);
+        self.committed = true;
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _procs = self.manager.procs.lock().unwrap();
+            self.manager.reserved.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 
