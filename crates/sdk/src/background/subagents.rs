@@ -82,6 +82,14 @@ impl SubagentConfig {
     /// `workflow` tool alongside `subagent` unless this is `false`, which
     /// leaves plain subagents only and makes
     /// [`Session::workflows`](crate::Session::workflows) return `None`.
+    ///
+    /// Workflows have no services of their own: a run's stages are
+    /// detached workers of the session's one subagent manager, routed,
+    /// governed, and cancelled by this same configuration (routing, child
+    /// policies and extensions, `background_limit`, `max_depth`, `limits`,
+    /// and the live `settings` handle). No value of this configuration
+    /// enables workflows without subagents or runs them elsewhere, so there
+    /// is no workflow-specific setting to reject at build time.
     pub fn workflows(mut self, enabled: bool) -> Self {
         self.workflows = enabled;
         self

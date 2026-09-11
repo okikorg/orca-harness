@@ -83,9 +83,10 @@ pub mod providers {
 /// The workflow vocabulary (`Stage`, `Kind`, `RunState`, `StageStatus`,
 /// `GraphError`, `RunId`, `StageId`, `DEFAULT_STAGE_CAP`) is the
 /// `harness-dag` engine's own, re-exported so hosts need no direct
-/// dependency on it. A finished run's outcome ([`WorkflowStatus::outcome`])
-/// is the typed [`WorkflowOutcome`], whose JSON form is the document the
-/// parent receives.
+/// dependency on it. A finished run's outcome
+/// ([`WorkflowStatus::outcome`](orchestration::WorkflowStatus::outcome))
+/// is the typed [`WorkflowOutcome`](orchestration::WorkflowOutcome), whose
+/// JSON form is the document the parent receives.
 pub mod orchestration {
     pub use orca_harness_tools::dag::{
         GraphError, Kind, RunId, RunState, Stage, StageId, StageStatus, DEFAULT_STAGE_CAP,
