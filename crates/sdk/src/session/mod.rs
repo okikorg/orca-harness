@@ -17,7 +17,7 @@ use orca_harness_extensions::{SessionHandler, TruncationStore};
 use orca_harness_tools::{FileGuard, TodoList};
 use tokio::sync::{broadcast, Mutex};
 
-use crate::background::{BackgroundNotification, Processes, Subagents};
+use crate::background::{BackgroundNotification, Processes, Subagents, Workflows};
 use crate::tools::SessionTools;
 use crate::{Agent, RunHandle, RunOutcome, RunRequest, RunResult, SdkError};
 
@@ -151,6 +151,21 @@ impl Session {
             .background
             .as_ref()
             .map(|services| services.handle(self.closed.clone()))
+    }
+
+    /// Typed host access to this session's workflow runs, when the agent
+    /// configured subagents with workflows enabled (the default; see
+    /// [`SubagentConfig::workflows`]). The handle shares the session's
+    /// subagent manager and stage-output store with the `workflow` model
+    /// tool; a fork or resume starts with no runs. `None` without
+    /// subagents or with workflows disabled.
+    ///
+    /// [`SubagentConfig::workflows`]: crate::SubagentConfig::workflows
+    pub fn workflows(&self) -> Option<Workflows> {
+        self.tools
+            .background
+            .as_ref()
+            .and_then(|services| services.workflows(self.closed.clone()))
     }
 
     /// Typed host access to this session's background processes, when

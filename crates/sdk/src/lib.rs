@@ -15,7 +15,7 @@ mod tools;
 pub use agent::{Agent, AgentBuilder};
 pub use background::{
     BackgroundNotification, ChildEventCallback, ProcessConfig, Processes, SubagentConfig,
-    Subagents, NOTIFICATION_CAPACITY,
+    Subagents, Workflows, NOTIFICATION_CAPACITY,
 };
 pub use error::SdkError;
 pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig};
@@ -46,11 +46,12 @@ pub use orca_harness_provider_auth::{
     BearerCredential, CredentialError, CredentialSource, StaticCredential,
 };
 pub use orca_harness_tool_extensions::web;
+pub use orca_harness_tools::dag::{Kind, Stage};
 pub use orca_harness_tools::{
     core_tools, core_tools_with_executor, core_tools_with_guard, fs_admin_tools, AskTool,
     BackgroundStats, BunReplTool, Executor, FileGuard, ProcessNotification,
     ProcessNotificationKind, PyKernelTool, SubagentDepth, SubagentTool, TodoList, TodoWriteTool,
-    Workspace,
+    WorkflowSubmission, Workspace,
 };
 
 /// Core contracts and every companion type needed to implement them.
@@ -78,15 +79,26 @@ pub mod providers {
 }
 
 /// Subagent, background process, and workflow handles for host orchestration.
+///
+/// The workflow vocabulary (`Stage`, `Kind`, `RunState`, `StageStatus`,
+/// `GraphError`, `RunId`, `StageId`, `DEFAULT_STAGE_CAP`) is the
+/// `harness-dag` engine's own, re-exported so hosts need no direct
+/// dependency on it. A finished run's outcome is exposed as the JSON
+/// document the parent receives ([`WorkflowStatus::outcome`]) rather than
+/// as a typed twin of the engine's outcome.
 pub mod orchestration {
+    pub use orca_harness_tools::dag::{
+        GraphError, Kind, RunId, RunState, Stage, StageId, StageStatus, DEFAULT_STAGE_CAP,
+    };
     pub use orca_harness_tools::{
         core_tools_with_process, core_tools_with_shell_and_process, subagent_completions_prompt,
         ActiveInventory, BackgroundAcknowledgement, BackgroundJob, BackgroundProcess,
         BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox, ProcessController,
         ProcessEntry, ProcessSnapshot, ProcessSpawn, ProcessTool, ProcessWrite, SpawnExtensions,
-        SubagentDepth, SubagentIdentity, SubagentManager, SubagentModel, SubagentNotification,
-        SubagentOutcome, SubagentRequest, SubagentSpawn, SubagentTool, WorkflowStore, WorkflowTool,
-        DEFAULT_COMPLETION_CAPACITY,
+        StageOutput, SubagentDepth, SubagentIdentity, SubagentManager, SubagentModel,
+        SubagentNotification, SubagentOutcome, SubagentRequest, SubagentSpawn, SubagentTool,
+        WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus, WorkflowStore,
+        WorkflowSubmission, WorkflowTool, DEFAULT_COMPLETION_CAPACITY,
     };
 }
 

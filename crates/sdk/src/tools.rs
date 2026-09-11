@@ -148,7 +148,8 @@ pub(crate) struct SessionTools {
     pub(crate) file_guard: FileGuard,
     pub(crate) todo_list: Option<TodoList>,
     /// Present when the agent configured subagents; owns this session's
-    /// manager, completion inbox, and `subagent` tool.
+    /// manager, completion inbox, `subagent` tool, and (unless disabled)
+    /// `workflow` tool with its stage-output store.
     pub(crate) background: Option<BackgroundServices>,
     /// Present when the preset ships the `process` tool; the typed host
     /// handle over this session's own process manager.
@@ -162,10 +163,10 @@ pub(crate) struct SessionTools {
 
 impl SessionTools {
     /// Materializes the recipe: preset tools wired to the session's guard,
-    /// then the builder-ordered sources, then the session's `subagent`
-    /// tool (registered last among the host-built tools, as the CLI does),
-    /// then the agent-level tools (skills, MCP, memory) that are shared by
-    /// design.
+    /// then the builder-ordered sources, then the session's `workflow`
+    /// and `subagent` tools (registered last among the host-built tools,
+    /// in that order, as the CLI does), then the agent-level tools
+    /// (skills, MCP, memory) that are shared by design.
     pub(crate) fn new(definition: &AgentDefinition) -> Self {
         let workspace = definition.harness.workspace();
         let working_dir = || workspace.root().display().to_string();
@@ -197,7 +198,7 @@ impl SessionTools {
             .as_ref()
             .map(|config| BackgroundServices::new(definition, config, events.clone()));
         if let Some(services) = &background {
-            tools.push(services.tool());
+            tools.extend(services.tools());
         }
         tools.extend(definition.shared_tools.iter().cloned());
         Self {

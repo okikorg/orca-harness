@@ -1,9 +1,9 @@
 use crate::{graph, template, GraphError, Kind, Stage, StageId, DEFAULT_STAGE_CAP};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 mod maps;
 use maps::parse_items;
 use std::collections::{BTreeMap, BTreeSet};
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RunState {
     Running,
@@ -12,7 +12,7 @@ pub enum RunState {
     Cancelled,
     Stalled,
 }
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum StageStatus {
     Pending,

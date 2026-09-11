@@ -1,12 +1,22 @@
 //! Workflow overlay: ordinary detached agents driven by synchronous completions.
+//!
+//! JSON lives only at the tool boundary here: [`Tool::call`] parses its
+//! input into the typed [`WorkflowSubmission`] and renders the typed
+//! results back, so the model tool and the host API in [`host`] run one
+//! implementation.
 use crate::SubagentTool;
 use async_trait::async_trait;
 use orca_harness_core::{Concurrency, Model, Tool, ToolContext, ToolError, ToolSchema};
-use orca_harness_dag::{Dag, RunId};
+use orca_harness_dag::{RunId, Stage};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+mod host;
 mod runtime;
 mod store;
+pub use host::{
+    StageOutput, WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus, WorkflowSubmission,
+};
 use runtime::Runtime;
 pub use store::WorkflowStore;
 
@@ -19,6 +29,11 @@ pub use store::WorkflowStore;
 /// `store` holds stage outputs for the session and is shared with every other
 /// tool the host builds from the same manager, so a run survives a model
 /// switch that rebuilds this tool.
+///
+/// Hosts drive the same runtime without JSON through the typed operations
+/// in [`host`]: [`submit`](Self::submit), [`runs`](Self::runs),
+/// [`status`](Self::status), [`stage_output`](Self::stage_output), and
+/// [`cancel`](Self::cancel).
 pub struct WorkflowTool<M: Model + Clone + 'static> {
     runtime: Arc<Runtime<M>>,
     last_list: Mutex<Option<Value>>,
@@ -75,44 +90,11 @@ impl<M: Model + Clone + 'static> Tool for WorkflowTool<M> {
     }
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
         match input.get("action").and_then(Value::as_str) {
-            Some("run") => {
-                let graph = input
-                    .get("graph")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| ToolError::msg("graph array is required"))?;
-                let cap = match input.get("maxStages") {
-                    Some(v) => v
-                        .as_u64()
-                        .and_then(|n| usize::try_from(n).ok())
-                        .filter(|n| *n > 0)
-                        .ok_or_else(|| ToolError::msg("maxStages must be a positive integer"))?,
-                    None => orca_harness_dag::DEFAULT_STAGE_CAP,
-                };
-                let dag = Dag::with_cap(graph, cap).map_err(|e| ToolError::msg(e.to_string()))?;
-                for stage in dag.stages() {
-                    self.runtime
-                        .subagent
-                        .validate_model(stage.model.as_deref())?;
-                }
-                let resume = input
-                    .get("resumeFrom")
-                    .map(|v| {
-                        v.as_u64()
-                            .ok_or_else(|| ToolError::msg("resumeFrom must be a run id"))
-                    })
-                    .transpose()?;
-                let timeout = input
-                    .get("timeoutSeconds")
-                    .map(|v| {
-                        v.as_u64()
-                            .filter(|n| *n > 0)
-                            .ok_or_else(|| ToolError::msg("timeoutSeconds must be positive"))
-                    })
-                    .transpose()?;
-                self.runtime.submit(dag, ctx, resume, timeout)
-            }
+            Some("run") => self
+                .admit(parse_submission(&input)?, ctx.call_id.clone())
+                .map(WorkflowAcknowledgement::into_value),
             Some("list") => {
-                let snapshot = self.runtime.list();
+                let snapshot = list_value(&self.runs());
                 let mut last = self.last_list.lock().unwrap();
                 if last.as_ref() == Some(&snapshot) {
                     return Err(ToolError::msg(
@@ -124,7 +106,7 @@ impl<M: Model + Clone + 'static> Tool for WorkflowTool<M> {
             }
             Some("cancel") => {
                 let id = run_id(&input)?;
-                self.runtime.cancel(id)?;
+                self.cancel(id)?;
                 Ok(json!({"runId":id,"status":"cancelled"}))
             }
             Some("output") => {
@@ -133,7 +115,7 @@ impl<M: Model + Clone + 'static> Tool for WorkflowTool<M> {
                     .get("stage")
                     .and_then(Value::as_str)
                     .ok_or_else(|| ToolError::msg("stage is required"))?;
-                self.runtime.output(id, stage)
+                self.stage_output(id, stage).map(StageOutput::into_value)
             }
             _ => Err(ToolError::msg(
                 "action must be run, list, cancel, or output; polling/wait is unsupported",
@@ -146,4 +128,53 @@ fn run_id(input: &Value) -> Result<RunId, ToolError> {
         .get("runId")
         .and_then(Value::as_u64)
         .ok_or_else(|| ToolError::msg("runId is required"))
+}
+/// The tool's `run` arguments as a typed submission. Only shapes are
+/// checked here; graph and model validation happen in the shared path.
+fn parse_submission(input: &Value) -> Result<WorkflowSubmission, ToolError> {
+    let graph = input
+        .get("graph")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ToolError::msg("graph array is required"))?;
+    let stages = graph
+        .iter()
+        .map(|stage| serde_json::from_value::<Stage>(stage.clone()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ToolError::msg(e.to_string()))?;
+    let mut submission = WorkflowSubmission::new(stages);
+    if let Some(v) = input.get("maxStages") {
+        let cap = v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n > 0)
+            .ok_or_else(|| ToolError::msg("maxStages must be a positive integer"))?;
+        submission = submission.max_stages(cap);
+    }
+    if let Some(v) = input.get("resumeFrom") {
+        let run = v
+            .as_u64()
+            .ok_or_else(|| ToolError::msg("resumeFrom must be a run id"))?;
+        submission = submission.resume_from(run);
+    }
+    if let Some(v) = input.get("timeoutSeconds") {
+        let seconds = v
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| ToolError::msg("timeoutSeconds must be positive"))?;
+        submission = submission.timeout(Duration::from_secs(seconds));
+    }
+    Ok(submission)
+}
+/// The tool's `list` snapshot. Every run the manager holds is live, so the
+/// state is always `running` here; per-stage statuses stay out of the
+/// model's view (only terminal outputs are delivered automatically).
+fn list_value(runs: &[WorkflowStatus]) -> Value {
+    json!({"runs": runs.iter().map(|run| json!({
+        "runId": run.run_id,
+        "state": "running",
+        "activeStages": run.active.iter().map(|job| json!({
+            "spawnId": job.spawn_id,
+            "status": job.status.as_str(),
+        })).collect::<Vec<_>>(),
+    })).collect::<Vec<_>>()})
 }
