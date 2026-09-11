@@ -5,6 +5,7 @@ use orca_harness_core::{Extension, Limits, Model, Tool};
 use orca_harness_extensions::{LongSessionConfig, MemoryModel, RetryModel, ToolPolicy};
 use orca_harness_tools::{FileGuard, TodoList};
 
+use crate::background::SubagentConfig;
 use crate::extensions::{Compaction, ExtensionConfig, RetryConfig, TruncationConfig};
 use crate::tools::{ToolPreset, ToolSource};
 use crate::{Harness, Mcp, MemoryConfig, RunRequest, RunResult, SdkError, SessionBuilder, Skills};
@@ -38,6 +39,9 @@ pub(crate) struct AgentDefinition {
     /// its own. `None` means each session gets a fresh one.
     pub shared_file_guard: Option<FileGuard>,
     pub shared_todo_list: Option<TodoList>,
+    /// Sessions build their own subagent manager, inbox, and `subagent`
+    /// tool from this recipe (see [`crate::background::BackgroundServices`]).
+    pub subagents: Option<SubagentConfig>,
 }
 
 pub struct AgentBuilder {
@@ -53,6 +57,7 @@ pub struct AgentBuilder {
     context_capacity: Option<u64>,
     shared_file_guard: Option<FileGuard>,
     shared_todo_list: Option<TodoList>,
+    subagents: Option<SubagentConfig>,
     mcp: Option<Mcp>,
     skills: Option<Skills>,
     memory: Option<MemoryConfig>,
@@ -73,6 +78,7 @@ impl AgentBuilder {
             context_capacity: None,
             shared_file_guard: None,
             shared_todo_list: None,
+            subagents: None,
             mcp: None,
             skills: None,
             memory: None,
@@ -223,6 +229,16 @@ impl AgentBuilder {
             .any(|source| matches!(source, ToolSource::Todos))
     }
 
+    /// Add the `subagent` tool and the typed host handle
+    /// [`Session::subagents`](crate::Session::subagents). Each session owns
+    /// its manager, queue, and completion inbox; only `config`'s live
+    /// settings handle is shared between sessions. Workers get the agent's
+    /// tool preset and custom tools, nothing else.
+    pub fn subagents(mut self, config: SubagentConfig) -> Self {
+        self.subagents = Some(config);
+        self
+    }
+
     pub fn memory(mut self, config: MemoryConfig) -> Self {
         self.memory = Some(config);
         self
@@ -261,6 +277,9 @@ impl AgentBuilder {
                 mcp.catalog(),
             ));
         }
+        if let Some(subagents) = &self.subagents {
+            subagents.apply_to_settings();
+        }
         if let Some(memory) = &self.memory {
             if memory.search_tool {
                 shared_tools.push(Arc::new(orca_harness_extensions::MemorySearchTool::new(
@@ -295,6 +314,7 @@ impl AgentBuilder {
                 context_capacity: self.context_capacity,
                 shared_file_guard: self.shared_file_guard,
                 shared_todo_list: self.shared_todo_list,
+                subagents: self.subagents,
             }),
         })
     }

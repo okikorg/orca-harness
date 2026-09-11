@@ -25,14 +25,16 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use orca_harness_core::{
-    Agent, Concurrency, Context, Extension, ExtensionError, Limits, Model, ModelResponse, Next,
-    Subscriptions, Tool, ToolCall, ToolContext, ToolError, ToolSchema, Usage,
+    Agent, CancellationToken, Concurrency, Context, Extension, ExtensionError, Limits, Model,
+    ModelResponse, Next, Subscriptions, Tool, ToolCall, ToolContext, ToolError, ToolSchema, Usage,
 };
 
 use crate::{core_tools, BackgroundStats, Workspace};
 
+mod host;
 mod settings;
 pub(crate) mod spawn;
+pub use host::{BackgroundAcknowledgement, SubagentOutcome, SubagentRequest};
 pub use settings::*;
 
 type ToolFactory = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
@@ -45,7 +47,7 @@ type RetryPolicy = (u32, std::time::Duration);
 
 pub(crate) mod background;
 use background::{
-    detach_subagent, execution_deadline, subagent_control, subagent_parameters, subagent_result,
+    detach_subagent, execution_deadline, subagent_control, subagent_outcome, subagent_parameters,
     BackgroundConfig, InFlight,
 };
 pub use background::{
@@ -431,47 +433,22 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             .get("background")
             .and_then(Value::as_bool)
             .unwrap_or(self.background.is_some());
-        if detached && self.background.is_none() {
-            return Err(ToolError::msg(
-                "background subagents are unavailable in this host or nesting depth",
-            ));
-        }
-        let requested = input.get("model").and_then(Value::as_str);
-        let req = spawn::SpawnRequest {
-            id: self.next_spawn_id(),
-            generation: None,
-            expected_model_key: None,
-            depth: None,
-            task: task.to_string(),
-            system_prompt: input
-                .get("systemPrompt")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            model: requested.map(str::to_string),
-            call_id: ctx.call_id.clone(),
-            run: None,
-            stage: None,
-            parent_id: None,
-            notifier: None,
-        };
+        let mut request = SubagentRequest::new(task);
+        request.system_prompt = input
+            .get("systemPrompt")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        request.model = input
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let prepared =
-            self.prepare_spawn(req, detached, if detached { None } else { ctx.deadline })?;
+            self.prepare_request(request, Some(ctx.call_id.clone()), detached, ctx.deadline)?;
         if detached {
-            return Ok(prepared.detach());
+            return Ok(prepared.detach().into_value());
         }
-        let spawn::Prepared {
-            agent,
-            spawn,
-            telemetry,
-            started,
-            in_flight,
-            ..
-        } = prepared;
-        let _in_flight = in_flight;
-        let result = agent
-            .run_with_cancellation(task, ctx.cancellation.child_token())
-            .await;
-        subagent_result(result, &telemetry, started, spawn.identity.as_ref())
-            .map_err(ToolError::msg)
+        Self::execute_foreground(prepared, ctx.cancellation.child_token())
+            .await
+            .map(SubagentOutcome::into_value)
     }
 }

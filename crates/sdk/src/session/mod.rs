@@ -17,6 +17,7 @@ use orca_harness_extensions::{
 use orca_harness_tools::{FileGuard, TodoList};
 use tokio::sync::Mutex;
 
+use crate::background::Subagents;
 use crate::tools::SessionTools;
 use crate::{Agent, RunHandle, RunOutcome, RunRequest, RunResult, SdkError};
 
@@ -156,7 +157,7 @@ impl Session {
 
     /// Resume a persistent session from disk. The transcript and recovery
     /// store are restored; live processes, REPL state, the read-before-write
-    /// guard, and todos start fresh.
+    /// guard, todos, and detached subagents start fresh.
     pub(crate) fn resume(agent: Agent, id: &str) -> Result<Self, SdkError> {
         let path = agent
             .inner
@@ -208,6 +209,19 @@ impl Session {
     /// [`AgentBuilder::todos_shared`]: crate::AgentBuilder::todos_shared
     pub fn todo_list(&self) -> Option<TodoList> {
         self.tools.todo_list.clone()
+    }
+
+    /// Typed host access to this session's subagents, when the agent
+    /// configured them with [`AgentBuilder::subagents`]. The handle shares
+    /// the session's manager and completion inbox with the `subagent`
+    /// model tool; a fork or resume starts with no live jobs.
+    ///
+    /// [`AgentBuilder::subagents`]: crate::AgentBuilder::subagents
+    pub fn subagents(&self) -> Option<Subagents> {
+        self.tools
+            .background
+            .as_ref()
+            .map(|services| services.handle())
     }
 
     pub async fn messages(&self) -> Vec<orca_harness_core::Message> {
@@ -320,8 +334,8 @@ impl Session {
 
     /// Copy this persistent session into a new one. The fork shares the
     /// transcript and recovery store but not live processes, REPL state,
-    /// the read-before-write guard, or todos: those start fresh unless the
-    /// agent configured caller-owned instances.
+    /// the read-before-write guard, todos, or detached subagents: those
+    /// start fresh unless the agent configured caller-owned instances.
     pub async fn fork(&self) -> Result<Self, SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -353,7 +367,8 @@ impl Session {
     }
 
     /// Start a new conversation in this session and clear its
-    /// read-before-write guard and todo list.
+    /// read-before-write guard and todo list, cancelling any detached
+    /// subagents and dropping their undelivered results.
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let fresh = fresh_context(&self.agent);
