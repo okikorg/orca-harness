@@ -25,6 +25,20 @@ pub struct Stage {
     #[serde(default)]
     pub model: Option<String>,
 }
+impl Stage {
+    /// An ordinary stage with no dependencies; set the other fields directly.
+    pub fn new(id: impl Into<StageId>, prompt: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            prompt: prompt.into(),
+            needs: Vec::new(),
+            kind: Kind::Agent,
+            over: None,
+            schema: None,
+            model: None,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphError(pub String);
 impl std::fmt::Display for GraphError {

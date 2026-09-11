@@ -26,6 +26,11 @@ pub enum SdkError {
     /// reached, or the session's process manager is gone.
     #[error("process error: {0}")]
     Process(String),
+    /// A typed workflow operation (see [`Workflows`](crate::Workflows))
+    /// was refused: the graph or a stage model failed validation,
+    /// admission was refused, or the run or stage is unknown.
+    #[error("workflow error: {0}")]
+    Workflow(String),
     #[error("session already has an active run")]
     BusySession,
     /// The session was shut down (see

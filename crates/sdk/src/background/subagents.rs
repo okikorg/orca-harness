@@ -50,6 +50,7 @@ pub struct SubagentConfig {
     pub(crate) inherit_extensions: bool,
     pub(crate) child_extensions: Option<SpawnExtensions>,
     pub(crate) on_child_event: Option<ChildEventCallback>,
+    pub(crate) workflows: bool,
 }
 
 impl Default for SubagentConfig {
@@ -65,6 +66,7 @@ impl Default for SubagentConfig {
             inherit_extensions: true,
             child_extensions: None,
             on_child_event: None,
+            workflows: true,
         }
     }
 }
@@ -72,6 +74,15 @@ impl Default for SubagentConfig {
 impl SubagentConfig {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether sessions also get the `workflow` model tool and the typed
+    /// [`Workflows`](crate::Workflows) handle over the same subagent
+    /// manager. On by default; off leaves plain subagents only and
+    /// [`Session::workflows`](crate::Session::workflows) returns `None`.
+    pub fn workflows(mut self, enabled: bool) -> Self {
+        self.workflows = enabled;
+        self
     }
 
     /// Whether every child gets the agent's own extensions (those added

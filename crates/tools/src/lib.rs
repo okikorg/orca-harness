@@ -90,4 +90,15 @@ pub fn fs_admin_tools(ws: &Workspace) -> Vec<Arc<dyn Tool>> {
 }
 
 mod workflow;
-pub use workflow::{WorkflowStore, WorkflowTool};
+pub use workflow::{
+    StageOutput, WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus, WorkflowStore,
+    WorkflowSubmission, WorkflowTool,
+};
+
+/// The graph vocabulary a [`WorkflowSubmission`] is built from, re-exported
+/// from `orca-harness-dag` so hosts need no direct dependency on it.
+pub mod dag {
+    pub use orca_harness_dag::{
+        GraphError, Kind, RunId, RunState, Stage, StageId, StageStatus, DEFAULT_STAGE_CAP,
+    };
+}

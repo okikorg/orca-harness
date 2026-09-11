@@ -21,6 +21,7 @@
 mod notifications;
 mod processes;
 mod subagents;
+mod workflows;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use orca_harness_core::{Extension, Model, Tool};
 use orca_harness_extensions::{EventStream, Truncation};
 use orca_harness_tools::{
     CompletionInbox, FileGuard, SpawnExtensions, SubagentDepth, SubagentManager, SubagentTool,
+    WorkflowStore, WorkflowTool,
 };
 use tokio::sync::broadcast;
 
@@ -38,6 +40,7 @@ use crate::tools::{preset_tools, ToolSource};
 pub use notifications::{BackgroundNotification, NOTIFICATION_CAPACITY};
 pub use processes::{ProcessConfig, Processes};
 pub use subagents::{ChildEventCallback, SubagentConfig, Subagents};
+pub use workflows::Workflows;
 
 pub(crate) use notifications::rearm;
 
@@ -53,6 +56,10 @@ pub(crate) struct BackgroundServices {
     inbox: CompletionInbox,
     settings: SubagentDepth,
     subagents: Arc<SubagentTool<Arc<dyn Model>>>,
+    /// The `workflow` tool over the same manager, when the recipe enables
+    /// workflows. Its stage-output store is shared with the inbox so a
+    /// conversation reset discards the outputs with the runs.
+    workflows: Option<Arc<WorkflowTool<Arc<dyn Model>>>>,
     events: broadcast::Sender<BackgroundNotification>,
 }
 
@@ -79,7 +86,11 @@ impl BackgroundServices {
     ) -> Self {
         let settings = config.settings.clone();
         let manager = SubagentManager::from_settings(settings.clone());
-        let inbox = CompletionInbox::new(manager.clone());
+        let store = config.workflows.then(WorkflowStore::new);
+        let mut inbox = CompletionInbox::new(manager.clone());
+        if let Some(store) = &store {
+            inbox = inbox.with_workflow_store(store.clone());
+        }
         let workspace = definition.harness.workspace().clone();
         let preset = definition.preset;
         let processes = definition.processes.clone();
@@ -126,17 +137,32 @@ impl BackgroundServices {
         if let Some(limits) = &config.limits {
             tool = tool.limits(limits.clone());
         }
+        let subagents = Arc::new(tool);
+        let workflows = store.map(|store| {
+            // Only fails without depth-zero background execution, which
+            // `background` above configured on this very tool.
+            let tool = WorkflowTool::new(subagents.clone(), store)
+                .expect("session subagents run with background execution");
+            Arc::new(tool)
+        });
         Self {
             inbox,
             settings,
-            subagents: Arc::new(tool),
+            subagents,
+            workflows,
             events,
         }
     }
 
-    /// The `subagent` tool registered in the session's tool list.
-    pub(crate) fn tool(&self) -> Arc<dyn Tool> {
-        self.subagents.clone()
+    /// The tools registered in the session's tool list: `workflow` first
+    /// when enabled, then `subagent`, in the order the CLI registers them.
+    pub(crate) fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+        if let Some(workflows) = &self.workflows {
+            tools.push(workflows.clone());
+        }
+        tools.push(self.subagents.clone());
+        tools
     }
 
     pub(crate) fn handle(&self, closed: Arc<AtomicBool>) -> Subagents {
@@ -147,6 +173,12 @@ impl BackgroundServices {
             self.events.clone(),
             closed,
         )
+    }
+
+    pub(crate) fn workflows(&self, closed: Arc<AtomicBool>) -> Option<Workflows> {
+        self.workflows
+            .as_ref()
+            .map(|tool| Workflows::new(tool.clone(), closed))
     }
 
     pub(crate) fn run_handles(&self) -> RunBackground {

@@ -74,7 +74,12 @@ impl WorkflowStore {
             .then(|| record.answer.clone())
     }
 
-    pub(super) fn outcome(&self, run: u64, value: &serde_json::Value) {
+    /// The terminal outcome the runtime recorded for `run`, once it finished.
+    pub(super) fn stored_outcome(&self, run: u64) -> Option<serde_json::Value> {
+        self.0.lock().unwrap().get(&run)?.outcome.clone()
+    }
+
+    pub(super) fn set_outcome(&self, run: u64, value: &serde_json::Value) {
         self.0.lock().unwrap().entry(run).or_default().outcome = Some(value.clone());
     }
 }

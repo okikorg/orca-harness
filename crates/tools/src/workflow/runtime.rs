@@ -1,12 +1,13 @@
+use super::host::{StageOutput, WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus};
 use super::store::WorkflowStore;
 use crate::subagent::spawn::SpawnRequest;
 use crate::{SubagentNotification, SubagentSpawn, SubagentTool};
-use orca_harness_core::{Model, ToolContext, ToolError};
+use orca_harness_core::{Model, ToolError};
 use orca_harness_dag::{Advance, Dag, RunId, RunState, StageId};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 struct Run {
     dag: Dag,
     spawn: SubagentSpawn,
@@ -39,13 +40,16 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             store,
         }
     }
+    /// Admit a validated graph. Callers validate the graph and every stage
+    /// model first (see `WorkflowTool::admit`); this only checks the reuse
+    /// source and the deadline before admission.
     pub fn submit(
         self: &Arc<Self>,
         dag: Dag,
-        ctx: &ToolContext,
-        resume: Option<u64>,
-        timeout: Option<u64>,
-    ) -> Result<Value, ToolError> {
+        call_id: String,
+        resume: Option<RunId>,
+        timeout: Option<Duration>,
+    ) -> Result<WorkflowAcknowledgement, ToolError> {
         let _dispatch = self.dispatch.lock().unwrap();
         if resume.is_some_and(|id| !self.store.exists(id)) {
             return Err(ToolError::msg("resumeFrom run does not exist"));
@@ -56,16 +60,16 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             id,
             parent_id: None,
             depth: 0,
-            call_id: ctx.call_id.clone(),
+            call_id,
             task: format!("workflow · {count} stages"),
             identity: None,
             run: None,
             stage: None,
         };
         let requested_deadline = timeout
-            .map(|seconds| {
+            .map(|timeout| {
                 tokio::time::Instant::now()
-                    .checked_add(std::time::Duration::from_secs(seconds))
+                    .checked_add(timeout)
                     .ok_or_else(|| ToolError::msg("timeoutSeconds is too large"))
             })
             .transpose()?;
@@ -118,7 +122,10 @@ impl<M: Model + Clone + 'static> Runtime<M> {
         let advance = run.dag.start();
         self.runs.lock().unwrap().insert(id, run);
         self.apply(id, advance);
-        Ok(json!({"runId":id,"status":"running","stages":count,"termination":"detached"}))
+        Ok(WorkflowAcknowledgement {
+            run_id: id,
+            stages: count,
+        })
     }
     fn key(&self, run: &Run, id: &StageId) -> String {
         let mut material: Value =
@@ -148,17 +155,67 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             run.persisted.insert(id);
         }
     }
-    pub fn list(&self) -> Value {
+    /// Every run the manager still holds, in id order. Per-stage statuses
+    /// come from this runtime's DAG when it owns the run; a run admitted by
+    /// another tool over the same manager reports `Running` with none.
+    pub fn statuses(&self) -> Vec<WorkflowStatus> {
         let manager = &self.subagent.background_config().unwrap().manager;
         let jobs = manager.active();
         let ids = manager.inner.run_ids();
-        json!({"runs":ids.iter().map(|id| json!({"runId":id,"state":"running","activeStages":jobs.iter().filter(|job| job.spawn.run == Some(*id)).map(|job| json!({"spawnId":job.spawn.id,"status":job.status.as_str()})).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+        let runs = self.runs.lock().unwrap();
+        ids.into_iter()
+            .map(|id| {
+                let (state, stages) = runs
+                    .get(&id)
+                    .map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
+                    .unwrap_or((RunState::Running, BTreeMap::new()));
+                WorkflowStatus {
+                    run_id: id,
+                    state,
+                    stages,
+                    active: jobs
+                        .iter()
+                        .filter(|job| job.spawn.run == Some(id))
+                        .map(|job| WorkflowStageJob {
+                            spawn_id: job.spawn.id,
+                            stage: job.spawn.stage.clone(),
+                            status: job.status,
+                        })
+                        .collect(),
+                    outcome: None,
+                }
+            })
+            .collect()
     }
 
-    pub fn output(&self, id: u64, stage: &str) -> Result<Value, ToolError> {
+    /// A live run's status, or a finished run's from the outcome this
+    /// runtime recorded in the store before delivering it.
+    pub fn status(&self, id: RunId) -> Option<WorkflowStatus> {
+        if let Some(live) = self.statuses().into_iter().find(|run| run.run_id == id) {
+            return Some(live);
+        }
+        let outcome = self.store.stored_outcome(id)?;
+        let state = serde_json::from_value(outcome["state"].clone())
+            .expect("the runtime records a valid state");
+        // A stalled run records no stage map.
+        let stages = serde_json::from_value(outcome["stages"].clone()).unwrap_or_default();
+        Some(WorkflowStatus {
+            run_id: id,
+            state,
+            stages,
+            active: Vec::new(),
+            outcome: Some(outcome),
+        })
+    }
+
+    pub fn output(&self, id: RunId, stage: &str) -> Result<StageOutput, ToolError> {
         self.store
             .output(id, stage)
-            .map(|answer| json!({"runId":id,"stage":stage,"answer":answer}))
+            .map(|answer| StageOutput {
+                run_id: id,
+                stage: stage.to_string(),
+                answer,
+            })
             .ok_or_else(|| ToolError::msg("stage output is unavailable"))
     }
     pub fn cancel(self: &Arc<Self>, id: u64) -> Result<(), ToolError> {
@@ -351,7 +408,7 @@ impl<M: Model + Clone + 'static> Runtime<M> {
         }
         outcome["timings"] = json!(run.timings);
         self.persist(&mut run);
-        self.store.outcome(id, &outcome);
+        self.store.set_outcome(id, &outcome);
         config.manager.inner.finish(run.generation, id);
         let answer = outcome.to_string();
         (config.notifier)(SubagentNotification {

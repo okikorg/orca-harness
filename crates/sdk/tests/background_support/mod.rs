@@ -31,6 +31,30 @@ impl Model for Held {
     }
 }
 
+/// Answers every task with the task text itself, so a workflow stage's
+/// output is its rendered prompt.
+pub struct Echo;
+
+#[async_trait]
+impl Model for Echo {
+    async fn generate(
+        &self,
+        context: &Context,
+        _: &[ToolSchema],
+    ) -> Result<ModelResponse, ModelError> {
+        let task = context
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::User { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .expect("a task");
+        Ok(ModelResponse::final_text(task))
+    }
+}
+
 /// A child extension whose hook never looks at the worker's token: the
 /// kernel guards model and tool calls with the token, hooks it does not.
 /// Signals `entered` once the worker is inside the hook.
