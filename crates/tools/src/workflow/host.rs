@@ -63,18 +63,6 @@ impl WorkflowSubmission {
     pub fn stages(&self) -> &[Stage] {
         &self.stages
     }
-
-    pub fn stage_cap(&self) -> Option<usize> {
-        self.max_stages
-    }
-
-    pub fn run_timeout(&self) -> Option<Duration> {
-        self.timeout
-    }
-
-    pub fn resumed_run(&self) -> Option<RunId> {
-        self.resume_from
-    }
 }
 
 /// An admitted run: the typed form of the tool's `run` acknowledgement.

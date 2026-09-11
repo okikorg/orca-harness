@@ -188,23 +188,52 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             .collect()
     }
 
-    /// A live run's status, or a finished run's from the outcome this
-    /// runtime recorded in the store before delivering it.
+    /// A finished run's status from the outcome this runtime recorded in
+    /// the store before delivering it, else a live run's. The store is
+    /// consulted first: `finish` records the outcome before the manager
+    /// forgets the run, so a run caught in that window reads as finished
+    /// rather than as live with no stages.
     pub fn status(&self, id: RunId) -> Option<WorkflowStatus> {
-        if let Some(live) = self.statuses().into_iter().find(|run| run.run_id == id) {
-            return Some(live);
+        if let Some(outcome) = self.store.stored_outcome(id) {
+            let state = serde_json::from_value(outcome["state"].clone())
+                .expect("the runtime records a valid state");
+            // `fail()`, the stalled path, records no stage map.
+            let stages = serde_json::from_value(outcome["stages"].clone()).unwrap_or_default();
+            return Some(WorkflowStatus {
+                run_id: id,
+                state,
+                stages,
+                active: Vec::new(),
+                outcome: Some(outcome),
+            });
         }
-        let outcome = self.store.stored_outcome(id)?;
-        let state = serde_json::from_value(outcome["state"].clone())
-            .expect("the runtime records a valid state");
-        // A stalled run records no stage map.
-        let stages = serde_json::from_value(outcome["stages"].clone()).unwrap_or_default();
+        let manager = &self.subagent.background_config().unwrap().manager;
+        if !manager.inner.run_ids().contains(&id) {
+            return None;
+        }
+        let active = manager
+            .active()
+            .into_iter()
+            .filter(|job| job.spawn.run == Some(id))
+            .map(|job| WorkflowStageJob {
+                spawn_id: job.spawn.id,
+                stage: job.spawn.stage,
+                status: job.status,
+            })
+            .collect();
+        let (state, stages) = self
+            .runs
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
+            .unwrap_or((RunState::Running, BTreeMap::new()));
         Some(WorkflowStatus {
             run_id: id,
             state,
             stages,
-            active: Vec::new(),
-            outcome: Some(outcome),
+            active,
+            outcome: None,
         })
     }
 

@@ -78,8 +78,10 @@ impl SubagentConfig {
 
     /// Whether sessions also get the `workflow` model tool and the typed
     /// [`Workflows`](crate::Workflows) handle over the same subagent
-    /// manager. On by default; off leaves plain subagents only and
-    /// [`Session::workflows`](crate::Session::workflows) returns `None`.
+    /// manager. On by default: configuring subagents registers the
+    /// `workflow` tool alongside `subagent` unless this is `false`, which
+    /// leaves plain subagents only and makes
+    /// [`Session::workflows`](crate::Session::workflows) return `None`.
     pub fn workflows(mut self, enabled: bool) -> Self {
         self.workflows = enabled;
         self
