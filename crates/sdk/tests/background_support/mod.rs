@@ -15,10 +15,19 @@ use orca_harness_core::{
     ModelResponse, Subscriptions, ToolSchema,
 };
 use orca_harness_sdk::orchestration::SubagentModel;
-use orca_harness_sdk::{Agent, BackgroundNotification, Harness, SubagentConfig, SubagentDepth};
+use orca_harness_sdk::{
+    Agent, BackgroundNotification, Harness, Stage, SubagentConfig, SubagentDepth,
+};
 use serde_json::json;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Notify;
+
+/// One ordinary workflow stage with its dependencies.
+pub fn stage(id: &str, prompt: &str, needs: &[&str]) -> Stage {
+    let mut stage = Stage::new(id, prompt);
+    stage.needs = needs.iter().map(|need| need.to_string()).collect();
+    stage
+}
 
 /// Blocks every worker until released; honours cancellation.
 pub struct Held(pub CancellationToken);

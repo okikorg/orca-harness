@@ -320,7 +320,7 @@ impl<M: Model + Clone + 'static> Runtime<M> {
     }
     /// A stage whose worker could not be prepared fails the run; `None`
     /// when the run is gone.
-    fn unspawnable(
+    fn abandon_stage(
         &self,
         id: u64,
         spawn_id: u64,
@@ -358,7 +358,7 @@ impl<M: Model + Clone + 'static> Runtime<M> {
                                         prepared.detach();
                                     }
                                     Err(error) => {
-                                        let Some(advance) = self.unspawnable(
+                                        let Some(advance) = self.abandon_stage(
                                             id,
                                             spawn_id,
                                             &stage_id,

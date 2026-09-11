@@ -11,19 +11,15 @@ use orca_harness_core::testing::ScriptedModel;
 use orca_harness_core::{CancellationToken, ModelResponse};
 use orca_harness_sdk::orchestration::RunState;
 use orca_harness_sdk::{
-    BackgroundNotification, Harness, SdkError, Stage, SubagentConfig, WorkflowSubmission,
+    BackgroundNotification, Harness, SdkError, SubagentConfig, WorkflowSubmission,
 };
 
 mod background_support;
 mod common;
 use background_support::{
-    completion_messages, next_matching, route_to_child, routed_agent, wait_until, Echo, Held,
+    completion_messages, next_matching, route_to_child, routed_agent, stage, wait_until, Echo, Held,
 };
 use common::temp_dir;
-
-fn stage(id: &str, prompt: &str) -> Stage {
-    Stage::new(id, prompt)
-}
 
 #[tokio::test]
 async fn shutdown_settles_live_runs_and_refuses_later_submissions() {
@@ -43,7 +39,7 @@ async fn shutdown_settles_live_runs_and_refuses_later_submissions() {
     let mut events = session.notifications();
 
     let ack = workflows
-        .submit(WorkflowSubmission::new([stage("a", "held")]))
+        .submit(WorkflowSubmission::new([stage("a", "held", &[])]))
         .unwrap();
     assert_eq!(subagents.active().len(), 2, "the run and its stage");
 
@@ -65,7 +61,7 @@ async fn shutdown_settles_live_runs_and_refuses_later_submissions() {
     );
     assert_eq!(session.pending_completions(), 0, "nothing is owed");
     assert!(matches!(
-        workflows.submit(WorkflowSubmission::new([stage("b", "later")])),
+        workflows.submit(WorkflowSubmission::new([stage("b", "later", &[])])),
         Err(SdkError::SessionClosed)
     ));
     assert!(matches!(
@@ -99,8 +95,8 @@ async fn clear_cancels_running_workflows_and_delivers_nothing_to_the_new_convers
 
     let ack = workflows
         .submit(WorkflowSubmission::new([
-            stage("a", "held"),
-            stage("b", "held too"),
+            stage("a", "held", &[]),
+            stage("b", "held too", &[]),
         ]))
         .unwrap();
     assert_eq!(workflows.status(ack.run_id).unwrap().active.len(), 2);
@@ -140,7 +136,7 @@ async fn clear_cancels_running_workflows_and_delivers_nothing_to_the_new_convers
 
     // The session keeps serving: a new run is admitted and finishes.
     let again = workflows
-        .submit(WorkflowSubmission::new([stage("c", "held again")]))
+        .submit(WorkflowSubmission::new([stage("c", "held again", &[])]))
         .unwrap();
     assert!(again.run_id > ack.run_id, "one counter, never reused");
     assert_eq!(workflows.runs().len(), 1);
@@ -160,7 +156,7 @@ async fn fork_and_resume_start_with_no_workflow_runs() {
     let session = agent.new_session().persistent().open().unwrap();
     let workflows = session.workflows().unwrap();
     let ack = workflows
-        .submit(WorkflowSubmission::new([stage("a", "alpha")]))
+        .submit(WorkflowSubmission::new([stage("a", "alpha", &[])]))
         .unwrap();
     wait_until(|| session.pending_completions() == 1, "the run outcome").await;
     assert_eq!(workflows.status(ack.run_id).unwrap().state, RunState::Done);
@@ -185,7 +181,7 @@ async fn fork_and_resume_start_with_no_workflow_runs() {
     // The fork's own run lives on its own counter and store: it may even
     // reuse the original's id without touching the original's outcome.
     let fork_ack = forked
-        .submit(WorkflowSubmission::new([stage("a", "fork alpha")]))
+        .submit(WorkflowSubmission::new([stage("a", "fork alpha", &[])]))
         .unwrap();
     wait_until(|| fork.pending_completions() == 1, "the fork's outcome").await;
     assert_eq!(fork_ack.run_id, ack.run_id, "a fresh spawn counter");

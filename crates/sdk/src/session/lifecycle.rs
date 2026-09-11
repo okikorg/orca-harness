@@ -97,7 +97,8 @@ impl Session {
 
     /// Empty this persistent session's transcript in place, keeping its
     /// id and file. Like [`clear`](Self::clear), the guard, todos,
-    /// detached subagents, and background processes are reset with it.
+    /// detached subagents, workflow runs with their stored stage outputs,
+    /// and background processes are reset with it.
     pub async fn reset_in_place(&self) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -116,12 +117,13 @@ impl Session {
     /// Stop this session for good: refuse every later run, spawn,
     /// workflow submission, and conversation change, cancel its detached
     /// workers and workflow runs, kill its background processes, and wait,
-    /// up to `grace`, for all of them to exit. Admission stops before the wait begins, so nothing can
-    /// extend it; undelivered results are dropped. Worker cancellation
-    /// is cooperative: one that ignores its token keeps the wait going,
-    /// and when `grace` runs out the error reports how many workers and
-    /// processes are still winding down. A worker's or process's exit
-    /// notification may still be in flight when this returns.
+    /// up to `grace`, for all of them to exit. Admission stops before the
+    /// wait begins, so nothing can extend it; undelivered results are
+    /// dropped. Worker cancellation is cooperative: one that ignores its
+    /// token keeps the wait going, and when `grace` runs out the error
+    /// reports how many workers and processes are still winding down. A
+    /// worker's or process's exit notification may still be in flight
+    /// when this returns.
     ///
     /// Fails with [`SdkError::BusySession`] while a run is active,
     /// touching nothing; finish or cancel the run and call again. Every
