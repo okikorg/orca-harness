@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use orca_harness_core::{Agent as CoreAgent, CancellationToken, Context, Extension, Limits, Tool};
+use orca_harness_core::{
+    Agent as CoreAgent, CancellationToken, Context, Extension, Limits, Message, Tool,
+};
 use orca_harness_extensions::{
     ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, ToolRetry,
     Truncation, TruncationStore, UsageMeter,
@@ -30,6 +32,22 @@ pub(super) struct RunExecution {
     pub(super) _busy: BusyGuard,
 }
 
+/// A continuation needs a turn to continue from: anything beyond the
+/// system prompt.
+pub(super) fn ensure_continuable(context: &Context) -> Result<(), SdkError> {
+    let has_turns = context
+        .messages()
+        .iter()
+        .any(|message| !matches!(message, Message::System { .. }));
+    if has_turns {
+        Ok(())
+    } else {
+        Err(SdkError::Config(
+            "nothing to continue: the session has no messages beyond the system prompt".into(),
+        ))
+    }
+}
+
 pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
     let RunExecution {
         definition,
@@ -43,7 +61,11 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunResult, SdkError> {
         _busy,
     } = run;
     let mut context = context.lock().await;
-    context.push_user_with_images(request.prompt, request.images);
+    if request.continuation {
+        ensure_continuable(&context)?;
+    } else {
+        context.push_user_with_images(request.prompt, request.images);
+    }
 
     let mut limits: Limits = definition.inner.limits.clone();
     if let Some(duration) = request.deadline {
