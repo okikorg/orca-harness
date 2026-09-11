@@ -34,12 +34,10 @@ impl ProcessCore<'_> {
             return Err(ToolError::msg("`notifyOnMatch` must not be empty"));
         }
         let notify_on_exit = !wait_for_exit && notify_on_exit;
+        self.ensure_open()?;
         let config = self.config;
         let manager = self.manager;
 
-        if manager.shutdown.is_cancelled() {
-            return Err(ToolError::msg("process manager is closed"));
-        }
         if manager.procs.lock().unwrap().len() >= config.max_processes {
             return Err(ToolError::msg(format!(
                 "live process limit reached ({}); kill one first",

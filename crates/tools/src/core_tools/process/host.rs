@@ -152,7 +152,8 @@ impl ProcessCore<'_> {
     /// Forget every process and kill the ones still running, waiting
     /// (bounded, per process) for each to exit. Returns how many were
     /// running. The manager stays open for new spawns.
-    pub(super) async fn kill_all(&self) -> usize {
+    pub(super) async fn kill_all(&self) -> Result<usize, ToolError> {
+        self.ensure_open()?;
         let procs: Vec<Arc<Proc>> = self
             .manager
             .procs
@@ -172,20 +173,7 @@ impl ProcessCore<'_> {
         for proc in &running {
             await_killed(proc).await;
         }
-        running.len()
-    }
-}
-
-impl Manager {
-    /// Processes not yet reaped, whether or not the manager is closed.
-    fn running(&self) -> Vec<Arc<Proc>> {
-        self.procs
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|proc| proc.running())
-            .cloned()
-            .collect()
+        Ok(running.len())
     }
 }
 
@@ -223,13 +211,16 @@ impl ProcessController {
     /// False once the tool that owns the manager has been dropped or
     /// shut down.
     pub fn is_open(&self) -> bool {
-        self.live_manager().is_ok()
+        self.manager
+            .upgrade()
+            .is_some_and(|manager| !manager.shutdown.is_cancelled())
     }
 
+    /// The manager while its tool lives; the core's own gate refuses a
+    /// closed one with the same error.
     fn live_manager(&self) -> Result<Arc<Manager>, ToolError> {
         self.manager
             .upgrade()
-            .filter(|manager| !manager.shutdown.is_cancelled())
             .ok_or_else(|| ToolError::msg("process manager is closed"))
     }
 
@@ -287,7 +278,7 @@ impl ProcessController {
     /// sorted by id.
     pub fn list(&self) -> Result<Vec<ProcessEntry>, ToolError> {
         let manager = self.live_manager()?;
-        Ok(self.core(&manager).list())
+        self.core(&manager).list()
     }
 
     /// Kill every running process and forget every entry, waiting
@@ -297,7 +288,7 @@ impl ProcessController {
     /// later spawns work as before.
     pub async fn kill_all(&self) -> Result<usize, ToolError> {
         let manager = self.live_manager()?;
-        Ok(self.core(&manager).kill_all().await)
+        self.core(&manager).kill_all().await
     }
 
     /// Close the manager for good: every running process is killed by
@@ -310,7 +301,7 @@ impl ProcessController {
         let Some(manager) = self.manager.upgrade() else {
             return 0;
         };
-        let live = manager.running().len();
+        let live = manager.running_procs().len();
         manager.shutdown.cancel();
         live
     }
@@ -320,7 +311,7 @@ impl ProcessController {
     pub fn running(&self) -> usize {
         self.manager
             .upgrade()
-            .map_or(0, |manager| manager.running().len())
+            .map_or(0, |manager| manager.running_procs().len())
     }
 
     /// Resolve once no process is running: after a [`close`](Self::close)
@@ -333,7 +324,7 @@ impl ProcessController {
             let Some(manager) = self.manager.upgrade() else {
                 return;
             };
-            let running = manager.running();
+            let running = manager.running_procs();
             drop(manager);
             if running.is_empty() {
                 return;

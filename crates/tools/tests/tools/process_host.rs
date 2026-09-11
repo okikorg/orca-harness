@@ -372,9 +372,15 @@ async fn close_reports_closed_and_kills() {
     assert_eq!(err.to_string(), "process manager is closed");
     let err = controller.list().unwrap_err();
     assert_eq!(err.to_string(), "process manager is closed");
-    // The model's tool shares the closed manager: it refuses spawns too.
+    // The model's tool shares the closed manager: it refuses every
+    // action too.
     let err = tool
         .call(json!({"action": "spawn", "command": "true"}), &ctx())
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "process manager is closed");
+    let err = tool
+        .call(json!({"action": "list"}), &ctx())
         .await
         .unwrap_err();
     assert_eq!(err.to_string(), "process manager is closed");
