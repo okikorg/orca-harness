@@ -23,14 +23,15 @@ pub(crate) struct AgentDefinition {
     pub limits: Limits,
     /// The tool recipe: sessions materialize `preset` and `tool_sources`
     /// themselves (see [`crate::tools::SessionTools`]) so mutable
-    /// built-ins are session-owned; the `skill` tool is read off
-    /// `skills` at each run boundary (see [`crate::tools::RunTools`]);
-    /// `shared_tools` (MCP, memory) are built once here and appended
-    /// after it.
+    /// built-ins are session-owned; the `skill` tool and the MCP tools
+    /// are read off `skills` and `mcp` at each run boundary (see
+    /// [`crate::tools::RunTools`]); `memory_tools` are built once here
+    /// and appended after them.
     pub preset: ToolPreset,
     pub tool_sources: Vec<ToolSource>,
     pub skills: Option<Skills>,
-    pub shared_tools: Vec<Arc<dyn Tool>>,
+    pub mcp: Option<Mcp>,
+    pub memory_tools: Vec<Arc<dyn Tool>>,
     pub extensions: Vec<Arc<dyn Extension>>,
     pub extension_config: ExtensionConfig,
     pub context_capacity: Option<u64>,
@@ -264,6 +265,18 @@ impl AgentBuilder {
         self
     }
 
+    /// Offer the MCP interface tools and every connected server's tools
+    /// over `mcp`. The registry is read at each run boundary: a run
+    /// captures the tool set when it starts and keeps it, so `connect`,
+    /// `connect_stdio`, and `disconnect` reach the next run of every
+    /// session and never a run in flight. A server disconnected or
+    /// replaced mid-run stays callable through that run's captured tools
+    /// (its calls go to the old connection: they succeed or fail with
+    /// that connection's transport error), while the catalog's live
+    /// schema visibility may hide its schemas from the model until
+    /// selected again. The model is wrapped in
+    /// [`McpModel`](orca_harness_tool_extensions::mcp::McpModel) at
+    /// build, which reads the catalog live for that visibility.
     pub fn mcp(mut self, mcp: Mcp) -> Self {
         self.mcp = Some(mcp);
         self
@@ -287,7 +300,7 @@ impl AgentBuilder {
                 self.preset
             )));
         }
-        let mut shared_tools: Vec<Arc<dyn Tool>> = Vec::new();
+        let mut memory_tools: Vec<Arc<dyn Tool>> = Vec::new();
         if let Some(config) = self.extension_config.model_retry {
             self.model = Arc::new(
                 RetryModel::new(self.model, config.attempts)
@@ -296,7 +309,8 @@ impl AgentBuilder {
             );
         }
         if let Some(mcp) = &self.mcp {
-            shared_tools.extend(mcp.tools());
+            // The tools themselves are read per run (see `RunTools`); the
+            // visibility wrap reads the catalog live, so it is built once.
             self.model = Arc::new(orca_harness_tool_extensions::mcp::McpModel::new(
                 self.model,
                 mcp.catalog(),
@@ -307,13 +321,13 @@ impl AgentBuilder {
         }
         if let Some(memory) = &self.memory {
             if memory.search_tool {
-                shared_tools.push(Arc::new(orca_harness_extensions::MemorySearchTool::new(
+                memory_tools.push(Arc::new(orca_harness_extensions::MemorySearchTool::new(
                     memory.memory.store().clone(),
                     memory.memory.scope().clone(),
                 )));
             }
             if memory.manage_tool {
-                shared_tools.push(Arc::new(orca_harness_extensions::MemoryManageTool::new(
+                memory_tools.push(Arc::new(orca_harness_extensions::MemoryManageTool::new(
                     memory.memory.store().clone(),
                     memory.memory.scope().clone(),
                 )));
@@ -333,7 +347,8 @@ impl AgentBuilder {
                 preset: self.preset,
                 tool_sources: self.tool_sources,
                 skills: self.skills,
-                shared_tools,
+                mcp: self.mcp,
+                memory_tools,
                 extensions: self.extensions,
                 extension_config: self.extension_config,
                 context_capacity: self.context_capacity,

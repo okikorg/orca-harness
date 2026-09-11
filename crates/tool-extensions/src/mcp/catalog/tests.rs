@@ -1,3 +1,4 @@
+use super::search::singular;
 use super::*;
 
 #[test]
