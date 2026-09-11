@@ -391,7 +391,11 @@ impl Session {
     /// [`notifications`](Self::notifications) still observe what is
     /// winding down. A session without configured subagents closes at
     /// once. Unlike [`clear`](Self::clear), which starts a fresh
-    /// conversation the session keeps serving, this is final.
+    /// conversation the session keeps serving, this is final. A host
+    /// foreground worker ([`Subagents::run`](crate::Subagents::run)) in
+    /// flight is neither cancelled nor awaited: foreground workers bypass
+    /// admission and follow the caller's token, so cancel it through
+    /// that token.
     ///
     /// Dropping a session instead of calling this cancels the same work
     /// but waits for nothing. Background processes and workflow runs are
