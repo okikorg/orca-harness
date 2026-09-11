@@ -22,6 +22,12 @@ pub enum SdkError {
     Subagent(String),
     #[error("session already has an active run")]
     BusySession,
+    /// [`Session::shutdown`](crate::Session::shutdown) cancelled every
+    /// detached worker but `still_active` of them had not exited when the
+    /// grace period ran out; cancellation is cooperative and they are
+    /// still winding down.
+    #[error("shutdown timed out with {still_active} background worker(s) still active")]
+    ShutdownTimeout { still_active: usize },
     #[error("session not found: {0}")]
     SessionNotFound(String),
     #[error("session has no persistent recorder")]

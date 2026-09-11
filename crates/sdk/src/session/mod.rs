@@ -1,23 +1,25 @@
 //! Session lifecycle: open/resume/fork/clear/reset, the session-owned tool
 //! state, and the busy guard that serializes operations on one session.
 
+mod builder;
 mod events;
 mod execution;
 mod import;
 mod persistence;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use orca_harness_core::{Context, Message};
 use orca_harness_extensions::{
-    compact, CompactConfig, CompactReport, SessionFile, SessionHandler, TruncationStore,
+    compact, CompactConfig, CompactReport, SessionHandler, TruncationStore,
 };
 use orca_harness_tools::{FileGuard, TodoList};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
-use crate::background::Subagents;
+use crate::background::{BackgroundNotification, Subagents};
 use crate::tools::SessionTools;
 use crate::{Agent, RunHandle, RunOutcome, RunRequest, RunResult, SdkError};
 
@@ -26,83 +28,7 @@ use execution::{execute, RunExecution};
 use import::imported_context;
 use persistence::{load_session_store, save_session_store, session_store};
 
-#[derive(Clone)]
-pub struct Sessions {
-    dir: PathBuf,
-}
-
-impl Sessions {
-    pub(crate) fn new(dir: PathBuf) -> Self {
-        Self { dir }
-    }
-
-    pub fn list(&self) -> Vec<SessionFile> {
-        SessionFile::list(&self.dir)
-    }
-
-    pub fn directory(&self) -> &Path {
-        &self.dir
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum SessionMode {
-    #[default]
-    Ephemeral,
-    Persistent,
-}
-
-pub struct SessionBuilder {
-    agent: Agent,
-    mode: SessionMode,
-    context: Vec<Message>,
-}
-
-impl SessionBuilder {
-    pub(crate) fn new(agent: Agent) -> Self {
-        Self {
-            agent,
-            mode: SessionMode::Ephemeral,
-            context: Vec::new(),
-        }
-    }
-
-    /// Seed the session with an existing conversation instead of an empty
-    /// one. A persistent session writes the imported history to disk when
-    /// it opens, so a later `resume_session` sees it.
-    ///
-    /// System-prompt precedence: the agent's system prompt is
-    /// authoritative. When the agent has one, it replaces a leading
-    /// imported `System` message, or is prepended when the import has
-    /// none. When the agent has no system prompt, an imported leading
-    /// `System` message is kept as-is.
-    ///
-    /// [`open`](Self::open) rejects a history the kernel cannot resume from
-    /// with [`SdkError::InvalidContext`]: more than one `System` message or
-    /// one that is not first; a `Tool` message that does not immediately
-    /// follow an `Assistant` message whose tool calls it answers (the
-    /// result ids must match the call ids exactly); or an `Assistant`
-    /// message with tool calls that is not immediately followed by its
-    /// `Tool` message. An empty import is the same as none.
-    pub fn context(mut self, messages: impl IntoIterator<Item = Message>) -> Self {
-        self.context = messages.into_iter().collect();
-        self
-    }
-
-    pub fn ephemeral(mut self) -> Self {
-        self.mode = SessionMode::Ephemeral;
-        self
-    }
-
-    pub fn persistent(mut self) -> Self {
-        self.mode = SessionMode::Persistent;
-        self
-    }
-
-    pub fn open(self) -> Result<Session, SdkError> {
-        Session::open(self.agent, self.mode, self.context)
-    }
-}
+pub use builder::{SessionBuilder, SessionMode, Sessions};
 
 pub struct Session {
     agent: Agent,
@@ -224,6 +150,36 @@ impl Session {
             .map(|services| services.handle())
     }
 
+    /// Observe this session's detached subagents: worker exits, results
+    /// waiting for the parent, and batches entering the transcript.
+    /// `None` when the agent configured no subagents.
+    ///
+    /// Observation is separate from delivery. Reading a notification
+    /// consumes nothing the parent is owed, and the session never starts
+    /// a run on its own: a host that wants the parent to take up results
+    /// that arrived while idle awaits
+    /// [`BackgroundNotification::CompletionsReady`] and calls
+    /// [`continue_run`](Self::continue_run) (or [`run`](Self::run) with
+    /// the next prompt) itself; the batch is delivered at that run's
+    /// first model call. A receiver that falls more than
+    /// [`NOTIFICATION_CAPACITY`](crate::NOTIFICATION_CAPACITY)
+    /// notifications behind misses the oldest ones.
+    pub fn notifications(&self) -> Option<broadcast::Receiver<BackgroundNotification>> {
+        self.tools
+            .background
+            .as_ref()
+            .map(|services| services.subscribe())
+    }
+
+    /// Detached results waiting for the parent transcript; zero without
+    /// configured subagents.
+    pub fn pending_completions(&self) -> usize {
+        self.tools
+            .background
+            .as_ref()
+            .map_or(0, |services| services.pending_completions())
+    }
+
     pub async fn messages(&self) -> Vec<orca_harness_core::Message> {
         self.context.lock().await.messages().to_vec()
     }
@@ -316,6 +272,11 @@ impl Session {
             request,
             cancellation,
             observer,
+            background: self
+                .tools
+                .background
+                .as_ref()
+                .map(|services| services.run_handles()),
             _busy: busy,
         })
     }
@@ -335,7 +296,10 @@ impl Session {
     /// Copy this persistent session into a new one. The fork shares the
     /// transcript and recovery store but not live processes, REPL state,
     /// the read-before-write guard, todos, or detached subagents: those
-    /// start fresh unless the agent configured caller-owned instances.
+    /// start fresh unless the agent configured caller-owned instances. In
+    /// particular the fork has its own subagent manager, completion inbox,
+    /// and notification channel; results owed to this session never reach
+    /// the fork.
     pub async fn fork(&self) -> Result<Self, SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -368,7 +332,10 @@ impl Session {
 
     /// Start a new conversation in this session and clear its
     /// read-before-write guard and todo list, cancelling any detached
-    /// subagents and dropping their undelivered results.
+    /// subagents and dropping their undelivered results. The subagent
+    /// manager starts a new generation, so a worker that finishes after
+    /// this call has its result refused rather than delivered to the new
+    /// conversation.
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let fresh = fresh_context(&self.agent);
@@ -385,6 +352,9 @@ impl Session {
         Ok(())
     }
 
+    /// Empty this persistent session's transcript in place, keeping its
+    /// id and file. Like [`clear`](Self::clear), the guard, todos, and
+    /// detached subagents are reset with it.
     pub async fn reset_in_place(&self) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -395,7 +365,35 @@ impl Session {
         *context = fresh;
         recorder.sync(&context);
         save_session_store(&self.truncation_store, &recorder.path())?;
+        self.tools.clear();
         Ok(())
+    }
+
+    /// Stop this session's detached work and wait, up to `grace`, for its
+    /// workers to exit. Admission stops and every worker is cancelled
+    /// first (their undelivered results are dropped), then the wait
+    /// begins. Cancellation is cooperative: a worker that ignores its
+    /// token keeps the wait going, and when `grace` runs out the error
+    /// reports how many are still winding down. Fails with
+    /// [`SdkError::BusySession`] while a run is active; finish or cancel
+    /// it first. A session without configured subagents returns at once.
+    ///
+    /// Dropping a session instead of calling this cancels the same work
+    /// but waits for nothing. Background processes and workflow runs are
+    /// not yet covered here.
+    pub async fn shutdown(self, grace: Duration) -> Result<(), SdkError> {
+        let _busy = BusyGuard::acquire(self.busy.clone())?;
+        let Some(services) = &self.tools.background else {
+            return Ok(());
+        };
+        services.clear();
+        let manager = services.manager();
+        match tokio::time::timeout(grace, manager.wait_idle()).await {
+            Ok(()) => Ok(()),
+            Err(_) => Err(SdkError::ShutdownTimeout {
+                still_active: manager.live_workers(),
+            }),
+        }
     }
 }
 
