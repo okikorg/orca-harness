@@ -46,6 +46,14 @@ impl SubagentRequest {
     pub fn task(&self) -> &str {
         &self.task
     }
+
+    pub fn system_prompt_override(&self) -> Option<&str> {
+        self.system_prompt.as_deref()
+    }
+
+    pub fn requested_model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
 }
 
 /// A finished foreground worker: the typed form of the tool's JSON result.
@@ -137,6 +145,10 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
 
     /// Admitted detached workers, running and queued, in spawn order.
     /// Empty when background execution is not configured.
+    ///
+    /// Unlike the tool's `action=list`, this never refuses a repeat with
+    /// "no change since the previous list": that refusal keeps the model
+    /// from polling, whereas a host may poll this freely.
     pub fn active_jobs(&self) -> Vec<BackgroundJob> {
         self.background
             .as_ref()

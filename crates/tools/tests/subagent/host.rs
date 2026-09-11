@@ -144,6 +144,7 @@ async fn typed_spawns_queue_under_the_same_limit_as_the_tool() {
             BackgroundStatus::Queued
         ]
     );
+    // Negative check: a too-short sleep can only pass spuriously, never fail.
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 1);
 
@@ -218,7 +219,14 @@ async fn typed_run_nests_children_by_the_shared_depth() {
         ModelResponse::final_text("grandchild done"),
         ModelResponse::final_text("child done"),
     ]));
-    let tool = SubagentTool::new(nested.clone(), &ws).max_depth(SubagentDepth::new(2));
+    let spawns: Arc<Mutex<Vec<SubagentSpawn>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = spawns.clone();
+    let tool = SubagentTool::new(nested.clone(), &ws)
+        .max_depth(SubagentDepth::new(2))
+        .spawn_extensions(Arc::new(move |spawn| {
+            recorded.lock().unwrap().push(spawn.clone());
+            Vec::new()
+        }));
     let outcome = tool
         .run_foreground(
             SubagentRequest::new("outer"),
@@ -231,6 +239,15 @@ async fn typed_run_nests_children_by_the_shared_depth() {
     assert_eq!(nested.generate_calls(), 3, "grandchild must actually run");
     assert_eq!(outcome.steps, 2);
     assert_eq!(outcome.tool_calls, 1);
+    {
+        let spawns = spawns.lock().unwrap();
+        assert_eq!(
+            spawns.iter().map(|spawn| spawn.depth).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(spawns[0].call_id, format!("host:{}", spawns[0].id));
+        assert_eq!(spawns[1].parent_id, Some(spawns[0].id));
+    }
 
     let flat = Arc::new(ScriptedModel::new(vec![
         ModelResponse::tool_calls(vec![call("1", "subagent", json!({"task": "inner"}))]),
@@ -337,4 +354,41 @@ async fn typed_cancellation_matches_the_tool_cancel_action() {
             .expect("completion channel closed");
     }
     assert!(tool.active_jobs().is_empty());
+}
+
+#[tokio::test]
+async fn typed_foreground_run_stops_when_its_token_is_cancelled() {
+    let release = CancellationToken::new();
+    let (ws, _dir) = temp_ws();
+    let stats = BackgroundStats::new();
+    let tool = SubagentTool::new(
+        Arc::new(GateModel {
+            release: release.clone(),
+        }),
+        &ws,
+    )
+    .stats(stats.clone());
+
+    let cancel = CancellationToken::new();
+    let run = tokio::spawn({
+        let tool = tool.clone();
+        let cancel = cancel.clone();
+        async move {
+            tool.run_foreground(SubagentRequest::new("held"), cancel, None)
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(stats.agents(), 1, "the worker is in flight");
+    cancel.cancel();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), run)
+        .await
+        .expect("cancellation must end the run")
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with("subagent failed: cancelled"), "{error}");
+    assert_eq!(stats.agents(), 0, "in-flight accounting unwinds on cancel");
+    assert!(!release.is_cancelled(), "the model never finished on its own");
 }

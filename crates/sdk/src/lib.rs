@@ -75,7 +75,6 @@ pub mod providers {
 
 /// Subagent, background process, and workflow handles for host orchestration.
 pub mod orchestration {
-    pub use crate::background::{SubagentConfig, Subagents};
     pub use orca_harness_tools::{
         subagent_completions_prompt, ActiveInventory, BackgroundAcknowledgement, BackgroundJob,
         BackgroundProcess, BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox,
