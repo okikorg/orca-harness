@@ -19,7 +19,7 @@ use crate::{Agent, HarnessEvent, RunRequest, RunResult, SdkError};
 
 pub(super) struct RunExecution {
     pub(super) definition: Agent,
-    /// The session's materialized tools (see `SessionTools`).
+    /// The session's materialized tools (see [`crate::tools::SessionTools`]).
     pub(super) tools: Vec<Arc<dyn Tool>>,
     pub(super) context: Arc<Mutex<Context>>,
     pub(super) recorder: Option<Arc<SessionHandler>>,
