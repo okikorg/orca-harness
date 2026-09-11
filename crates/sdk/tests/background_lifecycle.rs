@@ -322,6 +322,66 @@ async fn shutdown_awaits_workers_and_times_out_when_they_hang() {
 }
 
 #[tokio::test]
+async fn shutdown_while_a_run_is_active_touches_nothing() {
+    let root = temp_dir("delivery-shutdown-busy");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let release = CancellationToken::new();
+    let child: Arc<dyn Model> = Arc::new(Held(release.clone()));
+    let slow_started = Arc::new(Notify::new());
+    let slow = {
+        let started = slow_started.clone();
+        FnTool::new(
+            "slow",
+            "sleeps for a long time",
+            json!({"type": "object"}),
+            move |_args, _ctx| {
+                let started = started.clone();
+                async move {
+                    started.notify_one();
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    Ok(json!({}))
+                }
+            },
+        )
+    };
+    let agent = harness
+        .agent(ScriptedModel::new(vec![
+            tool_call("s1", "slow"),
+            ModelResponse::final_text("never reached"),
+        ]))
+        .tool(slow)
+        .subagents(SubagentConfig::new().model(SubagentModel::new(
+            "flash/child",
+            "the child",
+            child,
+        )))
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    route_to_child(&subagents.settings());
+    subagents.spawn(SubagentRequest::new("held")).unwrap();
+
+    let handle = session.start(RunRequest::new("stall")).unwrap();
+    slow_started.notified().await;
+    let error = session.shutdown(Duration::ZERO).await.unwrap_err();
+    assert!(matches!(error, SdkError::BusySession), "{error}");
+    assert_eq!(
+        subagents.active().len(),
+        1,
+        "a refused shutdown cancels nothing"
+    );
+
+    handle.cancellation_token().cancel();
+    let _ = handle.finish().await;
+    session.shutdown(Duration::from_secs(2)).await.unwrap();
+    assert!(subagents.active().is_empty());
+    assert!(!release.is_cancelled());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
 async fn cancelling_parent_run_does_not_cancel_detached_children() {
     let root = temp_dir("delivery-parent-cancel");
     let harness = Harness::builder().workspace(&root).build().unwrap();

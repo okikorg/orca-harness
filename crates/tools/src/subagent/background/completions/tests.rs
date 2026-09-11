@@ -198,13 +198,17 @@ async fn delivery_hook_observes_the_batch_the_transcript_receives() {
     context.push_user("orchestrate");
 
     delivery.before_model(&mut context).await.unwrap();
-    assert_eq!(context.messages().len(), 2, "inventory without completions");
+    assert_eq!(
+        context.messages().len(),
+        1,
+        "no inventory before anything was spawned"
+    );
     assert!(seen.lock().unwrap().is_empty());
 
     inbox.push(notification(0, 2, "b"));
     inbox.push(notification(0, 1, "a"));
     delivery.before_model(&mut context).await.unwrap();
-    assert_eq!(context.messages().len(), 3);
+    assert_eq!(context.messages().len(), 2);
     assert_eq!(*seen.lock().unwrap(), vec![vec![1, 2]]);
     assert!(!inbox.has_ready());
 }

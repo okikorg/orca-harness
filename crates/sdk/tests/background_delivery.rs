@@ -40,6 +40,13 @@ async fn completion_reaches_parent_once_at_next_model_call() {
     route_to_child(&subagents.settings());
 
     assert_eq!(session.run("delegate").await.unwrap().text, "spawned");
+    assert!(
+        !parent.observed_contexts()[0]
+            .messages()
+            .iter()
+            .any(|message| matches!(message, Message::User { content, .. } if content.contains("background_subagent_inventory"))),
+        "no inventory snapshot before anything was spawned"
+    );
     wait_until(|| session.pending_completions() == 1, "the completion").await;
     assert!(
         completion_messages(&session.messages().await).is_empty(),
@@ -260,6 +267,12 @@ async fn stale_generation_completions_are_suppressed() {
 
     assert_eq!(session.run("hello").await.unwrap().text, "fresh turn");
     assert!(completion_messages(&session.messages().await).is_empty());
+    assert!(
+        !session.messages().await.iter().any(|message| {
+            matches!(message, Message::User { content, .. } if content.contains("background_subagent_inventory"))
+        }),
+        "a conversation with no workers carries no inventory snapshot"
+    );
     while let Ok(notification) = notifications.try_recv() {
         assert!(
             !matches!(
@@ -270,6 +283,119 @@ async fn stale_generation_completions_are_suppressed() {
             "a stale result is neither announced as ready nor delivered: {notification:?}"
         );
     }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn idle_completion_after_a_mid_run_delivery_still_notifies_host() {
+    /// Answers the first worker at once and holds the second until released.
+    struct FirstThenHeld {
+        calls: std::sync::atomic::AtomicUsize,
+        release: CancellationToken,
+    }
+
+    #[async_trait::async_trait]
+    impl Model for FirstThenHeld {
+        async fn generate(
+            &self,
+            _: &orca_harness_core::Context,
+            _: &[orca_harness_core::ToolSchema],
+        ) -> Result<ModelResponse, orca_harness_core::ModelError> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Ok(ModelResponse::final_text("first done"));
+            }
+            self.release.cancelled().await;
+            Ok(ModelResponse::final_text("second done"))
+        }
+    }
+
+    let root = temp_dir("delivery-relatch");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let parent = Arc::new(ScriptedModel::new(vec![
+        spawn_call("c1", "first"),
+        tool_call("c2", "wait_for_child"),
+        spawn_call("c3", "second"),
+        ModelResponse::final_text("both spawned"),
+    ]));
+    let release = CancellationToken::new();
+    let child: Arc<dyn Model> = Arc::new(FirstThenHeld {
+        calls: Default::default(),
+        release: release.clone(),
+    });
+    let ready = Arc::new(Notify::new());
+    let wait_for_child = {
+        let ready = ready.clone();
+        FnTool::new(
+            "wait_for_child",
+            "waits until the first child finished",
+            json!({"type": "object"}),
+            move |_args, _ctx| {
+                let ready = ready.clone();
+                async move {
+                    ready.notified().await;
+                    Ok(json!({"waited": true}))
+                }
+            },
+        )
+    };
+    let agent = harness
+        .agent(parent)
+        .tool(wait_for_child)
+        .subagents(SubagentConfig::new().model(SubagentModel::new(
+            "flash/child",
+            "the child",
+            child,
+        )))
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    route_to_child(&subagents.settings());
+    let mut notifications = session.notifications().unwrap();
+    let mut wake_ups = session.notifications().unwrap();
+    tokio::spawn({
+        let ready = ready.clone();
+        async move {
+            next_matching(&mut wake_ups, "the first wake-up", |n| {
+                matches!(n, BackgroundNotification::CompletionsReady { .. }).then_some(())
+            })
+            .await;
+            ready.notify_one();
+        }
+    });
+
+    assert_eq!(
+        session.run("delegate twice").await.unwrap().text,
+        "both spawned"
+    );
+    let delivered = completion_messages(&session.messages().await);
+    assert_eq!(delivered.len(), 1, "the first result was delivered mid-run");
+    assert!(delivered[0].contains("first done"));
+    assert_eq!(
+        subagents.active().len(),
+        1,
+        "the second worker is still held"
+    );
+    next_matching(&mut notifications, "the mid-run wake-up", |n| {
+        matches!(n, BackgroundNotification::CompletionsReady { .. }).then_some(())
+    })
+    .await;
+    next_matching(&mut notifications, "the mid-run delivery", |n| {
+        matches!(n, BackgroundNotification::Delivered { .. }).then_some(())
+    })
+    .await;
+
+    // The second worker finishes while the session is idle: the wake-up
+    // latch the mid-run result set must have been cleared with the run.
+    release.cancel();
+    let pending = next_matching(&mut notifications, "the idle wake-up", |n| match n {
+        BackgroundNotification::CompletionsReady { pending } => Some(pending),
+        _ => None,
+    })
+    .await;
+    assert_eq!(pending, 1);
+    assert_eq!(session.pending_completions(), 1);
 
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -375,13 +375,16 @@ impl Session {
     /// begins. Cancellation is cooperative: a worker that ignores its
     /// token keeps the wait going, and when `grace` runs out the error
     /// reports how many are still winding down. Fails with
-    /// [`SdkError::BusySession`] while a run is active; finish or cancel
-    /// it first. A session without configured subagents returns at once.
+    /// [`SdkError::BusySession`] while a run is active, touching nothing;
+    /// finish or cancel the run and call again. A session without
+    /// configured subagents returns at once. The session stays usable
+    /// afterwards, like after [`clear`](Self::clear): new spawns are
+    /// admitted into a fresh generation.
     ///
     /// Dropping a session instead of calling this cancels the same work
     /// but waits for nothing. Background processes and workflow runs are
     /// not yet covered here.
-    pub async fn shutdown(self, grace: Duration) -> Result<(), SdkError> {
+    pub async fn shutdown(&self, grace: Duration) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let Some(services) = &self.tools.background else {
             return Ok(());

@@ -37,7 +37,9 @@ impl orca_harness_core::Extension for ActiveInventory {
 }
 
 /// Append the parent-visible worker inventory unless the transcript's latest
-/// snapshot already says the same thing.
+/// snapshot already says the same thing. An empty inventory is only worth
+/// a turn when it supersedes an earlier snapshot: a conversation that never
+/// spawned anything gets no snapshot at all.
 pub fn refresh_inventory(context: &mut Context, manager: &SubagentManager) {
     let jobs = manager.active_for_parent();
     let running = jobs
@@ -72,7 +74,7 @@ pub fn refresh_inventory(context: &mut Context, manager: &SubagentManager) {
             Message::User { content, .. } if content.starts_with(PREFIX) => Some(content),
             _ => None,
         });
-    if previous != Some(&snapshot) {
+    if previous != Some(&snapshot) && !(jobs.is_empty() && previous.is_none()) {
         context.push_user(snapshot);
     }
 }
@@ -125,7 +127,10 @@ mod tests {
         .background(manager.clone(), |_| {});
         let mut context = Context::new();
         refresh_inventory(&mut context, &manager);
-        assert_eq!(latest(&context)["count"], 0);
+        assert!(
+            context.messages().is_empty(),
+            "no snapshot before anything was spawned"
+        );
         for task in ["inspect tools", "review changes"] {
             tool.call(
                 json!({"task": task}),
