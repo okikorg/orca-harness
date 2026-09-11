@@ -303,11 +303,7 @@ impl ProcessCore<'_> {
             .unwrap()
             .remove(id)
             .ok_or_else(|| ToolError::msg(format!("unknown process id: {id}")))?;
-        // The caller receives this termination through the `kill` result;
-        // an autonomous exit wake would tell the model the same thing twice.
-        proc.notify_on_exit.store(false, Ordering::Release);
-        proc.kill.cancel();
-        let _ = tokio::time::timeout(Duration::from_secs(5), proc.done.cancelled()).await;
+        terminate(&proc).await;
         Ok(self.snapshot(id, &proc, false, false))
     }
 
@@ -355,9 +351,20 @@ impl ProcessTool {
         }
     }
 
-    /// Adopt shared live counters. Call before any spawn (and before
-    /// taking a controller: this replaces the manager).
+    /// Adopt shared live counters. This replaces the manager, so it
+    /// must come first among the builders that touch it.
+    ///
+    /// # Panics
+    ///
+    /// Must be called before [`controller`](Self::controller) and before
+    /// any spawn: a controller taken earlier would watch the discarded
+    /// manager and report closed, and a process started earlier would be
+    /// orphaned by the swap.
     pub fn stats(mut self, stats: BackgroundStats) -> Self {
+        assert!(
+            Arc::weak_count(&self.manager) == 0 && self.manager.procs.lock().unwrap().is_empty(),
+            "ProcessTool::stats must be called before controller() and before any spawn"
+        );
         self.manager = Manager::new(stats);
         self
     }
@@ -398,7 +405,8 @@ impl ProcessTool {
     }
 
     /// A typed host handle over this tool's processes. Take it after the
-    /// builders, since [`stats`](Self::stats) replaces the manager.
+    /// builders, since [`stats`](Self::stats) replaces the manager (and
+    /// panics if a controller already exists).
     pub fn controller(&self) -> ProcessController {
         ProcessController::new(self)
     }
@@ -419,6 +427,27 @@ impl Drop for ProcessTool {
     fn drop(&mut self) {
         self.manager.shutdown.cancel();
     }
+}
+
+/// The one kill path, in two steps so a bulk kill can signal every
+/// process before waiting on any: [`signal_kill`] then [`await_killed`].
+/// The caller reports the termination itself (a `kill` result, a
+/// session clear), so the autonomous exit wake is switched off: it
+/// would say the same thing twice.
+async fn terminate(proc: &Proc) {
+    signal_kill(proc);
+    await_killed(proc).await;
+}
+
+/// Silence the exit wake and tell the waiter to kill the child.
+fn signal_kill(proc: &Proc) {
+    proc.notify_on_exit.store(false, Ordering::Release);
+    proc.kill.cancel();
+}
+
+/// Wait, bounded, for a signalled child's exit and output drain.
+async fn await_killed(proc: &Proc) {
+    let _ = tokio::time::timeout(Duration::from_secs(5), proc.done.cancelled()).await;
 }
 
 /// Between a child's exit and `done` (readers drained, waiter finished)

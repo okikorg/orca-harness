@@ -1,15 +1,79 @@
-//! The session-level host handle over background processes.
+//! The agent-level process recipe and the session-level host handle over
+//! background processes.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use orca_harness_core::CancellationToken;
 use orca_harness_tools::{
-    ProcessController, ProcessEntry, ProcessSnapshot, ProcessSpawn, ProcessWrite,
+    Executor, ProcessController, ProcessEntry, ProcessSnapshot, ProcessSpawn, ProcessWrite,
 };
 
 use crate::SdkError;
+
+/// How an agent's sessions run `shell` and `process` commands. Attach
+/// with [`AgentBuilder::processes`](crate::AgentBuilder::processes);
+/// only [`ToolPreset::Coding`](crate::ToolPreset::Coding) ships those
+/// tools, so the builder rejects it for every other preset. Every
+/// session (and every subagent child) builds its own tools from this
+/// recipe, so nothing here is shared at run time.
+#[derive(Clone, Debug, Default)]
+pub struct ProcessConfig {
+    pub(crate) executor: Option<Executor>,
+    pub(crate) working_dir: Option<PathBuf>,
+    pub(crate) max_output_bytes: Option<usize>,
+    pub(crate) buffer_cap: Option<usize>,
+    pub(crate) max_processes: Option<usize>,
+}
+
+impl ProcessConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run `shell` and `process` commands through `executor` (an
+    /// [`Executor::ssh`] or [`Executor::docker_exec`] target) instead of
+    /// the local host shell. The file tools are not affected: they keep
+    /// operating on the local workspace, so pair a remote executor with
+    /// a synced or mounted workspace. Without an explicit
+    /// [`working_dir`](Self::working_dir), commands on a remote executor
+    /// run wherever the target starts them.
+    pub fn executor(mut self, executor: Executor) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    /// Where commands run. Defaults to the workspace root for the local
+    /// executor and to nothing for a remote one, whose filesystem need
+    /// not mirror the workspace.
+    pub fn working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(dir.into());
+        self
+    }
+
+    /// Cap on output bytes each `process` call returns (the tool's
+    /// default when unset).
+    pub fn max_output_bytes(mut self, bytes: usize) -> Self {
+        self.max_output_bytes = Some(bytes);
+        self
+    }
+
+    /// Cap on unread output retained per process; older bytes beyond it
+    /// are dropped and reported once (the tool's default when unset).
+    pub fn buffer_cap(mut self, bytes: usize) -> Self {
+        self.buffer_cap = Some(bytes);
+        self
+    }
+
+    /// Cap on live processes per session, host- and model-started
+    /// together (the tool's default when unset).
+    pub fn max_processes(mut self, n: usize) -> Self {
+        self.max_processes = Some(n);
+        self
+    }
+}
 
 /// Host handle over one session's background processes, when its tool
 /// preset includes the `process` tool. Every operation runs the same
@@ -17,10 +81,19 @@ use crate::SdkError;
 /// session-owned manager, so host- and model-started processes share
 /// ids, state, output limits, and the live process cap.
 ///
-/// The handle keeps nothing alive: processes die with the session (or
-/// its explicit shutdown refuses further operations), after which every
-/// call here fails with [`SdkError::SessionClosed`] or
+/// The handle keeps nothing alive: processes die with the session, and
+/// [`Session::shutdown`] kills them and closes the manager, after which
+/// every call here fails with [`SdkError::SessionClosed`] or
 /// [`SdkError::Process`] and [`is_open`](Self::is_open) is false.
+/// [`Session::clear`] kills them too but keeps the handle serving.
+/// Process events (readiness matches, exits) reach the host through
+/// [`Session::notifications`] as
+/// [`BackgroundNotification::ProcessNotified`].
+///
+/// [`Session::shutdown`]: crate::Session::shutdown
+/// [`Session::clear`]: crate::Session::clear
+/// [`Session::notifications`]: crate::Session::notifications
+/// [`BackgroundNotification::ProcessNotified`]: crate::BackgroundNotification::ProcessNotified
 #[derive(Clone)]
 pub struct Processes {
     controller: ProcessController,

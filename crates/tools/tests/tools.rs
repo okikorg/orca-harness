@@ -10,10 +10,11 @@ use tokio::time::timeout;
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{Agent, CancellationToken, Message, ModelResponse, Tool, ToolContext};
 use orca_harness_tools::{
-    core_tools, BackgroundStats, CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool,
-    Executor, FileGuard, FileInfoTool, GlobTool, GrepTool, ListDirTool, MultiEditTool,
-    ProcessEntry, ProcessNotificationKind, ProcessSpawn, ProcessTool, ProcessWrite, ReadFileTool,
-    RenameFileTool, ShellTool, Workspace, WriteFileTool,
+    core_tools, core_tools_with_guard, core_tools_with_shell_and_process, BackgroundStats,
+    CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool, Executor, FileGuard,
+    FileInfoTool, GlobTool, GrepTool, ListDirTool, MultiEditTool, ProcessEntry,
+    ProcessNotificationKind, ProcessSpawn, ProcessTool, ProcessWrite, ReadFileTool, RenameFileTool,
+    ShellTool, Workspace, WriteFileTool,
 };
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);

@@ -14,8 +14,8 @@ mod tools;
 
 pub use agent::{Agent, AgentBuilder};
 pub use background::{
-    BackgroundNotification, ChildEventCallback, Processes, SubagentConfig, Subagents,
-    NOTIFICATION_CAPACITY,
+    BackgroundNotification, ChildEventCallback, ProcessConfig, Processes, SubagentConfig,
+    Subagents, NOTIFICATION_CAPACITY,
 };
 pub use error::SdkError;
 pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig};
@@ -48,8 +48,9 @@ pub use orca_harness_provider_auth::{
 pub use orca_harness_tool_extensions::web;
 pub use orca_harness_tools::{
     core_tools, core_tools_with_executor, core_tools_with_guard, fs_admin_tools, AskTool,
-    BackgroundStats, BunReplTool, Executor, FileGuard, PyKernelTool, SubagentDepth, SubagentTool,
-    TodoList, TodoWriteTool, Workspace,
+    BackgroundStats, BunReplTool, Executor, FileGuard, ProcessNotification,
+    ProcessNotificationKind, PyKernelTool, SubagentDepth, SubagentTool, TodoList, TodoWriteTool,
+    Workspace,
 };
 
 /// Core contracts and every companion type needed to implement them.
@@ -79,13 +80,13 @@ pub mod providers {
 /// Subagent, background process, and workflow handles for host orchestration.
 pub mod orchestration {
     pub use orca_harness_tools::{
-        core_tools_with_process, subagent_completions_prompt, ActiveInventory,
-        BackgroundAcknowledgement, BackgroundJob, BackgroundProcess, BackgroundStats,
-        BackgroundStatus, CompletionDelivery, CompletionInbox, ProcessController, ProcessEntry,
-        ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn, ProcessTool,
-        ProcessWrite, SpawnExtensions, SubagentDepth, SubagentIdentity, SubagentManager,
-        SubagentModel, SubagentNotification, SubagentOutcome, SubagentRequest, SubagentSpawn,
-        SubagentTool, WorkflowStore, WorkflowTool, DEFAULT_COMPLETION_CAPACITY,
+        core_tools_with_process, core_tools_with_shell_and_process, subagent_completions_prompt,
+        ActiveInventory, BackgroundAcknowledgement, BackgroundJob, BackgroundProcess,
+        BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox, ProcessController,
+        ProcessEntry, ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn,
+        ProcessTool, ProcessWrite, SpawnExtensions, SubagentDepth, SubagentIdentity,
+        SubagentManager, SubagentModel, SubagentNotification, SubagentOutcome, SubagentRequest,
+        SubagentSpawn, SubagentTool, WorkflowStore, WorkflowTool, DEFAULT_COMPLETION_CAPACITY,
     };
 }
 

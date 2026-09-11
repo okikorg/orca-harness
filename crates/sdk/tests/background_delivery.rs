@@ -118,7 +118,7 @@ async fn completion_during_run_is_delivered_before_next_model_step() {
     let id = session.id().unwrap();
     let subagents = session.subagents().unwrap();
     route_to_child(&subagents.settings());
-    let mut notifications = session.notifications().unwrap();
+    let mut notifications = session.notifications();
     tokio::spawn({
         let ready = ready.clone();
         async move {
@@ -186,7 +186,7 @@ async fn idle_completion_notifies_host_without_launching_a_run() {
     let session = agent.new_session().ephemeral().open().unwrap();
     let subagents = session.subagents().unwrap();
     route_to_child(&subagents.settings());
-    let mut notifications = session.notifications().unwrap();
+    let mut notifications = session.notifications();
 
     assert_eq!(session.run("delegate").await.unwrap().text, "spawned");
     let calls_after_first_run = parent.generate_calls();
@@ -252,7 +252,7 @@ async fn stale_generation_completions_are_suppressed() {
     let session = agent.new_session().ephemeral().open().unwrap();
     let subagents = session.subagents().unwrap();
     route_to_child(&subagents.settings());
-    let mut notifications = session.notifications().unwrap();
+    let mut notifications = session.notifications();
 
     let ack = subagents.spawn(SubagentRequest::new("held")).unwrap();
     assert_eq!(ack.status, BackgroundStatus::Running);
@@ -355,8 +355,8 @@ async fn idle_completion_after_a_mid_run_delivery_still_notifies_host() {
     let session = agent.new_session().ephemeral().open().unwrap();
     let subagents = session.subagents().unwrap();
     route_to_child(&subagents.settings());
-    let mut notifications = session.notifications().unwrap();
-    let mut wake_ups = session.notifications().unwrap();
+    let mut notifications = session.notifications();
+    let mut wake_ups = session.notifications();
     tokio::spawn({
         let ready = ready.clone();
         async move {
@@ -498,8 +498,8 @@ async fn completion_after_the_last_model_boundary_is_announced_when_the_run_ends
     let session = agent.new_session().ephemeral().open().unwrap();
     let subagents = session.subagents().unwrap();
     route_to_child(&subagents.settings());
-    let mut notifications = session.notifications().unwrap();
-    let mut observer = session.notifications().unwrap();
+    let mut notifications = session.notifications();
+    let mut observer = session.notifications();
     tokio::spawn(async move {
         loop {
             match observer.recv().await {

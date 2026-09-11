@@ -1,9 +1,11 @@
 //! Host observation of a session's detached work, kept apart from parent
 //! delivery: a host that reads these never consumes a completion the
 //! parent transcript is owed, and a completion the transcript is not
-//! owed (a workflow stage) is still observable here.
+//! owed (a workflow stage) is still observable here. Background
+//! processes report on the same channel, separate from run events: a
+//! process outlives the run that started it.
 
-use orca_harness_tools::{CompletionInbox, SubagentNotification};
+use orca_harness_tools::{CompletionInbox, ProcessNotification, SubagentNotification};
 use tokio::sync::broadcast;
 
 /// Capacity of a session's notification channel. A receiver that falls
@@ -13,7 +15,8 @@ use tokio::sync::broadcast;
 /// backpressure, parent delivery is not.
 pub const NOTIFICATION_CAPACITY: usize = 256;
 
-/// What a session reports about its detached subagents, read through
+/// What a session reports about its detached subagents and background
+/// processes, read through
 /// [`Session::notifications`](crate::Session::notifications). Nothing
 /// here starts a model run: a host that wants the parent to react to
 /// [`CompletionsReady`](Self::CompletionsReady) continues the session
@@ -38,6 +41,17 @@ pub enum BackgroundNotification {
     /// A batch entered the parent transcript as one user turn, at a model
     /// boundary of a running turn or a host-started continuation.
     CompletionsDelivered { spawn_ids: Vec<u64> },
+    /// A detached background process (host- or model-started through
+    /// the session's `process` tool) exited, or its output first matched
+    /// the pattern its spawn asked to be told about. Carries the output
+    /// that accrued since the last drain. Not sent for processes the
+    /// host or the model killed, nor for those [`Session::clear`]
+    /// killed; a process [`Session::shutdown`] kills may still report
+    /// its exit.
+    ///
+    /// [`Session::clear`]: crate::Session::clear
+    /// [`Session::shutdown`]: crate::Session::shutdown
+    ProcessNotified(ProcessNotification),
 }
 
 /// The subagent notifier installed on a session's `subagent` tool: let
