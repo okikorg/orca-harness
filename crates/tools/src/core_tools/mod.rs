@@ -26,7 +26,10 @@ pub use files::{EditFileTool, FileGuard, ListDirTool, ReadFileTool, WriteFileToo
 pub use glob::GlobTool;
 pub use mutation_preflight::MutationPreflight;
 pub use mutations::{ApplyPatchTool, MultiEditTool};
-pub use process::{ProcessNotification, ProcessNotificationKind, ProcessTool};
+pub use process::{
+    ProcessController, ProcessEntry, ProcessNotification, ProcessNotificationKind, ProcessSnapshot,
+    ProcessSpawn, ProcessTool, ProcessWrite,
+};
 pub use search::GrepTool;
 pub use shell::{Executor, ShellTool};
 pub use stats::{BackgroundProcess, BackgroundStats};
@@ -52,9 +55,23 @@ pub fn core_tools(ws: &Workspace) -> Vec<Arc<dyn Tool>> {
 /// resetting with every rebuild.
 pub fn core_tools_with_guard(ws: &Workspace, guard: &FileGuard) -> Vec<Arc<dyn Tool>> {
     let dir = ws.root().to_string_lossy().into_owned();
+    core_tools_with_process(ws, guard, ProcessTool::local().working_dir(dir))
+}
+
+/// [`core_tools_with_guard`] around a caller-built `process` tool, for a
+/// host that configures the tool once (stats, notifications, limits) and
+/// keeps its [`ProcessController`](ProcessTool::controller) instead of
+/// replacing a default tool after the fact. Same order: `shell`, the
+/// given `process`, then the file tools.
+pub fn core_tools_with_process(
+    ws: &Workspace,
+    guard: &FileGuard,
+    process: ProcessTool,
+) -> Vec<Arc<dyn Tool>> {
+    let dir = ws.root().to_string_lossy().into_owned();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(ShellTool::local().working_dir(dir.clone())),
-        Arc::new(ProcessTool::local().working_dir(dir)),
+        Arc::new(ShellTool::local().working_dir(dir)),
+        Arc::new(process),
     ];
     tools.extend(file_tools(ws, guard));
     tools

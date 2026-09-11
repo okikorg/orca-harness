@@ -11,9 +11,9 @@ use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{Agent, CancellationToken, Message, ModelResponse, Tool, ToolContext};
 use orca_harness_tools::{
     core_tools, BackgroundStats, CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool,
-    FileGuard, FileInfoTool, GlobTool, GrepTool, ListDirTool, MultiEditTool,
-    ProcessNotificationKind, ProcessTool, ReadFileTool, RenameFileTool, ShellTool, Workspace,
-    WriteFileTool,
+    Executor, FileGuard, FileInfoTool, GlobTool, GrepTool, ListDirTool, MultiEditTool,
+    ProcessEntry, ProcessNotificationKind, ProcessSpawn, ProcessTool, ProcessWrite, ReadFileTool,
+    RenameFileTool, ShellTool, Workspace, WriteFileTool,
 };
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -39,3 +39,4 @@ fn ctx() -> ToolContext {
 
 include!("tools/files_and_shell.rs");
 include!("tools/glob_process_admin.rs");
+include!("tools/process_host.rs");

@@ -14,7 +14,8 @@ mod tools;
 
 pub use agent::{Agent, AgentBuilder};
 pub use background::{
-    BackgroundNotification, ChildEventCallback, SubagentConfig, Subagents, NOTIFICATION_CAPACITY,
+    BackgroundNotification, ChildEventCallback, Processes, SubagentConfig, Subagents,
+    NOTIFICATION_CAPACITY,
 };
 pub use error::SdkError;
 pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig};
@@ -78,12 +79,13 @@ pub mod providers {
 /// Subagent, background process, and workflow handles for host orchestration.
 pub mod orchestration {
     pub use orca_harness_tools::{
-        subagent_completions_prompt, ActiveInventory, BackgroundAcknowledgement, BackgroundJob,
-        BackgroundProcess, BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox,
-        ProcessNotification, ProcessNotificationKind, ProcessTool, SpawnExtensions, SubagentDepth,
-        SubagentIdentity, SubagentManager, SubagentModel, SubagentNotification, SubagentOutcome,
-        SubagentRequest, SubagentSpawn, SubagentTool, WorkflowStore, WorkflowTool,
-        DEFAULT_COMPLETION_CAPACITY,
+        core_tools_with_process, subagent_completions_prompt, ActiveInventory,
+        BackgroundAcknowledgement, BackgroundJob, BackgroundProcess, BackgroundStats,
+        BackgroundStatus, CompletionDelivery, CompletionInbox, ProcessController, ProcessEntry,
+        ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn, ProcessTool,
+        ProcessWrite, SpawnExtensions, SubagentDepth, SubagentIdentity, SubagentManager,
+        SubagentModel, SubagentNotification, SubagentOutcome, SubagentRequest, SubagentSpawn,
+        SubagentTool, WorkflowStore, WorkflowTool, DEFAULT_COMPLETION_CAPACITY,
     };
 }
 
