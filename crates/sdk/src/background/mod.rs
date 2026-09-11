@@ -137,12 +137,14 @@ impl BackgroundServices {
         if let Some(limits) = &config.limits {
             tool = tool.limits(limits.clone());
         }
-        if config.tool_retry.is_some() {
-            // Attempts and backoff come from the live settings handle
-            // (see `SubagentConfig::apply_to_settings`); the tool only
-            // needs the data-failure rule.
-            tool = tool.retry_ok_when(orca_harness_tools::retry::data_failure);
-        }
+        // Attempts and backoff come from the live settings handle (see
+        // `SubagentConfig::apply_to_settings`, or the host's own edits);
+        // the tool carries the classifiers, so whenever children retry
+        // they retry exactly what the parent's layer would: data failures
+        // in, native file mutations out.
+        tool = tool
+            .retry_ok_when(orca_harness_tools::retry::data_failure)
+            .retry_error_when(orca_harness_tools::retry::retryable_error);
         let subagents = Arc::new(tool);
         let workflows = store.map(|store| {
             // Only fails without depth-zero background execution, which

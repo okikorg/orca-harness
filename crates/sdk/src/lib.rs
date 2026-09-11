@@ -19,8 +19,7 @@ pub use background::{
 };
 pub use error::SdkError;
 pub use extensions::{
-    CompactCallback, Compaction, ErrorRetryPredicate, LiveModelRetry, ModelRetryConfig,
-    ModelRetryNotice, OkRetryPredicate, RetryConfig, ToolRetryConfig, TruncationConfig,
+    CompactCallback, Compaction, ModelRetryOptions, RetryConfig, ToolRetryOptions, TruncationConfig,
 };
 pub use harness::{Harness, HarnessBuilder};
 pub use mcp::{Mcp, McpServerStatus};

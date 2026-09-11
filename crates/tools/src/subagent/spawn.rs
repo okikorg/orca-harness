@@ -246,6 +246,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
                     std::time::Duration::from_millis(self.max_depth.retry_backoff_ms() as u64),
                 ),
                 self.ok_failure.clone(),
+                self.retry_error.clone(),
             )));
         }
 

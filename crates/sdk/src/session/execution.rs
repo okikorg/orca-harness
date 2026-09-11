@@ -136,16 +136,17 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
             agent = agent.tool(ReadToolResultTool::new(store.clone()));
         }
     }
-    if let Some(config) = &definition.inner.extension_config.retry {
+    if let Some(options) = &definition.inner.extension_config.retry {
         // Children that retry inside own their failures: this layer then
         // leaves `subagent` / `workflow` runs alone instead of replaying
-        // a whole child per parent attempt.
-        let children_retry = definition
+        // a whole child per parent attempt. Read off the live handle per
+        // call, so a settings edit and `SubagentConfig::tool_retry` agree.
+        let subagents = definition
             .inner
             .subagents
             .as_ref()
-            .is_some_and(|subagents| subagents.tool_retry.is_some());
-        agent = agent.extension(config.extension(children_retry));
+            .map(|subagents| subagents.settings.clone());
+        agent = agent.extension(options.extension(subagents));
     }
     if let Compaction::Automatic(config) = definition.inner.extension_config.compaction {
         let capacity = ContextCapacity::new(definition.inner.context_capacity);

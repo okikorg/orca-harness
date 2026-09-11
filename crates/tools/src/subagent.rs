@@ -41,6 +41,8 @@ type ToolFactory = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
 
 /// Predicate marking an `Ok` tool result as a failure for retry purposes.
 type OkFailureRule = Arc<dyn Fn(&ToolCall, &Value) -> bool + Send + Sync>;
+/// Predicate deciding whether a returned tool error is safe to retry.
+type ErrorRetryRule = Arc<dyn Fn(&ToolCall, &ToolError) -> bool + Send + Sync>;
 
 /// Inner-agent retry policy: total attempts plus backoff.
 type RetryPolicy = (u32, std::time::Duration);
@@ -141,6 +143,8 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
     retry_policy: Option<RetryPolicy>,
     /// Data-failure rule for [`Self::retry_policy`].
     ok_failure: Option<OkFailureRule>,
+    /// Error restriction for [`Self::retry_policy`]; `None` retries every `Err`.
+    retry_error: Option<ErrorRetryRule>,
     background: Option<BackgroundConfig>,
 }
 
@@ -176,6 +180,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             stats: BackgroundStats::default(),
             retry_policy: None,
             ok_failure: None,
+            retry_error: None,
             background: None,
         }
     }
@@ -297,6 +302,18 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         self
     }
 
+    /// Retry a child's returned errors only when `rule` accepts them (for
+    /// example [`crate::retry::retryable_error`], which never replays
+    /// native file mutations). Attempts and backoff remain controlled by
+    /// the shared live settings handle; without a rule every `Err` retries.
+    pub fn retry_error_when(
+        mut self,
+        rule: impl Fn(&ToolCall, &ToolError) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.retry_error = Some(std::sync::Arc::new(rule));
+        self
+    }
+
     fn child_replica(&self, spawn_id: u64, model: M, identity: Option<SubagentIdentity>) -> Self {
         Self {
             model,
@@ -314,6 +331,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             stats: self.stats.clone(),
             retry_policy: self.retry_policy,
             ok_failure: self.ok_failure.clone(),
+            retry_error: self.retry_error.clone(),
             // Detached nesting needs durable child-context ownership. Keep the
             // first release depth-zero while preserving foreground nesting.
             background: None,

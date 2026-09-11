@@ -6,7 +6,7 @@ use orca_harness_tools::{FileGuard, TodoList};
 
 use crate::background::{ProcessConfig, SubagentConfig};
 use crate::extensions::{
-    Compaction, ExtensionConfig, ModelRetryConfig, ToolRetryConfig, TruncationConfig,
+    Compaction, ExtensionConfig, ModelRetryOptions, ToolRetryOptions, TruncationConfig,
 };
 use crate::tools::{ToolPreset, ToolSource};
 use crate::{Harness, Mcp, MemoryConfig, RunRequest, RunResult, SdkError, SessionBuilder, Skills};
@@ -166,20 +166,27 @@ impl AgentBuilder {
     }
 
     /// Retry the agent's own tool calls in every run; see
-    /// [`ToolRetryConfig`] for what is retried, what is excluded, and how
-    /// it interacts with subagents that retry inside. A plain
-    /// [`RetryConfig`](crate::RetryConfig) converts with the defaults.
-    pub fn tool_retry(mut self, config: impl Into<ToolRetryConfig>) -> Self {
-        self.extension_config.retry = Some(config.into());
+    /// [`ToolRetryOptions`] for what is retried, what is excluded, and how
+    /// it interacts with subagents that retry inside.
+    ///
+    /// A plain [`RetryConfig`](crate::RetryConfig) converts with the
+    /// built-in classifiers on, so `tool_retry(RetryConfig::attempts(n))`
+    /// no longer replays every error: native file mutation errors are
+    /// excluded and `shell` / `process` / `web_fetch` data failures are
+    /// retried. The older retry-every-`Err`-only behaviour is
+    /// `ToolRetryOptions::attempts(n).retry_data_failures(false).exclude_non_idempotent(false)`.
+    pub fn tool_retry(mut self, options: impl Into<ToolRetryOptions>) -> Self {
+        self.extension_config.retry = Some(options.into());
         self
     }
 
-    /// Retry transient model failures; see [`ModelRetryConfig`]. The
+    /// Retry transient model failures; see [`ModelRetryOptions`]. The
     /// model is wrapped once at build, shared by every session and every
     /// subagent inheriting it, so retry is never nested. A plain
-    /// [`RetryConfig`](crate::RetryConfig) converts with the defaults.
-    pub fn model_retry(mut self, config: impl Into<ModelRetryConfig>) -> Self {
-        self.extension_config.model_retry = Some(config.into());
+    /// [`RetryConfig`](crate::RetryConfig) converts to a fixed attempt
+    /// cap with its backoff.
+    pub fn model_retry(mut self, options: impl Into<ModelRetryOptions>) -> Self {
+        self.extension_config.model_retry = Some(options.into());
         self
     }
 
