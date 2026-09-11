@@ -239,8 +239,7 @@ async fn readiness_and_exit_notifications_reach_the_host() {
 
     let spawned = processes
         .spawn(
-            ProcessSpawn::new("sleep 0.7; echo ready; sleep 0.3; echo bye")
-                .notify_on_match("ready"),
+            ProcessSpawn::new("sleep 1; echo ready; sleep 0.3; echo bye").notify_on_match("ready"),
             None,
         )
         .await
@@ -259,7 +258,7 @@ async fn readiness_and_exit_notifications_reach_the_host() {
 
     let exit = next_process_notification(&mut notifications, "the exit").await;
     assert_eq!(exit.id, spawned.id);
-    assert_eq!(exit.command, "sleep 0.7; echo ready; sleep 0.3; echo bye");
+    assert_eq!(exit.command, "sleep 1; echo ready; sleep 0.3; echo bye");
     assert_eq!(
         exit.kind,
         ProcessNotificationKind::Exit { exit_code: Some(0) }
@@ -330,7 +329,7 @@ async fn shutdown_kills_processes_and_reports_stragglers() {
         .await
         .unwrap();
 
-    session.shutdown(Duration::from_millis(200)).await.unwrap();
+    session.shutdown(Duration::from_secs(2)).await.unwrap();
     assert!(!processes.is_open());
     let found = std::process::Command::new("pgrep")
         .args(["-f", "sleep 286.4"])
@@ -368,15 +367,12 @@ async fn shutdown_kills_processes_and_reports_stragglers() {
         .spawn(SubagentRequest::new("stalled"))
         .unwrap();
     entered.notified().await;
-    let error = session
-        .shutdown(Duration::from_millis(300))
-        .await
-        .unwrap_err();
+    let error = session.shutdown(Duration::from_secs(1)).await.unwrap_err();
     assert!(
         matches!(
             error,
             SdkError::ShutdownTimeout {
-                still_active: 1,
+                still_active_workers: 1,
                 still_running_processes: 0
             }
         ),

@@ -83,10 +83,10 @@ pub mod orchestration {
         core_tools_with_process, core_tools_with_shell_and_process, subagent_completions_prompt,
         ActiveInventory, BackgroundAcknowledgement, BackgroundJob, BackgroundProcess,
         BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox, ProcessController,
-        ProcessEntry, ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn,
-        ProcessTool, ProcessWrite, SpawnExtensions, SubagentDepth, SubagentIdentity,
-        SubagentManager, SubagentModel, SubagentNotification, SubagentOutcome, SubagentRequest,
-        SubagentSpawn, SubagentTool, WorkflowStore, WorkflowTool, DEFAULT_COMPLETION_CAPACITY,
+        ProcessEntry, ProcessSnapshot, ProcessSpawn, ProcessTool, ProcessWrite, SpawnExtensions,
+        SubagentDepth, SubagentIdentity, SubagentManager, SubagentModel, SubagentNotification,
+        SubagentOutcome, SubagentRequest, SubagentSpawn, SubagentTool, WorkflowStore, WorkflowTool,
+        DEFAULT_COMPLETION_CAPACITY,
     };
 }
 

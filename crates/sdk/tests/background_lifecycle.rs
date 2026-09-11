@@ -307,7 +307,7 @@ async fn shutdown_awaits_workers_and_times_out_when_they_hang() {
         matches!(
             error,
             SdkError::ShutdownTimeout {
-                still_active: 1,
+                still_active_workers: 1,
                 still_running_processes: 0
             }
         ),
@@ -520,7 +520,7 @@ async fn spawns_during_the_grace_window_are_refused() {
         matches!(
             shutdown,
             Err(SdkError::ShutdownTimeout {
-                still_active: 1,
+                still_active_workers: 1,
                 still_running_processes: 0
             })
         ),
