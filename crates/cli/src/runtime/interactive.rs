@@ -38,7 +38,19 @@ use crate::{
 
 /// Headless or interactive. The endpoint (provider, base url, key, model)
 /// lives in the worker and can be switched from the TUI at runtime.
-pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
+pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
+    let session = if cfg.no_session {
+        None
+    } else {
+        match open_session(&mut cfg) {
+            Ok(opened) => Some(opened),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
     let ws = Workspace::new(&cfg.workspace);
     // Scanned before the prompt is built: whether the `skill` tool gets
     // advertised depends on whether any skill was found, and the scan is
@@ -98,18 +110,6 @@ pub(crate) async fn run_mode(cfg: Config) -> ExitCode {
     };
     let memory_root = workspace_scope(&ws);
     let memory_scope = MemoryScope::new(workspace_key(&memory_root), memory_root);
-
-    let session = if cfg.no_session {
-        None
-    } else {
-        match open_session(&cfg, &ws) {
-            Ok(opened) => Some(opened),
-            Err(err) => {
-                eprintln!("error: {err}");
-                return ExitCode::FAILURE;
-            }
-        }
-    };
 
     if cfg.prompt.is_some() {
         let (handler, resumed) = match session {

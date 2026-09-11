@@ -16,6 +16,35 @@ mod main_tests {
     use crate::{parse_run_args, resolve_theme, select_provider, system_prompt, Config, Planning};
 
     #[test]
+    fn resume_subcommand_reuses_session_options() {
+        for command in ["resume", "--resume"] {
+            let cfg = parse_run_args(
+                [
+                    command,
+                    "session-id",
+                    "--workspace",
+                    "/tmp/orca",
+                    "--openrouter",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            )
+            .unwrap();
+            assert_eq!(cfg.resume_id.as_deref(), Some("session-id"));
+            assert_eq!(cfg.workspace, PathBuf::from("/tmp/orca"));
+            assert!(!cfg.continue_latest);
+        }
+        for args in [
+            vec!["resume"],
+            vec!["resume", "--workspace"],
+            vec!["resume", ""],
+        ] {
+            assert!(parse_run_args(args.into_iter().map(str::to_owned).collect()).is_err());
+        }
+    }
+
+    #[test]
     fn bare_prompt_is_small_and_enforces_the_requested_output_contract() {
         let prompt = crate::headless::bare_system_prompt(
             &Workspace::new(PathBuf::from(".")),

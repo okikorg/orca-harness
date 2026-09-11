@@ -83,6 +83,7 @@ orcacode — terminal host for Orca Harness
 USAGE:
   orcacode [OPTIONS]                interactive session
   orcacode [OPTIONS] -p \"prompt\"    headless single run (streams to stdout)
+  orcacode resume ID [OPTIONS]      resume a recorded session (same as --resume ID)
   orcacode update                   install the latest release
   orcacode plugin <COMMAND>         manage Agent Plugin packages
 

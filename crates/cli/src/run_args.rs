@@ -38,7 +38,15 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut yolo = false;
     let mut theme = std::env::var("ORCA_THEME").ok();
 
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
+    if args.peek().is_some_and(|arg| arg == "resume") {
+        args.next();
+        resume_id = Some(
+            args.next()
+                .filter(|id| !id.is_empty() && !id.starts_with('-'))
+                .ok_or("usage: orcacode resume ID [OPTIONS]")?,
+        );
+    }
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
             args.next()

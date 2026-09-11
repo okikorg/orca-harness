@@ -56,7 +56,31 @@ pub async fn run(
         "orcacode · session ended · tokens in {} out {}",
         app.tokens_in, app.tokens_out
     );
+    if let Some(hint) = resume_hint(app.cfg.session_id.as_deref()) {
+        println!("{hint}");
+    }
     Ok(())
+}
+
+fn resume_hint(session_id: Option<&str>) -> Option<String> {
+    let id = session_id?;
+    Some(format!(
+        "\nResume this session with:\n  orcacode resume {id}"
+    ))
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    #[test]
+    fn resume_hint_needs_only_the_session_id() {
+        assert!(resume_hint(None).is_none());
+        assert_eq!(
+            resume_hint(Some("session-id")).unwrap(),
+            "\nResume this session with:\n  orcacode resume session-id"
+        );
+    }
 }
 
 /// Move the transcript view by `delta` lines: positive scrolls back
