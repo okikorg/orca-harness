@@ -20,7 +20,7 @@ use orca_harness_tools::{FileGuard, TodoList};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::background::{BackgroundNotification, Processes, Subagents, Workflows};
-use crate::tools::SessionTools;
+use crate::tools::{RunTools, SessionTools};
 use crate::{Agent, RunHandle, RunOutcome, RunRequest, RunResult, SdkError};
 
 use events::RunObserver;
@@ -298,9 +298,11 @@ impl Session {
             ));
         }
         let cancellation = request.run_token();
+        let RunTools { tools, skill_once } = self.tools.run_tools(&self.agent.inner);
         Ok(RunExecution {
             definition: self.agent.clone(),
-            tools: self.tools.tools.clone(),
+            tools,
+            skill_once,
             context: self.context.clone(),
             recorder: self.recorder.clone(),
             store: self.truncation_store.clone(),
