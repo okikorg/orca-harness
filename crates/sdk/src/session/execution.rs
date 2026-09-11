@@ -131,7 +131,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
             result => break result,
         }
     };
-    let dropped_events = fanout.finish();
+    let dropped_events = fanout.flush();
     let persistence = match &recorder {
         Some(recorder) => {
             recorder.sync(&context);

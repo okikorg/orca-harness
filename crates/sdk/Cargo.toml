@@ -23,7 +23,6 @@ tokio.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-async-trait.workspace = true
 
 [[example]]
 name = "provider_anthropic"

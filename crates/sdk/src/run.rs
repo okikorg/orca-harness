@@ -232,10 +232,15 @@ pub enum RunEvent {
     Harness(HarnessEvent),
     /// `dropped` events were discarded between the previous delivered
     /// event and the next one because the channel was full (see
-    /// [`RunRequest::event_capacity`]). Emitted once per gap, as soon as
-    /// capacity is available again; a gap still open when the run ends is
-    /// reported by a final marker that always fits, so the markers in a
-    /// fully drained stream sum to [`RunOutcome::dropped_events`].
+    /// [`RunRequest::event_capacity`]). Emitted once per gap, carried
+    /// before the next event that finds room; a gap still open when the
+    /// run ends is reported by a final marker that always fits, so the
+    /// markers in a fully drained stream sum to
+    /// [`RunOutcome::dropped_events`]. The count is exact; the placement
+    /// is relative to the next delivered event and approximate when tools
+    /// run in parallel (the dispatcher emits `ToolFinished` and
+    /// `ToolResult` concurrently). Two markers can be adjacent when the
+    /// event following a marker did not fit either.
     Overflow { dropped: u64 },
 }
 

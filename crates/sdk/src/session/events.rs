@@ -32,13 +32,15 @@ pub(super) struct RunObserver {
 
 impl RunObserver {
     /// A channel holding `capacity` events for the reader plus the one
-    /// reserved slot.
+    /// reserved slot. `capacity` is at least one
+    /// ([`RunRequest::event_capacity`](crate::RunRequest::event_capacity)
+    /// clamps it).
     pub(super) fn channel(capacity: usize) -> (Self, Receiver<RunEvent>, Arc<AtomicU64>) {
-        let (sender, receiver) = mpsc::channel(capacity.max(1) + 1);
+        let (sender, receiver) = mpsc::channel(capacity + 1);
         let reserved = sender
             .clone()
             .try_reserve_owned()
-            .unwrap_or_else(|_| unreachable!("a fresh channel has a free slot"));
+            .expect("a fresh channel has a free slot");
         let dropped = Arc::new(AtomicU64::new(0));
         let observer = Self {
             sender,
@@ -81,7 +83,7 @@ impl EventFanout {
     /// Report a gap left open by the last events of the run through the
     /// reserved slot, and return the total dropped. Call once, after the
     /// kernel has finished emitting.
-    pub(super) fn finish(&self) -> u64 {
+    pub(super) fn flush(&self) -> u64 {
         let reserved = self.reserved.lock().unwrap().take();
         let gap = self.pending_gap.swap(0, Ordering::AcqRel);
         if let Some(permit) = reserved {
@@ -162,12 +164,12 @@ mod tests {
             Some(RunEvent::Overflow { dropped: 3 })
         ));
         assert!(matches!(receiver.recv().await, Some(RunEvent::Harness(_))));
-        assert_eq!(fanout.finish(), 3);
+        assert_eq!(fanout.flush(), 3);
         assert!(receiver.try_recv().is_err());
     }
 
     #[tokio::test]
-    async fn marker_that_does_not_fit_keeps_the_gap_pending() {
+    async fn marker_fits_but_event_does_not_opens_a_new_gap() {
         let (fanout, mut receiver, dropped) = fanout(1);
         fanout.emit(event()).await;
         fanout.emit(event()).await; // dropped: gap 1
@@ -186,12 +188,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn marker_that_does_not_fit_keeps_the_gap_pending() {
+        let (fanout, mut receiver, dropped) = fanout(1);
+        fanout.emit(event()).await;
+        fanout.emit(event()).await; // dropped: gap 1
+        fanout.emit(event()).await; // marker does not fit: gap 2
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
+        assert!(matches!(receiver.recv().await, Some(RunEvent::Harness(_))));
+        fanout.emit(event()).await;
+        assert!(matches!(
+            receiver.recv().await,
+            Some(RunEvent::Overflow { dropped: 2 })
+        ));
+    }
+
+    #[tokio::test]
     async fn trailing_gap_is_flushed_through_the_reserved_slot() {
         let (fanout, mut receiver, _dropped) = fanout(1);
         for _ in 0..4 {
             fanout.emit(event()).await;
         }
-        assert_eq!(fanout.finish(), 3);
+        assert_eq!(fanout.flush(), 3);
         assert!(matches!(receiver.recv().await, Some(RunEvent::Harness(_))));
         assert!(matches!(
             receiver.recv().await,
@@ -208,7 +225,7 @@ mod tests {
         for _ in 0..3 {
             fanout.emit(event()).await;
         }
-        assert_eq!(fanout.finish(), 0);
+        assert_eq!(fanout.flush(), 0);
         assert_eq!(dropped.load(Ordering::SeqCst), 0);
     }
 }

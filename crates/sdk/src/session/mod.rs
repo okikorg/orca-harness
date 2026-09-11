@@ -226,9 +226,8 @@ impl Session {
     /// Run one request to completion and report its detailed
     /// [`RunOutcome`], including usage and transcript when the run failed
     /// or was cancelled. `Err` only when the run never started: the
-    /// session is busy, the request shape cannot run (a continuation with
-    /// a prompt, images, or nothing to continue), or an image cannot be
-    /// read.
+    /// session is busy, or the request shape cannot run (a continuation
+    /// with a prompt, images, or nothing to continue).
     pub async fn run_outcome(
         &self,
         request: impl Into<RunRequest>,
