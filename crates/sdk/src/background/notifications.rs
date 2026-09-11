@@ -171,13 +171,11 @@ mod tests {
 
         notify(&inbox, &events, finished(0, 1, None));
         notify(&inbox, &events, finished(0, 2, None));
-        let mut wakeups = 0;
-        while let Ok(event) = host.try_recv() {
-            if matches!(event, BackgroundNotification::CompletionsReady { .. }) {
-                wakeups += 1;
-            }
-        }
-        assert_eq!(wakeups, 1, "the second result joins the pending batch");
+        assert_eq!(
+            ready_count(&mut host),
+            1,
+            "the second result joins the pending batch"
+        );
         assert_eq!(inbox.pending(), 2);
 
         inbox.reset();

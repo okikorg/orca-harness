@@ -212,3 +212,15 @@ async fn delivery_hook_observes_the_batch_the_transcript_receives() {
     assert_eq!(*seen.lock().unwrap(), vec![vec![1, 2]]);
     assert!(!inbox.has_ready());
 }
+
+#[test]
+fn reset_clears_an_outstanding_wakeup() {
+    let inbox = CompletionInbox::new(SubagentManager::new(1));
+    assert!(inbox.request_wakeup());
+    assert!(!inbox.request_wakeup(), "one wake-up outstanding");
+    inbox.reset();
+    assert!(
+        inbox.request_wakeup(),
+        "the replaced conversation's wake-up does not carry over"
+    );
+}

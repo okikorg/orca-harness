@@ -173,6 +173,9 @@ impl CompletionInbox {
             workflows.clear();
         }
         *self.ready.lock().unwrap() = ReadyBatch::default();
+        // A wake-up requested for the replaced conversation is owed to
+        // nobody; the first result of the new one must announce itself.
+        self.wake_pending.store(false, Ordering::Release);
     }
 }
 
