@@ -402,8 +402,11 @@ async fn skills_discovery_enable_and_disable() {
     // Uninstall skill
     let uninstalled = skills.uninstall("code_helper").unwrap();
     assert!(uninstalled);
+    // The catalog drops the entry at once, ahead of any reload.
+    assert!(skills.catalog().skills.is_empty());
+    assert!(skills.tool().is_none());
 
-    // After uninstallation, reload to update discovered cache
+    // A reload finds nothing on disk either
     let reloaded = skills.reload();
     assert!(reloaded.skills.is_empty());
     assert!(skills.tool().is_none());

@@ -2,74 +2,17 @@
 //! preview reads a source without installing from it, and catalog
 //! changes reach the next run of a session, never the one in flight.
 
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use async_trait::async_trait;
-use orca_harness_core::{
-    Context, FnTool, Message, Model, ModelError, ModelResponse, ToolCall, ToolSchema,
-};
-use orca_harness_sdk::{
-    Harness, SkillDestination, SkillPreview, SkillSourceOutcome, Skills, ToolPreset,
-};
+use orca_harness_core::{FnTool, Message};
+use orca_harness_sdk::{Harness, SkillDestination, SkillPreview, Skills, ToolPreset};
 use serde_json::json;
 
 mod common;
+mod schema_support;
 use common::temp_dir;
-
-/// One scripted model step: a final answer, or one call of the named
-/// tool with the given input.
-enum Step {
-    Final,
-    Call(&'static str, serde_json::Value),
-}
-
-/// Records the tool schema names offered on every `generate` call and
-/// answers from a script (final text once the script runs out).
-#[derive(Default)]
-struct Recording {
-    offered: Mutex<Vec<Vec<String>>>,
-    script: Mutex<VecDeque<Step>>,
-}
-
-impl Recording {
-    fn script(&self, steps: Vec<Step>) {
-        *self.script.lock().unwrap() = steps.into();
-    }
-
-    /// The schema names of every model call so far, then forgets them.
-    fn take(&self) -> Vec<Vec<String>> {
-        std::mem::take(&mut *self.offered.lock().unwrap())
-    }
-}
-
-#[async_trait]
-impl Model for Recording {
-    async fn generate(
-        &self,
-        _context: &Context,
-        tools: &[ToolSchema],
-    ) -> Result<ModelResponse, ModelError> {
-        self.offered
-            .lock()
-            .unwrap()
-            .push(tools.iter().map(|schema| schema.name.clone()).collect());
-        let step = self.script.lock().unwrap().pop_front();
-        Ok(match step {
-            Some(Step::Call(name, arguments)) => ModelResponse::ToolCalls {
-                content: None,
-                calls: vec![ToolCall {
-                    id: format!("call-{name}"),
-                    name: name.into(),
-                    arguments,
-                }],
-                usage: None,
-            },
-            Some(Step::Final) | None => ModelResponse::final_text("done"),
-        })
-    }
-}
+use schema_support::{name, Recording, Step};
 
 fn write_skill(root: &Path, dir: &str, name: &str, description: &str) {
     let folder = root.join(dir);
@@ -129,6 +72,11 @@ fn expected_previews(src: &Path) -> Vec<SkillPreview> {
     ]
 }
 
+/// Whether one recorded model call offered the `skill` tool.
+fn offers_skill(schemas: &[serde_json::Value]) -> bool {
+    schemas.iter().any(|schema| name(schema) == "skill")
+}
+
 #[tokio::test]
 async fn preview_reads_metadata_without_installing() {
     let root = temp_dir("skills-preview");
@@ -158,19 +106,16 @@ async fn install_list_only_returns_previews_and_installs_nothing() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        outcome,
-        SkillSourceOutcome::Previewed(expected_previews(&src))
-    );
+    assert!(outcome.clone().installed().is_empty());
+    assert_eq!(outcome.previewed(), expected_previews(&src));
     assert!(entries(&managed_root(&root)).is_empty());
 
     let outcome = skills
         .install(&src.display().to_string(), SkillDestination::Managed)
         .await
         .unwrap();
-    let SkillSourceOutcome::Installed(installed) = outcome else {
-        panic!("a plain install installs");
-    };
+    assert!(outcome.clone().previewed().is_empty());
+    let installed = outcome.installed();
     let names: Vec<&str> = installed.iter().map(|item| item.name.as_str()).collect();
     assert_eq!(names, ["alpha", "beta"]);
     assert!(installed
@@ -246,38 +191,38 @@ async fn skill_changes_apply_at_the_next_run_not_mid_run() {
     session.run("one").await.unwrap();
     let offered = model.take();
     assert_eq!(offered.len(), 1);
-    assert!(offered[0].contains(&"skill".to_string()));
+    assert!(offers_skill(&offered[0]));
 
     skills.disable("s1");
     session.run("two").await.unwrap();
     let offered = model.take();
-    assert!(!offered[0].contains(&"skill".to_string()));
+    assert!(!offers_skill(&offered[0]));
 
     skills.enable("s1");
     skills.scaffold("s2", SkillDestination::Workspace).unwrap();
     skills.reload();
     session.run("three").await.unwrap();
     let offered = model.take();
-    assert!(offered[0].contains(&"skill".to_string()));
+    assert!(offers_skill(&offered[0]));
 
-    // Within one run the schema set is fixed even when a tool callback
-    // changes the catalog between two model calls.
+    // Within one run every schema, parameters included, is fixed even
+    // when a tool callback changes the catalog between two model calls.
     model.script(vec![Step::Call("toggle", json!({})), Step::Final]);
     session.run("four").await.unwrap();
     let offered = model.take();
     assert_eq!(offered.len(), 2);
     assert_eq!(offered[0], offered[1]);
-    assert!(offered[0].contains(&"skill".to_string()));
+    assert!(offers_skill(&offered[0]));
 
     session.run("five").await.unwrap();
     let offered = model.take();
-    assert!(!offered[0].contains(&"skill".to_string()));
+    assert!(!offers_skill(&offered[0]));
 
     // A fresh ephemeral run reads the same catalog.
     skills.enable("s1");
     agent.run("six").await.unwrap();
     let offered = model.take();
-    assert!(offered[0].contains(&"skill".to_string()));
+    assert!(offers_skill(&offered[0]));
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -304,7 +249,7 @@ async fn skill_once_follows_the_run() {
         Step::Final,
     ]);
     let result = session.run("load").await.unwrap();
-    let offered = model.take();
+    let offered = model.take_names();
     assert_eq!(offered.len(), 3);
     for names in &offered {
         let count = names.iter().filter(|name| *name == "skill").count();

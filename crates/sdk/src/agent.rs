@@ -270,10 +270,11 @@ impl AgentBuilder {
     }
 
     /// Offer the `skill` tool over `skills`. The catalog is read at each
-    /// run boundary, so changes made through the handle (enable, disable,
-    /// reload, scaffold, install, uninstall) reach the next run of every
-    /// session and never a run in flight; a run offers no `skill` tool
-    /// when no skill is enabled at its start.
+    /// run boundary, so `enable`, `disable`, and `reload` reach the next
+    /// run of every session and never a run in flight; `scaffold` and
+    /// `install` change disk and reach the catalog at the next `reload`,
+    /// and `uninstall` drops its entry from the catalog at once. A run
+    /// offers no `skill` tool when no skill is enabled at its start.
     pub fn skills(mut self, skills: Skills) -> Self {
         self.skills = Some(skills);
         self

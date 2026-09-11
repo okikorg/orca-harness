@@ -26,7 +26,8 @@ pub struct SkillPreview {
     pub name: String,
     /// The frontmatter `description`, or empty when the file has none.
     pub description: String,
-    /// The skill folder relative to the source root.
+    /// The skill folder relative to the checkout root: the local folder,
+    /// the repository root, or the deep link's subdirectory.
     pub path: PathBuf,
     /// Display form of the source it was read from.
     pub origin: String,
@@ -42,14 +43,33 @@ pub enum SkillSourceOutcome {
     Installed(Vec<Installed>),
 }
 
+impl SkillSourceOutcome {
+    /// The installed skills; empty when the source was only previewed.
+    pub fn installed(self) -> Vec<Installed> {
+        match self {
+            Self::Installed(installed) => installed,
+            Self::Previewed(_) => Vec::new(),
+        }
+    }
+
+    /// The previewed skills; empty when the source was installed.
+    pub fn previewed(self) -> Vec<SkillPreview> {
+        match self {
+            Self::Previewed(previews) => previews,
+            Self::Installed(_) => Vec::new(),
+        }
+    }
+}
+
 /// The skill catalog an agent offers through its `skill` tool.
 ///
-/// Clones share one catalog and one enablement set. Catalog changes
-/// (`reload`, `enable`, `disable`, `scaffold`, `install`, `uninstall`)
-/// take effect at the next run of any session built from an agent
-/// holding this handle: the tool set, and so the `skill` tool's schema,
-/// is fixed for the length of a run and read again at the next run
-/// boundary.
+/// Clones share one catalog and one enablement set. `enable`, `disable`,
+/// and `reload` take effect at the next run of any session built from an
+/// agent holding this handle: the tool set, and so the `skill` tool's
+/// schema, is fixed for the length of a run and read again at the next
+/// run boundary. `scaffold` and `install` change disk and reach the
+/// catalog at the next `reload`; `uninstall` changes disk and drops the
+/// entry from the catalog at once.
 #[derive(Clone)]
 pub struct Skills {
     roots: Arc<Vec<SkillRoot>>,
@@ -205,20 +225,23 @@ impl Skills {
             .map(SkillSourceOutcome::Installed)
     }
 
+    /// Delete a catalogued skill's folder and drop it from the catalog,
+    /// so the next run does not offer a skill that is no longer on disk.
+    /// `Ok(false)` when the catalog holds no such skill.
     pub fn uninstall(&self, name: &str) -> Result<bool, SdkError> {
-        let found = self.discovered.read().expect("skills lock");
-        let Some(skill) = found.skills.iter().find(|skill| skill.name == name) else {
+        let mut found = self.discovered.write().expect("skills lock");
+        let Some(index) = found.skills.iter().position(|skill| skill.name == name) else {
             return Ok(false);
         };
-        if !skill.dir.starts_with(&self.managed_root)
-            && !skill.dir.starts_with(&self.workspace_root)
-        {
+        let dir = &found.skills[index].dir;
+        if !dir.starts_with(&self.managed_root) && !dir.starts_with(&self.workspace_root) {
             return Err(SdkError::Skill(format!(
                 "skill is outside SDK-managed roots: {}",
-                skill.dir.display()
+                dir.display()
             )));
         }
-        uninstall(&skill.dir).map_err(SdkError::Skill)?;
+        uninstall(dir).map_err(SdkError::Skill)?;
+        found.skills.remove(index);
         Ok(true)
     }
 
@@ -260,6 +283,8 @@ fn previews(checkout: &Checkout, candidates: &[Candidate], origin: &Origin) -> V
                 .and_then(|text| parse_frontmatter(&text).ok())
                 .and_then(|front| front.description)
                 .unwrap_or_default();
+            // Candidates are found by walking down from `checkout.root`,
+            // so the prefix always strips; the fallback is unreachable.
             let path = candidate
                 .dir
                 .strip_prefix(&checkout.root)
