@@ -22,6 +22,11 @@ pub enum SdkError {
     SessionNotFound(String),
     #[error("session has no persistent recorder")]
     EphemeralSession,
+    /// An imported conversation history (see
+    /// [`SessionBuilder::context`](crate::SessionBuilder::context)) is not
+    /// a shape the kernel can resume from.
+    #[error("invalid imported context: {0}")]
+    InvalidContext(String),
     #[error("cannot read image {path}: {source}")]
     Image {
         path: PathBuf,

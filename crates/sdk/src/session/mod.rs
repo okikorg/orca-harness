@@ -2,13 +2,14 @@
 //! state, and the busy guard that serializes operations on one session.
 
 mod execution;
+mod import;
 mod persistence;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use orca_harness_core::{CancellationToken, Context};
+use orca_harness_core::{CancellationToken, Context, Message};
 use orca_harness_extensions::{
     compact, CompactConfig, CompactReport, SessionFile, SessionHandler, TruncationStore,
 };
@@ -18,7 +19,8 @@ use tokio::sync::Mutex;
 use crate::tools::SessionTools;
 use crate::{Agent, RunHandle, RunRequest, RunResult, SdkError};
 
-use execution::{execute, RunExecution};
+use execution::{ensure_continuable, execute, RunExecution};
+use import::imported_context;
 use persistence::{load_session_store, save_session_store, session_store};
 
 #[derive(Clone)]
@@ -50,6 +52,7 @@ pub enum SessionMode {
 pub struct SessionBuilder {
     agent: Agent,
     mode: SessionMode,
+    context: Vec<Message>,
 }
 
 impl SessionBuilder {
@@ -57,7 +60,30 @@ impl SessionBuilder {
         Self {
             agent,
             mode: SessionMode::Ephemeral,
+            context: Vec::new(),
         }
+    }
+
+    /// Seed the session with an existing conversation instead of an empty
+    /// one. A persistent session writes the imported history to disk when
+    /// it opens, so a later `resume_session` sees it.
+    ///
+    /// System-prompt precedence: the agent's system prompt is
+    /// authoritative. When the agent has one, it replaces a leading
+    /// imported `System` message, or is prepended when the import has
+    /// none. When the agent has no system prompt, an imported leading
+    /// `System` message is kept as-is.
+    ///
+    /// [`open`](Self::open) rejects a history the kernel cannot resume from
+    /// with [`SdkError::InvalidContext`]: more than one `System` message or
+    /// one that is not first; a `Tool` message that does not immediately
+    /// follow an `Assistant` message whose tool calls it answers (the
+    /// result ids must match the call ids exactly); or an `Assistant`
+    /// message with tool calls that is not immediately followed by its
+    /// `Tool` message. An empty import is the same as none.
+    pub fn context(mut self, messages: impl IntoIterator<Item = Message>) -> Self {
+        self.context = messages.into_iter().collect();
+        self
     }
 
     pub fn ephemeral(mut self) -> Self {
@@ -71,7 +97,7 @@ impl SessionBuilder {
     }
 
     pub fn open(self) -> Result<Session, SdkError> {
-        Session::open(self.agent, self.mode)
+        Session::open(self.agent, self.mode, self.context)
     }
 }
 
@@ -85,12 +111,22 @@ pub struct Session {
     load_warnings: Vec<String>,
 }
 
+/// An empty conversation carrying only the agent's system prompt, if any.
+fn fresh_context(agent: &Agent) -> Context {
+    let mut context = Context::new();
+    if let Some(prompt) = &agent.inner.system_prompt {
+        context.push_system(prompt.clone());
+    }
+    context
+}
+
 impl Session {
-    fn open(agent: Agent, mode: SessionMode) -> Result<Self, SdkError> {
-        let mut context = Context::new();
-        if let Some(prompt) = &agent.inner.system_prompt {
-            context.push_system(prompt.clone());
-        }
+    fn open(agent: Agent, mode: SessionMode, imported: Vec<Message>) -> Result<Self, SdkError> {
+        let context = if imported.is_empty() {
+            fresh_context(&agent)
+        } else {
+            imported_context(&agent, imported)?
+        };
         let recorder = match mode {
             SessionMode::Ephemeral => None,
             SessionMode::Persistent => {
@@ -176,11 +212,64 @@ impl Session {
         self.context.lock().await.messages().to_vec()
     }
 
+    /// Run one request to completion on this session. A request built with
+    /// [`RunRequest::continuation`] behaves as [`continue_run`](Self::continue_run).
     pub async fn run(&self, request: impl Into<RunRequest>) -> Result<RunResult, SdkError> {
         let busy = BusyGuard::acquire(self.busy.clone())?;
         let request = request.into();
-        let cancellation = CancellationToken::new();
-        execute(RunExecution {
+        let cancellation = request.run_token();
+        execute(self.execution(request, cancellation, None, busy)?).await
+    }
+
+    /// Continue the conversation from where it stands without appending a
+    /// user message: the model produces the next assistant turn on the
+    /// current transcript. Limits, the request deadline, and the busy guard
+    /// apply as for [`run`](Self::run). Fails with [`SdkError::Config`] when
+    /// the transcript holds nothing beyond the system prompt or when the
+    /// request carries images.
+    pub async fn continue_run(&self, request: RunRequest) -> Result<RunResult, SdkError> {
+        self.run(RunRequest {
+            continuation: true,
+            ..request
+        })
+        .await
+    }
+
+    /// Start a request in the background. The handle's token is the run's
+    /// own: cancelling it, or dropping the handle, cancels this run and
+    /// nothing else, in particular not a caller token supplied through
+    /// [`RunRequest::cancellation`].
+    pub fn start(&self, request: impl Into<RunRequest>) -> Result<RunHandle, SdkError> {
+        let busy = BusyGuard::acquire(self.busy.clone())?;
+        let request = request.into();
+        if request.continuation {
+            // Report an empty transcript here rather than from the task
+            // when the context is free; `execute` re-checks under the lock.
+            if let Ok(context) = self.context.try_lock() {
+                ensure_continuable(&context)?;
+            }
+        }
+        let cancellation = request.run_token();
+        let (send, receive) = tokio::sync::mpsc::unbounded_channel();
+        let run = self.execution(request, cancellation.clone(), Some(send), busy)?;
+        let task = tokio::spawn(execute(run));
+        Ok(RunHandle::new(cancellation, receive, task))
+    }
+
+    /// The single construction site for a run over this session's state.
+    fn execution(
+        &self,
+        request: RunRequest,
+        cancellation: CancellationToken,
+        event_send: Option<tokio::sync::mpsc::UnboundedSender<crate::HarnessEvent>>,
+        busy: BusyGuard,
+    ) -> Result<RunExecution, SdkError> {
+        if request.continuation && !request.images.is_empty() {
+            return Err(SdkError::Config(
+                "a continuation carries no user message to attach images to".into(),
+            ));
+        }
+        Ok(RunExecution {
             definition: self.agent.clone(),
             tools: self.tools.tools.clone(),
             context: self.context.clone(),
@@ -188,29 +277,9 @@ impl Session {
             store: self.truncation_store.clone(),
             request,
             cancellation,
-            event_send: None,
+            event_send,
             _busy: busy,
         })
-        .await
-    }
-
-    pub fn start(&self, request: impl Into<RunRequest>) -> Result<RunHandle, SdkError> {
-        let busy = BusyGuard::acquire(self.busy.clone())?;
-        let request = request.into();
-        let cancellation = CancellationToken::new();
-        let (send, receive) = tokio::sync::mpsc::unbounded_channel();
-        let task = tokio::spawn(execute(RunExecution {
-            definition: self.agent.clone(),
-            tools: self.tools.tools.clone(),
-            context: self.context.clone(),
-            recorder: self.recorder.clone(),
-            store: self.truncation_store.clone(),
-            request,
-            cancellation: cancellation.clone(),
-            event_send: Some(send),
-            _busy: busy,
-        }));
-        Ok(RunHandle::new(cancellation, receive, task))
     }
 
     pub async fn compact(&self, config: CompactConfig) -> Result<CompactReport, SdkError> {
@@ -263,10 +332,7 @@ impl Session {
     /// read-before-write guard and todo list.
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
-        let mut fresh = Context::new();
-        if let Some(prompt) = &self.agent.inner.system_prompt {
-            fresh.push_system(prompt.clone());
-        }
+        let fresh = fresh_context(&self.agent);
         let mut context = self.context.lock().await;
         if let Some(recorder) = &self.recorder {
             recorder.start_new_with_context(&fresh)?;
@@ -283,10 +349,7 @@ impl Session {
     pub async fn reset_in_place(&self) -> Result<(), SdkError> {
         let _busy = BusyGuard::acquire(self.busy.clone())?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
-        let mut fresh = Context::new();
-        if let Some(prompt) = &self.agent.inner.system_prompt {
-            fresh.push_system(prompt.clone());
-        }
+        let fresh = fresh_context(&self.agent);
         let mut context = self.context.lock().await;
         recorder.reset()?;
         self.truncation_store.clear();

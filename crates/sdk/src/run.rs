@@ -16,6 +16,10 @@ pub struct RunRequest {
     pub deadline: Option<Duration>,
     pub(crate) on_event: Option<EventCallback>,
     pub(crate) continue_at_step_limit: bool,
+    /// Built by [`RunRequest::continuation`]: no user message is appended.
+    pub(crate) continuation: bool,
+    /// A caller-owned token; the run gets a child of it.
+    pub(crate) cancellation: Option<CancellationToken>,
 }
 
 impl RunRequest {
@@ -26,6 +30,60 @@ impl RunRequest {
             deadline: None,
             on_event: None,
             continue_at_step_limit: false,
+            continuation: false,
+            cancellation: None,
+        }
+    }
+
+    /// A request that continues the session's conversation from where it
+    /// stands, without appending a user message. The model sees the
+    /// transcript as-is (its last message is typically an earlier
+    /// assistant turn) and produces the next assistant turn.
+    ///
+    /// Limits, [`deadline`](Self::deadline), [`on_event`](Self::on_event),
+    /// [`continue_at_step_limit`](Self::continue_at_step_limit), and
+    /// [`cancellation`](Self::cancellation) apply as on any request.
+    /// Images cannot be attached (there is no message to carry them) and
+    /// are rejected with [`SdkError::Config`] when the run starts. A
+    /// session whose transcript holds nothing beyond the system prompt
+    /// rejects the request with [`SdkError::Config`].
+    ///
+    /// ```rust,no_run
+    /// # async fn example(session: orca_harness_sdk::Session) -> Result<(), orca_harness_sdk::SdkError> {
+    /// use orca_harness_sdk::RunRequest;
+    /// let result = session.continue_run(RunRequest::continuation()).await?;
+    /// println!("{}", result.text);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn continuation() -> Self {
+        Self {
+            continuation: true,
+            ..Self::new(String::new())
+        }
+    }
+
+    /// Whether this request was built with [`RunRequest::continuation`].
+    pub fn is_continuation(&self) -> bool {
+        self.continuation
+    }
+
+    /// Tie the run to a caller-owned token. The run receives a child of
+    /// `token`: cancelling `token` cancels the run, while cancelling the
+    /// run (through [`RunHandle::cancellation_token`] or by dropping the
+    /// handle) never cancels `token`, so one parent token can govern many
+    /// runs and other work without them cancelling each other.
+    pub fn cancellation(mut self, token: CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
+    }
+
+    /// The token this run observes: a child of the caller's token when one
+    /// was supplied, otherwise a fresh root.
+    pub(crate) fn run_token(&self) -> CancellationToken {
+        match &self.cancellation {
+            Some(parent) => parent.child_token(),
+            None => CancellationToken::new(),
         }
     }
 
