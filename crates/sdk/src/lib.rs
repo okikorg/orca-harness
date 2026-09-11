@@ -83,9 +83,9 @@ pub mod providers {
 /// The workflow vocabulary (`Stage`, `Kind`, `RunState`, `StageStatus`,
 /// `GraphError`, `RunId`, `StageId`, `DEFAULT_STAGE_CAP`) is the
 /// `harness-dag` engine's own, re-exported so hosts need no direct
-/// dependency on it. A finished run's outcome is exposed as the JSON
-/// document the parent receives ([`WorkflowStatus::outcome`]) rather than
-/// as a typed twin of the engine's outcome.
+/// dependency on it. A finished run's outcome ([`WorkflowStatus::outcome`])
+/// is the typed [`WorkflowOutcome`], whose JSON form is the document the
+/// parent receives.
 pub mod orchestration {
     pub use orca_harness_tools::dag::{
         GraphError, Kind, RunId, RunState, Stage, StageId, StageStatus, DEFAULT_STAGE_CAP,
@@ -95,9 +95,9 @@ pub mod orchestration {
         ActiveInventory, BackgroundAcknowledgement, BackgroundJob, BackgroundProcess,
         BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox, ProcessController,
         ProcessEntry, ProcessSnapshot, ProcessSpawn, ProcessTool, ProcessWrite, SpawnExtensions,
-        StageOutput, SubagentDepth, SubagentIdentity, SubagentManager, SubagentModel,
+        StageOutput, StageTiming, SubagentDepth, SubagentIdentity, SubagentManager, SubagentModel,
         SubagentNotification, SubagentOutcome, SubagentRequest, SubagentSpawn, SubagentTool,
-        WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus, WorkflowStore,
+        WorkflowAcknowledgement, WorkflowOutcome, WorkflowStageJob, WorkflowStatus, WorkflowStore,
         WorkflowSubmission, WorkflowTool, DEFAULT_COMPLETION_CAPACITY,
     };
 }

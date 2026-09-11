@@ -83,7 +83,7 @@ async fn session_workflows_submit_and_receive_terminal_outcome() {
     assert_eq!(status.state, RunState::Done);
     assert_eq!(status.stages["a"], StageStatus::Done);
     assert_eq!(
-        status.outcome.as_ref().unwrap()["outputs"],
+        serde_json::to_value(&status.outcome.as_ref().unwrap().outputs).unwrap(),
         outcome["workflow"]["outputs"]
     );
     assert_eq!(

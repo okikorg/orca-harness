@@ -5,6 +5,7 @@
 //! that switch must still replay afterwards. Hosts therefore create one store
 //! per session, alongside the subagent manager whose spawn sequence names the
 //! runs, and clone it into every rebuild.
+use super::WorkflowOutcome;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +17,7 @@ struct Record {
 #[derive(Default)]
 struct Run {
     stages: HashMap<String, Record>,
-    outcome: Option<serde_json::Value>,
+    outcome: Option<WorkflowOutcome>,
 }
 
 /// A shared handle: cloning shares the runs, it does not copy them.
@@ -75,11 +76,11 @@ impl WorkflowStore {
     }
 
     /// The terminal outcome the runtime recorded for `run`, once it finished.
-    pub(super) fn stored_outcome(&self, run: u64) -> Option<serde_json::Value> {
+    pub(super) fn stored_outcome(&self, run: u64) -> Option<WorkflowOutcome> {
         self.0.lock().unwrap().get(&run)?.outcome.clone()
     }
 
-    pub(super) fn set_outcome(&self, run: u64, value: &serde_json::Value) {
-        self.0.lock().unwrap().entry(run).or_default().outcome = Some(value.clone());
+    pub(super) fn set_outcome(&self, run: u64, outcome: &WorkflowOutcome) {
+        self.0.lock().unwrap().entry(run).or_default().outcome = Some(outcome.clone());
     }
 }

@@ -5,7 +5,7 @@
 
 use orca_harness_core::{CancellationToken, Tool};
 use orca_harness_dag::{Kind, RunState, StageStatus};
-use orca_harness_tools::{BackgroundStatus, WorkflowSubmission};
+use orca_harness_tools::{BackgroundStatus, StageTiming, WorkflowSubmission};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -163,7 +163,7 @@ async fn dependencies_maps_and_stage_cap() {
         assert_eq!(status.stages[id], StageStatus::Done, "{id}");
     }
     assert_eq!(
-        status.outcome.as_ref().unwrap()["outputs"],
+        serde_json::to_value(&status.outcome.as_ref().unwrap().outputs).unwrap(),
         outcome["workflow"]["outputs"]
     );
     assert_eq!(
@@ -239,8 +239,14 @@ async fn resume_from_replays_cached_outputs() {
     let status = tool.status(second.run_id).unwrap();
     assert_eq!(status.state, RunState::Done);
     let outcome = status.outcome.unwrap();
-    assert_eq!(outcome["timings"]["a"]["cached"], true);
-    assert_eq!(outcome["outputs"]["a"], "alpha");
+    assert_eq!(
+        outcome.timings["a"],
+        StageTiming::Ran {
+            runtime_ms: Some(0),
+            cached: true
+        }
+    );
+    assert_eq!(outcome.outputs["a"], "alpha");
     assert_eq!(
         tool.stage_output(second.run_id, "a").unwrap().answer,
         "alpha"
@@ -277,7 +283,7 @@ async fn status_and_stage_output_during_and_after_run() {
     assert_eq!(finished.state, RunState::Done);
     assert_eq!(finished.stages["a"], StageStatus::Done);
     assert!(finished.active.is_empty());
-    assert_eq!(finished.outcome.as_ref().unwrap()["state"], "done");
+    assert_eq!(finished.outcome.as_ref().unwrap().state, RunState::Done);
     assert!(tool.runs().is_empty());
     let output = tool.stage_output(ack.run_id, "a").unwrap();
     assert_eq!(output.answer, "held");

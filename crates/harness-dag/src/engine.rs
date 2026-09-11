@@ -69,6 +69,11 @@ impl Dag {
             .map(serde::Deserialize::deserialize)
             .collect::<Result<Vec<Stage>, _>>()
             .map_err(|e| GraphError(e.to_string()))?;
+        Self::from_stages(stages, cap)
+    }
+    /// Validate typed stages directly; [`with_cap`](Self::with_cap) is this
+    /// after deserializing.
+    pub fn from_stages(stages: Vec<Stage>, cap: usize) -> Result<Self, GraphError> {
         let graph = graph::validate(stages, cap)?;
         let mut edges: BTreeMap<_, Vec<_>> = graph.keys().map(|id| (id.clone(), vec![])).collect();
         for stage in graph.values() {
