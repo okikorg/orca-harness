@@ -17,7 +17,7 @@ use crate::agent::AgentDefinition;
 use crate::background::{
     BackgroundNotification, BackgroundServices, ProcessConfig, NOTIFICATION_CAPACITY,
 };
-use crate::Skills;
+use crate::{Mcp, Skills};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ToolPreset {
@@ -166,8 +166,8 @@ pub(crate) struct SessionTools {
 
 /// The tools one run registers, and the run-scoped integrations they
 /// call for. Built at the run boundary, so a catalog that changes
-/// between runs (skills; MCP next) is read once per run: the kernel's
-/// tool set, and every schema in it, is fixed for the length of the run.
+/// between runs (skills, MCP) is read once per run: the kernel's tool
+/// set, and every schema in it, is fixed for the length of the run.
 pub(crate) struct RunTools {
     pub(crate) tools: Vec<Arc<dyn Tool>>,
     /// The `skill` tool is registered this run, so the run pairs it with
@@ -226,14 +226,16 @@ impl SessionTools {
     }
 
     /// The tool set for one run: the session-owned tools, then the
-    /// `skill` tool as the agent's catalog stands right now, then the
-    /// agent-level tools built once at agent build (MCP, memory).
+    /// `skill` tool as the agent's skill catalog stands right now, then
+    /// the MCP interface and server tools as the MCP registry stands
+    /// right now, then the memory tools built once at agent build.
     pub(crate) fn run_tools(&self, definition: &AgentDefinition) -> RunTools {
         let mut tools = self.tools.clone();
         let skill = definition.skills.as_ref().and_then(Skills::tool);
         let skill_once = skill.is_some();
         tools.extend(skill);
-        tools.extend(definition.shared_tools.iter().cloned());
+        tools.extend(definition.mcp.iter().flat_map(Mcp::tools));
+        tools.extend(definition.memory_tools.iter().cloned());
         RunTools { tools, skill_once }
     }
 
