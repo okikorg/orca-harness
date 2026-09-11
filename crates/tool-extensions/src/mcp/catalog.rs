@@ -128,7 +128,7 @@ impl McpCatalog {
             .unwrap_or_default()
     }
 
-    /// The three stable interfaces are registered once; remote tools stay
+    /// The three stable interfaces are registered by the host; remote tools stay
     /// registered but hidden until `mcp_select_tool` selects them.
     pub fn interface_tools(&self) -> Vec<Arc<dyn Tool>> {
         vec![

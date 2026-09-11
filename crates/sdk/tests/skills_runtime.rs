@@ -5,14 +5,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orca_harness_core::{FnTool, Message};
+use orca_harness_core::FnTool;
 use orca_harness_sdk::{Harness, SkillDestination, SkillPreview, Skills, ToolPreset};
 use serde_json::json;
 
 mod common;
 mod schema_support;
 use common::temp_dir;
-use schema_support::{name, Recording, Step};
+use schema_support::{offers, tool_results, Recording, Step};
 
 fn write_skill(root: &Path, dir: &str, name: &str, description: &str) {
     let folder = root.join(dir);
@@ -70,11 +70,6 @@ fn expected_previews(src: &Path) -> Vec<SkillPreview> {
             origin: src.display().to_string(),
         },
     ]
-}
-
-/// Whether one recorded model call offered the `skill` tool.
-fn offers_skill(schemas: &[serde_json::Value]) -> bool {
-    schemas.iter().any(|schema| name(schema) == "skill")
 }
 
 #[tokio::test]
@@ -191,19 +186,19 @@ async fn skill_changes_apply_at_the_next_run_not_mid_run() {
     session.run("one").await.unwrap();
     let offered = model.take();
     assert_eq!(offered.len(), 1);
-    assert!(offers_skill(&offered[0]));
+    assert!(offers(&offered[0], "skill"));
 
     skills.disable("s1");
     session.run("two").await.unwrap();
     let offered = model.take();
-    assert!(!offers_skill(&offered[0]));
+    assert!(!offers(&offered[0], "skill"));
 
     skills.enable("s1");
     skills.scaffold("s2", SkillDestination::Workspace).unwrap();
     skills.reload();
     session.run("three").await.unwrap();
     let offered = model.take();
-    assert!(offers_skill(&offered[0]));
+    assert!(offers(&offered[0], "skill"));
 
     // Within one run every schema, parameters included, is fixed even
     // when a tool callback changes the catalog between two model calls.
@@ -212,17 +207,17 @@ async fn skill_changes_apply_at_the_next_run_not_mid_run() {
     let offered = model.take();
     assert_eq!(offered.len(), 2);
     assert_eq!(offered[0], offered[1]);
-    assert!(offers_skill(&offered[0]));
+    assert!(offers(&offered[0], "skill"));
 
     session.run("five").await.unwrap();
     let offered = model.take();
-    assert!(!offers_skill(&offered[0]));
+    assert!(!offers(&offered[0], "skill"));
 
     // A fresh ephemeral run reads the same catalog.
     skills.enable("s1");
     agent.run("six").await.unwrap();
     let offered = model.take();
-    assert!(offers_skill(&offered[0]));
+    assert!(offers(&offered[0], "skill"));
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -255,20 +250,12 @@ async fn skill_once_follows_the_run() {
         let count = names.iter().filter(|name| *name == "skill").count();
         assert_eq!(count, 1, "the skill tool registers once per run");
     }
-    let outputs: Vec<&serde_json::Value> = result
-        .messages
-        .iter()
-        .filter_map(|message| match message {
-            Message::Tool { results } => Some(results.iter().map(|r| &r.output)),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-    assert_eq!(outputs.len(), 2);
+    let results = tool_results(&result.messages);
+    assert_eq!(results.len(), 2);
     assert!(
-        outputs[0].get("instructions").is_some(),
+        results[0].2.get("instructions").is_some(),
         "first load is real"
     );
-    assert_eq!(outputs[1]["alreadyLoaded"], json!(true));
+    assert_eq!(results[1].2["alreadyLoaded"], json!(true));
     std::fs::remove_dir_all(&root).unwrap();
 }

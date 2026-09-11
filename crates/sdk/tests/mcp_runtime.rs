@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 mod common;
 mod schema_support;
 use common::temp_dir;
-use schema_support::{name, Recording, Step};
+use schema_support::{offers, tool_results, Recording, Step};
 
 const INTERFACE_TOOLS: [&str; 3] = ["mcp_search_tools", "mcp_select_tool", "mcp_features"];
 
@@ -42,6 +42,10 @@ while IFS= read -r line; do
       printf '%s\n' "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{{\"tools\":[{listed}]}}}}" ;;
     *'"method":"tools/call"'*)
       printf '%s\n' "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{reply}\"}}]}}}}" ;;
+    *)
+      # Unexpected requests fail fast instead of hanging the caller;
+      # notifications (no id) are dropped.
+      [ -n "$id" ] && printf '%s\n' "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{{\"code\":-32601,\"message\":\"method not found\"}}}}" ;;
   esac
 done
 "#
@@ -55,20 +59,7 @@ done
 /// `RunResult::messages` carries in full), as `(tool name, is_error,
 /// output)`. `seen` counts the results of earlier runs and is advanced.
 fn new_results(messages: &[Message], seen: &mut usize) -> Vec<(String, bool, Value)> {
-    let all: Vec<_> = messages
-        .iter()
-        .filter_map(|message| match message {
-            Message::Tool { results } => Some(results.iter().map(|result| {
-                (
-                    result.tool_name.clone(),
-                    result.is_error,
-                    result.output.clone(),
-                )
-            })),
-            _ => None,
-        })
-        .flatten()
-        .collect();
+    let all = tool_results(messages);
     let fresh = all[*seen..].to_vec();
     *seen = all.len();
     fresh
@@ -81,14 +72,8 @@ fn is_unknown_tool(result: &(String, bool, Value)) -> bool {
             .is_some_and(|error| error.starts_with("unknown tool:"))
 }
 
-fn offers_all(schemas: &[Value], names: &[&str]) -> bool {
-    names
-        .iter()
-        .all(|wanted| schemas.iter().any(|schema| name(schema) == *wanted))
-}
-
-fn offers(schemas: &[Value], wanted: &str) -> bool {
-    schemas.iter().any(|schema| name(schema) == wanted)
+fn offers_interfaces(schemas: &[Value]) -> bool {
+    INTERFACE_TOOLS.iter().all(|tool| offers(schemas, tool))
 }
 
 fn select_then_ping() -> Vec<Step> {
@@ -128,9 +113,7 @@ async fn new_connection_is_callable_next_turn_not_mid_run() {
     assert_eq!(results.len(), 1);
     assert!(is_unknown_tool(&results[0]), "{:?}", results[0]);
     let offered = model.take();
-    assert!(offered
-        .iter()
-        .all(|schemas| offers_all(schemas, &INTERFACE_TOOLS)));
+    assert!(offered.iter().all(|schemas| offers_interfaces(schemas)));
     assert!(!offered
         .iter()
         .any(|schemas| offers(schemas, "mcp__mock__ping")));
@@ -147,9 +130,7 @@ async fn new_connection_is_callable_next_turn_not_mid_run() {
     assert!(!results[1].1, "{:?}", results[1]);
     assert_eq!(results[1].2, json!({"content": "pong"}));
     let offered = model.take();
-    assert!(offered
-        .iter()
-        .all(|schemas| offers_all(schemas, &INTERFACE_TOOLS)));
+    assert!(offered.iter().all(|schemas| offers_interfaces(schemas)));
     assert!(
         !offers(&offered[0], "mcp__mock__ping"),
         "remote schemas stay hidden until selected"
@@ -251,10 +232,11 @@ async fn disconnect_during_a_run_keeps_that_runs_tools_and_drops_them_next_run()
     assert_eq!(results[2].2, json!({"disconnected": true}));
     assert_eq!(results[3].0, "mcp__mock__ping");
     assert!(
-        !is_unknown_tool(&results[3]),
+        !results[3].1,
         "the run keeps its captured tool: {:?}",
         results[3]
     );
+    assert_eq!(results[3].2, json!({"content": "pong"}));
     assert!(mcp.servers().is_empty());
 
     model.script(vec![Step::Call("mcp__mock__ping", json!({})), Step::Final]);
