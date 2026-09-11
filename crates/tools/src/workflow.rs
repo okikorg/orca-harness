@@ -2,7 +2,8 @@
 //!
 //! JSON lives only at the tool boundary here: [`Tool::call`] parses its
 //! input into the typed [`WorkflowSubmission`] and renders the typed
-//! results back, so the model tool and the host API in [`host`] run one
+//! results back, so the model tool and the typed host API
+//! ([`WorkflowSubmission`], [`WorkflowStatus`], [`StageOutput`]) run one
 //! implementation.
 use crate::SubagentTool;
 use async_trait::async_trait;
@@ -33,7 +34,8 @@ pub use store::WorkflowStore;
 /// switch that rebuilds this tool.
 ///
 /// Hosts drive the same runtime without JSON through the typed operations
-/// in [`host`]: [`submit`](Self::submit), [`runs`](Self::runs),
+/// over [`WorkflowSubmission`] and [`WorkflowStatus`]:
+/// [`submit`](Self::submit), [`runs`](Self::runs),
 /// [`status`](Self::status), [`stage_output`](Self::stage_output), and
 /// [`cancel`](Self::cancel).
 pub struct WorkflowTool<M: Model + Clone + 'static> {
