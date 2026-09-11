@@ -12,12 +12,14 @@
 - `Mcp` reports MCP server status and coordinates MCP integration.
 - `TruncationConfig`, `RetryConfig`, and `Compaction` configure common extensions without exposing host internals.
 
-The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually. The most common companion types for implementing `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `ToolDecision`, `HarnessError`, and the Codex credential contract) are exported at the top level as a convenience subset; each of the four namespaces below is the complete grouping for its area:
+`Agent::run` is the one-shot entry point: it opens an ephemeral session, runs one request, and drops the session when the call returns, so no history carries between calls and overlapping calls are allowed. Use a `Session` when you need multi-turn history, persistence, or control over work that should outlive a single run.
+
+The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually. Everything a host needs is reachable from this crate alone. The most common companion types for implementing `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `ToolDecision`, `HarnessError`, and the Codex credential contract) are exported at the top level as a convenience subset, plus the standard tool bundle from `orca-harness-tools` (`core_tools*`, `fs_admin_tools`, `Workspace`, `FileGuard`, `Executor`, and the ask, REPL, kernel, and todo tools), which has no namespace of its own. Each of the four namespaces below is the complete grouping for its area:
 
 - `contracts`: core traits plus the complete set of companion types needed to implement them.
 - `providers`: model adapters, the model catalog, and credentials including Codex.
 - `orchestration`: subagent, background process, and workflow handles.
-- `integrations`: MCP, skills, web, memory, session recording, and reusable extension handles.
+- `integrations`: MCP, skills, web, memory, session recording, and reusable extension handles (events, policy, usage, retries, truncation, compaction).
 
 `tests/consumer_api.rs` is the baseline: it depends on `orca_harness_sdk` alone and implements every contract. Use `orcacode` when you want the reference terminal host rather than a Rust embedding API.
 

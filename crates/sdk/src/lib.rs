@@ -1,17 +1,4 @@
-//! High-level, CLI-independent Rust facade for Orca Harness.
-//!
-//! Everything a host needs is reachable from this crate alone. Each
-//! namespace below is the complete grouping for its area; the top level is
-//! a curated convenience subset of them.
-//!
-//! - [`contracts`]: companion types for implementing `Model`, `Tool`, and
-//!   `Extension`.
-//! - [`providers`]: model adapters, the model catalog, and credentials
-//!   (including Codex).
-//! - [`orchestration`]: subagent, background process, and workflow handles.
-//! - [`integrations`]: MCP, skills, web, memory, session recording, and the
-//!   reusable extension handles (events, policy, usage, retries,
-//!   truncation, compaction).
+#![doc = include_str!("../README.md")]
 
 mod agent;
 mod error;
