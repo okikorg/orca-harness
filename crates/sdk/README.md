@@ -9,8 +9,10 @@
 - `RunRequest`, `RunHandle`, `RunResult`, `RunOutcome`, `RunEvent`, and `EventCallback` start runs, consume the bounded event stream or cancellation, and report detailed outcomes with partial usage on failure.
 - `Sessions`, `SessionBuilder`, and `Session` support persistent, forkable session workflows.
 - `Memory` configures explicit global/workspace memory; `Skills` manages skill sources and destinations.
-- `Mcp` reports MCP server status and coordinates MCP integration.
-- `TruncationConfig`, `RetryConfig`, and `Compaction` configure common extensions without exposing host internals.
+- `Mcp` reports MCP server status and coordinates MCP integration; `SkillPreview` inspects a skill before it is installed.
+- `TruncationConfig`, `RetryConfig` (with `ToolRetryOptions` and `ModelRetryOptions`), and `Compaction` configure common extensions without exposing host internals.
+- `SubagentConfig` and `Subagents` spawn and control detached child agents; `ProcessConfig` and `Processes` start and watch background OS processes; `Workflows` runs a `WorkflowSubmission` of `Stage`s over the same subagents.
+- `BackgroundNotification`, read through `Session::notifications`, reports every worker, stage, and process exit; `Session::shutdown` ends a session's detached work explicitly.
 
 `Agent::run` is the one-shot entry point: it opens an ephemeral session, runs one request, and drops the session when the call returns, so no history carries between calls and overlapping calls are allowed. Use a `Session` when you need multi-turn history, persistence, or control over work that should outlive a single run.
 
@@ -33,7 +35,13 @@ cargo run -p orca-harness-sdk --example agent_tour
 cargo run -p orca-harness-sdk --example host_assembly
 ```
 
-Additional examples cover cancellation, custom events, local MCP, memory and skills, session lifecycle, and recovery through compaction and retries.
+Additional examples cover cancellation (`background_cancellation`), custom events, local MCP, memory and skills, session lifecycle, and recovery through compaction and retries. The orchestration examples are deterministic and need no credentials: `detached_subagents`, `background_processes`, `workflows`, and `partial_outcomes`.
+
+## Orchestration
+
+Two different things run "in the background". A `RunHandle` (from `Session::start`) is one parent run executing off the caller's task; it belongs to the caller, who reads its events and awaits its outcome. Subagents, background processes, and workflows are detached work owned by the session: they outlive the run that started them, and a session hands out `Subagents`, `Processes`, and `Workflows` handles to spawn, inspect, and cancel them from the host.
+
+A detached subagent's result (and a workflow's run-level outcome) is owed to the parent conversation: it is delivered as one user turn at the parent's next model call, either inside a running turn or when the host calls `Session::continue_run(RunRequest::continuation())`. While the session is idle the host is told through `Session::notifications` (`CompletionsReady`, `SubagentFinished`, `ProcessNotified`); the session never starts a run on its own. `Session::shutdown` cancels the detached work and waits up to a grace period for it to exit; dropping the session cancels the same work but waits for nothing.
 
 ## Anthropic
 
