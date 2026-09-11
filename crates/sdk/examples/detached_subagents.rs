@@ -14,7 +14,8 @@
 //!    host-approved child model (`flash/child`), selected as the default
 //!    route through the live `Subagents::settings` handle.
 //! 2. A parent turn that calls the `subagent` tool twice with
-//!    `background: true` and answers at once.
+//!    `background: true` and answers at once; the workers are held until
+//!    that turn has ended, then released by the host.
 //! 3. `Session::notifications()` delivering `SubagentFinished` per worker
 //!    and one `CompletionsReady` wake-up; no run starts on its own.
 //! 4. `Session::continue_run(RunRequest::continuation())` handing the
@@ -34,18 +35,24 @@ use async_trait::async_trait;
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_sdk::orchestration::{BackgroundStatus, SubagentModel, SubagentRequest};
 use orca_harness_sdk::{
-    BackgroundNotification, Context, Harness, Message, Model, ModelError, ModelResponse,
-    RunRequest, SubagentConfig, ToolSchema,
+    BackgroundNotification, CancellationToken, Context, Harness, Message, Model, ModelError,
+    ModelResponse, RunRequest, SubagentConfig, ToolSchema,
 };
 use serde_json::json;
 use support::TempWorkspace;
 
-/// The child: answers every task with a one-line report about it.
-struct Reporter;
+/// The child: once released, answers every task with a one-line report
+/// about it. Holding the workers until the parent's turn has ended keeps
+/// the flow deterministic: a result that lands mid-turn is delivered
+/// before the parent's next model step instead of waiting for the host.
+struct Reporter {
+    release: CancellationToken,
+}
 
 #[async_trait]
 impl Model for Reporter {
     async fn generate(&self, ctx: &Context, _: &[ToolSchema]) -> Result<ModelResponse, ModelError> {
+        self.release.cancelled().await;
         let task = ctx
             .messages()
             .iter()
@@ -80,7 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ModelResponse::final_text("two workers spawned"),
         ModelResponse::final_text("folded both reports in"),
     ]);
-    let child: Arc<dyn Model> = Arc::new(Reporter);
+    let release = CancellationToken::new();
+    let child: Arc<dyn Model> = Arc::new(Reporter {
+        release: release.clone(),
+    });
     let agent = harness
         .agent(parent)
         .subagents(
@@ -106,32 +116,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first = session.run("delegate the review").await?;
     println!("parent turn one: {}", first.text);
     assert_eq!(first.text, "two workers spawned");
+    assert_eq!(subagents.active().len(), 2, "both workers are held");
+    release.cancel();
 
-    // Each worker's exit is observable; the results wait for the parent
-    // and no run starts on the session's own initiative.
-    for _ in 0..2 {
-        let finished = next_matching(&mut notifications, |n| match n {
-            BackgroundNotification::SubagentFinished(n) => Some(n),
-            _ => None,
-        })
-        .await?;
-        let answer = finished.result.expect("the worker succeeded");
-        println!(
-            "worker {} ({}) -> {}",
-            finished.spawn.id, finished.spawn.task, answer["answer"]
-        );
+    // Each worker's exit is observable, and one wake-up says results are
+    // waiting. The wake-up is sent as soon as the first result is admitted,
+    // so it can arrive between the two exits: consume the channel in one
+    // loop. No run starts on the session's own initiative.
+    let (mut finished, mut ready) = (0, None);
+    while finished < 2 || ready.is_none() {
+        match next_notification(&mut notifications).await? {
+            BackgroundNotification::SubagentFinished(n) => {
+                let answer = n.result.expect("the worker succeeded");
+                println!(
+                    "worker {} ({}) -> {}",
+                    n.spawn.id, n.spawn.task, answer["answer"]
+                );
+                finished += 1;
+            }
+            BackgroundNotification::CompletionsReady { pending } => ready = Some(pending),
+            other => println!("other notification: {other:?}"),
+        }
     }
-    let pending = next_matching(&mut notifications, |n| match n {
-        BackgroundNotification::CompletionsReady { pending } => Some(pending),
-        _ => None,
-    })
-    .await?;
     println!(
-        "completions ready: {pending} announced, {} pending",
+        "completions ready: {} announced, {} pending",
+        ready.expect("the wake-up"),
         session.pending_completions()
     );
-    assert_eq!(session.pending_completions(), 2);
-    assert!(subagents.active().is_empty());
+    // The second result may still be on its way into the inbox: poll.
+    wait_until(
+        || session.pending_completions() == 2 && subagents.active().is_empty(),
+        "both results",
+    )
+    .await?;
 
     // The host continues the conversation: the batch enters the transcript
     // as one user turn before the model answers.
@@ -171,21 +188,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => None,
     })
     .await?;
-    assert_eq!(session.pending_completions(), 1);
+    // The exit is announced before the result is filed: poll for the inbox.
+    wait_until(|| session.pending_completions() == 1, "the host result").await?;
 
     session.shutdown(Duration::from_secs(2)).await?;
     println!("session shut down; the undelivered host result was dropped");
     Ok(())
 }
 
-/// The next notification `pick` accepts, within a bounded wait.
+/// Polls `condition` for up to five seconds.
+async fn wait_until(
+    mut condition: impl FnMut() -> bool,
+    what: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _ in 0..500 {
+        if condition() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Err(format!("timed out waiting for {what}").into())
+}
+
+/// The next notification, within a bounded wait.
+async fn next_notification(
+    receiver: &mut tokio::sync::broadcast::Receiver<BackgroundNotification>,
+) -> Result<BackgroundNotification, Box<dyn std::error::Error>> {
+    Ok(tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await??)
+}
+
+/// The next notification `pick` accepts, skipping the others, within a
+/// bounded wait.
 async fn next_matching<T>(
     receiver: &mut tokio::sync::broadcast::Receiver<BackgroundNotification>,
     mut pick: impl FnMut(BackgroundNotification) -> Option<T>,
 ) -> Result<T, Box<dyn std::error::Error>> {
     loop {
-        let notification = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await??;
-        if let Some(value) = pick(notification) {
+        if let Some(value) = pick(next_notification(receiver).await?) {
             return Ok(value);
         }
     }

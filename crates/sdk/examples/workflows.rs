@@ -116,12 +116,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     finished.sort();
     assert_eq!(finished, ["a", "b", "m[0]", "m[1]", "source"]);
 
-    // Poll the run until it settles; the outcome is then inspectable.
+    // Poll the run until its stored outcome is present: the stage exits
+    // above are announced before the run settles and records it.
     let mut status = workflows.status(ack.run_id).expect("a known run");
     for _ in 0..500 {
-        if status.state != RunState::Running {
+        if status.outcome.is_some() {
             break;
         }
+        assert_eq!(status.state, RunState::Running);
         tokio::time::sleep(Duration::from_millis(10)).await;
         status = workflows.status(ack.run_id).expect("a known run");
     }
@@ -129,7 +131,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(status.state, RunState::Done);
     assert!(status.stages.values().all(|s| *s == StageStatus::Done));
 
-    let outcome = status.outcome.expect("a finished run carries its outcome");
+    let outcome = status
+        .outcome
+        .expect("the run settled within the bounded wait");
     for (id, output) in &outcome.outputs {
         println!("output {id}: {output}");
     }
