@@ -6,18 +6,8 @@ use orca_harness_extensions::{CompactConfig, HarnessEvent, PolicyOutcome, ToolPo
 use orca_harness_sdk::{Compaction, Harness, MemoryConfig, RunRequest, SkillDestination, Skills};
 use serde_json::json;
 
-fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "orca-sdk-test-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
+mod common;
+use common::temp_dir;
 
 #[tokio::test]
 async fn run_text_events_and_custom_tool() {

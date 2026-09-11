@@ -2,29 +2,17 @@
 //! own ephemeral session, so calls are isolated from each other and may
 //! overlap, unlike `Session::run` which rejects overlap with `BusySession`.
 
-use orca_harness_core::testing::ScriptedModel;
-use orca_harness_core::{Message, ModelResponse};
+use std::sync::Arc;
+use std::time::Duration;
+
+use orca_harness_core::testing::{call, ScriptedModel};
+use orca_harness_core::{FnTool, HarnessError, Message, ModelResponse};
 use orca_harness_sdk::{Harness, RunRequest, SdkError};
+use serde_json::json;
+use tokio::sync::Barrier;
 
-fn temp_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "orca-sdk-test-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn final_answer(text: &str) -> ModelResponse {
-    ModelResponse::Final {
-        text: text.into(),
-        usage: None,
-    }
-}
+mod common;
+use common::temp_dir;
 
 fn user_texts(messages: &[Message]) -> Vec<String> {
     messages
@@ -40,7 +28,10 @@ fn user_texts(messages: &[Message]) -> Vec<String> {
 async fn agent_run_is_one_shot_and_isolated() {
     let root = temp_dir("one-shot-isolated");
     let harness = Harness::builder().workspace(&root).build().unwrap();
-    let model = ScriptedModel::new(vec![final_answer("first"), final_answer("second")]);
+    let model = ScriptedModel::new(vec![
+        ModelResponse::final_text("first"),
+        ModelResponse::final_text("second"),
+    ]);
     let agent = harness
         .agent(model)
         .system_prompt("You are terse.")
@@ -68,7 +59,7 @@ async fn agent_run_is_one_shot_and_isolated() {
 }
 
 #[tokio::test]
-async fn agent_run_returns_model_errors() {
+async fn agent_run_propagates_run_errors() {
     let root = temp_dir("one-shot-model-error");
     let harness = Harness::builder().workspace(&root).build().unwrap();
     // An empty script fails on the first model call.
@@ -76,19 +67,55 @@ async fn agent_run_returns_model_errors() {
     let agent = harness.agent(model).build().unwrap();
 
     let result = agent.run("hello").await;
-    assert!(matches!(result, Err(SdkError::Harness(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(SdkError::Harness(HarnessError::Model(_)))),
+        "{result:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Both runs must be in flight at the same time for the barrier to release,
+/// so a regression to a shared busy guard or serialized execution shows up
+/// as a timeout rather than a pass.
 #[tokio::test]
 async fn agent_run_allows_overlap() {
     let root = temp_dir("one-shot-overlap");
     let harness = Harness::builder().workspace(&root).build().unwrap();
-    let model = ScriptedModel::new(vec![final_answer("done"), final_answer("done")]);
-    let agent = harness.agent(model).build().unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let rendezvous = FnTool::new(
+        "rendezvous",
+        "waits for the other run",
+        json!({"type": "object"}),
+        move |_args, _ctx| {
+            let barrier = barrier.clone();
+            async move {
+                barrier.wait().await;
+                Ok(json!({"met": true}))
+            }
+        },
+    );
+    let model = ScriptedModel::new(vec![
+        ModelResponse::ToolCalls {
+            content: None,
+            calls: vec![call("r1", "rendezvous", json!({}))],
+            usage: None,
+        },
+        ModelResponse::ToolCalls {
+            content: None,
+            calls: vec![call("r2", "rendezvous", json!({}))],
+            usage: None,
+        },
+        ModelResponse::final_text("done"),
+        ModelResponse::final_text("done"),
+    ]);
+    let agent = harness.agent(model).tool(rendezvous).build().unwrap();
 
-    let (left, right) = tokio::join!(agent.run("left"), agent.run("right"));
+    let (left, right) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(agent.run("left"), agent.run("right"))
+    })
+    .await
+    .expect("both runs must reach the rendezvous concurrently");
     let left = left.unwrap();
     let right = right.unwrap();
     assert_eq!(left.text, "done");

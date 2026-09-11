@@ -14,7 +14,11 @@
 
 `Agent::run` is the one-shot entry point: it opens an ephemeral session, runs one request, and drops the session when the call returns, so no history carries between calls and overlapping calls are allowed. Use a `Session` when you need multi-turn history, persistence, or control over work that should outlive a single run.
 
-The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually. Everything a host needs is reachable from this crate alone. The most common companion types for implementing `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `ToolDecision`, `HarnessError`, and the Codex credential contract) are exported at the top level as a convenience subset, plus the standard tool bundle from `orca-harness-tools` (`core_tools*`, `fs_admin_tools`, `Workspace`, `FileGuard`, `Executor`, and the ask, REPL, kernel, and todo tools), which has no namespace of its own. Each of the four namespaces below is the complete grouping for its area:
+The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually.
+
+The top level is a convenience subset: the most common companion types for implementing `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `ToolDecision`, `HarnessError`, and the Codex credential contract), plus the standard tool bundle from `orca-harness-tools` (`core_tools*`, `fs_admin_tools`, `Workspace`, `FileGuard`, `Executor`, and the ask, REPL, kernel, and todo tools), which has no namespace of its own.
+
+Each of the four namespaces below is the complete grouping for its area:
 
 - `contracts`: core traits plus the complete set of companion types needed to implement them.
 - `providers`: model adapters, the model catalog, and credentials including Codex.
