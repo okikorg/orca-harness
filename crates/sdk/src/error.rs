@@ -16,6 +16,10 @@ pub enum SdkError {
     Mcp(#[from] orca_harness_tool_extensions::mcp::McpError),
     #[error("skill error: {0}")]
     Skill(String),
+    /// A typed subagent operation (see [`Subagents`](crate::Subagents))
+    /// was refused: routing, admission, or the worker itself failed.
+    #[error("subagent error: {0}")]
+    Subagent(String),
     #[error("session already has an active run")]
     BusySession,
     #[error("session not found: {0}")]

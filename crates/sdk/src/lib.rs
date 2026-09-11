@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 mod agent;
+mod background;
 mod error;
 mod extensions;
 mod harness;
@@ -12,6 +13,7 @@ mod skills;
 mod tools;
 
 pub use agent::{Agent, AgentBuilder};
+pub use background::{SubagentConfig, Subagents};
 pub use error::SdkError;
 pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig};
 pub use harness::{Harness, HarnessBuilder};
@@ -73,11 +75,14 @@ pub mod providers {
 
 /// Subagent, background process, and workflow handles for host orchestration.
 pub mod orchestration {
+    pub use crate::background::{SubagentConfig, Subagents};
     pub use orca_harness_tools::{
-        BackgroundJob, BackgroundProcess, BackgroundStats, BackgroundStatus, ProcessNotification,
-        ProcessNotificationKind, ProcessTool, SpawnExtensions, SubagentDepth, SubagentIdentity,
-        SubagentManager, SubagentModel, SubagentNotification, SubagentSpawn, SubagentTool,
-        WorkflowStore, WorkflowTool,
+        subagent_completions_prompt, ActiveInventory, BackgroundAcknowledgement, BackgroundJob,
+        BackgroundProcess, BackgroundStats, BackgroundStatus, CompletionDelivery, CompletionInbox,
+        ProcessNotification, ProcessNotificationKind, ProcessTool, SpawnExtensions, SubagentDepth,
+        SubagentIdentity, SubagentManager, SubagentModel, SubagentNotification, SubagentOutcome,
+        SubagentRequest, SubagentSpawn, SubagentTool, WorkflowStore, WorkflowTool,
+        DEFAULT_COMPLETION_CAPACITY,
     };
 }
 

@@ -1,7 +1,10 @@
 //! Detached worker lifetime, tool protocol, and execution.
-use super::{BackgroundStats, Meter, SubagentIdentity, SubagentSpawn};
+use super::{
+    BackgroundAcknowledgement, BackgroundStats, Meter, SubagentIdentity, SubagentOutcome,
+    SubagentSpawn,
+};
 use orca_harness_core::{Agent, Limits, Model};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 
 mod completions;
@@ -45,12 +48,14 @@ impl Drop for InFlight {
     }
 }
 
-pub(super) fn subagent_result(
+/// Account for a finished worker: the typed result both the model tool
+/// and the host API report.
+pub(super) fn subagent_outcome(
     result: Result<String, orca_harness_core::HarnessError>,
     telemetry: &Meter,
     started: std::time::Instant,
     identity: Option<&SubagentIdentity>,
-) -> Result<Value, String> {
+) -> Result<SubagentOutcome, String> {
     let elapsed_ms = started.elapsed().as_millis();
     let total = telemetry.total();
     let steps = telemetry.steps();
@@ -61,18 +66,15 @@ pub(super) fn subagent_result(
             total.input_tokens, total.output_tokens
         )
     })?;
-    Ok(json!({
-        "answer": answer,
-        "usage": {
-            "inputTokens": total.input_tokens,
-            "outputTokens": total.output_tokens,
-        },
-        "runtimeMs": elapsed_ms,
-        "steps": steps,
-        "toolCalls": tool_calls,
-        "termination": "completed",
-        "identity": identity,
-    }))
+    Ok(SubagentOutcome {
+        answer,
+        input_tokens: total.input_tokens,
+        output_tokens: total.output_tokens,
+        runtime_ms: elapsed_ms,
+        steps: u64::from(steps),
+        tool_calls: u64::from(tool_calls),
+        identity: identity.cloned(),
+    })
 }
 
 pub(super) fn detach_subagent<M: Model + Clone + 'static>(
@@ -83,7 +85,7 @@ pub(super) fn detach_subagent<M: Model + Clone + 'static>(
     mut limits: Limits,
     timeout_secs: u32,
     in_flight: InFlight,
-) -> Value {
+) -> BackgroundAcknowledgement {
     let (background, admission) = background;
     let (generation, cancellation, slot) = admission.into_parts();
     let manager = background.manager.inner.clone();
@@ -92,12 +94,11 @@ pub(super) fn detach_subagent<M: Model + Clone + 'static>(
     } else {
         BackgroundStatus::Queued
     };
-    let acknowledgement = json!({
-        "spawnId": spawn.id,
-        "status": status.as_str(),
-        "termination": "detached",
-        "identity": spawn.identity,
-    });
+    let acknowledgement = BackgroundAcknowledgement {
+        spawn_id: spawn.id,
+        status,
+        identity: spawn.identity.clone(),
+    };
     let job = Completion {
         manager,
         generation,
@@ -129,7 +130,8 @@ pub(super) fn detach_subagent<M: Model + Clone + 'static>(
                 .limits(limits)
                 .run_with_cancellation(&spawn.task, cancellation)
                 .await;
-            subagent_result(result, &telemetry, started, spawn.identity.as_ref())
+            subagent_outcome(result, &telemetry, started, spawn.identity.as_ref())
+                .map(SubagentOutcome::into_value)
         } else {
             Err(if cancellation.is_cancelled() {
                 "subagent cancelled before execution"

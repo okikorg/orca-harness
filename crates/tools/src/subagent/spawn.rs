@@ -25,7 +25,7 @@ pub(crate) struct Prepared<M: Model + Clone + 'static> {
     pub(super) in_flight: InFlight,
 }
 impl<M: Model + Clone + 'static> Prepared<M> {
-    pub(crate) fn detach(self) -> Value {
+    pub(crate) fn detach(self) -> BackgroundAcknowledgement {
         detach_subagent(
             self.background.expect("detached admission"),
             self.agent,

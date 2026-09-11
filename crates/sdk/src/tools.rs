@@ -13,6 +13,7 @@ use orca_harness_tools::{
 };
 
 use crate::agent::AgentDefinition;
+use crate::background::BackgroundServices;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ToolPreset {
@@ -70,13 +71,18 @@ pub(crate) fn preset_tools(
 pub(crate) struct SessionTools {
     pub(crate) file_guard: FileGuard,
     pub(crate) todo_list: Option<TodoList>,
+    /// Present when the agent configured subagents; owns this session's
+    /// manager, completion inbox, and `subagent` tool.
+    pub(crate) background: Option<BackgroundServices>,
     pub(crate) tools: Vec<Arc<dyn Tool>>,
 }
 
 impl SessionTools {
     /// Materializes the recipe: preset tools wired to the session's guard,
-    /// then the builder-ordered sources, then the agent-level tools
-    /// (skills, MCP, memory) that are shared by design.
+    /// then the builder-ordered sources, then the session's `subagent`
+    /// tool (registered last among the host-built tools, as the CLI does),
+    /// then the agent-level tools (skills, MCP, memory) that are shared by
+    /// design.
     pub(crate) fn new(definition: &AgentDefinition) -> Self {
         let workspace = definition.harness.workspace();
         let working_dir = || workspace.root().display().to_string();
@@ -96,18 +102,31 @@ impl SessionTools {
                 }
             });
         }
+        let background = definition
+            .subagents
+            .as_ref()
+            .map(|config| BackgroundServices::new(definition, config));
+        if let Some(services) = &background {
+            tools.push(services.tool());
+        }
         tools.extend(definition.shared_tools.iter().cloned());
         Self {
             file_guard,
             todo_list,
+            background,
             tools,
         }
     }
 
+    /// Reset every session-owned built-in: the guard, todos, and detached
+    /// subagents with their undelivered results.
     pub(crate) fn clear(&self) {
         self.file_guard.clear();
         if let Some(todos) = &self.todo_list {
             todos.clear();
+        }
+        if let Some(background) = &self.background {
+            background.clear();
         }
     }
 }

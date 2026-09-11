@@ -40,3 +40,4 @@ include!("subagent/background.rs");
 include!("subagent/background_lifecycle.rs");
 include!("subagent/routing.rs");
 include!("subagent/events.rs");
+include!("subagent/host.rs");
