@@ -13,7 +13,7 @@ use orca_harness_tools::{
 use tokio::sync::broadcast;
 
 use super::BackgroundNotification;
-use crate::SdkError;
+use crate::{RetryConfig, SdkError};
 
 /// Observes one child's harness events, tagged with the spawn they
 /// belong to; see [`SubagentConfig::on_child_event`].
@@ -51,6 +51,7 @@ pub struct SubagentConfig {
     pub(crate) child_extensions: Option<SpawnExtensions>,
     pub(crate) on_child_event: Option<ChildEventCallback>,
     pub(crate) workflows: bool,
+    pub(crate) tool_retry: Option<RetryConfig>,
 }
 
 impl Default for SubagentConfig {
@@ -67,6 +68,7 @@ impl Default for SubagentConfig {
             child_extensions: None,
             on_child_event: None,
             workflows: true,
+            tool_retry: None,
         }
     }
 }
@@ -193,6 +195,27 @@ impl SubagentConfig {
         self
     }
 
+    /// Retry each child's own tool calls inside the child, with the core
+    /// tools' data failures (`shell` / `process` `success: false`,
+    /// `web_fetch` 5xx) counted as failures; see
+    /// [`orca_harness_tools::retry::data_failure`]. Without this, children
+    /// get no retry: the parent's
+    /// [`AgentBuilder::tool_retry`](crate::AgentBuilder::tool_retry) wraps
+    /// only the parent's calls, and a child's failed run is retried there
+    /// as one `subagent` call.
+    ///
+    /// The attempts and backoff are installed into the live `settings`
+    /// handle as defaults when the agent is built
+    /// ([`SubagentDepth::ensure_retry_defaults`]), so a handle the host
+    /// already configured keeps its values, and later live edits win.
+    /// Once set, the parent's tool retry stops replaying `subagent` and
+    /// `workflow` runs: a child's failure is retried in one layer, not
+    /// both.
+    pub fn tool_retry(mut self, config: RetryConfig) -> Self {
+        self.tool_retry = Some(config);
+        self
+    }
+
     /// Push the one-shot builder choices into the live handle.
     pub(crate) fn apply_to_settings(&self) {
         if let Some(limit) = self.background_limit {
@@ -200,6 +223,11 @@ impl SubagentConfig {
         }
         if let Some(depth) = self.max_depth {
             self.settings.set(depth);
+        }
+        if let Some(retry) = &self.tool_retry {
+            let backoff_ms = u32::try_from(retry.backoff_ms).unwrap_or(u32::MAX);
+            self.settings
+                .ensure_retry_defaults(retry.attempts, backoff_ms);
         }
     }
 }

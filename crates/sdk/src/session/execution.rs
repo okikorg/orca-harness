@@ -15,8 +15,8 @@ use orca_harness_core::{
     Agent as CoreAgent, CancellationToken, Context, Extension, Limits, Message, Tool,
 };
 use orca_harness_extensions::{
-    ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, ToolRetry,
-    Truncation, TruncationStore, UsageMeter,
+    ContextCapacity, EventStream, LongSession, ReadToolResultTool, SessionHandler, Truncation,
+    TruncationStore, UsageMeter,
 };
 use orca_harness_tool_extensions::skills::SkillOnce;
 use orca_harness_tools::{ActiveInventory, CompletionDelivery};
@@ -136,8 +136,16 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
             agent = agent.tool(ReadToolResultTool::new(store.clone()));
         }
     }
-    if let Some(config) = definition.inner.extension_config.retry {
-        agent = agent.extension(ToolRetry::new(config.attempts).backoff(config.duration()));
+    if let Some(config) = &definition.inner.extension_config.retry {
+        // Children that retry inside own their failures: this layer then
+        // leaves `subagent` / `workflow` runs alone instead of replaying
+        // a whole child per parent attempt.
+        let children_retry = definition
+            .inner
+            .subagents
+            .as_ref()
+            .is_some_and(|subagents| subagents.tool_retry.is_some());
+        agent = agent.extension(config.extension(children_retry));
     }
     if let Compaction::Automatic(config) = definition.inner.extension_config.compaction {
         let capacity = ContextCapacity::new(definition.inner.context_capacity);

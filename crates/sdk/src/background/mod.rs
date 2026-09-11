@@ -137,6 +137,12 @@ impl BackgroundServices {
         if let Some(limits) = &config.limits {
             tool = tool.limits(limits.clone());
         }
+        if config.tool_retry.is_some() {
+            // Attempts and backoff come from the live settings handle
+            // (see `SubagentConfig::apply_to_settings`); the tool only
+            // needs the data-failure rule.
+            tool = tool.retry_ok_when(orca_harness_tools::retry::data_failure);
+        }
         let subagents = Arc::new(tool);
         let workflows = store.map(|store| {
             // Only fails without depth-zero background execution, which

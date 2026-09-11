@@ -40,6 +40,7 @@ mod bun_repl;
 mod core_tools;
 mod fs_admin;
 mod kernel;
+pub mod retry;
 mod subagent;
 mod todo;
 
