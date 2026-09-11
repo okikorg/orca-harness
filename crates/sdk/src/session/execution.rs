@@ -34,7 +34,7 @@ pub(super) struct RunExecution {
 
 /// A continuation needs a turn to continue from: anything beyond the
 /// system prompt.
-pub(super) fn ensure_continuable(context: &Context) -> Result<(), SdkError> {
+fn ensure_continuable(context: &Context) -> Result<(), SdkError> {
     let has_turns = context
         .messages()
         .iter()
@@ -42,7 +42,7 @@ pub(super) fn ensure_continuable(context: &Context) -> Result<(), SdkError> {
     if has_turns {
         Ok(())
     } else {
-        Err(SdkError::Config(
+        Err(SdkError::InvalidContext(
             "nothing to continue: the session has no messages beyond the system prompt".into(),
         ))
     }
