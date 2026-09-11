@@ -189,7 +189,7 @@ async fn dropping_a_session_cancels_its_background_subagents() {
         .unwrap();
     let session = agent.new_session().ephemeral().open().unwrap();
     let subagents = session.subagents().unwrap();
-    let mut notifications = session.notifications().unwrap();
+    let mut notifications = session.notifications();
     let ack = subagents.spawn(SubagentRequest::new("held")).unwrap();
     assert_eq!(subagents.active().len(), 1);
 
@@ -304,7 +304,13 @@ async fn shutdown_awaits_workers_and_times_out_when_they_hang() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, SdkError::ShutdownTimeout { still_active: 1 }),
+        matches!(
+            error,
+            SdkError::ShutdownTimeout {
+                still_active: 1,
+                still_running_processes: 0
+            }
+        ),
         "{error}"
     );
 
@@ -511,7 +517,13 @@ async fn spawns_during_the_grace_window_are_refused() {
     });
     assert!(matches!(refused, SdkError::SessionClosed), "{refused}");
     assert!(
-        matches!(shutdown, Err(SdkError::ShutdownTimeout { still_active: 1 })),
+        matches!(
+            shutdown,
+            Err(SdkError::ShutdownTimeout {
+                still_active: 1,
+                still_running_processes: 0
+            })
+        ),
         "only the stalled worker was ever live: {shutdown:?}"
     );
 

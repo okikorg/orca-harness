@@ -37,6 +37,9 @@ impl ProcessCore<'_> {
         let config = self.config;
         let manager = self.manager;
 
+        if manager.shutdown.is_cancelled() {
+            return Err(ToolError::msg("process manager is closed"));
+        }
         if manager.procs.lock().unwrap().len() >= config.max_processes {
             return Err(ToolError::msg(format!(
                 "live process limit reached ({}); kill one first",

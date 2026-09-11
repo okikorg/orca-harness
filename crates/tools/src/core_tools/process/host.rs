@@ -10,7 +10,7 @@ use std::time::Duration;
 use orca_harness_core::{CancellationToken, ToolError};
 use serde_json::{json, Value};
 
-use super::{Manager, ProcessConfig, ProcessCore, ProcessTool};
+use super::{await_killed, signal_kill, Manager, Proc, ProcessConfig, ProcessCore, ProcessTool};
 
 /// Parameters of a `spawn`; defaults match the tool's JSON defaults
 /// (`waitForExit` false, `notifyOnExit` true, no match pattern).
@@ -148,6 +148,47 @@ impl ProcessEntry {
     }
 }
 
+impl ProcessCore<'_> {
+    /// Forget every process and kill the ones still running, waiting
+    /// (bounded, per process) for each to exit. Returns how many were
+    /// running. The manager stays open for new spawns.
+    pub(super) async fn kill_all(&self) -> usize {
+        let procs: Vec<Arc<Proc>> = self
+            .manager
+            .procs
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, p)| p)
+            .collect();
+        let running: Vec<&Arc<Proc>> = procs.iter().filter(|proc| proc.running()).collect();
+        // Signal every process before waiting on any: the children die
+        // in parallel, no waiter can emit an exit wake for a process not
+        // yet silenced, and the per-process bound only matters for one
+        // that ignores SIGKILL.
+        for proc in &running {
+            signal_kill(proc);
+        }
+        for proc in &running {
+            await_killed(proc).await;
+        }
+        running.len()
+    }
+}
+
+impl Manager {
+    /// Processes not yet reaped, whether or not the manager is closed.
+    fn running(&self) -> Vec<Arc<Proc>> {
+        self.procs
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|proc| proc.running())
+            .cloned()
+            .collect()
+    }
+}
+
 /// Typed host handle over a [`ProcessTool`]'s processes. Obtained from
 /// [`ProcessTool::controller`]; every operation runs the code path the
 /// model's `process` tool runs, against the same manager, so the two
@@ -157,7 +198,11 @@ impl ProcessEntry {
 /// reference to the tool's manager: dropping the tool still kills its
 /// children (and lets in-flight controller calls return), after which
 /// every operation here fails with "process manager is closed" and
-/// [`is_open`](Self::is_open) reports false.
+/// [`is_open`](Self::is_open) reports false. A host that owns the
+/// session lifecycle drives it from here: [`kill_all`](Self::kill_all)
+/// resets the process state while the manager keeps serving,
+/// [`close`](Self::close) shuts it for good, and
+/// [`wait_idle`](Self::wait_idle) bounds the cleanup.
 ///
 /// Controller calls bypass the tool's keyed concurrency gating;
 /// concurrent drains of one process split its output between callers.
@@ -243,5 +288,59 @@ impl ProcessController {
     pub fn list(&self) -> Result<Vec<ProcessEntry>, ToolError> {
         let manager = self.live_manager()?;
         Ok(self.core(&manager).list())
+    }
+
+    /// Kill every running process and forget every entry, waiting
+    /// (bounded, per process) for the kills to land; the same path as
+    /// [`kill`](Self::kill), so no exit notification is emitted for
+    /// them. Returns how many were running. The manager stays open:
+    /// later spawns work as before.
+    pub async fn kill_all(&self) -> Result<usize, ToolError> {
+        let manager = self.live_manager()?;
+        Ok(self.core(&manager).kill_all().await)
+    }
+
+    /// Close the manager for good: every running process is killed by
+    /// its waiter (an exit notification may still follow for those that
+    /// asked for one), [`is_open`](Self::is_open) turns false, and every
+    /// later spawn, on this handle or through the model's tool, is
+    /// refused. Returns how many processes were running at the time.
+    /// Idempotent; zero once the tool is gone.
+    pub fn close(&self) -> usize {
+        let Some(manager) = self.manager.upgrade() else {
+            return 0;
+        };
+        let live = manager.running().len();
+        manager.shutdown.cancel();
+        live
+    }
+
+    /// Processes not yet exited, closed manager or not; zero once the
+    /// tool is gone.
+    pub fn running(&self) -> usize {
+        self.manager
+            .upgrade()
+            .map_or(0, |manager| manager.running().len())
+    }
+
+    /// Resolve once no process is running: after a [`close`](Self::close)
+    /// this is the bounded wait for the kills to land, on an open manager
+    /// it also outlasts processes spawned meanwhile. Returns at once when
+    /// the tool is gone. Pair with a timeout: a process that ignores
+    /// SIGKILL keeps this pending.
+    pub async fn wait_idle(&self) {
+        loop {
+            let Some(manager) = self.manager.upgrade() else {
+                return;
+            };
+            let running = manager.running();
+            drop(manager);
+            if running.is_empty() {
+                return;
+            }
+            for proc in running {
+                proc.done.cancelled().await;
+            }
+        }
     }
 }

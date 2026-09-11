@@ -1,6 +1,7 @@
 //! Session-owned background services: the subagent manager, the completion
-//! inbox detached results land in, the `subagent` tool that feeds both,
-//! and the notification channel hosts observe them through.
+//! inbox detached results land in, and the `subagent` tool that feeds
+//! both, reporting on the session's notification channel (which the
+//! session owns, so background processes report there as well).
 //!
 //! Built once per session when the agent configured subagents (see
 //! [`AgentBuilder::subagents`](crate::AgentBuilder::subagents)), so two
@@ -35,7 +36,7 @@ use crate::agent::AgentDefinition;
 use crate::tools::{preset_tools, ToolSource};
 
 pub use notifications::{BackgroundNotification, NOTIFICATION_CAPACITY};
-pub use processes::Processes;
+pub use processes::{ProcessConfig, Processes};
 pub use subagents::{ChildEventCallback, SubagentConfig, Subagents};
 
 pub(crate) use notifications::rearm;
@@ -58,7 +59,9 @@ pub(crate) struct BackgroundServices {
 impl BackgroundServices {
     /// Materialize the agent's subagent recipe for one session.
     ///
-    /// Children run with the agent's tool preset over a fresh
+    /// Children run with the agent's tool preset (and its process
+    /// configuration: executor and limits, but no notifier, since a
+    /// child's processes have no host to report to) over a fresh
     /// read-before-write guard per spawn plus the caller-owned custom
     /// tools; they get no REPLs, todo list, skills, MCP, or memory tools.
     /// Nesting is governed by the shared [`SubagentDepth`] handle, as for
@@ -69,13 +72,17 @@ impl BackgroundServices {
     /// parent's per-run extensions (recorder, usage meter, event stream,
     /// truncation store, compaction, `SkillOnce`, completion delivery) are
     /// built inside each run, not here, so no child can ever share them.
-    pub(crate) fn new(definition: &AgentDefinition, config: &SubagentConfig) -> Self {
+    pub(crate) fn new(
+        definition: &AgentDefinition,
+        config: &SubagentConfig,
+        events: broadcast::Sender<BackgroundNotification>,
+    ) -> Self {
         let settings = config.settings.clone();
         let manager = SubagentManager::from_settings(settings.clone());
         let inbox = CompletionInbox::new(manager.clone());
-        let (events, _) = broadcast::channel(NOTIFICATION_CAPACITY);
         let workspace = definition.harness.workspace().clone();
         let preset = definition.preset;
+        let processes = definition.processes.clone();
         let custom: Vec<Arc<dyn Tool>> = definition
             .tool_sources
             .iter()
@@ -85,7 +92,12 @@ impl BackgroundServices {
             })
             .collect();
         let factory = Arc::new(move || {
-            let mut tools = preset_tools(preset, &workspace, &FileGuard::default());
+            let mut tools = preset_tools(
+                preset,
+                &workspace,
+                &FileGuard::default(),
+                processes.as_ref(),
+            );
             tools.extend(custom.iter().cloned());
             tools
         });
@@ -142,10 +154,6 @@ impl BackgroundServices {
             inbox: self.inbox.clone(),
             events: self.events.clone(),
         }
-    }
-
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<BackgroundNotification> {
-        self.events.subscribe()
     }
 
     pub(crate) fn pending_completions(&self) -> usize {

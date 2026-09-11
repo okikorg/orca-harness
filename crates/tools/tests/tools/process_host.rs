@@ -295,3 +295,168 @@ async fn tool_json_output_unchanged() {
         .unwrap();
     assert_eq!(killed["exitCode"], json!(3));
 }
+
+#[tokio::test]
+async fn kill_all_stops_every_live_process_and_keeps_the_manager_open() {
+    let stats = BackgroundStats::new();
+    let tool = ProcessTool::local().stats(stats.clone());
+    let controller = tool.controller();
+    for _ in 0..2 {
+        controller
+            .spawn(
+                ProcessSpawn::new("sleep 283.1 & wait"),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+    }
+    // An exited-but-not-killed entry is forgotten too, without counting
+    // as a kill.
+    controller
+        .spawn(
+            ProcessSpawn::new("true").wait_for_exit(true),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(controller.list().unwrap().len(), 3);
+    assert_eq!(stats.processes(), 2);
+
+    assert_eq!(controller.kill_all().await.unwrap(), 2);
+    assert!(controller.list().unwrap().is_empty());
+    assert_eq!(stats.processes(), 0);
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 283.1"])
+        .output()
+        .unwrap();
+    assert!(!found.status.success(), "kill_all must kill every child");
+
+    assert!(controller.is_open());
+    assert_eq!(controller.kill_all().await.unwrap(), 0);
+    let again = controller
+        .spawn(ProcessSpawn::new("printf later"), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(again.output, "later");
+    let via_tool = tool.call(json!({"action": "list"}), &ctx()).await.unwrap();
+    assert_eq!(via_tool["processes"][0]["id"], json!(again.id));
+}
+
+#[tokio::test]
+async fn close_reports_closed_and_kills() {
+    let tool = ProcessTool::local();
+    let controller = tool.controller();
+    controller
+        .spawn(
+            ProcessSpawn::new("sleep 284.2 & wait"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(controller.close(), 1);
+    assert!(!controller.is_open());
+    controller.wait_idle().await;
+    assert_eq!(controller.running(), 0);
+    assert_eq!(controller.close(), 0, "a second close finds nothing running");
+    let found = std::process::Command::new("pgrep")
+        .args(["-f", "sleep 284.2"])
+        .output()
+        .unwrap();
+    assert!(!found.status.success(), "close must kill every child");
+
+    let err = controller
+        .spawn(ProcessSpawn::new("true"), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "process manager is closed");
+    let err = controller.list().unwrap_err();
+    assert_eq!(err.to_string(), "process manager is closed");
+    // The model's tool shares the closed manager: it refuses spawns too.
+    let err = tool
+        .call(json!({"action": "spawn", "command": "true"}), &ctx())
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "process manager is closed");
+}
+
+#[tokio::test]
+async fn wait_idle_resolves_after_the_last_exit() {
+    let tool = ProcessTool::local();
+    let controller = tool.controller();
+    controller
+        .spawn(ProcessSpawn::new("sleep 2"), CancellationToken::new())
+        .await
+        .unwrap();
+    controller
+        .spawn(ProcessSpawn::new("sleep 2.5"), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(controller.running(), 2);
+
+    let started = std::time::Instant::now();
+    timeout(Duration::from_secs(8), controller.wait_idle())
+        .await
+        .expect("wait_idle resolves once both exit");
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(controller.running(), 0);
+    let entries = controller.list().unwrap();
+    assert_eq!(entries.len(), 2, "exited entries stay listed until killed");
+    assert!(entries.iter().all(|entry| !entry.running));
+
+    // Nothing running: immediate. Tool gone: immediate as well.
+    timeout(Duration::from_millis(100), controller.wait_idle())
+        .await
+        .unwrap();
+    drop(tool);
+    timeout(Duration::from_millis(100), controller.wait_idle())
+        .await
+        .unwrap();
+    assert_eq!(controller.running(), 0);
+}
+
+#[test]
+#[should_panic(expected = "ProcessTool::stats must be called before controller()")]
+fn stats_after_controller_panics() {
+    let tool = ProcessTool::local();
+    let _controller = tool.controller();
+    let _ = tool.stats(BackgroundStats::new());
+}
+
+#[tokio::test]
+async fn core_tools_with_shell_and_process_keeps_file_tools_local() {
+    let (ws, dir) = temp_ws();
+    std::fs::write(dir.join("local.txt"), "on this host").unwrap();
+    let remote = Executor::docker_exec("orca-harness-never-run");
+    let guard = FileGuard::new();
+    let tools = core_tools_with_shell_and_process(
+        &ws,
+        &guard,
+        ShellTool::new(remote.clone()),
+        ProcessTool::new(remote),
+    );
+    let names = |tools: &[Arc<dyn Tool>]| -> Vec<String> {
+        tools.iter().map(|tool| tool.schema().name).collect()
+    };
+    assert_eq!(names(&tools), names(&core_tools_with_guard(&ws, &guard)));
+    assert_eq!(&names(&tools)[..2], ["shell", "process"]);
+
+    let read = tools
+        .iter()
+        .find(|tool| tool.schema().name == "read_file")
+        .unwrap();
+    let got = read
+        .call(json!({"path": "local.txt"}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(got["content"], json!("on this host"));
+    assert!(
+        !guard.is_empty(),
+        "the read goes through the caller's guard"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

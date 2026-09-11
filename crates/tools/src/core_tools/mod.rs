@@ -61,18 +61,33 @@ pub fn core_tools_with_guard(ws: &Workspace, guard: &FileGuard) -> Vec<Arc<dyn T
 /// [`core_tools_with_guard`] around a caller-built `process` tool, for a
 /// host that configures the tool once (stats, notifications, limits) and
 /// keeps its [`ProcessController`](ProcessTool::controller) instead of
-/// replacing a default tool after the fact. Same order: `shell`, the
-/// given `process`, then the file tools.
+/// replacing a default tool after the fact. The `shell` is local, rooted
+/// at the workspace. Same order: `shell`, the given `process`, then the
+/// file tools.
 pub fn core_tools_with_process(
     ws: &Workspace,
     guard: &FileGuard,
     process: ProcessTool,
 ) -> Vec<Arc<dyn Tool>> {
     let dir = ws.root().to_string_lossy().into_owned();
-    let mut tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(ShellTool::local().working_dir(dir)),
-        Arc::new(process),
-    ];
+    core_tools_with_shell_and_process(ws, guard, ShellTool::local().working_dir(dir), process)
+}
+
+/// The core set around caller-built `shell` and `process` tools, for a
+/// host that configures both once (an executor, limits, notifications,
+/// stats) and takes the process tool's controller before handing it
+/// over. Same order as [`core_tools`]: `shell`, `process`, then the file
+/// tools. The file tools always operate on the local workspace, whatever
+/// executor the two command tools were built with: pair a remote
+/// executor with a synced or mounted workspace, or drop the file tools
+/// if the target's filesystem is only reachable over the shell.
+pub fn core_tools_with_shell_and_process(
+    ws: &Workspace,
+    guard: &FileGuard,
+    shell: ShellTool,
+    process: ProcessTool,
+) -> Vec<Arc<dyn Tool>> {
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(shell), Arc::new(process)];
     tools.extend(file_tools(ws, guard));
     tools
 }
@@ -82,12 +97,12 @@ pub fn core_tools_with_process(
 /// the local workspace — pair with a synced or mounted workspace, or drop
 /// them if the target's filesystem is only reachable over the shell.
 pub fn core_tools_with_executor(ws: &Workspace, executor: Executor) -> Vec<Arc<dyn Tool>> {
-    let mut tools: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(ShellTool::new(executor.clone())),
-        Arc::new(ProcessTool::new(executor)),
-    ];
-    tools.extend(file_tools(ws, &FileGuard::new()));
-    tools
+    core_tools_with_shell_and_process(
+        ws,
+        &FileGuard::new(),
+        ShellTool::new(executor.clone()),
+        ProcessTool::new(executor),
+    )
 }
 
 /// The file half of the core set, wired to one guard.

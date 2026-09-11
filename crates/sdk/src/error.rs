@@ -34,11 +34,19 @@ pub enum SdkError {
     #[error("session is shut down")]
     SessionClosed,
     /// [`Session::shutdown`](crate::Session::shutdown) cancelled every
-    /// detached worker but `still_active` of them had not exited when the
-    /// grace period ran out; cancellation is cooperative and they are
-    /// still winding down.
-    #[error("shutdown timed out with {still_active} background worker(s) still active")]
-    ShutdownTimeout { still_active: usize },
+    /// detached worker and killed every background process, but
+    /// `still_active` workers and `still_running_processes` processes
+    /// had not exited when the grace period ran out. Worker cancellation
+    /// is cooperative, so they may still be winding down; a process
+    /// counted here survived its kill signal so far.
+    #[error(
+        "shutdown timed out with {still_active} background worker(s) and \
+         {still_running_processes} process(es) still active"
+    )]
+    ShutdownTimeout {
+        still_active: usize,
+        still_running_processes: usize,
+    },
     #[error("session not found: {0}")]
     SessionNotFound(String),
     #[error("session has no persistent recorder")]

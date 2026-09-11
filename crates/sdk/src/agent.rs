@@ -5,7 +5,7 @@ use orca_harness_core::{Extension, Limits, Model, Tool};
 use orca_harness_extensions::{LongSessionConfig, MemoryModel, RetryModel, ToolPolicy};
 use orca_harness_tools::{FileGuard, TodoList};
 
-use crate::background::SubagentConfig;
+use crate::background::{ProcessConfig, SubagentConfig};
 use crate::extensions::{Compaction, ExtensionConfig, RetryConfig, TruncationConfig};
 use crate::tools::{ToolPreset, ToolSource};
 use crate::{Harness, Mcp, MemoryConfig, RunRequest, RunResult, SdkError, SessionBuilder, Skills};
@@ -42,6 +42,9 @@ pub(crate) struct AgentDefinition {
     /// Sessions build their own subagent manager, inbox, and `subagent`
     /// tool from this recipe (see [`crate::background::BackgroundServices`]).
     pub subagents: Option<SubagentConfig>,
+    /// How sessions of a [`ToolPreset::Coding`] agent build their
+    /// `shell` and `process` tools; `None` means local defaults.
+    pub processes: Option<ProcessConfig>,
 }
 
 pub struct AgentBuilder {
@@ -58,6 +61,7 @@ pub struct AgentBuilder {
     shared_file_guard: Option<FileGuard>,
     shared_todo_list: Option<TodoList>,
     subagents: Option<SubagentConfig>,
+    processes: Option<ProcessConfig>,
     mcp: Option<Mcp>,
     skills: Option<Skills>,
     memory: Option<MemoryConfig>,
@@ -79,6 +83,7 @@ impl AgentBuilder {
             shared_file_guard: None,
             shared_todo_list: None,
             subagents: None,
+            processes: None,
             mcp: None,
             skills: None,
             memory: None,
@@ -239,6 +244,19 @@ impl AgentBuilder {
         self
     }
 
+    /// Configure how sessions run `shell` and `process` commands: the
+    /// executor and the process tool's limits. Only
+    /// [`ToolPreset::Coding`] ships those tools, so
+    /// [`build`](Self::build) rejects this with [`SdkError::Config`] for
+    /// any other preset. Without it a `Coding` agent runs commands on the
+    /// local host with default limits. Each session builds its own tools
+    /// from the recipe; process events reach the host through
+    /// [`Session::notifications`](crate::Session::notifications).
+    pub fn processes(mut self, config: ProcessConfig) -> Self {
+        self.processes = Some(config);
+        self
+    }
+
     pub fn memory(mut self, config: MemoryConfig) -> Self {
         self.memory = Some(config);
         self
@@ -255,6 +273,12 @@ impl AgentBuilder {
     }
 
     pub fn build(mut self) -> Result<Agent, SdkError> {
+        if self.processes.is_some() && self.preset != ToolPreset::Coding {
+            return Err(SdkError::Config(format!(
+                "process configuration requires ToolPreset::Coding, not {:?}",
+                self.preset
+            )));
+        }
         let mut shared_tools: Vec<Arc<dyn Tool>> = Vec::new();
         let mut skill_once = false;
         if let Some(skills) = &self.skills {
@@ -315,6 +339,7 @@ impl AgentBuilder {
                 shared_file_guard: self.shared_file_guard,
                 shared_todo_list: self.shared_todo_list,
                 subagents: self.subagents,
+                processes: self.processes,
             }),
         })
     }

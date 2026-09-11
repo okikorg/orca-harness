@@ -16,7 +16,7 @@ use orca_harness_core::{Context, Message};
 use orca_harness_extensions::{
     compact, CompactConfig, CompactReport, SessionHandler, TruncationStore,
 };
-use orca_harness_tools::{FileGuard, TodoList};
+use orca_harness_tools::{FileGuard, ProcessController, TodoList};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::background::{BackgroundNotification, Processes, Subagents};
@@ -171,9 +171,11 @@ impl Session {
             .map(|controller| Processes::new(controller.clone(), self.closed.clone()))
     }
 
-    /// Observe this session's detached subagents: worker exits, results
-    /// waiting for the parent, and batches entering the transcript.
-    /// `None` when the agent configured no subagents.
+    /// Observe this session's detached work: subagent worker exits,
+    /// results waiting for the parent, batches entering the transcript,
+    /// and background process events (a readiness match, an exit). Every
+    /// session has a channel; one without subagents or a `process` tool
+    /// simply never sends.
     ///
     /// Observation is separate from delivery. Reading a notification
     /// consumes nothing the parent is owed, and the session never starts
@@ -185,11 +187,8 @@ impl Session {
     /// first model call. A receiver that falls more than
     /// [`NOTIFICATION_CAPACITY`](crate::NOTIFICATION_CAPACITY)
     /// notifications behind misses the oldest ones.
-    pub fn notifications(&self) -> Option<broadcast::Receiver<BackgroundNotification>> {
-        self.tools
-            .background
-            .as_ref()
-            .map(|services| services.subscribe())
+    pub fn notifications(&self) -> broadcast::Receiver<BackgroundNotification> {
+        self.tools.events.subscribe()
     }
 
     /// Detached results waiting for the parent transcript; zero without
@@ -354,10 +353,12 @@ impl Session {
 
     /// Start a new conversation in this session and clear its
     /// read-before-write guard and todo list, cancelling any detached
-    /// subagents and dropping their undelivered results. The subagent
-    /// manager starts a new generation, so a worker that finishes after
-    /// this call has its result refused rather than delivered to the new
-    /// conversation.
+    /// subagents and dropping their undelivered results, and killing the
+    /// session's background processes (host- and model-started alike,
+    /// without exit notifications; the process handle keeps serving).
+    /// The subagent manager starts a new generation, so a worker that
+    /// finishes after this call has its result refused rather than
+    /// delivered to the new conversation.
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         let fresh = fresh_context(&self.agent);
@@ -370,13 +371,13 @@ impl Session {
             self.truncation_store.clear();
         }
         *context = fresh;
-        self.tools.clear();
+        self.tools.clear().await;
         Ok(())
     }
 
     /// Empty this persistent session's transcript in place, keeping its
-    /// id and file. Like [`clear`](Self::clear), the guard, todos, and
-    /// detached subagents are reset with it.
+    /// id and file. Like [`clear`](Self::clear), the guard, todos,
+    /// detached subagents, and background processes are reset with it.
     pub async fn reset_in_place(&self) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         let recorder = self.recorder.as_ref().ok_or(SdkError::EphemeralSession)?;
@@ -387,18 +388,19 @@ impl Session {
         *context = fresh;
         recorder.sync(&context);
         save_session_store(&self.truncation_store, &recorder.path())?;
-        self.tools.clear();
+        self.tools.clear().await;
         Ok(())
     }
 
     /// Stop this session for good: refuse every later run, spawn, and
-    /// conversation change, cancel its detached workers, and wait, up to
-    /// `grace`, for them to exit. Admission stops before the wait begins,
-    /// so nothing can extend it; undelivered results are dropped.
-    /// Cancellation is cooperative: a worker that ignores its token keeps
-    /// the wait going, and when `grace` runs out the error reports how
-    /// many are still winding down. A worker's exit notification may
-    /// still be in flight when this returns.
+    /// conversation change, cancel its detached workers, kill its
+    /// background processes, and wait, up to `grace`, for all of them to
+    /// exit. Admission stops before the wait begins, so nothing can
+    /// extend it; undelivered results are dropped. Worker cancellation
+    /// is cooperative: one that ignores its token keeps the wait going,
+    /// and when `grace` runs out the error reports how many workers and
+    /// processes are still winding down. A worker's or process's exit
+    /// notification may still be in flight when this returns.
     ///
     /// Fails with [`SdkError::BusySession`] while a run is active,
     /// touching nothing; finish or cancel the run and call again. Every
@@ -415,21 +417,38 @@ impl Session {
     ///
     /// Dropping a session instead of calling this cancels the same work
     /// but waits for nothing. [`processes`](Self::processes) refuses
-    /// every operation after a shutdown; live background processes are
-    /// killed when the session is dropped, and workflow runs are not yet
-    /// covered here.
+    /// every operation after a shutdown and reports closed; workflow
+    /// runs are not yet covered here.
     pub async fn shutdown(&self, grace: Duration) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         self.closed.store(true, Ordering::Release);
-        let Some(services) = &self.tools.background else {
-            return Ok(());
+        let services = self.tools.background.as_ref();
+        let process = self.tools.process.as_ref();
+        if let Some(services) = services {
+            services.close();
+        }
+        if let Some(process) = process {
+            process.close();
+        }
+        let idle = async {
+            tokio::join!(
+                async {
+                    if let Some(services) = services {
+                        services.manager().wait_idle().await;
+                    }
+                },
+                async {
+                    if let Some(process) = process {
+                        process.wait_idle().await;
+                    }
+                }
+            );
         };
-        services.close();
-        let manager = services.manager();
-        match tokio::time::timeout(grace, manager.wait_idle()).await {
+        match tokio::time::timeout(grace, idle).await {
             Ok(()) => Ok(()),
             Err(_) => Err(SdkError::ShutdownTimeout {
-                still_active: manager.live_workers(),
+                still_active: services.map_or(0, |services| services.manager().live_workers()),
+                still_running_processes: process.map_or(0, ProcessController::running),
             }),
         }
     }
