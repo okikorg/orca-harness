@@ -18,7 +18,10 @@ pub use background::{
     Subagents, Workflows, NOTIFICATION_CAPACITY,
 };
 pub use error::SdkError;
-pub use extensions::{CompactCallback, Compaction, RetryConfig, TruncationConfig};
+pub use extensions::{
+    CompactCallback, Compaction, ErrorRetryPredicate, LiveModelRetry, ModelRetryConfig,
+    ModelRetryNotice, OkRetryPredicate, RetryConfig, ToolRetryConfig, TruncationConfig,
+};
 pub use harness::{Harness, HarnessBuilder};
 pub use mcp::{Mcp, McpServerStatus};
 pub use memory::{Memory, MemoryConfig};

@@ -1,12 +1,13 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use orca_harness_core::{Extension, Limits, Model, Tool};
-use orca_harness_extensions::{LongSessionConfig, MemoryModel, RetryModel, ToolPolicy};
+use orca_harness_extensions::{LongSessionConfig, MemoryModel, ToolPolicy};
 use orca_harness_tools::{FileGuard, TodoList};
 
 use crate::background::{ProcessConfig, SubagentConfig};
-use crate::extensions::{Compaction, ExtensionConfig, RetryConfig, TruncationConfig};
+use crate::extensions::{
+    Compaction, ExtensionConfig, ModelRetryConfig, ToolRetryConfig, TruncationConfig,
+};
 use crate::tools::{ToolPreset, ToolSource};
 use crate::{Harness, Mcp, MemoryConfig, RunRequest, RunResult, SdkError, SessionBuilder, Skills};
 
@@ -164,13 +165,21 @@ impl AgentBuilder {
         self
     }
 
-    pub fn tool_retry(mut self, config: RetryConfig) -> Self {
-        self.extension_config.retry = Some(config);
+    /// Retry the agent's own tool calls in every run; see
+    /// [`ToolRetryConfig`] for what is retried, what is excluded, and how
+    /// it interacts with subagents that retry inside. A plain
+    /// [`RetryConfig`](crate::RetryConfig) converts with the defaults.
+    pub fn tool_retry(mut self, config: impl Into<ToolRetryConfig>) -> Self {
+        self.extension_config.retry = Some(config.into());
         self
     }
 
-    pub fn model_retry(mut self, config: RetryConfig) -> Self {
-        self.extension_config.model_retry = Some(config);
+    /// Retry transient model failures; see [`ModelRetryConfig`]. The
+    /// model is wrapped once at build, shared by every session and every
+    /// subagent inheriting it, so retry is never nested. A plain
+    /// [`RetryConfig`](crate::RetryConfig) converts with the defaults.
+    pub fn model_retry(mut self, config: impl Into<ModelRetryConfig>) -> Self {
+        self.extension_config.model_retry = Some(config.into());
         self
     }
 
@@ -303,12 +312,8 @@ impl AgentBuilder {
             )));
         }
         let mut memory_tools: Vec<Arc<dyn Tool>> = Vec::new();
-        if let Some(config) = self.extension_config.model_retry {
-            self.model = Arc::new(
-                RetryModel::new(self.model, config.attempts)
-                    .backoff(config.duration())
-                    .retry_delay(orca_harness_model_providers::http_error::retry_delay),
-            );
+        if let Some(config) = &self.extension_config.model_retry {
+            self.model = Arc::new(config.wrap(self.model));
         }
         if let Some(mcp) = &self.mcp {
             // The tools themselves are read per run (see `RunTools`); the
@@ -416,11 +421,5 @@ impl Agent {
     )]
     pub fn todo_list(&self) -> Option<TodoList> {
         self.inner.shared_todo_list.clone()
-    }
-}
-
-impl RetryConfig {
-    pub(crate) fn duration(&self) -> Duration {
-        Duration::from_millis(self.backoff_ms)
     }
 }

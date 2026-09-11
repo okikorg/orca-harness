@@ -69,40 +69,10 @@ pub fn tool_retry() -> orca_harness_extensions::ToolRetry {
         .retry_error_when(retryable_error)
 }
 
-/// Returned-error retry policy. Native file mutations are never replayed:
-/// their exact-match failures are deterministic, while retrying after an I/O
-/// error could repeat an operation whose rollback was incomplete. Subagent
-/// control actions (including unsupported legacy wait calls) are deterministic
-/// too, and the poll-guard error on a repeated `list` must reach the model, not be
-/// retried into a harness-side poll loop. Other tools retain the
-/// extension's historical retry-on-`Err` behavior.
-pub fn retryable_error(
-    call: &orca_harness_core::ToolCall,
-    _error: &orca_harness_core::ToolError,
-) -> bool {
-    if call.name == "subagent" {
-        return call.arguments["action"]
-            .as_str()
-            .is_none_or(|action| action == "run");
-    }
-    !matches!(
-        call.name.as_str(),
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
-    )
-}
-
-/// The data-failure rule for [`tool_retry`], shared with the subagent
-/// relay so inner agents retry exactly what the top-level agent retries.
-pub fn data_failure(call: &orca_harness_core::ToolCall, out: &serde_json::Value) -> bool {
-    match call.name.as_str() {
-        "shell" | "process" => out["success"].as_bool() == Some(false),
-        "web_fetch" => match out["status"].as_u64() {
-            Some(status) => (500..600).contains(&status),
-            None => false,
-        },
-        _ => false,
-    }
-}
+/// The classifiers are the tools crate's, so every host and the subagent
+/// relay retry exactly the same failures; see
+/// [`orca_harness_tools::retry`].
+pub use orca_harness_tools::retry::{data_failure, retryable_error};
 
 #[cfg(test)]
 mod tests {
@@ -137,33 +107,6 @@ mod tests {
     fn unknown_names_are_never_enabled() {
         assert!(find("no-such").is_none());
         assert!(!enabled("no-such"));
-    }
-
-    #[test]
-    fn mutation_errors_are_not_retryable() {
-        let call = |name: &str| orca_harness_core::ToolCall {
-            id: "test".into(),
-            name: name.into(),
-            arguments: serde_json::json!({}),
-        };
-        let error = orca_harness_core::ToolError::msg("deterministic");
-
-        assert!(!retryable_error(&call("multi_edit"), &error));
-        assert!(!retryable_error(&call("apply_patch"), &error));
-        assert!(!retryable_error(&call("write_file"), &error));
-        assert!(!retryable_error(&call("edit_file"), &error));
-        assert!(retryable_error(&call("web_fetch"), &error));
-
-        let control = |action: &str| orca_harness_core::ToolCall {
-            id: "test".into(),
-            name: "subagent".into(),
-            arguments: serde_json::json!({"action": action}),
-        };
-        assert!(retryable_error(&call("subagent"), &error), "run by default");
-        assert!(retryable_error(&control("run"), &error));
-        assert!(!retryable_error(&control("list"), &error));
-        assert!(!retryable_error(&control("wait"), &error));
-        assert!(!retryable_error(&control("cancel_all"), &error));
     }
 
     #[tokio::test]
