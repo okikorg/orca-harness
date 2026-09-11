@@ -35,13 +35,13 @@ cargo run -p orca-harness-sdk --example agent_tour
 cargo run -p orca-harness-sdk --example host_assembly
 ```
 
-Additional examples cover cancellation (`background_cancellation`), custom events, local MCP, memory and skills, session lifecycle, and recovery through compaction and retries. The orchestration examples are deterministic and need no credentials: `detached_subagents`, `background_processes`, `workflows`, and `partial_outcomes`.
+Additional examples cover cancellation (`background_cancellation`), custom events, local MCP, memory and skills, session lifecycle, and recovery through compaction and retries. The orchestration examples (`detached_subagents`, `background_processes`, and `workflows`) and `partial_outcomes`, which demonstrates `RunOutcome` on runs that stop early, are deterministic and need no credentials.
 
 ## Orchestration
 
 Two different things run "in the background". A `RunHandle` (from `Session::start`) is one parent run executing off the caller's task; it belongs to the caller, who reads its events and awaits its outcome. Subagents, background processes, and workflows are detached work owned by the session: they outlive the run that started them, and a session hands out `Subagents`, `Processes`, and `Workflows` handles to spawn, inspect, and cancel them from the host.
 
-A detached subagent's result (and a workflow's run-level outcome) is owed to the parent conversation: it is delivered as one user turn at the parent's next model call, either inside a running turn or when the host calls `Session::continue_run(RunRequest::continuation())`. While the session is idle the host is told through `Session::notifications` (`CompletionsReady`, `SubagentFinished`, `ProcessNotified`); the session never starts a run on its own. `Session::shutdown` cancels the detached work and waits up to a grace period for it to exit; dropping the session cancels the same work but waits for nothing.
+A detached subagent's result (and a workflow's run-level outcome) is owed to the parent conversation: it is delivered as one user turn at the parent's next model call: inside the running turn if one is in progress, otherwise at the first model call of the host's next run (`continue_run` or `run`). While the session is idle the host is told through `Session::notifications` (`CompletionsReady`, `SubagentFinished`, `ProcessNotified`); the session never starts a run on its own. `Session::shutdown` cancels the detached work and waits up to a grace period for it to exit; dropping the session cancels the same work but waits for nothing.
 
 ## Anthropic
 

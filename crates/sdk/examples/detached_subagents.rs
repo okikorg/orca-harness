@@ -192,6 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wait_until(|| session.pending_completions() == 1, "the host result").await?;
 
     session.shutdown(Duration::from_secs(2)).await?;
+    assert_eq!(session.pending_completions(), 0);
     println!("session shut down; the undelivered host result was dropped");
     Ok(())
 }

@@ -14,9 +14,11 @@
 //! 2. `Workflows::submit(WorkflowSubmission)` and its acknowledgement.
 //! 3. `BackgroundNotification::SubagentFinished` for every stage
 //!    (`spawn.run` names the run, `spawn.stage` the stage).
-//! 4. Polling `Workflows::status` until the run leaves `Running`, then
+//! 4. Polling `Workflows::status` until its outcome is recorded, then
 //!    reading `WorkflowOutcome` outputs and per-stage `StageTiming`.
-//! 5. `Workflows::stage_output` for a stored answer, then `shutdown`.
+//! 5. `Workflows::stage_output` for a stored answer; the run-level
+//!    `SubagentFinished` and `CompletionsReady` for the one completion
+//!    owed to the parent; then `shutdown`.
 //!
 //! Deterministic: the stage model is scripted and never calls a provider.
 
@@ -162,7 +164,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("stored output of {}: {}", stored.stage, stored.answer);
     assert_eq!(stored.answer, "summarize the change");
 
-    // The run-level outcome is the one completion the parent is owed.
+    // The run-level outcome is the one completion the parent is owed. It
+    // is recorded before it is announced and filed, so wait for the
+    // wake-up (`CompletionsReady`) rather than reading the inbox at once.
+    loop {
+        let notification =
+            tokio::time::timeout(Duration::from_secs(10), notifications.recv()).await??;
+        match notification {
+            BackgroundNotification::SubagentFinished(n) if n.spawn.id == ack.run_id => {
+                assert!(n.spawn.run.is_none(), "the run itself, not a stage");
+                println!(
+                    "run {} finished -> {:?}",
+                    n.spawn.id,
+                    n.result.map(|_| "ok")
+                );
+            }
+            BackgroundNotification::CompletionsReady { pending } => {
+                println!("completions ready: {pending}");
+                break;
+            }
+            other => println!("other notification: {other:?}"),
+        }
+    }
     assert_eq!(session.pending_completions(), 1);
     session.shutdown(Duration::from_secs(2)).await?;
     println!("session shut down");

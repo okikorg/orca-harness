@@ -60,8 +60,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             async move {
                 started.notify_one();
                 println!("  [Tool] Computation started, awaiting cancellation or timeout...");
-                // Loop with quick yields so cooperatively checking the token or select detects it
-                for _ in 0..1000 {
+                // Poll the token with quick yields for a few seconds: long
+                // enough that the host's cancellation always lands first,
+                // even under load, so the tool never runs to completion.
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                while tokio::time::Instant::now() < deadline {
                     if ctx.cancellation.is_cancelled() {
                         saw.store(true, Ordering::SeqCst);
                         println!("  [Tool] Cancellation token observed inside tool context!");
