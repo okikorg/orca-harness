@@ -391,8 +391,11 @@ impl Agent {
     /// with [`SdkError::BusySession`].
     ///
     /// Detached work started during the run (background subagents,
-    /// processes, workflows) is neither cancelled nor awaited by this method
-    /// and cannot be observed from the result. Open a `Session` to manage it.
+    /// processes, workflows) is not awaited, and cannot be observed from
+    /// the result: the ephemeral session is dropped when this method
+    /// returns, which cancels that work on a best-effort basis (live
+    /// subagent runs are cancelled, live process groups are killed).
+    /// Open a `Session` to manage it instead.
     ///
     /// Built-in mutable tool state (the read-before-write [`FileGuard`],
     /// the [`TodoList`], background processes, Python/Bun REPLs) is owned by

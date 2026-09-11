@@ -38,12 +38,10 @@ impl ProcessCore<'_> {
         let config = self.config;
         let manager = self.manager;
 
-        if manager.procs.lock().unwrap().len() >= config.max_processes {
-            return Err(ToolError::msg(format!(
-                "live process limit reached ({}); kill one first",
-                config.max_processes
-            )));
-        }
+        // Claim a slot before the child exists: the reservation is what
+        // keeps parallel spawns from all passing the same count, and it is
+        // released by `Slot`'s drop on every path that returns early.
+        let slot = manager.reserve_slot(config.max_processes)?;
 
         let mut cmd = config
             .executor
@@ -151,11 +149,7 @@ impl ProcessCore<'_> {
             p.output_ready.notify_waiters();
         });
 
-        manager
-            .procs
-            .lock()
-            .unwrap()
-            .insert(id.clone(), proc.clone());
+        slot.commit(id.clone(), proc.clone());
 
         if wait_for_exit {
             tokio::select! {
