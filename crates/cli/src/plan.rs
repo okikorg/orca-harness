@@ -60,6 +60,8 @@ pub struct PlanArea(Arc<RwLock<Episode>>);
 struct Episode {
     briefed: bool,
     written: Vec<String>,
+    /// Plans written or revised since the host last asked about them.
+    fresh: Vec<String>,
 }
 
 impl PlanArea {
@@ -87,6 +89,16 @@ impl PlanArea {
         if !episode.written.iter().any(|seen| seen == path) {
             episode.written.push(path.to_string());
         }
+        if !episode.fresh.iter().any(|seen| seen == path) {
+            episode.fresh.push(path.to_string());
+        }
+    }
+
+    /// Plans written or revised since the last call — what the turn that
+    /// just ended produced, so the host asks about a plan once per change
+    /// rather than after every turn.
+    pub fn take_fresh(&self) -> Vec<String> {
+        std::mem::take(&mut self.0.write().expect("plan area lock").fresh)
     }
 
     /// The plans written so far this episode.
@@ -99,6 +111,7 @@ impl PlanArea {
     pub fn end(&self) -> Vec<String> {
         let mut episode = self.0.write().expect("plan area lock");
         episode.briefed = false;
+        episode.fresh.clear();
         std::mem::take(&mut episode.written)
     }
 }
@@ -152,8 +165,10 @@ pub fn briefing(today: &str) -> String {
          \n\
          Structure a plan as: a one-sentence goal, two or three sentences on the approach, the \
          files each step creates or modifies, and the steps themselves as `- [ ]` checkboxes \
-         small enough to do one at a time, each saying what to verify. The user approves the \
-         file before it is created, and leaves plan mode with /mode."
+         small enough to do one at a time, each saying what to verify. Never end a turn \
+         asking whether you may write the plan or whether to proceed: calling write_file is \
+         the proposal. The user approves that write, and once the file exists the host asks \
+         them whether to approve the plan and start implementing."
     )
 }
 
@@ -241,6 +256,12 @@ mod tests {
             ]
         );
 
+        // What was written since the last look is handed over once.
+        assert_eq!(area.take_fresh().len(), 2);
+        assert!(area.take_fresh().is_empty());
+        area.record("docs/plan/2026-08-22-a.md");
+        assert_eq!(area.take_fresh(), ["docs/plan/2026-08-22-a.md".to_string()]);
+
         // Ending hands back what was written and resets for next time.
         let written = area.end();
         assert_eq!(written.len(), 2);
@@ -269,6 +290,7 @@ mod tests {
         );
         assert!(text.contains("You choose the name"), "{text}");
         assert!(text.contains("Decide for yourself"), "{text}");
+        assert!(text.contains("Never end a turn"), "{text}");
         assert!(text.contains("needs no file"), "{text}");
         assert!(text.contains("write_file"));
         assert!(text.contains("edit_file"));

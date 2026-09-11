@@ -18,7 +18,9 @@ use crate::view::{self, theme};
 use super::super::state::{
     App, ModelPickerTarget, Overlay, SESSION_ACTIONS, SETTINGS_ROWS, SUBAGENT_ROWS,
 };
-use super::super::{copy_command, expand_tool, push_error, push_notice, SESSIONS_WINDOW};
+use super::super::{
+    copy_command, expand_tool, push_error, push_notice, start_submission, SESSIONS_WINDOW,
+};
 
 pub(crate) fn slash_command(
     app: &mut App,
@@ -419,6 +421,49 @@ pub(crate) fn apply_mode(app: &mut App, next: crate::mode::Mode) {
             push_notice(app, format!("plan saved to {path}"));
         }
     }
+}
+
+/// The name the plan decision is shown under, and how its answer is told
+/// apart from an ordinary tool approval.
+pub(crate) const PLAN_APPROVAL: &str = "plan";
+
+/// A plan-mode turn that wrote or revised a plan ends by asking whether to
+/// approve it and start implementing — the ordinary yes/no approval prompt.
+/// Nothing awaits the answer on the channel: the key handler reports it and
+/// [`approve_plan`] acts on a yes.
+pub(crate) fn request_plan_approval(app: &mut App) {
+    if !app.cfg.mode.is_plan() {
+        return;
+    }
+    let fresh = app.cfg.plan.take_fresh();
+    if fresh.is_empty() {
+        return;
+    }
+    let (respond, _) = tokio::sync::oneshot::channel();
+    app.approval = Some(crate::msg::ApprovalRequest {
+        tool_name: PLAN_APPROVAL.into(),
+        detail: format!(
+            "{} written · approve and start implementing?",
+            fresh.join(", ")
+        ),
+        yes_no: true,
+        respond,
+    });
+}
+
+/// The plan was approved: leave plan mode and run the implementation turn.
+pub(crate) fn approve_plan(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, width: usize) {
+    let plans = app.cfg.plan.written().join(", ");
+    apply_mode(app, crate::mode::Mode::Normal);
+    start_submission(
+        app,
+        worker,
+        format!(
+            "Implement the approved plan in {plans}: work through its steps in order, verify \
+             each as it says, and tick its checkbox in the file when done."
+        ),
+        width,
+    );
 }
 
 /// `/mode [normal|plan|auto|yolo]` — no argument opens the standard picker,

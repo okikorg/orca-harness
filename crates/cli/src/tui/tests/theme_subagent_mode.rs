@@ -214,6 +214,57 @@ mod mode_rewind_todo_tests {
         assert!(app.cfg.plan.written().is_empty(), "the episode ended");
     }
 
+    /// A plan-mode turn that wrote a plan ends with the yes/no approval.
+    /// `n` keeps planning and does not nag until the plan changes; `y`
+    /// leaves plan mode and starts the implementation run.
+    #[tokio::test]
+    async fn a_written_plan_asks_for_approval_and_yes_starts_implementing() {
+        let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        let finish = |app: &mut App| {
+            app.run = RunState::Running {
+                id: crate::msg::RunId::User(1),
+                started: Instant::now(),
+                cancel: CancellationToken::new(),
+            };
+            let done = UiMsg::RunDone {
+                id: crate::msg::RunId::User(1),
+                result: Ok(String::new()),
+            };
+            handle_ui_msg(app, done, &worker, 80);
+        };
+        let answer = |app: &mut App, c: char| {
+            handle_terminal_event(app, CtEvent::Key(key(KeyCode::Char(c))), &worker, 80);
+        };
+
+        // A turn that wrote nothing asks nothing.
+        finish(&mut app);
+        assert!(app.approval.is_none());
+
+        app.cfg.plan.record("docs/plan/2026-09-11-x.md");
+        finish(&mut app);
+        let request = app.approval.as_ref().expect("plan approval prompt");
+        assert!(request.yes_no);
+        assert!(request.detail.contains("docs/plan/2026-09-11-x.md"), "{}", request.detail);
+
+        answer(&mut app, 'n');
+        assert_eq!(app.cfg.mode.get(), Mode::Plan);
+        assert!(rx.try_recv().is_err(), "no run starts on no");
+        finish(&mut app);
+        assert!(app.approval.is_none(), "an unchanged plan is not asked about again");
+
+        app.cfg.plan.record("docs/plan/2026-09-11-x.md");
+        finish(&mut app);
+        answer(&mut app, 'y');
+        assert_eq!(app.cfg.mode.get(), Mode::Normal);
+        assert!(app.cfg.plan.written().is_empty(), "the episode ended");
+        assert!(texts(&app).contains("plan saved to docs/plan/2026-09-11-x.md"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(WorkerCmd::Run { prompt, .. }) if prompt.contains("docs/plan/2026-09-11-x.md")
+        ));
+    }
+
     #[tokio::test]
     async fn switching_from_plan_to_yolo_ends_the_episode_once() {
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();

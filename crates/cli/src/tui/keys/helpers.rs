@@ -37,7 +37,7 @@ pub(crate) fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
 
 /// A compact transcript notification: the dot keeps system status scannable
 /// without giving it the visual weight of transcript content.
-pub(crate) fn handle_approval_key(app: &mut App, key: KeyEvent) {
+pub(crate) fn handle_approval_key(app: &mut App, key: KeyEvent) -> Option<ApprovalResponse> {
     let yes_no = app.approval.as_ref().is_some_and(|request| request.yes_no);
     let response = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalResponse::AllowOnce),
@@ -83,6 +83,7 @@ pub(crate) fn handle_approval_key(app: &mut App, key: KeyEvent) {
             let _ = request.respond.send(response);
         }
     }
+    response
 }
 
 pub(crate) fn history_nav(app: &mut App, dir: i32) {

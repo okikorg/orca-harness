@@ -6,7 +6,7 @@ use std::path::Path;
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use tokio::sync::mpsc;
 
-use crate::msg::WorkerCmd;
+use crate::msg::{ApprovalResponse, WorkerCmd};
 use crate::tui::clipboard;
 use crate::tui::components::ask::AskFormEvent;
 use crate::tui::components::picker::ListPicker;
@@ -105,8 +105,11 @@ pub(crate) fn handle_terminal_event(
     if ctrl && key.code == KeyCode::Tab {
         return;
     }
-    if app.approval.is_some() {
-        handle_approval_key(app, key);
+    if let Some(request) = &app.approval {
+        let plan = request.tool_name == crate::tui::commands::PLAN_APPROVAL;
+        if handle_approval_key(app, key) == Some(ApprovalResponse::AllowOnce) && plan {
+            crate::tui::commands::approve_plan(app, worker, width);
+        }
         return;
     }
     if app.ask.is_some() {

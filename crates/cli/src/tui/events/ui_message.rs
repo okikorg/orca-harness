@@ -427,7 +427,9 @@ pub(crate) fn handle_ui_msg(
                     }
                     push_turn_footer(app, &parts);
                 }
-                start_next_queued_prompt(app, worker, width);
+                if !start_next_queued_prompt(app, worker, width) {
+                    crate::tui::commands::request_plan_approval(app);
+                }
             }
         }
         UiMsg::ShellDone { id } => {
