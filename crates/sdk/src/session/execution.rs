@@ -167,6 +167,13 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
             result => break result,
         }
     };
+    if let Some(background) = &background {
+        // The wake-up latch is set by the first result that arrives after
+        // it was consumed; a result that arrived mid-run was delivered by
+        // this run, so clear it again or the first result to arrive while
+        // idle would never announce itself.
+        background.inbox.consume_wakeup();
+    }
     let dropped_events = fanout.flush();
     let persistence = match &recorder {
         Some(recorder) => {

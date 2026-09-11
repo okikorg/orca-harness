@@ -263,8 +263,12 @@ impl Subagents {
         self.inbox.pending()
     }
 
-    /// A fresh observer of this session's detached work; the same channel
-    /// as [`Session::notifications`](crate::Session::notifications).
+    /// A fresh observer of this session's detached work, for code that
+    /// holds only this handle. [`Session::notifications`] is the primary
+    /// entry point and documents the channel's contract; this is the same
+    /// channel.
+    ///
+    /// [`Session::notifications`]: crate::Session::notifications
     pub fn notifications(&self) -> broadcast::Receiver<BackgroundNotification> {
         self.events.subscribe()
     }

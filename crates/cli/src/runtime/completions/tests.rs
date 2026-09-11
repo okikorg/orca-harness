@@ -189,12 +189,36 @@ fn inventory_value(context: &Context) -> serde_json::Value {
 #[tokio::test]
 async fn unchanged_inventory_reaches_model_when_same_call_compacts_the_old_snapshot() {
     use orca_harness_core::testing::ScriptedModel;
-    use orca_harness_core::{Agent, CancellationToken};
+    use orca_harness_core::{Agent, CancellationToken, Model, ModelError, ToolSchema};
     use orca_harness_extensions::{ContextCapacity, LongSession, TruncationStore};
+    use orca_harness_tools::{SubagentRequest, SubagentTool, Workspace};
+
+    struct HeldChild(CancellationToken);
+    #[async_trait]
+    impl Model for HeldChild {
+        async fn generate(
+            &self,
+            _: &Context,
+            _: &[ToolSchema],
+        ) -> Result<ModelResponse, ModelError> {
+            self.0.cancelled().await;
+            Ok(ModelResponse::final_text("child finished"))
+        }
+    }
 
     let manager = SubagentManager::new(1);
     let inbox = CompletionInbox::new(manager.clone());
     let (ui, _) = mpsc::unbounded_channel();
+    // One live worker: an empty inventory is never restored, only a
+    // non-empty one supersedes what compaction removed.
+    let release = CancellationToken::new();
+    let tool = SubagentTool::new(
+        Arc::new(HeldChild(release.clone())),
+        &Workspace::new(std::env::temp_dir()),
+    )
+    .background(manager.clone(), |_| {});
+    tool.spawn_background(SubagentRequest::new("keep running"))
+        .unwrap();
     let model = Arc::new(ScriptedModel::new(vec![ModelResponse::final_text(
         "answer",
     )]));
@@ -225,7 +249,8 @@ async fn unchanged_inventory_reaches_model_when_same_call_compacts_the_old_snaps
         .unwrap();
     assert!(compacted.load(Ordering::Relaxed));
     let contexts = model.observed_contexts();
-    assert_eq!(inventory_value(&contexts[0])["count"], 0);
+    assert_eq!(inventory_value(&contexts[0])["count"], 1);
+    release.cancel();
     assert!(!contexts[0]
         .messages()
         .iter()
@@ -339,11 +364,8 @@ async fn parent_mid_turn_receives_the_batch_before_its_next_model_call() {
             Message::System { .. } => "system",
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        shape,
-        ["user", "inventory", "calls", "results", "batch", "answer"]
-    );
-    let Message::User { content, .. } = &context.messages()[4] else {
+    assert_eq!(shape, ["user", "calls", "results", "batch", "answer"]);
+    let Message::User { content, .. } = &context.messages()[3] else {
         unreachable!()
     };
     let value: serde_json::Value = serde_json::from_str(content).unwrap();
@@ -364,15 +386,15 @@ async fn delivery_appends_one_user_turn_per_model_call_with_everything_ready() {
     delivery.before_model(&mut context).await.unwrap();
     assert_eq!(
         context.messages().len(),
-        2,
-        "initial inventory is available even without completions"
+        1,
+        "no inventory before anything was spawned"
     );
 
     inbox.push(notification(0, 2, "b"));
     inbox.push(notification(0, 1, "a"));
     delivery.before_model(&mut context).await.unwrap();
-    assert_eq!(context.messages().len(), 3);
-    let orca_harness_core::Message::User { content, .. } = &context.messages()[2] else {
+    assert_eq!(context.messages().len(), 2);
+    let orca_harness_core::Message::User { content, .. } = &context.messages()[1] else {
         panic!("completions arrive as a user turn");
     };
     let value: serde_json::Value = serde_json::from_str(content).unwrap();
