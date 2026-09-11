@@ -272,11 +272,13 @@ impl AgentBuilder {
     /// session and never a run in flight. A server disconnected or
     /// replaced mid-run stays callable through that run's captured tools
     /// (its calls go to the old connection: they succeed or fail with
-    /// that connection's transport error), while the catalog's live
-    /// schema visibility may hide its schemas from the model until
-    /// selected again. The model is wrapped in
-    /// [`McpModel`](orca_harness_tool_extensions::mcp::McpModel) at
-    /// build, which reads the catalog live for that visibility.
+    /// that connection's transport error). Schema visibility is the one
+    /// thing read live, through the
+    /// [`McpModel`](orca_harness_tool_extensions::mcp::McpModel) wrap
+    /// built here: a disconnect unhides the run's captured schemas
+    /// (the catalog no longer knows them), while a replace hides them
+    /// until the new catalog tool is selected. See [`Mcp`] for the
+    /// selection rule.
     pub fn mcp(mut self, mcp: Mcp) -> Self {
         self.mcp = Some(mcp);
         self

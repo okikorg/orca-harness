@@ -24,11 +24,15 @@ pub struct McpServerStatus {
 /// run stays callable through that run's captured tools: in-flight and
 /// later calls in the run go to the old connection and either succeed or
 /// fail with that connection's transport error, never with an unknown
-/// tool. The catalog does drive schema visibility live (see
-/// [`McpModel`](orca_harness_tool_extensions::mcp::McpModel)), so a
-/// replaced server's schemas can drop out of the model's view mid-run
-/// until selected again. Nothing else changes mid-run: there is no
-/// mutation of a run's registry.
+/// tool. Schema visibility alone is read live from the catalog (see
+/// [`McpModel`](orca_harness_tool_extensions::mcp::McpModel)): a
+/// mid-run disconnect unhides the run's captured schemas, since the
+/// catalog no longer knows them, while a replace hides them until the
+/// new catalog tool is selected. A replaced server therefore stays
+/// callable only through a tool selected before the change: selecting
+/// after the replace flags the new catalog tool, not the run's captured
+/// one. Nothing else changes mid-run: there is no mutation of a run's
+/// registry.
 ///
 /// [`AgentBuilder::mcp`]: crate::AgentBuilder::mcp
 #[derive(Clone, Default)]
@@ -89,6 +93,8 @@ impl Mcp {
             .collect()
     }
 
+    /// `name` is expected to be in the catalog; a concurrent disconnect
+    /// between the lookups yields an unhealthy, zero-tool status.
     fn status(&self, name: &str) -> McpServerStatus {
         McpServerStatus {
             name: name.to_string(),

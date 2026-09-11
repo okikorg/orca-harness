@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use orca_harness_core::{Context, Model, ModelError, ModelResponse, ToolCall, ToolSchema};
+use orca_harness_core::{Context, Message, Model, ModelError, ModelResponse, ToolCall, ToolSchema};
 use serde_json::Value;
 
 /// One scripted model step: a final answer, or one call of the named
@@ -51,6 +51,30 @@ impl Recording {
 /// The tool name of one recorded schema.
 pub fn name(schema: &Value) -> String {
     schema["name"].as_str().unwrap_or_default().to_string()
+}
+
+/// Whether one recorded model call offered the tool named `wanted`.
+pub fn offers(schemas: &[Value], wanted: &str) -> bool {
+    schemas.iter().any(|schema| name(schema) == wanted)
+}
+
+/// Every tool result in a transcript, in order, as
+/// `(tool name, is_error, output)`.
+pub fn tool_results(messages: &[Message]) -> Vec<(String, bool, Value)> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Tool { results } => Some(results.iter().map(|result| {
+                (
+                    result.tool_name.clone(),
+                    result.is_error,
+                    result.output.clone(),
+                )
+            })),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 #[async_trait]
