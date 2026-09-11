@@ -65,7 +65,7 @@ async fn workflow_chain_uses_real_inbox_with_one_terminal_wake() {
     assert!(commands.try_recv().is_err());
     let batch = inbox.drain();
     assert_eq!(batch.len(), 1);
-    let prompt = completions_prompt(&batch);
+    let prompt = subagent_completions_prompt(&batch);
     assert!(prompt.contains("final"));
     assert!(!prompt.contains("private"));
     let mut count = 0;

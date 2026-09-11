@@ -3,17 +3,17 @@
 //! A detached job's result lands in a shared inbox the moment it exists.
 //! The parent reads the inbox at its next model call: the
 //! [`CompletionDelivery`] extension runs in `before_model`, so a parent
-//! mid-turn sees results between its steps rather than after the turn,
-//! and a host starts a hidden wake-up run when the parent is idle.
-//! Whichever comes first drains everything ready into one message with
-//! stable spawn ordering, so many workers finishing together cost one
-//! model call, not one each.
+//! mid-turn sees results between its steps rather than after the turn.
+//! When the parent is idle a host may start a run of its own (the
+//! interactive CLI starts a hidden wake-up run); the inbox only reports,
+//! through [`CompletionInbox::request_wakeup`], that one is worth
+//! starting, and never launches a model run itself. Whichever comes first
+//! drains everything ready into one message with stable spawn ordering,
+//! so many workers finishing together cost one model call, not one each.
 //!
 //! Host observation and parent delivery are separate: a host renders every
 //! notification it receives, then hands the inbox only the ones the parent
-//! transcript owes an answer to. The inbox never launches a model run; it
-//! only tells the host, through [`CompletionInbox::request_wakeup`], that
-//! one is worth starting.
+//! transcript owes an answer to.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -55,6 +55,12 @@ pub struct CompletionInbox {
 }
 
 impl CompletionInbox {
+    /// Bound the manager to [`DEFAULT_COMPLETION_CAPACITY`] undelivered results.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the manager has already admitted a job; see
+    /// [`with_capacity`](Self::with_capacity).
     pub fn new(manager: SubagentManager) -> Self {
         Self::with_capacity(manager, DEFAULT_COMPLETION_CAPACITY)
     }
@@ -65,6 +71,13 @@ impl CompletionInbox {
         self
     }
 
+    /// Bound the manager to `capacity` admitted-but-undelivered results.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the manager has already admitted a job: capacity is applied
+    /// through [`SubagentManager::with_completion_capacity`], which must run
+    /// before any admission.
     pub fn with_capacity(manager: SubagentManager, capacity: usize) -> Self {
         Self {
             manager: manager.with_completion_capacity(capacity),
@@ -74,6 +87,7 @@ impl CompletionInbox {
         }
     }
 
+    /// The manager whose generation and capacity this inbox follows.
     pub fn manager(&self) -> &SubagentManager {
         &self.manager
     }
@@ -206,7 +220,7 @@ impl Extension for CompletionDelivery {
             if let Some(hook) = &self.on_delivered {
                 hook(&batch);
             }
-            context.push_user(completions_prompt(&batch));
+            context.push_user(subagent_completions_prompt(&batch));
         }
         refresh_inventory(context, &self.inbox.manager);
         Ok(())
@@ -215,7 +229,7 @@ impl Extension for CompletionDelivery {
 
 /// The hidden user turn carrying a batch. JSON rather than prose so the
 /// results stay clearly delimited from each other and from instructions.
-pub fn completions_prompt(batch: &[SubagentNotification]) -> String {
+pub fn subagent_completions_prompt(batch: &[SubagentNotification]) -> String {
     let completions = batch
         .iter()
         .map(|notification| {
