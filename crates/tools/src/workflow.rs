@@ -141,12 +141,13 @@ fn parse_submission(input: &Value) -> Result<WorkflowSubmission, ToolError> {
         .map(|stage| serde_json::from_value::<Stage>(stage.clone()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ToolError::msg(e.to_string()))?;
+    // Positivity of maxStages and timeoutSeconds is admit's rule, not a
+    // shape check, so the typed path and this one refuse zero identically.
     let mut submission = WorkflowSubmission::new(stages);
     if let Some(v) = input.get("maxStages") {
         let cap = v
             .as_u64()
             .and_then(|n| usize::try_from(n).ok())
-            .filter(|n| *n > 0)
             .ok_or_else(|| ToolError::msg("maxStages must be a positive integer"))?;
         submission = submission.max_stages(cap);
     }
@@ -159,7 +160,6 @@ fn parse_submission(input: &Value) -> Result<WorkflowSubmission, ToolError> {
     if let Some(v) = input.get("timeoutSeconds") {
         let seconds = v
             .as_u64()
-            .filter(|n| *n > 0)
             .ok_or_else(|| ToolError::msg("timeoutSeconds must be positive"))?;
         submission = submission.timeout(Duration::from_secs(seconds));
     }

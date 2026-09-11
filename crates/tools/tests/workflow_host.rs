@@ -116,6 +116,13 @@ async fn invalid_graph_fails_before_admission_on_both_paths() {
         .unwrap_err()
         .to_string()
         .contains("resumeFrom run does not exist"));
+    for input in [
+        json!({"action":"run","graph":[{"id":"a","prompt":"a"}],"maxStages":0}),
+        json!({"action":"run","graph":[{"id":"a","prompt":"a"}],"timeoutSeconds":0}),
+    ] {
+        let via_tool = tool.call(input, &ctx()).await.unwrap_err().to_string();
+        assert!(via_tool.contains("must be"), "{via_tool}");
+    }
     assert!(manager.active().is_empty(), "nothing was admitted");
     assert!(calls.lock().unwrap().is_empty(), "no stage ran");
     assert_eq!(store.runs(), 0, "a rejected run records nothing");
@@ -196,11 +203,16 @@ async fn timeout_covers_queued_stages() {
     let (done, _) = terminal(&mut rx).await;
     assert!(done.result.is_err());
     let status = tool.status(ack.run_id).unwrap();
-    assert_ne!(status.state, RunState::Done);
-    assert_ne!(
+    assert_eq!(
+        status.state,
+        RunState::Failed,
+        "the running stage timed out, which fails the run"
+    );
+    assert_eq!(status.stages["a"], StageStatus::Failed);
+    assert_eq!(
         status.stages["b"],
-        StageStatus::Done,
-        "the queued stage never ran"
+        StageStatus::Stopped,
+        "the queued stage was abandoned by the failure, not cancelled"
     );
     assert!(status.outcome.is_some());
     manager.cancel_all();

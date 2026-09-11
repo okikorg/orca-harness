@@ -1,104 +1,11 @@
 use orca_harness_core::{
-    CancellationToken, Context, Model, ModelError, ModelResponse, Tool, ToolContext, ToolSchema,
+    CancellationToken, Context, Model, ModelError, ModelResponse, Tool, ToolSchema,
 };
-use orca_harness_tools::{
-    SubagentManager, SubagentNotification, SubagentTool, WorkflowStore, WorkflowTool,
-};
+use orca_harness_tools::{SubagentManager, SubagentTool, WorkflowStore, WorkflowTool};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-fn ctx() -> ToolContext {
-    ToolContext {
-        call_id: "workflow-call".into(),
-        tool_name: "workflow".into(),
-        cancellation: CancellationToken::new(),
-        deadline: None,
-    }
-}
-#[derive(Clone)]
-struct Echo {
-    calls: Arc<Mutex<Vec<String>>>,
-    held: Option<CancellationToken>,
-}
-#[async_trait::async_trait]
-impl Model for Echo {
-    async fn generate(
-        &self,
-        context: &Context,
-        _: &[ToolSchema],
-    ) -> Result<ModelResponse, ModelError> {
-        let task = context
-            .messages()
-            .iter()
-            .rev()
-            .find_map(|m| match m {
-                orca_harness_core::Message::User { content, .. } => Some(content.clone()),
-                _ => None,
-            })
-            .unwrap();
-        self.calls.lock().unwrap().push(task.clone());
-        if let Some(token) = &self.held {
-            token.cancelled().await;
-        }
-        Ok(ModelResponse::final_text(if task == "dimensions" {
-            "[\"a\",\"b\"]".into()
-        } else {
-            task
-        }))
-    }
-}
-/// The tool under test with the handles a case needs: the manager that admits
-/// its stages, the parent notification stream, the recorded stage prompts, and
-/// the session's output store.
-type Harness = (
-    WorkflowTool<Echo>,
-    SubagentManager,
-    tokio::sync::mpsc::UnboundedReceiver<SubagentNotification>,
-    Arc<Mutex<Vec<String>>>,
-    WorkflowStore,
-);
-fn tool(held: Option<CancellationToken>, capacity: usize) -> Harness {
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let manager = SubagentManager::new(1).with_completion_capacity(capacity);
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let subagent = Arc::new(
-        SubagentTool::with_tools(
-            Echo {
-                calls: calls.clone(),
-                held,
-            },
-            Arc::new(Vec::new),
-        )
-        .background(manager.clone(), move |n| {
-            let _ = tx.send(n);
-        }),
-    );
-    let store = WorkflowStore::new();
-    (
-        WorkflowTool::new(subagent, store.clone()).unwrap(),
-        manager,
-        rx,
-        calls,
-        store,
-    )
-}
-async fn terminal(
-    rx: &mut tokio::sync::mpsc::UnboundedReceiver<SubagentNotification>,
-) -> (SubagentNotification, usize) {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let mut stages = 0;
-        loop {
-            let n = rx.recv().await.unwrap();
-            if n.spawn.run.is_none() {
-                return (n, stages);
-            }
-            if !n.result.as_ref().is_ok_and(|v| v["cached"] == true) {
-                stages += 1;
-            }
-        }
-    })
-    .await
-    .expect("workflow must terminate")
-}
+mod workflow_support;
+use workflow_support::{ctx, terminal, tool, Echo};
 #[tokio::test]
 async fn fanout_reuses_one_slot_and_one_delivery_reservation_and_replays() {
     let (tool, manager, mut rx, calls, _store) = tool(None, 1);

@@ -23,9 +23,15 @@ use crate::SdkError;
 /// [`Session::notifications`] as [`SubagentFinished`] with
 /// `spawn.run.is_some()`, but only the run-level outcome (`spawn.run`
 /// is `None`, `spawn.id` is the run id) is owed to the parent
-/// transcript and counted by [`Session::pending_completions`]. Every
-/// call fails with [`SdkError::SessionClosed`] once the session was
-/// shut down.
+/// transcript and counted by [`Session::pending_completions`].
+///
+/// After [`Session::shutdown`], [`submit`](Self::submit),
+/// [`stage_output`](Self::stage_output), and [`cancel`](Self::cancel)
+/// fail with [`SdkError::SessionClosed`], while [`runs`](Self::runs) and
+/// [`status`](Self::status) still answer: empty and `None` respectively,
+/// since the close cancelled every run and cleared the store.
+///
+/// [`Session::shutdown`]: crate::Session::shutdown
 ///
 /// [`SubagentConfig::workflows`]: crate::SubagentConfig::workflows
 /// [`Session::notifications`]: crate::Session::notifications

@@ -238,7 +238,10 @@ impl AgentBuilder {
     /// [`Session::subagents`](crate::Session::subagents). Each session owns
     /// its manager, queue, and completion inbox; only `config`'s live
     /// settings handle is shared between sessions. Workers get the agent's
-    /// tool preset and custom tools, nothing else.
+    /// tool preset and custom tools, nothing else. Configuring subagents
+    /// also registers the `workflow` tool and enables
+    /// [`Session::workflows`](crate::Session::workflows) unless the
+    /// config sets [`SubagentConfig::workflows`]`(false)`.
     pub fn subagents(mut self, config: SubagentConfig) -> Self {
         self.subagents = Some(config);
         self
