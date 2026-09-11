@@ -153,7 +153,7 @@ async fn whole_pipeline_delivers_one_outcome_and_no_stage_output_to_the_parent()
         WorkflowTool::new(subagent.clone(), store.clone()).unwrap(),
     ))
     .tool_arc(subagent)
-    .extension(CompletionDelivery::new(inbox.clone(), ui));
+    .extension(delivery(inbox.clone(), ui));
 
     let mut context = Context::new();
     context.push_user("review this change");
