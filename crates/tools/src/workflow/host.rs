@@ -11,7 +11,7 @@
 //! observable difference is the synthetic `host:workflow` call id on
 //! host-originated runs.
 
-use super::WorkflowTool;
+use super::{WorkflowOutcome, WorkflowTool};
 use crate::BackgroundStatus;
 use orca_harness_core::{Model, ToolError};
 use orca_harness_dag::{Dag, RunId, RunState, Stage, StageId, StageStatus, DEFAULT_STAGE_CAP};
@@ -108,11 +108,9 @@ pub struct WorkflowStatus {
     pub stages: BTreeMap<StageId, StageStatus>,
     pub active: Vec<WorkflowStageJob>,
     /// The finished outcome the runtime recorded and delivered: the
-    /// `harness-dag` outcome (`state`, `outputs`, `stages`, `degraded`,
-    /// `error`) plus `runtimeMs`, `peakAdmitted`, `peakRunning`, and
-    /// per-stage `timings`. Kept as JSON: it is the same document the
-    /// parent receives, so no typed twin of the engine's outcome exists.
-    pub outcome: Option<Value>,
+    /// `harness-dag` outcome plus the runtime's timing and admission
+    /// bookkeeping, the same document the parent receives as JSON.
+    pub outcome: Option<WorkflowOutcome>,
 }
 
 /// One stage's stored output: the typed form of the tool's `output` result.
@@ -196,12 +194,8 @@ impl<M: Model + Clone + 'static> WorkflowTool<M> {
         if submission.timeout.is_some_and(|timeout| timeout.is_zero()) {
             return Err(ToolError::msg("timeoutSeconds must be positive"));
         }
-        let values: Vec<Value> = submission
-            .stages
-            .iter()
-            .map(|stage| serde_json::to_value(stage).expect("a stage serializes"))
-            .collect();
-        let dag = Dag::with_cap(&values, cap).map_err(|e| ToolError::msg(e.to_string()))?;
+        let dag =
+            Dag::from_stages(submission.stages, cap).map_err(|e| ToolError::msg(e.to_string()))?;
         for stage in dag.stages() {
             self.runtime
                 .subagent

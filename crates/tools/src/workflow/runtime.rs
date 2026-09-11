@@ -1,13 +1,15 @@
-use super::host::{StageOutput, WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus};
+use super::host::WorkflowAcknowledgement;
+use super::outcome::{StageTiming, WorkflowOutcome};
 use super::store::WorkflowStore;
 use crate::subagent::spawn::SpawnRequest;
 use crate::{SubagentNotification, SubagentSpawn, SubagentTool};
 use orca_harness_core::{Model, ToolError};
-use orca_harness_dag::{Advance, Dag, RunId, RunState, StageId};
+use orca_harness_dag::{Advance, Dag, Kind, RunId, RunOutcome, RunState, Stage, StageId};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+mod inspect;
 struct Run {
     dag: Dag,
     spawn: SubagentSpawn,
@@ -18,11 +20,25 @@ struct Run {
     model_keys: BTreeMap<Option<String>, Value>,
     persisted: HashSet<StageId>,
     started: Instant,
-    timings: BTreeMap<StageId, Value>,
+    timings: BTreeMap<StageId, StageTiming>,
     peak: usize,
     resume: Option<u64>,
     deadline: Option<tokio::time::Instant>,
 }
+/// What one emitted stage needs from the runtime: a replayed output that
+/// settles at once, or a worker to admit.
+enum SpawnPlan {
+    Cached {
+        advance: Advance,
+        notification: SubagentNotification,
+    },
+    Live {
+        request: SpawnRequest,
+        deadline: Option<tokio::time::Instant>,
+    },
+}
+/// Lock order: `dispatch` > `runs` > the store; manager state is always
+/// taken alone, never while `runs` is held.
 pub(super) struct Runtime<M: Model + Clone + 'static> {
     pub subagent: Arc<SubagentTool<M>>,
     // Dispatch serializes state transition + its admissions with cancellation.
@@ -155,98 +171,6 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             run.persisted.insert(id);
         }
     }
-    /// Every run the manager still holds, in id order. Per-stage statuses
-    /// come from this runtime's DAG when it owns the run; a run admitted by
-    /// another tool over the same manager reports `Running` with none.
-    pub fn statuses(&self) -> Vec<WorkflowStatus> {
-        let manager = &self.subagent.background_config().unwrap().manager;
-        let jobs = manager.active();
-        let ids = manager.inner.run_ids();
-        let runs = self.runs.lock().unwrap();
-        ids.into_iter()
-            .map(|id| {
-                let (state, stages) = runs
-                    .get(&id)
-                    .map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
-                    .unwrap_or((RunState::Running, BTreeMap::new()));
-                WorkflowStatus {
-                    run_id: id,
-                    state,
-                    stages,
-                    active: jobs
-                        .iter()
-                        .filter(|job| job.spawn.run == Some(id))
-                        .map(|job| WorkflowStageJob {
-                            spawn_id: job.spawn.id,
-                            stage: job.spawn.stage.clone(),
-                            status: job.status,
-                        })
-                        .collect(),
-                    outcome: None,
-                }
-            })
-            .collect()
-    }
-
-    /// A finished run's status from the outcome this runtime recorded in
-    /// the store before delivering it, else a live run's. The store is
-    /// consulted first: `finish` records the outcome before the manager
-    /// forgets the run, so a run caught in that window reads as finished
-    /// rather than as live with no stages.
-    pub fn status(&self, id: RunId) -> Option<WorkflowStatus> {
-        if let Some(outcome) = self.store.stored_outcome(id) {
-            let state = serde_json::from_value(outcome["state"].clone())
-                .expect("the runtime records a valid state");
-            // `fail()`, the stalled path, records no stage map.
-            let stages = serde_json::from_value(outcome["stages"].clone()).unwrap_or_default();
-            return Some(WorkflowStatus {
-                run_id: id,
-                state,
-                stages,
-                active: Vec::new(),
-                outcome: Some(outcome),
-            });
-        }
-        let manager = &self.subagent.background_config().unwrap().manager;
-        if !manager.inner.run_ids().contains(&id) {
-            return None;
-        }
-        let active = manager
-            .active()
-            .into_iter()
-            .filter(|job| job.spawn.run == Some(id))
-            .map(|job| WorkflowStageJob {
-                spawn_id: job.spawn.id,
-                stage: job.spawn.stage,
-                status: job.status,
-            })
-            .collect();
-        let (state, stages) = self
-            .runs
-            .lock()
-            .unwrap()
-            .get(&id)
-            .map(|run| (run.dag.state.clone(), run.dag.statuses().clone()))
-            .unwrap_or((RunState::Running, BTreeMap::new()));
-        Some(WorkflowStatus {
-            run_id: id,
-            state,
-            stages,
-            active,
-            outcome: None,
-        })
-    }
-
-    pub fn output(&self, id: RunId, stage: &str) -> Result<StageOutput, ToolError> {
-        self.store
-            .output(id, stage)
-            .map(|answer| StageOutput {
-                run_id: id,
-                stage: stage.to_string(),
-                answer,
-            })
-            .ok_or_else(|| ToolError::msg("stage output is unavailable"))
-    }
     pub fn cancel(self: &Arc<Self>, id: u64) -> Result<(), ToolError> {
         let manager = &self.subagent.background_config().unwrap().manager;
         if !manager.inner.run_ids().contains(&id) || !manager.cancel(id) {
@@ -281,7 +205,18 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             let Some(stage) = run.live.remove(&notification.spawn.id) else {
                 return;
             };
-            run.timings.insert(stage.clone(), json!({"runtimeMs":notification.result.as_ref().ok().and_then(|v| v.get("runtimeMs")).cloned(),"cached":false}));
+            run.timings.insert(
+                stage.clone(),
+                StageTiming::Ran {
+                    runtime_ms: notification
+                        .result
+                        .as_ref()
+                        .ok()
+                        .and_then(|v| v.get("runtimeMs"))
+                        .and_then(Value::as_u64),
+                    cached: false,
+                },
+            );
             let result = notification.result.and_then(|v| {
                 v.get("answer")
                     .and_then(Value::as_str)
@@ -295,7 +230,107 @@ impl<M: Model + Clone + 'static> Runtime<M> {
         self.apply(id, advance);
     }
     fn fail(self: &Arc<Self>, id: u64, error: String) {
-        self.finish(id, json!({"state":"failed","error":error}), true);
+        self.finish(
+            id,
+            RunOutcome {
+                state: RunState::Failed,
+                outputs: BTreeMap::new(),
+                stages: BTreeMap::new(),
+                degraded: false,
+                error: Some(error),
+            },
+        );
+    }
+    /// Book one emitted stage under `runs`: a replayed output completes
+    /// the stage there and then; a live one is registered before its
+    /// worker is prepared. `None` when the run is gone or no longer
+    /// running, in which case nothing was booked.
+    fn plan_stage(self: &Arc<Self>, id: u64, spawn_id: u64, stage: Stage) -> Option<SpawnPlan> {
+        let mut runs = self.runs.lock().unwrap();
+        let run = runs.get_mut(&id)?;
+        if run.dag.state != RunState::Running {
+            return None;
+        }
+        let key = self.key(run, &stage.id);
+        let cached = run
+            .resume
+            .and_then(|prior| self.store.replay(prior, &stage.id, &key));
+        let parent = run
+            .dag
+            .map_source(&stage.id)
+            .and_then(|source| run.spawns.get(source))
+            .copied()
+            .unwrap_or(id);
+        let depth = run.depths.get(&parent).copied().unwrap_or(0) + 1;
+        run.depths.insert(spawn_id, depth);
+        run.spawns.insert(stage.id.clone(), spawn_id);
+        if let Some(answer) = cached {
+            run.timings.insert(
+                stage.id.clone(),
+                StageTiming::Ran {
+                    runtime_ms: Some(0),
+                    cached: true,
+                },
+            );
+            let advance = run.dag.complete(&stage.id, Ok(answer.clone()));
+            self.persist(run);
+            return Some(SpawnPlan::Cached {
+                advance,
+                notification: SubagentNotification {
+                    generation: run.generation,
+                    spawn: SubagentSpawn {
+                        id: spawn_id,
+                        parent_id: Some(parent),
+                        depth,
+                        call_id: run.spawn.call_id.clone(),
+                        task: stage.prompt,
+                        identity: None,
+                        run: Some(id),
+                        stage: Some(stage.id),
+                    },
+                    result: Ok(json!({"answer":answer,"runtimeMs":0,"cached":true})),
+                },
+            });
+        }
+        run.live.insert(spawn_id, stage.id.clone());
+        run.peak = run.peak.max(run.live.len());
+        let runtime = self.clone();
+        let request = SpawnRequest {
+            id: spawn_id,
+            generation: Some(run.generation),
+            expected_model_key: Some(run.model_keys[&stage.model].clone()),
+            depth: Some(depth),
+            task: stage.prompt,
+            system_prompt: None,
+            model: stage.model,
+            call_id: run.spawn.call_id.clone(),
+            run: Some(id),
+            stage: Some(stage.id),
+            parent_id: Some(parent),
+            notifier: Some(Arc::new(move |notification| {
+                // Host settles the same existing UI row; stage results are not inbox entries.
+                (runtime.subagent.background_config().unwrap().notifier)(notification.clone());
+                runtime.complete(notification);
+            })),
+        };
+        Some(SpawnPlan::Live {
+            request,
+            deadline: run.deadline,
+        })
+    }
+    /// A stage whose worker could not be prepared fails the run; `None`
+    /// when the run is gone.
+    fn unspawnable(
+        &self,
+        id: u64,
+        spawn_id: u64,
+        stage: &StageId,
+        error: String,
+    ) -> Option<Advance> {
+        let mut runs = self.runs.lock().unwrap();
+        let run = runs.get_mut(&id)?;
+        run.live.remove(&spawn_id);
+        Some(run.dag.complete(stage, Err(error)))
     }
     fn apply(self: &Arc<Self>, id: u64, advance: Advance) {
         let mut work = VecDeque::from([advance]);
@@ -304,112 +339,43 @@ impl<M: Model + Clone + 'static> Runtime<M> {
                 Advance::Spawn(stages) => {
                     for stage in stages {
                         let spawn_id = self.subagent.next_spawn_id();
-                        let (request, cached) = {
-                            let mut runs = self.runs.lock().unwrap();
-                            let Some(run) = runs.get_mut(&id) else {
-                                return;
-                            };
-                            if run.dag.state != RunState::Running {
-                                break;
-                            }
-                            let key = self.key(run, &stage.id);
-                            let cached = run
-                                .resume
-                                .and_then(|prior| self.store.replay(prior, &stage.id, &key));
-                            let parent = run
-                                .dag
-                                .map_source(&stage.id)
-                                .and_then(|source| run.spawns.get(source))
-                                .copied()
-                                .unwrap_or(id);
-                            let depth = run.depths.get(&parent).copied().unwrap_or(0) + 1;
-                            run.depths.insert(spawn_id, depth);
-                            run.spawns.insert(stage.id.clone(), spawn_id);
-                            if let Some(answer) = cached {
-                                run.timings
-                                    .insert(stage.id.clone(), json!({"runtimeMs":0,"cached":true}));
-                                let advance = run.dag.complete(&stage.id, Ok(answer.clone()));
-                                self.persist(run);
-                                (
-                                    None,
-                                    Some((
-                                        advance,
-                                        SubagentNotification {
-                                            generation: run.generation,
-                                            spawn: SubagentSpawn {
-                                                id: spawn_id,
-                                                parent_id: Some(parent),
-                                                depth,
-                                                call_id: run.spawn.call_id.clone(),
-                                                task: stage.prompt.clone(),
-                                                identity: None,
-                                                run: Some(id),
-                                                stage: Some(stage.id.clone()),
-                                            },
-                                            result: Ok(
-                                                json!({"answer":answer,"runtimeMs":0,"cached":true}),
-                                            ),
-                                        },
-                                    )),
-                                )
-                            } else {
-                                run.live.insert(spawn_id, stage.id.clone());
-                                run.spawns.insert(stage.id.clone(), spawn_id);
-                                run.peak = run.peak.max(run.live.len());
-                                let runtime = self.clone();
-                                let request = SpawnRequest {
-                                    id: spawn_id,
-                                    generation: Some(run.generation),
-                                    expected_model_key: Some(run.model_keys[&stage.model].clone()),
-                                    depth: Some(depth),
-                                    task: stage.prompt,
-                                    system_prompt: None,
-                                    model: stage.model,
-                                    call_id: run.spawn.call_id.clone(),
-                                    run: Some(id),
-                                    stage: Some(stage.id.clone()),
-                                    parent_id: Some(parent),
-                                    notifier: Some(Arc::new(move |notification| {
-                                        // Host settles the same existing UI row; stage results are not inbox entries.
-                                        (runtime.subagent.background_config().unwrap().notifier)(
-                                            notification.clone(),
-                                        );
-                                        runtime.complete(notification);
-                                    })),
-                                };
-                                (Some((request, run.deadline)), None)
-                            }
+                        let stage_id = stage.id.clone();
+                        let Some(plan) = self.plan_stage(id, spawn_id, stage) else {
+                            break;
                         };
-                        if let Some((cached, notification)) = cached {
-                            self.subagent.announce(&notification.spawn);
-                            (self.subagent.background_config().unwrap().notifier)(notification);
-                            work.push_back(cached);
-                            continue;
-                        }
-                        if let Some((request, deadline)) = request {
-                            match self.subagent.prepare_spawn(request, true, deadline) {
-                                Ok(prepared) => {
-                                    prepared.detach();
-                                }
-                                Err(error) => {
-                                    let advance = {
-                                        let mut runs = self.runs.lock().unwrap();
-                                        let Some(run) = runs.get_mut(&id) else {
+                        match plan {
+                            SpawnPlan::Cached {
+                                advance,
+                                notification,
+                            } => {
+                                self.subagent.announce(&notification.spawn);
+                                (self.subagent.background_config().unwrap().notifier)(notification);
+                                work.push_back(advance);
+                            }
+                            SpawnPlan::Live { request, deadline } => {
+                                match self.subagent.prepare_spawn(request, true, deadline) {
+                                    Ok(prepared) => {
+                                        prepared.detach();
+                                    }
+                                    Err(error) => {
+                                        let Some(advance) = self.unspawnable(
+                                            id,
+                                            spawn_id,
+                                            &stage_id,
+                                            error.to_string(),
+                                        ) else {
                                             return;
                                         };
-                                        run.live.remove(&spawn_id);
-                                        run.dag.complete(&stage.id, Err(error.to_string()))
-                                    };
-                                    work.push_front(advance);
-                                    break;
+                                        work.push_front(advance);
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
                 }
                 Advance::Done(outcome) => {
-                    let failed = outcome.state != RunState::Done;
-                    self.finish(id, serde_json::to_value(outcome).unwrap(), failed);
+                    self.finish(id, outcome);
                     return;
                 }
                 Advance::Stalled(error) => {
@@ -419,7 +385,11 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             }
         }
     }
-    fn finish(&self, id: u64, mut outcome: Value, failed: bool) {
+    /// Record the terminal outcome, release the run, and notify the host
+    /// once at run level: the outcome as JSON under `workflow` (and as the
+    /// `answer` string), or, for a run that did not finish `Done`, an
+    /// error that leads with the cause and carries the same JSON.
+    fn finish(&self, id: u64, outcome: RunOutcome) {
         let Some(mut run) = self.runs.lock().unwrap().remove(&id) else {
             return;
         };
@@ -427,19 +397,24 @@ impl<M: Model + Clone + 'static> Runtime<M> {
         for spawn in run.live.keys() {
             config.manager.cancel(*spawn);
         }
-        outcome["runtimeMs"] = json!(run.started.elapsed().as_millis());
-        outcome["peakAdmitted"] = json!(run.peak);
-        outcome["peakRunning"] = json!(config.manager.inner.run_peak(id));
+        let failed = outcome.state != RunState::Done;
+        let runtime_ms = u64::try_from(run.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut outcome = WorkflowOutcome::new(outcome, runtime_ms);
+        outcome.peak_admitted = run.peak;
+        outcome.peak_running = config.manager.inner.run_peak(id);
         for stage in run.dag.stages() {
-            run.timings.entry(stage.id.clone()).or_insert_with(
-                || json!({"runtimeMs":null,"virtual":stage.kind == orca_harness_dag::Kind::Map}),
-            );
+            run.timings
+                .entry(stage.id.clone())
+                .or_insert_with(|| StageTiming::Skipped {
+                    virtual_stage: stage.kind == Kind::Map,
+                });
         }
-        outcome["timings"] = json!(run.timings);
+        outcome.timings = std::mem::take(&mut run.timings);
         self.persist(&mut run);
         self.store.set_outcome(id, &outcome);
         config.manager.inner.finish(run.generation, id);
-        let answer = outcome.to_string();
+        let value = serde_json::to_value(&outcome).expect("an outcome serializes");
+        let answer = value.to_string();
         (config.notifier)(SubagentNotification {
             generation: run.generation,
             spawn: run.spawn,
@@ -448,12 +423,12 @@ impl<M: Model + Clone + 'static> Runtime<M> {
                 // reader that stops at the first line must still see why.
                 Err(format!(
                     "workflow {} ({}): {}\n{answer}",
-                    outcome["state"].as_str().unwrap_or("failed"),
+                    value["state"].as_str().unwrap_or("failed"),
                     id,
-                    outcome["error"].as_str().unwrap_or("no error reported"),
+                    outcome.error.as_deref().unwrap_or("no error reported"),
                 ))
             } else {
-                Ok(json!({"answer":answer,"workflow":outcome,"termination":"completed"}))
+                Ok(json!({"answer":answer,"workflow":value,"termination":"completed"}))
             },
         });
     }

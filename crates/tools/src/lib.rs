@@ -91,8 +91,8 @@ pub fn fs_admin_tools(ws: &Workspace) -> Vec<Arc<dyn Tool>> {
 
 mod workflow;
 pub use workflow::{
-    StageOutput, WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus, WorkflowStore,
-    WorkflowSubmission, WorkflowTool,
+    StageOutput, StageTiming, WorkflowAcknowledgement, WorkflowOutcome, WorkflowStageJob,
+    WorkflowStatus, WorkflowStore, WorkflowSubmission, WorkflowTool,
 };
 
 /// The graph vocabulary a [`WorkflowSubmission`] is built from, re-exported

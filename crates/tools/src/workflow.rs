@@ -12,11 +12,13 @@ use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 mod host;
+mod outcome;
 mod runtime;
 mod store;
 pub use host::{
     StageOutput, WorkflowAcknowledgement, WorkflowStageJob, WorkflowStatus, WorkflowSubmission,
 };
+pub use outcome::{StageTiming, WorkflowOutcome};
 use runtime::Runtime;
 pub use store::WorkflowStore;
 
