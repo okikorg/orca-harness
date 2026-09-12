@@ -1,0 +1,102 @@
+<section class="section" id="sdk-background-types"><h2>Separate parent runs from detached work</h2><p>The SDK has several forms of concurrency with different owners and lifetimes. Cancelling a parent turn does not imply that session-owned work should be discarded.</p><table class="command-table"><thead><tr><th>Mechanism</th><th>Owner and result</th></tr></thead><tbody><tr><td><code>Session::start</code></td><td>The caller owns one parent conversation turn and receives its result through <code>RunHandle</code>.</td></tr><tr><td>Detached subagent</td><td>The session owns a worker that may outlive its spawning turn; its result enters the completion inbox.</td></tr><tr><td>Workflow</td><td>The session owns a graph of workers; one run-level result enters the parent conversation.</td></tr><tr><td>Background process</td><td>The session owns a local process; the host observes status and notifications rather than a completion-inbox result.</td></tr></tbody></table><p><code>clear</code>, <code>reset_in_place</code>, <code>shutdown</code>, and session drop cancel session-owned work. A parent <code>RunHandle</code> controls only its active turn.</p></section>
+<section class="section" id="sdk-run-handle"><h2>Drain events while the run executes</h2><p><code>Session::start</code> returns immediately. A session allows one active parent run, so another <code>run</code>, <code>run_outcome</code>, or <code>start</code> returns <code>SdkError::BusySession</code> until the handle settles.</p><div class="terminal"><pre>use orca_harness_sdk::{RunEvent, RunRequest};
+use std::time::Duration;
+
+let mut handle = session.start(
+    RunRequest::new("Review the release")
+        .deadline(Duration::from_secs(180))
+        .event_capacity(1024),
+)?;
+
+let mut events = handle
+    .take_events()
+    .expect("event receiver can only be taken once");
+
+let reader = tokio::spawn(async move {
+    let mut delivered = 0_u64;
+    let mut dropped = 0_u64;
+    while let Some(event) = events.recv().await {
+        match event {
+            RunEvent::Harness(event) =&gt; {
+                delivered += 1;
+                eprintln!("{event:?}");
+            }
+            RunEvent::Overflow { dropped: gap } =&gt; dropped += gap,
+        }
+    }
+    (delivered, dropped)
+});
+
+let outcome = handle.outcome().await?;
+let (delivered, dropped) = reader.await?;
+assert_eq!(dropped, outcome.dropped_events);</pre></div><div class="callout"><span class="callout-label">EVENTS ARE OBSERVATIONAL</span><p>The event channel is bounded and lossy: a full channel drops lifecycle events rather than blocking the run. Drain concurrently to preserve observability and use <code>RunOutcome</code> as the authoritative terminal record. Dropping the entire <code>RunHandle</code> requests cancellation.</p></div></section>
+<section class="section" id="sdk-cancellation"><h2>Cancel cooperatively</h2><p>Keep the handle’s cancellation token for UI signals or caller deadlines. Tools receive a child token in their execution context, but the kernel may drop a tool future as it selects cancellation, so the run outcome—not a tool-produced “cancelled” payload—is authoritative.</p><div class="terminal"><pre>let handle = session.start("Run a long analysis")?;
+let cancellation = handle.cancellation_token();
+
+// From a signal, timeout, or UI action:
+cancellation.cancel();
+
+let outcome = handle.outcome().await?;
+match outcome.execution {
+    Err(orca_harness_sdk::SdkError::Harness(
+        orca_harness_sdk::HarnessError::Cancelled,
+    )) =&gt; eprintln!("cancelled"),
+    other =&gt; eprintln!("unexpected outcome: {other:?}"),
+}</pre></div><p>A caller-owned <code>CancellationToken</code> can govern several requests through <code>RunRequest::cancellation</code>. Each run receives a child token: cancelling the parent cancels all children, while cancelling one run does not cancel its siblings.</p></section>
+<section class="section" id="sdk-notifications"><h2>Treat notifications as wakeups</h2><p>Subscribe before work can spawn. Background notifications are broadcast observations: reading them does not consume the durable result owed to the parent, and a slow receiver can miss old entries.</p><div class="terminal"><pre>use orca_harness_sdk::{BackgroundNotification, RunRequest};
+
+let mut notifications = session.notifications();
+session.run("Delegate the release review").await?;
+
+loop {
+    match notifications.recv().await {
+        Ok(BackgroundNotification::CompletionsReady { .. }) =&gt; {
+            if session.pending_completions() &gt; 0 {
+                let result = session
+                    .continue_run(RunRequest::continuation())
+                    .await?;
+                println!("{}", result.text);
+            }
+        }
+        Ok(BackgroundNotification::SubagentFinished(done)) =&gt; {
+            if let Err(error) = done.result {
+                eprintln!("worker {} failed: {error}", done.spawn.id);
+            }
+        }
+        Ok(_) =&gt; {}
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) =&gt; {
+            eprintln!("missed {count} notifications; reconciling state");
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) =&gt; break,
+    }
+}</pre></div><p>Use notifications as reasons to re-check authoritative state:</p><ul><li><code>pending_completions()</code> for results awaiting parent delivery;</li><li><code>subagents().active()</code> for detached workers;</li><li><code>workflows().runs()</code> for graph state and terminal outcomes;</li><li><code>processes().list()</code> for process status;</li><li>the transcript for completion batches already delivered.</li></ul><p><code>SubagentFinished</code> can arrive before inbox admission, and <code>CompletionsReady</code> can be coalesced or stale by the time it is read. Reconcile all state before declaring quiescence.</p></section>
+<section class="section" id="sdk-continuation"><h2>Continue without inventing a user prompt</h2><p><code>RunRequest::continuation()</code> adds pending detached results as one generated user turn and starts the next model step without appending a user-authored prompt.</p><div class="terminal"><pre>if session.pending_completions() &gt; 0 {
+    let result = session
+        .continue_run(RunRequest::continuation())
+        .await?;
+    println!("{}", result.text);
+}</pre></div><p>A continuation cannot carry prompt text or images. Deadlines, cancellation, events, and step-limit behavior still apply. The host must request continuation explicitly; receiving a completion notification never starts another model run automatically.</p></section>
+<section class="section" id="sdk-quiescence"><h2>Determine quiescence from all services</h2><p>A robust host waits until workers, workflows, and processes are terminal, then delivers pending completions and verifies that every successfully acknowledged job reached the transcript. Derive expected job IDs from successful tool results—not from model prose or proposed calls.</p><div class="terminal"><pre>let workers_busy = session.subagents()
+    .is_some_and(|workers| !workers.active().is_empty());
+let workflows_busy = session.workflows()
+    .is_some_and(|workflows| workflows.runs().iter()
+        .any(|run| run.outcome.is_none()));
+let processes_busy = session.processes()
+    .map(|processes| processes.list())
+    .transpose()?
+    .is_some_and(|processes| processes.iter()
+        .any(|process| process.running));
+
+let busy = workers_busy || workflows_busy || processes_busy;</pre></div><p>Process exits do not enter the detached completion inbox. If the model must reason about a completed process, carry the host-observed status into a later prompt or expose it through a host tool.</p></section>
+<section class="section" id="sdk-shutdown"><h2>Shut down with a bound</h2><p>First cancel and await any active parent <code>RunHandle</code>; shutdown returns <code>BusySession</code while a parent run is active. Then stop session-owned work with a finite grace period.</p><div class="terminal"><pre>let result = tokio::time::timeout(
+    Duration::from_secs(600),
+    drive_session(&amp;session),
+).await;
+
+let shutdown = session.shutdown(Duration::from_secs(10)).await;
+
+match result {
+    Ok(run_result) =&gt; run_result?,
+    Err(_) =&gt; return Err("overall deadline exceeded".into()),
+}
+shutdown?;</pre></div><p><code>shutdown</code> closes the session to new work, cancels detached workers and workflows, kills session-owned processes, drops undelivered completion results, and waits up to the grace period. Inspect required workflow/process outcomes and deliver required completions before calling it. Dropping a session requests best-effort cancellation but does not wait.</p></section>

@@ -55,3 +55,15 @@ path = "examples/processes/background.rs"
 [[example]]
 name = "workflows"
 path = "examples/workflows/graph.rs"
+
+[[example]]
+name = "agent_triage"
+path = "examples/use_cases/triage.rs"
+
+[[example]]
+name = "agent_support"
+path = "examples/use_cases/support.rs"
+
+[[example]]
+name = "agent_data_science"
+path = "examples/use_cases/data_science.rs"

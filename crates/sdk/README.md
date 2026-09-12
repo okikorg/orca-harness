@@ -35,7 +35,52 @@ cargo run -p orca-harness-sdk --example agent_tour
 cargo run -p orca-harness-sdk --example host_assembly
 ```
 
+### End-to-end host assembly
+
+Run `cargo run -p orca-harness-sdk --example host_assembly` for an offline,
+assertion-backed release-checklist host. It demonstrates:
+
+- Explicit workspace/state directories, memory CRUD and automatic recall, and
+  isolated skill discovery, enable/disable, and instruction loading.
+- Custom tools, an exercised publication-deny policy, tool retries, streamed
+  `RunHandle` events, and usage accounting.
+- A real local stdio MCP handshake, tool selection, and tool call. The example
+  launches its own executable in a private server mode; no Python or Node is needed.
+- Persistent session discovery and resume, recovery of truncated tool output,
+  and manual compaction of an isolated session fork.
+- Model retries, partial failure outcomes, and cooperative cancellation.
+- Detached subagents with a dedicated model route, a dependency-and-map workflow,
+  stored outputs, and delivery of both completion types to the parent conversation.
+- Background process readiness and exit notifications, synchronized through stdin,
+  followed by explicit session shutdown and MCP disconnection.
+
+The example uses deterministic model doubles and temporary state that is removed
+on exit. It requires a POSIX shell, but no API credentials or external services.
+It demonstrates run-event streaming, not provider token streaming. Live providers,
+credential refresh, HTTP MCP, web integrations, remote skill installation,
+containers, and language kernels are outside its coverage; see the focused
+examples under `examples/` for additional integration patterns.
+
 Additional examples cover cancellation (`background_cancellation`), custom events, local MCP, memory and skills, session lifecycle, and recovery through compaction and retries. The orchestration examples (`detached_subagents`, `background_processes`, and `workflows`) and `partial_outcomes`, which demonstrates `RunOutcome` on runs that stop early, are deterministic and need no credentials.
+
+The use-case examples under `examples/use_cases/` each define one agent for one
+real job, and each opens with the agent definition itself - system prompt,
+domain tools, and the host policy that bounds it - so the shape of an agent is
+the first thing you read:
+
+- `agent_triage`: an on-call responder that classifies an alert and may page the
+  rotation only for a sev1, with the severity gate enforced by a `ToolPolicy`
+  rather than by the prompt.
+- `agent_support`: a multi-turn customer support session with order lookup,
+  automatic memory recall of the customer's stated preference, and a refund
+  ceiling the model cannot talk its way past.
+- `agent_data_science`: an analyst over a CSV in the workspace, whose `group_by`
+  and `describe` tools do real arithmetic under `ToolPreset::ReadOnly`, so every
+  number in the answer was computed rather than narrated.
+
+`agent_triage` and `agent_support` each run a second scenario in which the model
+oversteps and the policy refuses, so the guardrail is visible and not just
+described. All three are deterministic and need no credentials.
 
 ## Orchestration
 
@@ -84,3 +129,65 @@ and [prompt caching](https://platform.claude.com/docs/en/build-with-claude/promp
 Use this crate when building a Rust application that wants a supported composition surface rather than assembling every lower-level crate directly. It is a facade, not a second runtime: runs still execute through `orca-harness-core`, and optional tools and integrations remain subject to the host's policies.
 
 Related documentation: the workspace [crate diagram](../../docs/crate-diagram.md).
+
+### Live release-review host
+
+`live_host_assembly` is a separate, auto-discovered example; `host_assembly`
+remains deterministic and offline. Supply credentials in your environment, then
+choose a provider and optionally a model ID:
+
+```bash
+# Requires ANTHROPIC_API_KEY
+cargo run -p orca-harness-sdk --example live_host_assembly -- anthropic
+# Requires OPENAI_API_KEY
+cargo run -p orca-harness-sdk --example live_host_assembly -- openai gpt-5
+# Requires OPENROUTER_API_KEY
+cargo run -p orca-harness-sdk --example live_host_assembly -- openrouter anthropic/claude-sonnet-4.5
+# Requires both CODEX_ACCESS_TOKEN and CODEX_ACCOUNT_ID (ChatGPT account credentials)
+cargo run -p orca-harness-sdk --example live_host_assembly -- codex gpt-5-codex
+```
+
+Defaults are `claude-sonnet-4-5`, `gpt-5`, `anthropic/claude-sonnet-4.5`, and
+`gpt-5-codex`, respectively. Model availability and tool-schema support depend on
+your account/provider. Credentials are read only at runtime, never printed by the
+example. Codex follows `providers/codex.rs`: refresh returns the supplied static
+credentials; this is **not** a production token-refresh implementation.
+
+**This makes real, potentially billable model calls**, including a dedicated
+same-provider child adapter used by detached subagents and workflow stages. There
+are no scripted fallback responses. A POSIX shell is required for the one allowed
+process command. The model reviews a seeded `RELEASE.md` in a temporary workspace,
+loads a local skill, calls a real local stdio MCP tool, delegates an independent
+review, submits a two-stage dependency workflow, and checks fixture presence with
+a harmless process. The MCP peer is a private mode of the same executable, not an
+external dependency; its tag check is fixture evidence, not a registry lookup or
+proof that tests passed.
+
+The Coding preset is constrained by an inherited, default-deny tool policy:
+read-oriented tools, orchestration, the local MCP check, and only the exact fixture
+check process command are allowed. General shell execution, file mutations,
+publishing and other external tool actions are denied. This is application policy,
+not an OS sandbox; run only with trusted fixture inputs. Provider requests still
+use the network. Memory recall is seeded by the host; skill loading and other
+requested capabilities are verified from successful tool exchanges, not prose.
+
+The host drains run events, prints per-parent-run usage (including partial usage
+on failures), configures model/tool retries and output truncation, and records a
+persistent session under temporary `.orca` state. It subscribes before spawning,
+checks worker/workflow/process statuses, waits for completion-inbox delivery, and
+drives further parent turns rather than shutting down at the first final answer.
+It bounds execution to ten minutes, eight parent turns, 24 steps per parent turn,
+and eight steps per child. Missing capability calls, detached failures, notification
+gaps, failed workflow/process outcomes, and exhausted budgets are reported as
+errors/partial reviews. Sessions shut down and MCP disconnects on fallible exit;
+temporary workspace and persistent records are removed on exit, not retained for
+later invocations.
+
+Coverage is intentionally limited: this is not every integration. Retry/truncation
+are configured, not guaranteed to trigger; memory recall is not an asserted model
+memory-tool call. Event counts describe SDK run events, not provider token
+streaming. Parent usage is not a combined cost ledger for all child calls. No
+publication, web search, remote MCP, remote skills, credential refresh, compaction,
+containers, kernels, or cross-invocation session resume is demonstrated. A model
+may decline or misuse tools, in which case the example fails its checks rather
+than claiming success. Compilation alone does not validate live provider behavior.

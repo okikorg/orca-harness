@@ -105,6 +105,30 @@
     "lede": "The orca-harness-sdk crate is a CLI-independent facade for composing models, tools, extensions, sessions, memory, skills, MCP, events, cancellation, and long-context recovery in your own Rust host."
   },
   {
+    "group": "EMBED",
+    "parent": "sdk",
+    "id": "sdk-first-agent",
+    "label": "First agent",
+    "title": "Build your first SDK agent",
+    "lede": "Configure a model, expose only the tools your host intends to authorize, observe a run, and choose the right session lifetime."
+  },
+  {
+    "group": "EMBED",
+    "parent": "sdk",
+    "id": "sdk-host-assembly",
+    "label": "Host assembly",
+    "title": "Compose a production SDK host",
+    "lede": "Combine policy, memory, skills, MCP, processes, subagents, workflows, retries, truncation, and verifiable outcomes behind explicit host-owned boundaries."
+  },
+  {
+    "group": "EMBED",
+    "parent": "sdk",
+    "id": "sdk-background-lifecycle",
+    "label": "Background lifecycle",
+    "title": "Drive background work safely",
+    "lede": "Distinguish parent runs from session-owned work, reconcile lossy notifications with durable state, continue completed work, and shut down with a bound."
+  },
+  {
     "group": "AUTOMATE",
     "id": "headless",
     "label": "Headless runs",
