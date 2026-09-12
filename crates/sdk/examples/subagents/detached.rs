@@ -26,6 +26,7 @@
 //!
 //! Deterministic: both models are scripted and never call a provider.
 
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::sync::Arc;

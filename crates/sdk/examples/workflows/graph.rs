@@ -22,6 +22,7 @@
 //!
 //! Deterministic: the stage model is scripted and never calls a provider.
 
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::time::Duration;
