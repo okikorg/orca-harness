@@ -105,11 +105,8 @@ pub fn core_tools_with_shell_and_process(
 ///
 /// - a provider without `file_api` cannot back the file tools, so no set
 ///   is returned at all instead of one silently rooted on the host.
-///
-/// `process` is **not** included: it manages long-lived background
-/// processes and has no sandbox backend yet, and registering its
-/// host-backed version would put a local process inside a set that is
-/// supposed to have none.
+/// - a provider without `sessions` cannot back `process`, and the same
+///   applies: no set, rather than one quietly missing a tool.
 ///
 /// `bun_repl` and `py_kernel` are not part of the core set on any backend
 /// — hosts add them deliberately. To keep them inside the boundary, build
@@ -121,18 +118,30 @@ pub fn core_tools_in_sandbox(
     sandbox: Arc<dyn orca_harness_core::Sandbox>,
     workspace_dir: impl Into<std::path::PathBuf>,
 ) -> Result<Vec<Arc<dyn Tool>>, orca_harness_core::SandboxError> {
-    if !sandbox.capabilities().file_api {
+    // Fail closed on a missing capability rather than quietly assembling a
+    // smaller set: a tool absent for a reason nobody stated is the kind of
+    // gap that gets noticed only when an agent needs it.
+    let capabilities = sandbox.capabilities();
+    if !capabilities.file_api {
         return Err(orca_harness_core::SandboxError::Unsupported {
             provider: "this sandbox",
             capability: "a file API, which the file tools require",
         });
     }
+    if !capabilities.sessions {
+        return Err(orca_harness_core::SandboxError::Unsupported {
+            provider: "this sandbox",
+            capability: "long-lived processes, which the process tool requires",
+        });
+    }
 
     let dir = workspace_dir.into();
     let ws = Workspace::sandboxed(dir.clone(), sandbox.clone());
-    let shell = ShellTool::new(Executor::sandbox(sandbox)).working_dir(dir.to_string_lossy());
+    let executor = Executor::sandbox(sandbox);
+    let shell = ShellTool::new(executor.clone()).working_dir(dir.to_string_lossy());
+    let process = ProcessTool::new(executor).working_dir(dir.to_string_lossy());
 
-    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(shell)];
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(shell), Arc::new(process)];
     tools.extend(file_tools(&ws, &FileGuard::new()));
     Ok(tools)
 }

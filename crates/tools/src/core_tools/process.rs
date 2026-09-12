@@ -28,8 +28,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::AsyncWriteExt;
-use tokio::process::ChildStdin;
 use tokio::sync::Notify;
 
 use orca_harness_core::{CancellationToken, ToolError};
@@ -76,7 +74,9 @@ struct Proc {
     buf: Mutex<OutBuf>,
     /// Wakes pollers when the readers append output.
     output_ready: Notify,
-    stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+    /// `None` once closed by an `eof` write. Detached from the waiter's
+    /// handle so a write need not contend with the process's lifetime.
+    stdin: tokio::sync::Mutex<Option<crate::spawner::Stdin>>,
     /// `Some(exit_code)` once the child has been reaped.
     exit: Mutex<Option<Option<i32>>>,
     /// Cancel to kill the child. A child token of the manager's shutdown.
@@ -346,16 +346,12 @@ impl ProcessCore<'_> {
             } else {
                 write.input
             };
-            stdin
-                .write_all(data.as_bytes())
-                .await
-                .map_err(|e| ToolError::msg(format!("write to stdin failed: {e}")))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| ToolError::msg(format!("flush stdin failed: {e}")))?;
+            stdin.write_all(data.as_bytes()).await?;
             if write.eof {
-                *guard = None; // drop the handle → child sees EOF
+                // A local pipe closes by being dropped; a sandbox session
+                // has to be told, so ask the handle rather than assuming.
+                stdin.close().await;
+                *guard = None;
             }
         }
 
