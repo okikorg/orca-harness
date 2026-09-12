@@ -1,0 +1,77 @@
+<section class="section" id="sdk-install"><h2>Add the crate</h2><p>The SDK is currently a workspace crate. From a checkout of this repository, add it by path together with a Tokio runtime:</p><div class="terminal"><pre><span class="prompt">$</span> cargo add --path crates/sdk orca-harness-sdk
+<span class="prompt">$</span> cargo add tokio --features macros,rt-multi-thread</pre></div><div class="callout"><span class="callout-label">VERSIONING</span><p>The facade is at <code>0.1.0</code>. Pin the exact revision when consuming it outside this workspace and expect the API to evolve before a stable release.</p></div></section>
+<section class="section" id="sdk-build-agent"><h2>Build your first agent</h2><p>A <code>Harness</code> owns workspace-scoped paths. An <code>Agent</code> is reusable configuration. A <code>Session</code> owns conversation context, and each run adds one turn.</p><div class="terminal"><pre>use orca_harness_sdk::{Harness, OpenAiModel, ToolPreset};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let model = OpenAiModel::new("gpt-4o-mini")
+        .api_key(std::env::var("OPENAI_API_KEY")?);
+
+    let harness = Harness::builder()
+        .workspace(std::env::current_dir()?)
+        .build()?;
+
+    let agent = harness
+        .agent(model)
+        .name("embedded-assistant")
+        .system_prompt("Be concise. Inspect before changing files.")
+        .tools(ToolPreset::ReadOnly)
+        .build()?;
+
+    let session = agent.new_session().ephemeral().open()?;
+    let result = session.run("Summarize this workspace").await?;
+    println!("{}", result.text);
+    Ok(())
+}</pre></div><p>The workspace must already exist and is canonicalized during <code>build()</code>. State defaults to <code>&lt;workspace&gt;/.orca</code>; use <code>.state_dir(...)</code> when generated state should live elsewhere.</p><h3>One shot or multiple turns</h3><p><code>agent.run(...)</code> creates a fresh ephemeral session for each call. Retain a session when later requests need earlier context:</p><div class="terminal"><pre>let session = agent.new_session().open()?; // ephemeral by default
+session.run("My preferred language is Rust.").await?;
+let answer = session.run("Which language did I mention?").await?;</pre></div></section>
+<section class="section" id="sdk-tools-policy"><h2>Add tools behind a policy</h2><p><code>FnTool</code> turns an async Rust closure into a model-callable JSON boundary. Validate arguments in the closure even when the schema marks them as required.</p><div class="terminal"><pre>use orca_harness_sdk::{FnTool, ToolPolicy};
+use serde_json::json;
+
+let lookup = FnTool::new(
+    "lookup_issue",
+    "Look up an issue by numeric id",
+    json!({
+        "type": "object",
+        "properties": { "id": { "type": "integer" } },
+        "required": ["id"],
+        "additionalProperties": false
+    }),
+    |args, _context| async move {
+        let id = args["id"]
+            .as_u64()
+            .ok_or_else(|| "id must be a positive integer".to_string())?;
+        Ok(json!({ "id": id, "status": "open" }))
+    },
+);
+
+let agent = harness
+    .agent(model)
+    .tool(lookup)
+    .policy(ToolPolicy::new().allow(["lookup_issue"]))
+    .build()?;</pre></div><table class="command-table"><thead><tr><th>Preset</th><th>Capabilities</th></tr></thead><tbody><tr><td><code>None</code></td><td>No workspace tools; this is the default.</td></tr><tr><td><code>ReadOnly</code></td><td>Read files, list directories, grep, and glob.</td></tr><tr><td><code>ShellLess</code></td><td>Read and mutate files, but no shell or process execution.</td></tr><tr><td><code>Coding</code></td><td>The complete coding toolset, including local command execution.</td></tr></tbody></table><div class="callout warn"><span class="callout-label">POLICY IS NOT ISOLATION</span><p><code>ToolPolicy</code> decides whether a registered call may execute. It does not constrain the process, filesystem, or network. An empty allowlist does not mean “deny all”; name the exact allowed tools or use a rule that denies by default.</p></div></section>
+<section class="section" id="sdk-events"><h2>Observe a run</h2><p>Enable event and usage extensions on the agent, then attach request-specific handling. Provider support determines whether token counts are populated.</p><div class="terminal"><pre>use orca_harness_sdk::{HarnessEvent, RunRequest};
+use std::time::Duration;
+
+let request = RunRequest::new("Inspect the failing tests")
+    .deadline(Duration::from_secs(90))
+    .on_event(|event| {
+        if let HarnessEvent::ToolCall { tool_name, .. } = event {
+            eprintln!("calling {tool_name}");
+        }
+    });
+
+let result = session.run(request).await?;
+eprintln!("steps: {}", result.metered_steps);
+eprintln!("tokens: {:?}", result.usage);
+println!("{}", result.text);</pre></div></section>
+<section class="section" id="sdk-persistence"><h2>Persist and branch conversations</h2><p>Ephemeral sessions retain history only while the value is alive. Persistent sessions record transcripts beneath the harness state directory and can be listed, resumed, and forked.</p><div class="terminal"><pre>let session = agent.new_session().persistent().open()?;
+let id = session.id().expect("persistent session id");
+session.run("Review the current design").await?;
+
+for saved in harness.sessions().list() {
+    println!("{} {}", saved.meta.id, saved.path.display());
+}
+
+let resumed = agent.resume_session(&amp;id)?;
+let branch = resumed.fork().await?;</pre></div><table class="command-table"><thead><tr><th>Operation</th><th>Effect</th></tr></thead><tbody><tr><td><code>messages()</code></td><td>Clone the in-memory conversation.</td></tr><tr><td><code>fork()</code></td><td>Create a persistent child with inherited context and a new ID.</td></tr><tr><td><code>clear()</code></td><td>Reset context and rotate a persistent session to a new ID.</td></tr><tr><td><code>reset_in_place()</code></td><td>Reset while retaining the persistent session ID.</td></tr><tr><td><code>load_warnings()</code></td><td>Return non-fatal warnings encountered during restore.</td></tr></tbody></table><p>Persistence restores conversation and truncation-recovery data, not live processes, REPLs, detached workers, workflows, notifications, or pending completions.</p></section>

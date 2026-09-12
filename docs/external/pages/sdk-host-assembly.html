@@ -1,0 +1,133 @@
+<section class="section" id="sdk-capabilities"><h2>Assemble explicit capabilities</h2><p>A production host should make its capabilities and security boundary visible in one builder chain. Installing tools makes them available; policy decides which calls are authorized.</p><div class="terminal"><pre>use orca_harness_sdk::orchestration::{Limits, SubagentModel};
+use orca_harness_sdk::{
+    MemoryConfig, PolicyOutcome, ProcessConfig, RetryConfig,
+    SubagentConfig, ToolCall, ToolPolicy, ToolPreset, TruncationConfig,
+};
+
+let policy = ToolPolicy::new().rule(|call: &amp;ToolCall| {
+    let allowed = match call.name.as_str() {
+        "read_file" | "list_dir" | "grep" | "glob"
+        | "skill" | "subagent" | "workflow"
+        | "mcp_select_tool" | "mcp__release__check" =&gt; true,
+        "process" =&gt; call.arguments["action"] == "spawn"
+            &amp;&amp; call.arguments["command"]
+                == "test -f RELEASE.md &amp;&amp; printf 'fixture-present\\n'",
+        _ =&gt; false,
+    };
+    if allowed {
+        PolicyOutcome::Allow
+    } else {
+        PolicyOutcome::Deny("Review only: mutations are forbidden".into())
+    }
+});
+
+let agent = harness
+    .agent(parent_model)
+    .name("release-review")
+    .system_prompt("Use tools for evidence. Never publish.")
+    .tools(ToolPreset::Coding)
+    .policy(policy)
+    .memory(MemoryConfig::new(memory))
+    .skills(skills)
+    .mcp(mcp.clone())
+    .processes(ProcessConfig::new().max_processes(2))
+    .subagents(
+        SubagentConfig::new()
+            .background_limit(3)
+            .max_depth(1)
+            .workflows(true)
+            .model(SubagentModel::new(
+                "reviewer",
+                "Dedicated release reviewer",
+                child_model,
+            ))
+            .limits(Limits { max_steps: 8, ..Default::default() }),
+    )
+    .limits(Limits { max_steps: 24, ..Default::default() })
+    .tool_retry(RetryConfig::attempts(2).backoff_ms(250))
+    .model_retry(RetryConfig::attempts(2).backoff_ms(500))
+    .truncation(TruncationConfig {
+        max_string_chars: 8_000,
+        ..Default::default()
+    })
+    .events(true)
+    .usage(true)
+    .build()?;</pre></div><ul><li>Configure parent and delegated models independently when they need different providers or limits.</li><li>Give the parent and children separate step budgets.</li><li>Use an exact allowlist for high-risk presets; tool presence does not grant permission.</li><li>Bound process count, retries, output size, and total host runtime.</li></ul></section>
+<section class="section" id="sdk-state-services"><h2>Attach stateful services</h2><h3>Memory</h3><p><code>harness.memory()</code> opens the workspace-scoped SQLite store. <code>MemoryConfig::new</code> enables automatic recall and read-only search; <code>MemoryConfig::read_write</code> also exposes model-initiated mutation.</p><div class="terminal"><pre>let memory = harness.memory()?;
+memory.save(
+    "Release reviews distinguish evidence from claims.",
+    "preference",
+    false,
+    "host-setup",
+)?;
+
+let config = MemoryConfig::new(memory)
+    .max_recalled_items(6)
+    .max_recalled_chars(4096);</pre></div><h3>Skills</h3><p>Skill installation or scaffolding changes disk. Call <code>reload()</code> before building or starting the next run so the catalog reflects those changes. Construct <code>Skills</code> directly when an embedded host should exclude user-home skill roots.</p><h3>MCP</h3><p>Connect servers before building the agent and disconnect them during cleanup. Use structured <code>connect_stdio</code> launches when arguments contain spaces or need explicit environment and working-directory fields.</p><div class="terminal"><pre>use orca_harness_sdk::integrations::mcp::StdioLaunch;
+
+let mcp = harness.mcp();
+let status = mcp.connect_stdio("tickets", &amp;StdioLaunch {
+    command: "node".into(),
+    args: vec!["./servers/tickets.js".into()],
+    env: Default::default(),
+    cwd: None,
+    environment: Default::default(),
+}).await?;
+
+if !status.healthy {
+    return Err("ticket MCP server is unhealthy".into());
+}
+// After all sessions stop: mcp.disconnect("tickets");</pre></div><p>MCP tools use names such as <code>mcp__tickets__lookup</code>. Skill and MCP catalogs are snapshotted at run boundaries; changing them does not rewrite an active run’s tool registry.</p></section>
+<section class="section" id="sdk-partial-outcomes"><h2>Preserve partial outcomes</h2><p>Use <code>run_outcome</code> or <code>RunHandle::outcome</code> when accounting and partial transcript state matter. Record them before collapsing the outcome into a simple success/error result.</p><div class="terminal"><pre>let outcome = session.run_outcome(request).await?;
+
+println!(
+    "usage={:?}, steps={}, dropped={}, persistence={:?}",
+    outcome.usage,
+    outcome.metered_steps,
+    outcome.dropped_events,
+    outcome.persistence,
+);
+
+match &amp;outcome.execution {
+    Ok(text) =&gt; println!("assistant: {text}"),
+    Err(error) =&gt; {
+        eprintln!("run stopped: {error}");
+        eprintln!("partial messages: {}", outcome.messages.len());
+    }
+}
+
+let result = outcome.into_result()?;</pre></div><p><code>RunOutcome</code> preserves execution status, accumulated usage, metered steps, partial messages, persistence status, and dropped-event count. <code>into_result()</code> intentionally gives up that richer failure view.</p></section>
+<section class="section" id="sdk-recovery"><h2>Retry and recover deliberately</h2><p><code>RetryConfig::attempts(2)</code> means two total attempts, not two retries after the initial call. Model retry targets transient transport and provider failures. Tool retry uses built-in classification, but hosts still need idempotency for externally mutating operations.</p><div class="terminal"><pre>let agent = harness
+    .agent(model)
+    .tool_retry(RetryConfig::attempts(3).backoff_ms(250))
+    .model_retry(RetryConfig::attempts(3).backoff_ms(500))
+    .truncation(TruncationConfig {
+        max_string_chars: 8_000,
+        store_budget_bytes: 16 * 1024 * 1024,
+        expose_reader_tool: true,
+    })
+    .build()?;</pre></div><p>Truncation limits what enters model context while retaining the original tool result in a bounded session recovery store. When enabled, <code>read_tool_result</code> retrieves it by the original call ID. Persistent sessions save this store; forks snapshot it; clear and reset operations remove it.</p></section>
+<section class="section" id="sdk-verification"><h2>Verify actions, not prose</h2><p>A model saying “the check passed” is not proof. Match successful tool calls with their results, then inspect host-owned workflow and process state separately.</p><div class="terminal"><pre>use std::collections::BTreeSet;
+use orca_harness_sdk::Message;
+
+let messages = session.messages().await;
+let mut exercised = BTreeSet::new();
+
+for message in &amp;messages {
+    let Message::Assistant { tool_calls, .. } = message else {
+        continue;
+    };
+    for call in tool_calls {
+        let succeeded = messages.iter().any(|message| {
+            matches!(message, Message::Tool { results }
+                if results.iter().any(|result|
+                    result.call_id == call.id &amp;&amp; !result.is_error))
+        });
+        if succeeded {
+            exercised.insert(call.name.as_str());
+        }
+    }
+}
+
+assert!(exercised.contains("read_file"));
+assert!(exercised.contains("mcp__release__check"));</pre></div><p>Also verify workflow terminal outcomes and process exit codes before reporting host-level success. The full pattern is implemented in <code>crates/sdk/examples/live_host_assembly.rs</code>.</p></section>

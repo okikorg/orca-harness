@@ -10,6 +10,16 @@ const article = document.querySelector('#article');
 const outline = document.querySelector('#outline');
 const copyTemplate = document.querySelector('#copy-icon');
 const bodyCache = new Map();
+const legacyRoutes = new Map([
+  ['sdk/sdk-install', 'sdk-first-agent/sdk-install'],
+  ['sdk/sdk-first-agent', 'sdk-first-agent/sdk-build-agent'],
+  ['sdk/sdk-tools', 'sdk-first-agent/sdk-tools-policy'],
+  ['sdk/sdk-runs', 'sdk-background-lifecycle/sdk-run-handle'],
+  ['sdk/sdk-sessions', 'sdk-first-agent/sdk-persistence'],
+  ['sdk/sdk-state', 'sdk-host-assembly/sdk-state-services'],
+  ['sdk/sdk-long-runs', 'sdk-host-assembly/sdk-recovery'],
+  ['sdk/sdk-errors', 'sdk-host-assembly/sdk-partial-outcomes'],
+]);
 let renderSequence = 0;
 
 async function loadBody(page) {
@@ -27,7 +37,16 @@ function renderNav(activePage) {
   nav.innerHTML = groups.map(group =>
     `<div class="nav-group"><span class="nav-group-title">${group}</span>${pages
       .filter(page => page.group === group)
-      .map(page => `<a class="nav-link ${page.id === activePage.id ? 'active' : ''}" href="#${page.id}">${page.label}</a>`)
+      .map(page => {
+        const classes = [
+          'nav-link',
+          page.parent ? 'nav-link-child' : '',
+          page.id === activePage.id ? 'active' : '',
+          activePage.parent === page.id ? 'parent-active' : '',
+        ].filter(Boolean).join(' ');
+        const current = page.id === activePage.id ? ' aria-current="page"' : '';
+        return `<a class="${classes}" href="#${page.id}"${current}>${page.label}</a>`;
+      })
       .join('')}</div>`
   ).join('');
 }
@@ -49,15 +68,22 @@ function addCopyButtons() {
   });
 }
 
-async function render(pageId = location.hash.slice(1).split('/')[0] || 'start') {
+async function render() {
   const sequence = ++renderSequence;
+  let route = location.hash.slice(1);
+  const replacement = legacyRoutes.get(route);
+  if (replacement) {
+    route = replacement;
+    history.replaceState(null, '', `#${replacement}`);
+  }
+  const pageId = route.split('/')[0] || 'start';
   const page = pages.find(candidate => candidate.id === pageId) || pages[0];
   const body = await loadBody(page);
   if (sequence !== renderSequence) return;
 
   document.title = `${page.label} — Orcacode`;
   renderNav(page);
-  article.innerHTML = `<p class="kicker">${page.group}</p><h1 class="title">${page.title}</h1><p class="lede">${page.lede}</p><div class="meta"><span>EXTERNAL USER DOCUMENTATION</span><span>Updated from source · 2026-08-31</span><button class="markdown-copy" type="button">Copy Markdown</button></div>${body}`;
+  article.innerHTML = `<p class="kicker">${page.group}</p><h1 class="title">${page.title}</h1><p class="lede">${page.lede}</p><div class="meta"><span>EXTERNAL USER DOCUMENTATION</span><span>Updated from source · 2026-09-12</span><button class="markdown-copy" type="button">Copy Markdown</button></div>${body}`;
   const markdownButton = article.querySelector('.markdown-copy');
   markdownButton.addEventListener('click', async () => {
     await navigator.clipboard.writeText(pageToMarkdown(page, body));
