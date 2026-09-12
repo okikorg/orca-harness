@@ -43,3 +43,15 @@ path = "examples/providers/codex.rs"
 [[example]]
 name = "provider_gateway"
 path = "examples/providers/gateway.rs"
+
+[[example]]
+name = "detached_subagents"
+path = "examples/subagents/detached.rs"
+
+[[example]]
+name = "background_processes"
+path = "examples/processes/background.rs"
+
+[[example]]
+name = "workflows"
+path = "examples/workflows/graph.rs"

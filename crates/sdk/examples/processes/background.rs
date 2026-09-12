@@ -14,6 +14,7 @@
 //!
 //! Deterministic: the model is scripted and never called.
 
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::time::Duration;
