@@ -57,11 +57,26 @@ impl Sandbox for MemSandbox {
         Ok(ExecOutput::default())
     }
 
-    async fn spawn(&self, _: SpawnRequest) -> Result<(Box<dyn Session>, Output), SandboxError> {
-        Err(SandboxError::Unsupported {
-            provider: "mem",
-            capability: "sessions",
-        })
+    /// A session that runs nothing: it records the argv it was asked for
+    /// and ends at once. Enough to prove `process` reaches the provider
+    /// instead of this machine, without a real interpreter in the test.
+    async fn spawn(
+        &self,
+        request: SpawnRequest,
+    ) -> Result<(Arc<dyn Session>, Output), SandboxError> {
+        self.execs
+            .lock()
+            .unwrap()
+            .push(format!("{} {}", request.program, request.args.join(" ")));
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let _ = tx
+            .send(orca_harness_core::Chunk {
+                stderr: false,
+                bytes: b"from the sandbox\n".to_vec(),
+            })
+            .await;
+        drop(tx);
+        Ok((Arc::new(MemSession), rx))
     }
 
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, SandboxError> {
@@ -116,6 +131,24 @@ impl Sandbox for MemSandbox {
     }
 
     async fn shutdown(&self) -> Result<(), SandboxError> {
+        Ok(())
+    }
+}
+
+struct MemSession;
+
+#[async_trait]
+impl Session for MemSession {
+    async fn write_stdin(&self, _: &[u8]) -> Result<(), SandboxError> {
+        Ok(())
+    }
+    async fn close_stdin(&self) -> Result<(), SandboxError> {
+        Ok(())
+    }
+    async fn wait(&self) -> Result<Option<i32>, SandboxError> {
+        Ok(Some(0))
+    }
+    async fn kill(&self) -> Result<(), SandboxError> {
         Ok(())
     }
 }
@@ -286,11 +319,13 @@ async fn the_assembled_sandbox_set_has_no_host_backed_tool() {
     assert!(names.contains(&"read_file".to_string()));
     assert!(names.contains(&"grep".to_string()));
 
-    // `process` has no sandbox backend yet, and the REPLs are never part
-    // of the core set on any backend — hosts add those deliberately, with
-    // their own `.sandbox(..)`. A host-backed version appearing here
-    // would be a local process inside a set that must have none.
-    for stateful in ["process", "bun_repl", "py_kernel"] {
+    assert!(names.contains(&"process".to_string()));
+
+    // The REPLs are never part of the core set on any backend — hosts add
+    // those deliberately, with their own `.sandbox(..)`. A host-backed
+    // version appearing here would be a local process inside a set that
+    // must have none.
+    for stateful in ["bun_repl", "py_kernel"] {
         assert!(
             !names.contains(&stateful.to_string()),
             "{stateful} must not be registered by the sandboxed core set"
@@ -313,6 +348,36 @@ async fn the_assembled_sandbox_set_has_no_host_backed_tool() {
         sandbox.get("/workspace/from-set.txt").as_deref(),
         Some(&b"x"[..])
     );
+
+    // `process` too: the command reaches the provider's session rather
+    // than starting a child on this machine.
+    let process = tools
+        .iter()
+        .find(|t| t.schema().name == "process")
+        .expect("process");
+    let spawned = process
+        .call(
+            serde_json::json!({ "action": "spawn", "command": "echo marker-in-sandbox" }),
+            &ctx("process"),
+        )
+        .await
+        .expect("spawn");
+    assert!(
+        spawned["output"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("from the sandbox"),
+        "output must come from the provider: {spawned:?}"
+    );
+    assert!(
+        sandbox
+            .execs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("marker-in-sandbox")),
+        "the provider never saw the command"
+    );
 }
 
 /// A provider with no file API cannot back the file tools. Returning a
@@ -333,7 +398,7 @@ async fn assembly_refuses_a_provider_without_a_file_api() {
         async fn exec(&self, _: ExecRequest) -> Result<ExecOutput, SandboxError> {
             Ok(ExecOutput::default())
         }
-        async fn spawn(&self, _: SpawnRequest) -> Result<(Box<dyn Session>, Output), SandboxError> {
+        async fn spawn(&self, _: SpawnRequest) -> Result<(Arc<dyn Session>, Output), SandboxError> {
             unreachable!()
         }
         async fn read_file(&self, _: &str) -> Result<Vec<u8>, SandboxError> {
@@ -359,5 +424,56 @@ async fn assembly_refuses_a_provider_without_a_file_api() {
         }
         Err(other) => panic!("wrong refusal: {other}"),
         Ok(_) => panic!("a provider without a file API must not yield a tool set"),
+    }
+}
+
+/// The same rule for the other capability: `process` needs a live
+/// session, and a provider without one must not yield a set quietly
+/// missing that tool.
+#[tokio::test]
+async fn assembly_refuses_a_provider_without_sessions() {
+    struct NoSessions(MemSandbox);
+
+    #[async_trait]
+    impl Sandbox for NoSessions {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                sessions: false,
+                file_api: true,
+                network_policy: false,
+            }
+        }
+        async fn exec(&self, r: ExecRequest) -> Result<ExecOutput, SandboxError> {
+            self.0.exec(r).await
+        }
+        async fn spawn(&self, _: SpawnRequest) -> Result<(Arc<dyn Session>, Output), SandboxError> {
+            unreachable!()
+        }
+        async fn read_file(&self, p: &str) -> Result<Vec<u8>, SandboxError> {
+            self.0.read_file(p).await
+        }
+        async fn write_file(&self, p: &str, b: &[u8], m: FileMode) -> Result<(), SandboxError> {
+            self.0.write_file(p, b, m).await
+        }
+        async fn list_dir(&self, p: &str) -> Result<Vec<Entry>, SandboxError> {
+            self.0.list_dir(p).await
+        }
+        async fn stat(&self, p: &str) -> Result<Option<Stat>, SandboxError> {
+            self.0.stat(p).await
+        }
+        async fn shutdown(&self) -> Result<(), SandboxError> {
+            Ok(())
+        }
+    }
+
+    match orca_harness_tools::core_tools_in_sandbox(
+        Arc::new(NoSessions(MemSandbox::default())),
+        "/workspace",
+    ) {
+        Err(SandboxError::Unsupported { capability, .. }) => {
+            assert!(capability.contains("long-lived processes"), "{capability}");
+        }
+        Err(other) => panic!("wrong refusal: {other}"),
+        Ok(_) => panic!("a provider without sessions must not yield a tool set"),
     }
 }

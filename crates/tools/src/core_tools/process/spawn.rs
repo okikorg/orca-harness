@@ -1,12 +1,10 @@
 //! Child startup, output readers, and lifetime supervision.
 
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orca_harness_core::{CancellationToken, ToolError};
-use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 
 use super::output::OutBuf;
@@ -43,21 +41,13 @@ impl ProcessCore<'_> {
         // released by `Slot`'s drop on every path that returns early.
         let slot = manager.reserve_slot(config.max_processes)?;
 
-        let mut cmd = config
+        let (spawner, request) = config
             .executor
-            .build(&command_str, config.working_dir.as_deref());
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ToolError::msg(format!("failed to spawn: {e}")))?;
-        let pgid = child.id();
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let stdin = child.stdin.take();
+            .spawn_parts(&command_str, config.working_dir.as_deref());
+        let sandboxed = spawner.is_sandboxed();
+        let (mut spawned, mut output) = spawner.spawn(request).await?;
+        let pgid = spawned.pgid();
+        let stdin = spawned.take_stdin();
 
         let id = format!("p{}", manager.seq.fetch_add(1, Ordering::SeqCst) + 1);
         let notification_cap = usize::from(
@@ -76,7 +66,7 @@ impl ProcessCore<'_> {
                 (!wait_for_exit).then_some(notify_match).flatten(),
             )),
             output_ready: Notify::new(),
-            stdin: tokio::sync::Mutex::new(stdin),
+            stdin: tokio::sync::Mutex::new(Some(stdin)),
             exit: Mutex::new(None),
             kill: manager.shutdown.child_token(),
             done: CancellationToken::new(),
@@ -84,32 +74,23 @@ impl ProcessCore<'_> {
             notifier: config.notifier.clone(),
         });
 
-        let mut readers = Vec::new();
-        for pipe in [stdout.map(either::Left), stderr.map(either::Right)] {
-            let Some(pipe) = pipe else { continue };
+        // One reader for both streams: they were already merged into a
+        // single unread buffer (terminal semantics), and the spawner
+        // hands them over interleaved in arrival order.
+        //
+        // `drained` firing means the output stream closed, which is the
+        // one end-of-process signal every sandbox provider has.
+        let drained = CancellationToken::new();
+        let reader = {
             let p = proc.clone();
-            readers.push(tokio::spawn(async move {
-                let mut chunk = [0u8; 8192];
-                match pipe {
-                    either::Either::Left(mut out) => loop {
-                        match out.read(&mut chunk).await {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                p.append_output(&chunk[..n]);
-                            }
-                        }
-                    },
-                    either::Either::Right(mut err) => loop {
-                        match err.read(&mut chunk).await {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                p.append_output(&chunk[..n]);
-                            }
-                        }
-                    },
+            let drained = drained.clone();
+            tokio::spawn(async move {
+                while let Some(chunk) = output.recv().await {
+                    p.append_output(&chunk.bytes);
                 }
-            }));
-        }
+                drained.cancel();
+            })
+        };
 
         manager.stats.add_process(id.clone(), command_str);
 
@@ -118,28 +99,41 @@ impl ProcessCore<'_> {
         let p = proc.clone();
         let stats = manager.stats.clone();
         tokio::spawn(async move {
-            let status = tokio::select! {
+            let exit = tokio::select! {
                 biased;
                 _ = p.kill.cancelled() => {
+                    // The group kill reaches grandchildren; `Spawned::kill`
+                    // then ends and reaps the child itself.
                     if let Some(pgid) = p.pgid {
                         pgroup::kill_group(pgid);
                     }
-                    let _ = child.start_kill();
-                    child.wait().await
+                    spawned.kill().await;
+                    None
                 }
-                status = child.wait() => status,
+                code = spawned.wait() => code,
+                // Only under a sandbox. Locally, a forked grandchild can
+                // hold the pipes open past its parent's exit, so the
+                // stream closing is not the parent ending — `wait` is the
+                // authority there, and this arm would report exit early.
+                _ = drained.cancelled(), if sandboxed => {
+                    // The stream usually closes just before the provider
+                    // reports the code, so this arm wins the race even
+                    // where a code was available. Wait it out rather than
+                    // discarding an exit code we could have had; only a
+                    // provider that reports none pays the full delay, and
+                    // only once its process has already ended.
+                    tokio::time::timeout(Duration::from_millis(500), spawned.wait())
+                        .await
+                        .ok()
+                        .flatten()
+                }
             };
-            *p.exit.lock().unwrap() = Some(status.ok().and_then(|s| s.code()));
+            *p.exit.lock().unwrap() = Some(exit);
             if p.counted.swap(false, Ordering::Relaxed) {
                 stats.remove_process(&p.id);
                 stats.dec_processes();
             }
-            let _ = tokio::time::timeout(Duration::from_millis(200), async {
-                for r in readers {
-                    let _ = r.await;
-                }
-            })
-            .await;
+            let _ = tokio::time::timeout(Duration::from_millis(200), reader).await;
             p.done.cancel();
             if p.notify_on_exit.load(Ordering::Acquire) {
                 p.emit(ProcessNotificationKind::Exit {
@@ -164,14 +158,4 @@ impl ProcessCore<'_> {
         settle_exit(&proc).await;
         Ok(self.snapshot(&id, &proc, notify_on_exit, !wait_for_exit))
     }
-}
-
-/// Tiny stand-in for the `either` crate so both pipe types share one
-/// reader loop without a dependency.
-mod either {
-    pub enum Either<L, R> {
-        Left(L),
-        Right(R),
-    }
-    pub use Either::{Left, Right};
 }

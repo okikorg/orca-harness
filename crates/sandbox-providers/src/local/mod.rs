@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use orca_harness_core::{
-    Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner, Sandbox,
-    SandboxError, Session, SpawnRequest, Stat,
+    CancellationToken, Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output,
+    Provisioner, Sandbox, SandboxError, Session, SpawnRequest, Stat,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -210,7 +210,7 @@ impl Sandbox for DockerSandbox {
     async fn spawn(
         &self,
         request: SpawnRequest,
-    ) -> Result<(Box<dyn Session>, Output), SandboxError> {
+    ) -> Result<(Arc<dyn Session>, Output), SandboxError> {
         let mut args = self.exec_args(request.cwd.as_deref(), true);
         for (key, value) in &request.env {
             args.insert(1, format!("{key}={value}"));
@@ -240,11 +240,30 @@ impl Sandbox for DockerSandbox {
             pump(pipe, tx, true);
         }
 
+        // The child is owned by a supervisor task rather than a mutex:
+        // `wait` would hold that mutex for the whole life of the process
+        // and deadlock the `kill` that is supposed to end it.
+        let (exit_tx, exit_rx) = tokio::sync::watch::channel(None);
+        let kill = CancellationToken::new();
+        let killed = kill.clone();
+        tokio::spawn(async move {
+            let status = tokio::select! {
+                biased;
+                _ = killed.cancelled() => {
+                    let _ = child.start_kill();
+                    child.wait().await
+                }
+                status = child.wait() => status,
+            };
+            let _ = exit_tx.send(Some(status.ok().and_then(|s| s.code())));
+        });
+
         let session = DockerSession {
-            stdin: Mutex::new(stdin),
-            child: Mutex::new(child),
+            stdin: Mutex::new(Some(stdin)),
+            exit: exit_rx,
+            kill,
         };
-        Ok((Box::new(session), rx))
+        Ok((Arc::new(session), rx))
     }
 
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, SandboxError> {
@@ -358,14 +377,21 @@ impl Sandbox for DockerSandbox {
 }
 
 struct DockerSession {
-    stdin: Mutex<tokio::process::ChildStdin>,
-    child: Mutex<tokio::process::Child>,
+    /// `None` once stdin has been closed; the pipe is dropped to make the
+    /// process see EOF.
+    stdin: Mutex<Option<tokio::process::ChildStdin>>,
+    /// `Some(code)` once the supervisor has reaped the child.
+    exit: tokio::sync::watch::Receiver<Option<Option<i32>>>,
+    kill: CancellationToken,
 }
 
 #[async_trait]
 impl Session for DockerSession {
     async fn write_stdin(&self, bytes: &[u8]) -> Result<(), SandboxError> {
-        let mut stdin = self.stdin.lock().await;
+        let mut guard = self.stdin.lock().await;
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| SandboxError::Request("stdin is closed".into()))?;
         stdin
             .write_all(bytes)
             .await
@@ -376,12 +402,32 @@ impl Session for DockerSession {
             .map_err(|e| SandboxError::Request(format!("stdin flush failed: {e}")))
     }
 
+    async fn close_stdin(&self) -> Result<(), SandboxError> {
+        *self.stdin.lock().await = None;
+        Ok(())
+    }
+
+    async fn wait(&self) -> Result<Option<i32>, SandboxError> {
+        let mut exit = self.exit.clone();
+        // `borrow` first: the supervisor may have finished before this
+        // receiver was cloned, and `changed` only reports what comes next.
+        if let Some(code) = *exit.borrow_and_update() {
+            return Ok(code);
+        }
+        while exit.changed().await.is_ok() {
+            if let Some(code) = *exit.borrow_and_update() {
+                return Ok(code);
+            }
+        }
+        // The supervisor task is gone without reporting — the runtime is
+        // shutting down. Staying pending would be a lie of a different
+        // kind, but claiming an exit we never saw is the worse one.
+        Err(SandboxError::Terminated("supervisor stopped".into()))
+    }
+
     async fn kill(&self) -> Result<(), SandboxError> {
-        let mut child = self.child.lock().await;
-        child
-            .kill()
-            .await
-            .map_err(|e| SandboxError::Request(format!("kill failed: {e}")))
+        self.kill.cancel();
+        Ok(())
     }
 }
 

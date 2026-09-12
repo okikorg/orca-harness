@@ -41,7 +41,7 @@ impl Sandbox for FakeSandbox {
         })
     }
 
-    async fn spawn(&self, _: SpawnRequest) -> Result<(Box<dyn Session>, Output), SandboxError> {
+    async fn spawn(&self, _: SpawnRequest) -> Result<(Arc<dyn Session>, Output), SandboxError> {
         Err(SandboxError::Unsupported {
             provider: "fake",
             capability: "sessions",

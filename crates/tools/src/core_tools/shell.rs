@@ -161,6 +161,51 @@ impl Executor {
         cmd.process_group(0);
         cmd
     }
+
+    /// The same command as [`build`](Self::build), but as the backend and
+    /// request a [`Spawner`](crate::Spawner) takes — the form long-lived
+    /// processes need, and the only form that works for a sandbox.
+    pub(crate) fn spawn_parts(
+        &self,
+        command_str: &str,
+        working_dir: Option<&str>,
+    ) -> (crate::Spawner, crate::spawner::Spawn) {
+        match &self.kind {
+            Kind::Process {
+                program,
+                leading_args,
+            } => {
+                let local_sh = self.is_local_sh();
+                // Same split as `build`: only the local shell gets a real
+                // cwd; anything else has the directory folded into the
+                // command, because there is no local directory to enter.
+                let effective = match (working_dir, local_sh) {
+                    (Some(_), true) | (None, _) => command_str.to_string(),
+                    (Some(dir), false) => format!("cd {dir} && {command_str}"),
+                };
+                let mut args = leading_args.clone();
+                args.push(effective);
+                (
+                    crate::Spawner::Local,
+                    crate::spawner::Spawn {
+                        program: program.clone(),
+                        args,
+                        working_dir: local_sh.then_some(working_dir).flatten().map(String::from),
+                        capture_stderr: true,
+                    },
+                )
+            }
+            Kind::Sandbox(sandbox) => (
+                crate::Spawner::Sandbox(sandbox.clone()),
+                crate::spawner::Spawn {
+                    program: "sh".into(),
+                    args: vec!["-c".into(), command_str.to_string()],
+                    working_dir: working_dir.map(String::from),
+                    capture_stderr: true,
+                },
+            ),
+        }
+    }
 }
 
 /// `shell` tool. Runs one command per call; concurrency-`Parallel` by

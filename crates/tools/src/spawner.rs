@@ -106,7 +106,10 @@ impl Spawner {
 
         Ok((
             Spawned {
-                inner: Inner::Local { child, stdin },
+                inner: Inner::Local {
+                    child,
+                    stdin: Some(stdin),
+                },
                 pgid,
             },
             rx,
@@ -144,8 +147,48 @@ impl Spawner {
 }
 
 enum Inner {
-    Local { child: Child, stdin: ChildStdin },
-    Sandbox(Box<dyn orca_harness_core::Session>),
+    Local {
+        child: Child,
+        /// `None` once taken by [`Spawned::take_stdin`] or closed.
+        stdin: Option<ChildStdin>,
+    },
+    Sandbox(Arc<dyn orca_harness_core::Session>),
+}
+
+/// The write half of a [`Spawned`] process, detached from it so one task
+/// can wait on the process while another writes to it. `process` needs
+/// this split; the REPL tools drive both from one place and do not.
+pub enum Stdin {
+    Local(Option<ChildStdin>),
+    Sandbox(Arc<dyn orca_harness_core::Session>),
+}
+
+impl Stdin {
+    pub async fn write_all(&mut self, bytes: &[u8]) -> Result<(), ToolError> {
+        match self {
+            Stdin::Local(Some(stdin)) => stdin
+                .write_all(bytes)
+                .await
+                .and(stdin.flush().await)
+                .map_err(|e| ToolError::msg(format!("stdin write failed: {e}"))),
+            Stdin::Local(None) => Err(ToolError::msg("stdin is closed")),
+            Stdin::Sandbox(session) => session
+                .write_stdin(bytes)
+                .await
+                .map_err(|e| ToolError::msg(e.to_string())),
+        }
+    }
+
+    /// Close stdin so the process sees EOF.
+    pub async fn close(&mut self) {
+        match self {
+            // Dropping the pipe is what closes it.
+            Stdin::Local(slot) => *slot = None,
+            Stdin::Sandbox(session) => {
+                let _ = session.close_stdin().await;
+            }
+        }
+    }
 }
 
 /// A live process, wherever it runs.
@@ -166,11 +209,14 @@ impl Spawned {
     /// the caller should restart it.
     pub async fn write_stdin(&mut self, bytes: &[u8]) -> Result<(), ToolError> {
         match &mut self.inner {
-            Inner::Local { stdin, .. } => stdin
-                .write_all(bytes)
-                .await
-                .and(stdin.flush().await)
-                .map_err(|e| ToolError::msg(format!("stdin write failed: {e}"))),
+            Inner::Local { stdin, .. } => match stdin {
+                Some(stdin) => stdin
+                    .write_all(bytes)
+                    .await
+                    .and(stdin.flush().await)
+                    .map_err(|e| ToolError::msg(format!("stdin write failed: {e}"))),
+                None => Err(ToolError::msg("stdin is closed")),
+            },
             Inner::Sandbox(session) => session
                 .write_stdin(bytes)
                 .await
@@ -186,6 +232,29 @@ impl Spawned {
         match &mut self.inner {
             Inner::Local { child, .. } => child.try_wait().ok().flatten().is_some(),
             Inner::Sandbox(_) => false,
+        }
+    }
+
+    /// Detach the write half, so another task can drive stdin while this
+    /// handle is parked in [`wait`](Self::wait).
+    pub fn take_stdin(&mut self) -> Stdin {
+        match &mut self.inner {
+            Inner::Local { stdin, .. } => Stdin::Local(stdin.take()),
+            Inner::Sandbox(session) => Stdin::Sandbox(session.clone()),
+        }
+    }
+
+    /// Resolve when the process ends, with its exit code where the
+    /// backend reports one.
+    ///
+    /// A sandbox provider with no terminal event leaves this pending
+    /// forever by contract, so callers on that path must also watch for
+    /// the output stream closing — the one end-of-process signal every
+    /// provider has.
+    pub async fn wait(&mut self) -> Option<i32> {
+        match &mut self.inner {
+            Inner::Local { child, .. } => child.wait().await.ok().and_then(|s| s.code()),
+            Inner::Sandbox(session) => session.wait().await.ok().flatten(),
         }
     }
 

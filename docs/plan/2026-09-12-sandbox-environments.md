@@ -362,14 +362,13 @@ rebuilds the agent through the `mcp_reload.rs` path and replaces cached runtimes
 
 ## Status at hand-over
 
-Branch `feat/sandbox-environments`. Steps 1, 2, 4, 5, the REPL half of step 3, and
-the Docker half of step 6 are done: formatted, no new clippy findings, tested
-without any API key.
+Branch `feat/sandbox-environments`. Steps 1 through 6 are done: formatted, no new
+clippy findings, tested without any API key.
 
-**Enclosure works end to end for `shell`, every file tool, `py_kernel` and
-`bun_repl`.** A Python kernel runs inside a real container, keeps state across
-calls, and writes files that appear in the sandbox and not on the host — verified
-against a live daemon, not a fake.
+**Enclosure works end to end for every tool that has a backend: `shell`, all eight
+file tools, `process`, `py_kernel` and `bun_repl`.** Verified against a live
+daemon, not a fake — a Python kernel keeps state across calls inside a container,
+and a background process takes stdin between calls and reports its own exit code.
 
 Landed:
 
@@ -386,28 +385,42 @@ Landed:
   interpreter inside the boundary. `bun_repl`'s per-call `TempSource` follows: under
   a sandbox it is written through the provider, because `.load` is executed *by the
   REPL* and a host temp file is invisible to a sandboxed interpreter.
+- `process` runs through the same `Spawner`. `Proc`'s stdin became a detached
+  write half (`spawner::Stdin`) so a write does not contend with the waiter that
+  owns the process's lifetime, its two pipe readers collapsed into one drain of the
+  spawner's channel, and kill routes to the session where there is no local process
+  group to signal.
+- `Session` gained `wait` and `close_stdin`. Done now because `DockerSession` is
+  its only implementor today and there will be five after step 7.
 - `core_tools_in_sandbox(sandbox, workspace_dir)` — the only supported way to build
-  a sandboxed set; refuses a provider without `file_api`.
+  a sandboxed set; refuses a provider without `file_api` **or** without `sessions`.
 - `crates/sandbox-providers` — `EnvironmentSpec`, `Network`, `Packages`, and the
   keyless Docker adapter implementing the whole trait.
 - `orca_harness_sdk::sandbox` re-export module.
 
-Tests, 16 new, no credentials required:
+Tests, 18 new, no credentials required:
 
 - `tools/tests/sandbox_executor.rs` (4) and `tools/tests/sandbox_workspace.rs` (6) —
   a sandboxed shell never reaches the host; writes land in the provider and not on
   disk; read-before-write still refuses an unread overwrite inside a sandbox;
   `list_dir`/`grep`/`glob` walk the sandbox tree; escapes still refused; the
-  assembled set holds no host-backed tool; a provider without a file API yields no
-  set.
+  assembled set holds no host-backed tool and every tool in it reaches the
+  provider; a provider missing either required capability yields no set.
 - `sandbox-providers` (5 unit + `docker_roundtrip.rs` + `sandboxed_repl.rs`) — exec,
   non-zero exit, binary-safe file round trip through a path with a quote and a space,
   listing, `stat` presence and absence, a live stdin session, and a Python kernel
   keeping state across calls inside a container. The two integration tests skip where
   no daemon is available.
+- `sandbox-providers/tests/sandboxed_process.rs` (1) — a background process inside a
+  container: a command that reports exit code 3, a `python3 -i` that stays alive
+  across calls and answers `print(6 * 7)` with 42 over stdin, a file written inside
+  and absent on the host, and a kill through the provider.
 
-All 261 pre-existing tools tests still pass untouched, which is what makes the host
-path provably unchanged across three refactors (`Executor`, `Workspace`, `Spawner`).
+All pre-existing tools tests still pass untouched, which is what makes the host
+path provably unchanged across four refactors (`Executor`, `Workspace`, `Spawner`,
+`process`). Workspace total 477 passing; the one failure, `tool-extensions`'
+`concurrent_fetches_fan_out_through_the_dispatcher`, is a timing assertion that
+also fails on a clean `main`.
 
 Three decisions made during implementation:
 
@@ -421,12 +434,17 @@ Three decisions made during implementation:
    `py_kernel` moved from reading `ChildStdout` directly to the same channel, and
    its stderr stays folded into stdout at the fd level by its own driver, so ordering
    is unchanged.
+4. **Completion and exit code are separate signals.** The output stream closing is
+   the one end-of-process signal every provider has, so it is the fallback; a
+   provider that reports a code is preferred. The stream normally closes just
+   before the code arrives, so the fallback is given a 500ms grace rather than
+   discarding a code that was available — without it, `process` reported `null`
+   for a command that exited 3 under Docker. The local path keeps `child.wait()`
+   as its sole authority: a forked grandchild can hold the pipes open past its
+   parent's exit, so stream closure there is not the parent ending.
 
 Not yet done, in order:
 
-- **`process`** — background process management (its own controller, notifications,
-  and stats across four files) has no sandbox backend, so `core_tools_in_sandbox`
-  omits it and a sandboxed agent has no background processes.
 - Steps 7 onward: the four remote adapters, capability staging and workspace
   transfer, enforcement, the execution axis, and the CLI.
 

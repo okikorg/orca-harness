@@ -75,14 +75,30 @@ pub struct Chunk {
     pub bytes: Vec<u8>,
 }
 
-/// A spawned process: stdin in, kill out. Output does **not** arrive
-/// through a method here — [`Sandbox::spawn`] hands back a receiver
-/// alongside the handle, so an implementation can pass its existing
-/// channel through untouched instead of wrapping a receiver in a mutex
-/// that would serialize every read.
+/// A spawned process: stdin in, exit and kill out. Output does **not**
+/// arrive through a method here — [`Sandbox::spawn`] hands back a
+/// receiver alongside the handle, so an implementation can pass its
+/// existing channel through untouched instead of wrapping a receiver in
+/// a mutex that would serialize every read.
 #[async_trait]
 pub trait Session: Send + Sync {
     async fn write_stdin(&self, bytes: &[u8]) -> Result<(), SandboxError>;
+
+    /// Close stdin so the process sees EOF. Idempotent: closing an
+    /// already-closed stdin is success, since callers use this to end
+    /// input and may not know whether the process already went away.
+    async fn close_stdin(&self) -> Result<(), SandboxError>;
+
+    /// Resolve when the process has ended, reporting its exit code.
+    ///
+    /// The contract is about *when*, not *what*: this must not resolve
+    /// while the process is still running. `Ok(None)` means "ended, code
+    /// unknown" — never "I cannot tell whether it ended". A provider
+    /// with no terminal event must leave this pending rather than return
+    /// early; callers pair it with the output stream closing, which is
+    /// the one end-of-process signal every provider has.
+    async fn wait(&self) -> Result<Option<i32>, SandboxError>;
+
     async fn kill(&self) -> Result<(), SandboxError>;
 }
 
@@ -141,7 +157,7 @@ pub trait Sandbox: Send + Sync {
     async fn spawn(
         &self,
         request: SpawnRequest,
-    ) -> Result<(Box<dyn Session>, Output), SandboxError>;
+    ) -> Result<(std::sync::Arc<dyn Session>, Output), SandboxError>;
 
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, SandboxError>;
 
