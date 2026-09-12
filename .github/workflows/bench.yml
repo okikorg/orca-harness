@@ -12,10 +12,9 @@ name: bench
 # Informational (reported, uploaded, never gated):
 #   kernel real-tool probe, subagent concurrency and capacity simulations.
 #
-# The budgets sit several times above what a quiet machine produces. A
-# shared runner cannot measure small drift honestly, so the gate catches
-# cliffs: a blocking call on the dispatch path, a directory walk added to
-# startup, a fsync per edit. Left out on purpose: benchmarks/compare (needs
+# Basic and new-session startup must each average strictly below 3.27ms;
+# shared-runner load can affect this tight target. Other budgets retain
+# headroom for large regressions. Left out on purpose: benchmarks/compare (needs
 # fx) and benchmarks/harness-comparison (live models, API keys, cost).
 
 on:

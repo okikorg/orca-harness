@@ -2,7 +2,7 @@
 set -euo pipefail
 
 binary="${1:-target/release/orcacode}"
-limit=8500000
+limit=6700000
 
 if [[ ! -f "$binary" ]]; then
   echo "missing release binary: $binary" >&2

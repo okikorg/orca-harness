@@ -38,7 +38,16 @@ def hyperfine_result(command: str, mean: float) -> dict:
 class GateTests(unittest.TestCase):
     """The gate is what CI trusts, so exit codes are the contract."""
 
-    def run_gate(self, suite: str, files: dict[str, dict], enforce: bool = True):
+    def run_gate(self, suite: str, files: dict[str, dict], enforce: bool = True,
+                 complete_startup: bool = True):
+        files = dict(files)
+        if suite == "startup" and files and complete_startup:
+            present = {
+                body["results"][0]["command"]
+                for name, body in files.items() if name != "summary.json"
+            }
+            for index, name in enumerate(sorted(check_budgets.STRICT_BUDGETS - present)):
+                files[f"required-{index}.json"] = hyperfine_result(name, 0.003)
         with tempfile.TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
             for name, body in files.items():
@@ -207,6 +216,16 @@ class GateTests(unittest.TestCase):
         self.assertEqual(1, result.returncode, result.stdout)
         self.assertIn("No startup results found", result.stdout)
 
+    def test_missing_required_startup_measurement_fails(self) -> None:
+        for name in sorted(check_budgets.STRICT_BUDGETS):
+            with self.subTest(name=name):
+                result = self.run_gate(
+                    "startup", {"one.json": hyperfine_result(name, 0.003)},
+                    complete_startup=False,
+                )
+                self.assertEqual(1, result.returncode, result.stdout)
+                self.assertIn("Missing required startup measurements", result.stdout)
+
     def test_budgets_are_not_enforced_off_linux_by_default(self) -> None:
         result = self.run_gate(
             "startup", {"startup.json": hyperfine_result("orcacode (startup)", 0.5)}, enforce=False
@@ -221,9 +240,30 @@ class UnitTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return check_budgets.check([measurement], check_budgets.STARTUP_BUDGETS, None, True)
 
-    def test_budget_comparison_is_inclusive(self) -> None:
-        self.assertTrue(self.gate(0.012))
-        self.assertFalse(self.gate(0.0121))
+    def test_startup_budget_is_strict(self) -> None:
+        self.assertTrue(self.gate(0.003269))
+        self.assertFalse(self.gate(0.00327))
+        self.assertFalse(self.gate(0.003271))
+
+    def test_invalid_startup_values_fail(self) -> None:
+        for value in [-1, float("nan"), float("inf")]:
+            with self.subTest(value=value):
+                self.assertFalse(self.gate(value))
+
+    def test_new_session_budget_is_strict(self) -> None:
+        for value, expected in [(0.003269, True), (0.00327, False), (0.003271, False)]:
+            with self.subTest(value=value), contextlib.redirect_stdout(io.StringIO()):
+                measurement = check_budgets.Measurement("orcacode (startup, new session)", value, "")
+                self.assertEqual(expected, check_budgets.check(
+                    [measurement], check_budgets.STARTUP_BUDGETS, None, True
+                ))
+
+    def test_other_budgets_remain_inclusive(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()):
+            measurement = check_budgets.Measurement("orcacode (resume)", 0.020, "")
+            self.assertTrue(check_budgets.check(
+                [measurement], check_budgets.STARTUP_BUDGETS, None, True
+            ))
 
     def test_durations_switch_units_below_a_millisecond(self) -> None:
         self.assertEqual("4.8µs", check_budgets.duration(0.0000048))

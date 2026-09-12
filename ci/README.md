@@ -47,7 +47,7 @@ never the other way round. Set `RELEASES_URL` to point at a different host.
 
 ## Checks
 
-- `check-binary-size.sh <path>`: the release binary must stay under 6,000,000 bytes.
+- `check-binary-size.sh <path>`: the uncompressed release binary must stay strictly under 6,700,000 bytes (6.7 decimal MB).
 - `check-source-size.sh`: every source file under `crates/` stays below 600 lines.
 
 Both run in the release workflow; `release.sh` runs them locally too.

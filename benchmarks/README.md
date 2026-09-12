@@ -136,8 +136,8 @@ Measured on the same machine, 100 runs each:
 | :-------------------------------- | -----: | -----: | -----: | -----: |
 | process baseline                  | 1.05ms | 1.02ms | 0.96ms |      — |
 | orcacode --help                   | 2.44ms | 2.42ms | 2.14ms |   10ms |
-| orcacode (startup)                | 2.79ms | 2.74ms | 2.42ms |   12ms |
-| orcacode (startup, new session)   | 3.13ms | 3.07ms | 2.73ms |   12ms |
+| orcacode (startup)                | 2.79ms | 2.74ms | 2.42ms | <3.27ms |
+| orcacode (startup, new session)   | 3.13ms | 3.07ms | 2.73ms | <3.27ms |
 | orcacode (startup, skills)        | 4.64ms | 4.57ms | 4.21ms |   16ms |
 | orcacode (resume)                 | 4.89ms | 4.71ms | 4.26ms |   20ms |
 
@@ -241,10 +241,18 @@ each kernel metric. Ceilings live at the top of that file.
 They are enforced on **Linux only** — that is what CI runs on — and are
 informational elsewhere. `ORCA_BENCH_ENFORCE=1` forces the gate anywhere.
 
-The ceilings sit 3–10× above the measured numbers on purpose. A shared CI
-runner cannot honestly measure 20% drift, so these catch the regressions
-that matter: a blocking call added to the dispatch path, a directory walk
-added to startup. Use the trend chart for drift, the gate for cliffs.
+Basic and new-session startup must each have a mean **strictly below 3.27ms**.
+This is fresh-process, pre-terminal startup (`ORCA_BENCH=1`), including MCP
+initialization for the isolated fixture, not `ORCA_BENCH=ui`. The fixture has
+no external MCP servers. Hyperfine uses warmups: this is not cold filesystem
+cache latency or time to first rendered screen. These tight ceilings may be
+sensitive to shared-runner load; no process-floor subtraction is applied.
+Other scenarios retain their existing, looser regression ceilings.
+
+`ci/check-binary-size.sh` separately requires the uncompressed release binary
+to be **strictly below 6,700,000 bytes** (decimal MB), enforced by CI and the
+release workflow's size-gated targets. Historical timings above are not a
+fresh validation of the current checkout.
 
 To re-baseline after an intentional change: run both suites on a quiet
 machine, update the budget tables in `shared/check_budgets.py` and the measured

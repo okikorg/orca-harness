@@ -16,10 +16,9 @@ Budgets are enforced on Linux only, because that is what CI runs and what
 the published numbers were measured on; elsewhere the run is informational.
 Set ORCA_BENCH_ENFORCE=1 to gate anyway.
 
-The ceilings are deliberately several times the numbers a quiet machine
-produces. They catch an order-of-magnitude regression — a blocking call
-added to the hot path, a directory walk added to startup, a fsync added to
-every edit — not 20% drift, which shared CI runners cannot measure honestly.
+Basic and new-session startup have a strict 3.27ms mean ceiling. Other
+ceilings retain headroom to catch large regressions on shared CI runners.
+The tight startup target may be sensitive to runner load.
 """
 
 import argparse
@@ -32,17 +31,17 @@ from typing import NamedTuple, Optional
 
 BENCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Seconds, roughly 3-4x the means an Apple Silicon Mac produces (2.8ms
-# startup, 4.7ms resume). Re-baseline with `./benchmarks/startup/run.sh` and
-# the table in benchmarks/README.md if the shape of startup changes.
+# Seconds. Basic and new-session startup are strict product targets;
+# other scenarios retain their existing regression ceilings.
 STARTUP_BUDGETS = {
     "orcacode --help": 0.010,
-    "orcacode (startup)": 0.012,
-    "orcacode (startup, new session)": 0.012,
+    "orcacode (startup)": 0.00327,
+    "orcacode (startup, new session)": 0.00327,
     "orcacode (startup, skills)": 0.016,
     "orcacode (resume)": 0.020,
 }
 DEFAULT_STARTUP_BUDGET = 0.012
+STRICT_BUDGETS = {"orcacode (startup)", "orcacode (startup, new session)"}
 
 # Seconds. p99 over the iteration count kernel/run.sh runs (5000 in --ci), so
 # these are percentiles rather than worst samples. Roughly 5-20x what a
@@ -203,8 +202,10 @@ def check(
         if not enforce:
             print(head.format(tag="INFO") + tail + f"  (budget: {duration(budget)})")
             continue
-        ok = item.value <= budget
-        print(head.format(tag="PASS" if ok else "FAIL") + tail + f"  (limit: {duration(budget)})")
+        strict = item.name in STRICT_BUDGETS
+        ok = 0 <= item.value and (item.value < budget if strict else item.value <= budget)
+        operator = "<" if strict else "<="
+        print(head.format(tag="PASS" if ok else "FAIL") + tail + f"  (limit: {operator}{duration(budget)})")
         passed = passed and ok
     return passed
 
@@ -237,6 +238,11 @@ def main() -> int:
 
     system_name = platform.system()
     enforce = enforcing(system_name)
+    if args.suite == "startup":
+        missing = STRICT_BUDGETS - {item.name for item in measurements}
+        if missing:
+            print("Missing required startup measurements: " + ", ".join(sorted(missing)))
+            return 1
     if check(measurements, budgets, default_budget, enforce):
         if not enforce:
             print(f"\nBudgets not enforced on {system_name}; numbers are informational")
