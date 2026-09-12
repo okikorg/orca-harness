@@ -1,9 +1,10 @@
 use super::agent::subagent_extensions;
 use super::completions::{delivery, PublishCompletion};
+use super::local_tools::{LocalTools, LocalToolsCache};
 use super::session::open_session;
 use super::worker::worker;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -20,9 +21,8 @@ use orca_harness_tool_extensions::web::{
     Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
 };
 use orca_harness_tools::{
-    core_tools_with_guard, ActiveInventory, AskTool, BackgroundStats, BunReplTool, CompletionInbox,
-    FileGuard, ProcessTool, PyKernelTool, SubagentDepth, SubagentManager, SubagentSpawn, TodoList,
-    TodoWriteTool, Workspace,
+    core_tools_with_guard, ActiveInventory, AskTool, BackgroundStats, CompletionInbox, FileGuard,
+    SubagentDepth, SubagentManager, SubagentSpawn, TodoList, TodoWriteTool, Workspace,
 };
 
 use crate::approval::Approval;
@@ -189,11 +189,17 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
     // swaps) keep it, so read_tool_result and /compact recovery survive.
     let store = TruncationStore::default();
     let context_capacity = ContextCapacity::default();
-    // Connect the configured MCP servers before the first build so their
-    // tools are in the first agent; status lines land in the transcript
-    // once the TUI starts draining the channel.
+    // Preserve the full-readiness benchmark while allowing a separate UI-ready
+    // measurement. Interactive startup never waits for remote handshakes.
+    let benchmark = std::env::var("ORCA_BENCH")
+        .ok()
+        .filter(|v| !v.trim().is_empty() && v != "0");
     let mcp = mcp::McpServers::new();
-    let mut mcp_notices = mcp.reload().await;
+    let mut mcp_notices = if benchmark.as_deref().is_some_and(|v| v != "ui") {
+        mcp.reload().await
+    } else {
+        Vec::new()
+    };
     let (plugin_hooks, hook_notices) = mcp.plugin_hook_extension();
     mcp_notices.extend(hook_notices);
     let hook_count = plugin_hooks.as_ref().map_or(0, |hooks| hooks.len());
@@ -220,7 +226,7 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         }
         _ => {}
     }
-    let build = {
+    let mut build = {
         let cfg = cfg.clone();
         let ui_tx = ui_tx.clone();
         let subagent_depth = subagent_depth.clone();
@@ -242,9 +248,16 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         let workflow_store = workflow_store.clone();
         let completions = completions.clone();
         let cmd_tx = cmd_tx.clone();
-        move |endpoint: &Endpoint| {
-            let generation = process_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let mut local_tools = LocalToolsCache::default();
+        move |endpoint: &Endpoint, preserve_local_tools: bool| {
             let ws = Workspace::new(&cfg.workspace);
+            let local_tools = local_tools.for_build(
+                preserve_local_tools,
+                &ws,
+                &stats,
+                &process_generation,
+                &cmd_tx,
+            );
             build_agent(
                 endpoint.build_model_for_ui(Some(ui_tx.clone())),
                 endpoint.provider.label(),
@@ -267,8 +280,7 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
                 &plan_area,
                 &memory,
                 &memory_scope,
-                generation,
-                &process_generation,
+                local_tools,
                 &subagent_manager,
                 &workflow_store,
                 &completions,
@@ -276,13 +288,10 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
             )
         }
     };
-    let agent = build(&endpoint);
-    // Everything above is the cold-start path — arg parse, config load,
-    // skills scan, system prompt, session open, MCP connect, agent build.
-    // Everything below needs a terminal, so `ORCA_BENCH` stops here: it is
-    // what lets `benchmarks/startup/run.sh` time the whole startup without a
-    // TTY. Nothing else in the binary reads it.
-    if std::env::var("ORCA_BENCH").is_ok_and(|v| !v.trim().is_empty() && v != "0") {
+    let agent = build(&endpoint, false);
+    // ORCA_BENCH=1 includes MCP readiness; =ui measures the pre-terminal path
+    // without background connections. Neither makes a model request.
+    if benchmark.is_some() {
         eprintln!("ORCA_BENCH set: exiting after startup, before the terminal UI");
         return ExitCode::SUCCESS;
     }
@@ -299,7 +308,8 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
     let tui_skills = skills.clone();
     let worker_todos = todos.clone();
     let worker_commands = cmd_tx.clone();
-    tokio::spawn(worker(
+    let _ = cmd_tx.send(crate::msg::WorkerCmd::ReloadMcp);
+    let worker_task = tokio::spawn(worker(
         agent,
         system,
         endpoint,
@@ -335,7 +345,12 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         todos,
         plan: plan_area,
     };
-    match tui::run(tui_cfg, cmd_tx, ui_rx).await {
+    let result = tui::run(tui_cfg, cmd_tx, ui_rx).await;
+    // The worker owns a sender to its own queue, so dropping the UI sender is
+    // not enough to close it. Abort and await it to cancel pending MCP work.
+    worker_task.abort();
+    let _ = worker_task.await;
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("terminal error: {err}");
@@ -367,8 +382,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     plan_area: &PlanArea,
     memory: &MemoryStore,
     memory_scope: &MemoryScope,
-    process_generation: u64,
-    current_process_generation: &Arc<AtomicU64>,
+    local_tools: &LocalTools,
     subagent_manager: &SubagentManager,
     workflow_store: &orca_harness_tools::WorkflowStore,
     completions: &CompletionInbox,
@@ -377,7 +391,8 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     // MCP visibility is a host-side model concern: core keeps its sacred,
     // immutable schema snapshot while this adapter filters it on each
     // provider request using the catalog's current selections.
-    let model: Arc<dyn Model> = Arc::new(McpModel::new(model, mcp.catalog()));
+    let catalog = mcp.catalog().snapshot();
+    let model: Arc<dyn Model> = Arc::new(McpModel::new(model, catalog.clone()));
     let model_for_subagents = model.clone();
     let model: Arc<dyn Model> = Arc::new(skills::SkillMentionModel::new(model, skills.clone()));
     let model: Arc<dyn Model> = Arc::new(MemoryModel::new(
@@ -468,7 +483,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
             .tool_arc(std::sync::Arc::new(WebSearchTool::new(fc.clone())))
             .tool_arc(std::sync::Arc::new(WebCrawlTool::new(fc)));
     }
-    for tool in mcp.tools() {
+    for tool in catalog.tools() {
         agent = agent.tool_arc(tool);
     }
     // One `skill` tool carrying the whole catalog, or none at all when
@@ -482,36 +497,11 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     for tool in core_tools_with_guard(ws, files) {
         agent = agent.tool_arc(tool);
     }
-    let root = ws.root().to_string_lossy().into_owned();
-    // Re-registering `process` replaces core_tools' entry by name (its
-    // position is kept) so it can carry the shared stats handle.
-    agent = agent.tool_arc(std::sync::Arc::new(
-        ProcessTool::local()
-            .working_dir(root.clone())
-            .stats(stats.clone())
-            .on_notification({
-                let worker = worker.clone();
-                let current = current_process_generation.clone();
-                let sequence = Arc::new(AtomicU64::new(0));
-                move |notification| {
-                    if current.load(Ordering::Acquire) == process_generation {
-                        let _ = worker.send(crate::msg::WorkerCmd::BackgroundProcess {
-                            generation: process_generation,
-                            sequence: sequence.fetch_add(1, Ordering::Relaxed) + 1,
-                            notification,
-                        });
-                    }
-                }
-            }),
-    ));
-    agent = agent.tool_arc(std::sync::Arc::new(
-        PyKernelTool::new()
-            .working_dir(root.clone())
-            .stats(stats.clone()),
-    ));
-    agent = agent.tool_arc(std::sync::Arc::new(
-        BunReplTool::new().working_dir(root).stats(stats.clone()),
-    ));
+    // Replace core_tools' process entry while preserving its schema position.
+    agent = agent
+        .tool_arc(local_tools.process.clone())
+        .tool_arc(local_tools.python.clone())
+        .tool_arc(local_tools.bun.clone());
     let ui_events = ui.clone();
     let mut subagent = super::subagents::tool(
         model_for_subagents,
@@ -519,7 +509,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         (inherited_provider, inherited_model),
         subagent_depth,
         subagent_models,
-        mcp.catalog(),
+        catalog,
     )
     .stats(stats.clone())
     .background(subagent_manager.clone(), {

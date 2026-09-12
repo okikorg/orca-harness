@@ -220,6 +220,71 @@ mod tests {
     }
 
     #[test]
+    fn mcp_invalid_input_never_writes_config() {
+        let invalid = [
+            ("", "server"),
+            (" ", "server"),
+            ("bad/name", "server"),
+            ("bad.name", "server"),
+            ("bad name", "server"),
+            ("café", "server"),
+            ("-docs", "server"),
+            ("--transport", "http docs https://example.com/mcp"),
+            ("--url", "https://example.com/mcp"),
+            ("docs", ""),
+            ("docs", "  \t\n"),
+            ("docs", "--transport http --url https://example.com/mcp"),
+            ("docs", "--url https://example.com/mcp"),
+            ("docs", "-x"),
+            ("docs", "http://example.com/mcp"),
+            ("docs", "  HTTPS://example.com/mcp --header token"),
+        ];
+        for initial in [
+            None,
+            Some(r#"{"theme":"nord","mcp":{"docs":{"command":"server","enabled":false}}}"#),
+        ] {
+            TEST_FILE.with(|file| *file.borrow_mut() = initial.map(str::to_string));
+            for (name, command) in invalid {
+                let error = crate::config::validate_mcp_server(name, command).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+                assert!(error.to_string().contains("stdio"));
+                assert!(error
+                    .to_string()
+                    .contains("/mcp add docs npx -y mcp-remote"));
+                let saved_error = save_mcp_server(name, command).unwrap_err();
+                assert_eq!(saved_error.kind(), io::ErrorKind::InvalidInput);
+                assert_eq!(saved_error.to_string(), error.to_string());
+                TEST_FILE.with(|file| assert_eq!(file.borrow().as_deref(), initial));
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_valid_executables_allow_flags_and_url_arguments() {
+        for (name, command) in [
+            ("docs-2", "npx -y mcp-remote https://example.com/mcp"),
+            (
+                "_local",
+                "./server --transport stdio --url http://localhost/mcp",
+            ),
+            (
+                "Server_1",
+                "/usr/local/bin/server --url=https://example.com/mcp",
+            ),
+            ("123", "uvx mcp-server-fetch"),
+        ] {
+            crate::config::validate_mcp_server(name, command).unwrap();
+            save_mcp_server(name, command).unwrap();
+            let server = stored_mcp_servers()
+                .into_iter()
+                .find(|s| s.name == name)
+                .unwrap();
+            assert_eq!(server.command, command);
+            assert!(server.enabled);
+        }
+    }
+
+    #[test]
     fn mcp_servers_round_trip_and_are_removable() {
         assert!(stored_mcp_servers().is_empty());
 

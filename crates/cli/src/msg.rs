@@ -265,6 +265,8 @@ pub enum UiMsg {
     /// A one-line status notice for the transcript (session warnings,
     /// load failures).
     Notice(String),
+    /// Visible even on the welcome screen, unlike transcript-only notices.
+    McpConnecting(bool),
     /// The worker adopted a previously recorded session; the transcript
     /// is replayed into the UI.
     SessionLoaded {
@@ -419,6 +421,11 @@ pub enum WorkerCmd {
     /// agent so their tools apply to the next run (the conversation
     /// context is kept).
     ReloadMcp,
+    /// Background reconciliation completed; publish diagnostics and rebuild
+    /// at a worker command boundary, never in the middle of an agent turn.
+    McpReloaded {
+        notices: Vec<String>,
+    },
     /// Rescan the skill directories and rebuild the agent so the
     /// catalog the model sees matches what is on disk (the conversation
     /// context is kept).

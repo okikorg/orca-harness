@@ -82,6 +82,7 @@ impl App {
             work_log: Vec::new(),
             turn_count: 0,
             welcome_dismissed: false,
+            mcp_connecting: false,
             turn_tool_calls: 0,
             pending_calls: std::collections::HashMap::new(),
             activity_tools: Vec::new(),

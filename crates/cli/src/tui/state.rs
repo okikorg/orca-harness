@@ -543,6 +543,8 @@ pub(crate) struct App {
     /// Kept separate from `turn_count`: local slash commands do not create
     /// model turns, but their transcript output must still be visible.
     pub(crate) welcome_dismissed: bool,
+    /// Background MCP reload progress, independent of startup transcript notices.
+    pub(crate) mcp_connecting: bool,
     /// Top-level tool calls made during the current turn.
     pub(crate) turn_tool_calls: usize,
     /// Call lines for in-flight tool calls, keyed by call id.

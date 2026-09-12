@@ -12,10 +12,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+
+use futures_util::{stream, StreamExt};
 
 use orca_harness_core::Tool;
 use orca_harness_tool_extensions::agent_plugins::PluginHook;
 use orca_harness_tool_extensions::mcp::{McpCatalog, McpClient, StdioLaunch};
+
+const CONNECT_CONCURRENCY: usize = 4;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 mod hooks;
 mod plugins;
@@ -271,9 +277,13 @@ impl McpServers {
     }
 
     /// Reconcile standalone config and the process's fixed plugin snapshot.
-    /// Each launch is independent, so one parse, data, spawn, handshake, or
-    /// catalog failure never blocks healthy siblings.
+    /// Launch failures are isolated and connections overlap within a bounded
+    /// window; ordered publication keeps catalog collision winners stable.
     pub async fn reload(&self) -> Vec<String> {
+        self.reload_with_timeout(CONNECT_TIMEOUT).await
+    }
+
+    async fn reload_with_timeout(&self, timeout: Duration) -> Vec<String> {
         let configured = crate::config::stored_mcp_servers();
         let (desired, collisions) = self.desired_servers(&configured);
         let previous_desired = self.desired.read().expect("mcp desired lock").clone();
@@ -284,7 +294,7 @@ impl McpServers {
         // Drop first, so removed or changed processes are gone before their
         // replacements start. Catalog-duplicate failures retry only when the
         // surrounding desired set changes and may have released the name.
-        let stale = {
+        let mut stale = {
             let connections = self.connections.read().expect("mcp lock");
             connections
                 .iter()
@@ -303,6 +313,7 @@ impl McpServers {
                 .map(|(name, _)| name.clone())
                 .collect::<Vec<_>>()
         };
+        stale.sort();
         if !stale.is_empty() {
             let mut connections = self.connections.write().expect("mcp lock");
             for name in &stale {
@@ -314,16 +325,30 @@ impl McpServers {
             }
         }
 
-        for server in &desired {
-            if self
-                .connections
-                .read()
-                .expect("mcp lock")
-                .contains_key(&server.name)
-            {
-                continue;
-            }
-            let connected = self.connect(server).await;
+        let pending = {
+            let connections = self.connections.read().expect("mcp lock");
+            desired
+                .iter()
+                .filter(|server| !connections.contains_key(&server.name))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // Poll launches concurrently, but publish in desired order so notices
+        // and duplicate-tool winners never depend on handshake timing. Keeping
+        // futures here (not detached tasks) also preserves drop cancellation.
+        let mut connecting = stream::iter(pending)
+            .map(|server| async move {
+                let connected = tokio::time::timeout(timeout, self.connect(&server))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(format!(
+                            "connection timed out after {timeout:?}; check the server command, environment, and startup logs, then disable/re-enable it in /mcp to retry"
+                        ))
+                    });
+                (server, connected)
+            })
+            .buffered(CONNECT_CONCURRENCY);
+        while let Some((server, connected)) = connecting.next().await {
             let connection = match connected {
                 Ok(connected) => {
                     let count = match connected.tools().len() {
@@ -369,6 +394,7 @@ impl McpServers {
                 .expect("mcp lock")
                 .insert(server.name.clone(), connection);
         }
+        drop(connecting);
         self.catalog.reorder(
             &desired
                 .iter()
@@ -384,9 +410,13 @@ impl McpServers {
         server: &DesiredServer,
     ) -> Result<orca_harness_tool_extensions::mcp::McpConnection, String> {
         match &server.launch {
-            LaunchIdentity::Legacy(command) => McpClient::connect(&server.name, command)
-                .await
-                .map_err(|error| error.to_string()),
+            LaunchIdentity::Legacy(command) => {
+                crate::config::validate_mcp_server(&server.name, command)
+                    .map_err(|error| error.to_string())?;
+                McpClient::connect(&server.name, command)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
             LaunchIdentity::Structured(launch) => {
                 let DesiredSource::Plugin { data, .. } = &server.source else {
                     unreachable!("structured launches are plugin-owned")

@@ -442,22 +442,6 @@ pub(crate) fn mcp_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSen
         Some("add") => {
             let name = parts.next().unwrap_or("");
             let launch = parts.collect::<Vec<_>>().join(" ");
-            if name.is_empty() || launch.is_empty() {
-                push_error(app, usage);
-                return;
-            }
-            // The name becomes part of the model-facing tool names
-            // (mcp__<name>__<tool>), so keep it identifier-shaped.
-            if !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
-                push_error(
-                    app,
-                    format!("invalid server name: {name} — letters, digits, - and _ only"),
-                );
-                return;
-            }
             // Editing a server that the user turned off must not
             // quietly turn it back on, so say what actually happens
             // rather than promising a connection that will not run.

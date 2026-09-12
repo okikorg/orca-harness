@@ -310,10 +310,42 @@ pub fn stored_mcp_servers() -> Vec<McpServer> {
         .unwrap_or_default()
 }
 
+/// Validate a named stdio MCP launch command without reading or writing config.
+/// Only the executable token is checked; flags and URLs may be arguments.
+pub fn validate_mcp_server(name: &str, command: &str) -> io::Result<()> {
+    let guidance = "usage: /mcp add <name> <command> — MCP servers use stdio; provide an executable followed by its arguments, e.g. /mcp add docs npx -y mcp-remote https://example.com/mcp (not --transport or --url before the executable)";
+    // Names become part of model-facing tool names (mcp__<name>__<tool>).
+    if name.is_empty()
+        || name.starts_with('-')
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid server name: {name} — use a non-empty name with ASCII letters, digits, - and _ only, not starting with '-'; {guidance}"),
+        ));
+    }
+    let executable = command.split_whitespace().next().unwrap_or("");
+    let lower = executable.to_ascii_lowercase();
+    if executable.is_empty()
+        || executable.starts_with('-')
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid MCP executable — must be non-empty, not start with '-', and not be an HTTP(S) URL; {guidance}"),
+        ));
+    }
+    Ok(())
+}
+
 /// Save (or replace) an MCP server's launch command, keeping whatever
 /// enabled state it already had; the worker reconnects so it applies to
 /// the next run.
 pub fn save_mcp_server(name: &str, command: &str) -> io::Result<PathBuf> {
+    validate_mcp_server(name, command)?;
     let command = command.to_string();
     mutate_section("mcp", name, move |entry| {
         let enabled = entry["enabled"] != json!(false);

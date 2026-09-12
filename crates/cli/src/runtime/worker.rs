@@ -38,13 +38,14 @@ fn workspace_relative(path: &std::path::Path) -> String {
 
 /// Owns the Agent and the conversation; runs prompts sent by the UI.
 /// `build` produces a fresh agent for the current endpoint; the
-/// conversation context survives model and provider swaps.
+/// conversation context survives model and provider swaps. The boolean requests
+/// local-tool preservation only when publishing a completed MCP reload.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn worker<F>(
     mut agent: Agent<Arc<dyn Model>>,
     system: String,
     mut endpoint: Endpoint,
-    build: F,
+    mut build: F,
     store: TruncationStore,
     context_capacity: ContextCapacity,
     mcp: mcp::McpServers,
@@ -61,7 +62,7 @@ pub(crate) async fn worker<F>(
     completions: CompletionInbox,
     ui: mpsc::UnboundedSender<UiMsg>,
 ) where
-    F: Fn(&Endpoint) -> Agent<Arc<dyn Model>>,
+    F: FnMut(&Endpoint, bool) -> Agent<Arc<dyn Model>>,
 {
     let _subagent_shutdown = CancelSubagentsOnDrop(subagent_manager.clone());
     let mut user_shell_call_id = 0_u64;
@@ -70,6 +71,7 @@ pub(crate) async fn worker<F>(
     // Skills /refine applied, newest last; RefineUndo pops and deletes.
     let mut refine_applied: Vec<crate::refine::Applied> = Vec::new();
     let mut login_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut mcp_reload = super::mcp_reload::McpReload::default();
     spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
     while let Some(command) = commands.recv().await {
         match command {
@@ -228,7 +230,7 @@ pub(crate) async fn worker<F>(
                 // fresh agent also drops process and interpreter tools, whose
                 // Drop implementations stop their background work. Do this
                 // before acknowledging success to the UI.
-                agent = build(&endpoint);
+                agent = build(&endpoint, false);
                 let _ = ui.send(UiMsg::SessionCleared { id: new_session_id });
             }
             WorkerCmd::Compact => {
@@ -435,7 +437,7 @@ pub(crate) async fn worker<F>(
                     model,
                 ) {
                     Ok(_) => {
-                        agent = build(&endpoint);
+                        agent = build(&endpoint, false);
                         let result = config::save_subagent_settings(&endpoint.subagent_settings);
                         let note = match result {
                             Ok(_) => format!("subagent {tier} model saved; applies to new spawns"),
@@ -518,7 +520,7 @@ pub(crate) async fn worker<F>(
                         };
                         endpoint = candidate;
                         let _ = config::save_provider(provider.label());
-                        agent = build(&endpoint);
+                        agent = build(&endpoint, false);
                         spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                         let _ = ui.send(UiMsg::ProviderChanged {
                             provider,
@@ -539,7 +541,7 @@ pub(crate) async fn worker<F>(
                 // Best-effort preference cache; a failed write only means
                 // the next session starts on the provider default.
                 let _ = config::save_model(endpoint.provider.label(), &endpoint.model);
-                agent = build(&endpoint);
+                agent = build(&endpoint, false);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 if ui
                     .send(UiMsg::ModelChanged {
@@ -573,7 +575,7 @@ pub(crate) async fn worker<F>(
                 };
                 endpoint = candidate;
                 let _ = config::save_provider(provider.label());
-                agent = build(&endpoint);
+                agent = build(&endpoint, false);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 let changed = UiMsg::ProviderChanged {
                     provider,
@@ -586,14 +588,28 @@ pub(crate) async fn worker<F>(
             WorkerCmd::ReloadExtensions => {
                 // The UI already saved the toggle; build_agent reads the
                 // config, so rebuilding is all that is left to do.
-                agent = build(&endpoint);
+                agent = build(&endpoint, false);
             }
             WorkerCmd::ReloadMcp => {
-                // Reconnect saved servers, report each result, then rebuild the agent.
-                for line in mcp.reload().await {
+                mcp_reload.request(&mcp, &ui, &command_tx);
+            }
+            WorkerCmd::McpReloaded { notices } => {
+                let pending = mcp_reload.finish();
+                for line in notices {
                     let _ = ui.send(UiMsg::Notice(line));
                 }
-                agent = build(&endpoint);
+                // Catalog publication must not kill local processes or REPL state.
+                agent = build(&endpoint, true);
+                let inventory = mcp.startup_inventory();
+                let _ = ui.send(UiMsg::Notice(format!(
+                    "MCP initialization complete · {} servers · {} tools available · /mcp for status",
+                    inventory.servers, inventory.tools,
+                )));
+                if pending {
+                    mcp_reload.request(&mcp, &ui, &command_tx);
+                } else {
+                    let _ = ui.send(UiMsg::McpConnecting(false));
+                }
             }
             WorkerCmd::TestPlugin { path } => super::plugin::test(&path, &ui).await,
             WorkerCmd::InstallSkill { source, here } => {
@@ -610,7 +626,7 @@ pub(crate) async fn worker<F>(
                 for line in skills.reload() {
                     let _ = ui.send(UiMsg::Notice(line));
                 }
-                agent = build(&endpoint);
+                agent = build(&endpoint, false);
             }
             WorkerCmd::ReloadSkills => {
                 // Rescan (cheap) and rebuild, so a skill created or
@@ -632,7 +648,7 @@ pub(crate) async fn worker<F>(
                         }
                     }
                 }
-                agent = build(&endpoint);
+                agent = build(&endpoint, false);
             }
         }
     }

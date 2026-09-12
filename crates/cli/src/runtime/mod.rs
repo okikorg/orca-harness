@@ -3,6 +3,8 @@ mod app;
 mod completions;
 mod context;
 mod interactive;
+mod local_tools;
+mod mcp_reload;
 mod plugin;
 mod session;
 mod signals;

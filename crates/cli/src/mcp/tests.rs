@@ -11,6 +11,8 @@ use serde_json::json;
 
 use super::*;
 
+#[path = "tests/connects.rs"]
+mod connect_tests;
 #[path = "tests/hooks.rs"]
 mod hook_tests;
 #[path = "tests/ordering.rs"]

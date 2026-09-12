@@ -364,6 +364,21 @@ mod mcp_command_tests {
         slash_command(&mut app, "mcp add bad/name run it", &worker, 80);
         assert!(printed(&app).contains("invalid server name: bad/name"));
 
+        // Misplaced transport/URL options are not executable commands.
+        let before = crate::config::stored_mcp_servers();
+        for input in [
+            "mcp add --transport http docs https://example.com/mcp",
+            "mcp add --url https://example.com/mcp",
+            "mcp add docs --transport http --url https://example.com/mcp",
+            "mcp add docs --url https://example.com/mcp",
+            "mcp add docs https://example.com/mcp",
+        ] {
+            slash_command(&mut app, input, &worker, 80);
+            assert_eq!(crate::config::stored_mcp_servers(), before);
+            assert!(rx.try_recv().is_err(), "invalid input must not reload MCP");
+        }
+        assert!(printed(&app).contains("stdio"));
+
         // Removing something that was never added names the valid set.
         slash_command(&mut app, "mcp remove nope", &worker, 80);
         assert!(printed(&app).contains("unknown mcp server: nope"));

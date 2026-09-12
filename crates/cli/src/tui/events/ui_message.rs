@@ -266,6 +266,7 @@ pub(crate) fn handle_ui_msg(
                 )));
             }
         },
+        UiMsg::McpConnecting(connecting) => app.mcp_connecting = connecting,
         UiMsg::Notice(text) => {
             push_notice(app, text);
         }

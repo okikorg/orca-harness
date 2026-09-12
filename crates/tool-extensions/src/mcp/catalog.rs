@@ -23,6 +23,7 @@ pub struct McpCatalog {
     servers: Arc<RwLock<Vec<Server>>>,
 }
 
+#[derive(Clone)]
 struct Server {
     name: String,
     client: Arc<McpClient>,
@@ -32,6 +33,31 @@ struct Server {
 impl McpCatalog {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Freeze membership for one agent build while sharing live clients and
+    /// tool selection. Background discovery must not advertise tools that the
+    /// current agent has not registered yet.
+    pub fn snapshot(&self) -> Self {
+        Self {
+            servers: Arc::new(RwLock::new(
+                self.servers.read().expect("mcp catalog lock").clone(),
+            )),
+        }
+    }
+
+    /// The interfaces and remote tools from this exact catalog snapshot.
+    pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        let mut tools = self.interface_tools();
+        tools.extend(
+            self.servers
+                .read()
+                .expect("mcp catalog lock")
+                .iter()
+                .flat_map(|server| server.tools.iter().cloned())
+                .map(|tool| tool as Arc<dyn Tool>),
+        );
+        tools
     }
 
     /// Replace one server while preserving the configured server order.

@@ -98,6 +98,42 @@
     }
 
     #[test]
+    fn mcp_connecting_status_preserves_welcome_and_hides_startup_notices() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        assert!(!app.mcp_connecting);
+        handle_ui_msg(&mut app, UiMsg::Notice("startup notice".into()), &tx, 90);
+        app.absorb_pending();
+
+        for connecting in [true, false] {
+            handle_ui_msg(&mut app, UiMsg::McpConnecting(connecting), &tx, 90);
+            assert_eq!(app.mcp_connecting, connecting);
+            assert!(!app.welcome_dismissed);
+            for width in [40, 90] {
+                let screen = rendered_rows(&mut app, width, 30).join("\n");
+                assert_eq!(screen.contains("MCP connecting · tools pending"), connecting, "{screen}");
+                assert!(screen.contains("ORCACODE"), "{screen}");
+                assert!(!screen.contains("startup notice"), "{screen}");
+            }
+        }
+        assert!(flat_lines(&app.transcript).contains("startup notice"));
+        assert!(!flat_lines(&app.transcript).contains("tools pending"));
+    }
+
+    #[test]
+    fn mcp_connecting_status_is_visible_in_normal_view_until_completion() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        app.welcome_dismissed = true;
+        for connecting in [true, false] {
+            handle_ui_msg(&mut app, UiMsg::McpConnecting(connecting), &tx, 90);
+            let screen = rendered_rows(&mut app, 90, 30).join("\n");
+            assert_eq!(screen.contains("MCP connecting · tools pending"), connecting, "{screen}");
+            assert!(!screen.contains("ORCACODE"), "{screen}");
+        }
+    }
+
+    #[test]
     fn help_as_the_first_command_opens_the_picker_without_polluting_history() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();

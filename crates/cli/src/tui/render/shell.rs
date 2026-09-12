@@ -378,6 +378,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         ))
         .push(Segment::new(state, status_bar::KEEP))
         .push(Segment::new(
+            if app.mcp_connecting {
+                "MCP connecting · tools pending"
+            } else {
+                ""
+            },
+            status_bar::KEEP,
+        ))
+        .push(Segment::new(
             mode_segment(&app.cfg.mode, &app.cfg.plan),
             status_bar::KEEP,
         ))

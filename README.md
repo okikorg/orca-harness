@@ -377,9 +377,21 @@ on malformed protocol traffic or generated-name collisions. An interrupted
 request closes its serialized connection rather than risking a stale or
 partially written exchange; toggle the server to reconnect it. The harness core
 and agent loop are unchanged. Server `<name>` must be letters, digits, `-`, or
-`_`. Toggling is cheap: reloads diff the config against the live connections,
+`_`, and must not start with `-`. The command must begin with a stdio executable,
+not an option such as `--url` or a bare HTTP URL. Invalid registrations are
+rejected before saving; invalid existing entries remain visible in `/mcp` but
+are not launched. Toggling is cheap: reloads diff the config against the live connections,
 so flipping one server leaves the others' processes untouched. A server that
-fails to connect reports why and is skipped — it never blocks the rest.
+fails to connect reports why and is skipped.
+
+Interactive startup and reload connect in the background, with up to four
+connections in flight and a 30-second total connection timeout per server.
+The welcome screen remains usable and shows `MCP connecting · tools pending`.
+Catalog publication remains deterministic; slow connections do not block the
+UI or ordinary tools. Once initialization completes, integration tools are
+registered at the next worker command boundary, without changing a running
+agent's tool set. Changes made during initialization queue one fresh reload.
+Exiting cancels pending connection work.
 
 Servers persist to the config file, either as a bare command string or as
 `{"command": …, "enabled": false}` so a disabled server keeps its command:

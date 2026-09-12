@@ -147,10 +147,17 @@ skills cost another 1.9 ms, and resuming a 2 000-message transcript 2.1 ms.
 ### The `ORCA_BENCH` hook
 
 `orcacode` is a TUI: normally it never exits on its own. `ORCA_BENCH=1`
-makes it stop at the end of `run_mode` in `crates/cli/src/main.rs`, right
-after the agent is built and just before the terminal is claimed. That is
-the entire cold-start path and nothing else — no model call, no TTY. The
-variable is read in exactly one place and does nothing else.
+makes it stop in `run_mode` in `crates/cli/src/runtime/interactive.rs`, right
+after the agent is built and just before the terminal is claimed. This mode
+continues to await MCP initialization, measuring full integration readiness
+without a model call or TTY.
+
+Interactive launches connect MCP servers in the background, with a visible
+pending indicator; integration tools join the agent at a worker command
+boundary after initialization completes. `ORCA_BENCH=ui` measures this shorter
+pre-terminal path without launching background connections. It excludes
+terminal rendering and must not be compared to full-readiness timings as if
+they measured the same boundary. Neither mode makes a model request.
 
 ### Fixture isolation
 
