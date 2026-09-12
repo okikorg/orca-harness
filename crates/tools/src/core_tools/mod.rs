@@ -106,12 +106,17 @@ pub fn core_tools_with_shell_and_process(
 /// - a provider without `file_api` cannot back the file tools, so no set
 ///   is returned at all instead of one silently rooted on the host.
 ///
-/// `process`, `bun_repl` and `py_kernel` are **not** included. They hold
-/// long-lived processes with framed stdin, which needs a spawner this
-/// function does not yet have; including their host-backed versions would
-/// put a local process inside a set that is supposed to have none. Check
-/// [`Capabilities::sessions`](orca_harness_core::Capabilities) and add
-/// them once a sandbox-backed spawner exists.
+/// `process` is **not** included: it manages long-lived background
+/// processes and has no sandbox backend yet, and registering its
+/// host-backed version would put a local process inside a set that is
+/// supposed to have none.
+///
+/// `bun_repl` and `py_kernel` are not part of the core set on any backend
+/// — hosts add them deliberately. To keep them inside the boundary, build
+/// them with [`BunReplTool::sandbox`](crate::BunReplTool::sandbox) and
+/// [`PyKernelTool::sandbox`](crate::PyKernelTool::sandbox) and pass the
+/// same sandbox. Both require
+/// [`Capabilities::sessions`](orca_harness_core::Capabilities).
 pub fn core_tools_in_sandbox(
     sandbox: Arc<dyn orca_harness_core::Sandbox>,
     workspace_dir: impl Into<std::path::PathBuf>,

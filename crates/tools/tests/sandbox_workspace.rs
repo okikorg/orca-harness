@@ -273,13 +273,14 @@ async fn the_assembled_sandbox_set_has_no_host_backed_tool() {
     assert!(names.contains(&"read_file".to_string()));
     assert!(names.contains(&"grep".to_string()));
 
-    // Deliberately absent until a sandbox-backed spawner exists: their
-    // host versions would put a local process in a set that must have
-    // none. Silence here would be the bug.
+    // `process` has no sandbox backend yet, and the REPLs are never part
+    // of the core set on any backend — hosts add those deliberately, with
+    // their own `.sandbox(..)`. A host-backed version appearing here
+    // would be a local process inside a set that must have none.
     for stateful in ["process", "bun_repl", "py_kernel"] {
         assert!(
             !names.contains(&stateful.to_string()),
-            "{stateful} has no sandbox backend yet and must not be registered"
+            "{stateful} must not be registered by the sandboxed core set"
         );
     }
 
