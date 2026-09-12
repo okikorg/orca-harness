@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use orca_harness_core::{
     CancellationToken, Capabilities, Entry, ExecOutput, ExecRequest, FileMode, Output, Sandbox,
-    SandboxError, Session, SpawnRequest, Tool, ToolContext,
+    SandboxError, Session, SpawnRequest, Stat, Tool, ToolContext,
 };
 use orca_harness_tools::{Executor, ShellTool};
 
@@ -58,6 +58,10 @@ impl Sandbox for FakeSandbox {
 
     async fn list_dir(&self, _: &str) -> Result<Vec<Entry>, SandboxError> {
         Ok(Vec::new())
+    }
+
+    async fn stat(&self, _: &str) -> Result<Option<Stat>, SandboxError> {
+        Ok(None)
     }
 
     async fn shutdown(&self) -> Result<(), SandboxError> {

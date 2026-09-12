@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::{fs, task::JoinSet};
+use tokio::task::JoinSet;
 
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
@@ -27,11 +27,11 @@ struct Change {
 
 /// Commit preflighted changes and restore already-written paths if a later
 /// filesystem operation fails. Match/path errors never reach this phase.
-async fn commit(changes: &[Change]) -> Result<(), ToolError> {
+async fn commit(ws: &Workspace, changes: &[Change]) -> Result<(), ToolError> {
     for (index, change) in changes.iter().enumerate() {
         let written = {
             let _io = crate::iogate::fs_permit().await;
-            fs::write(&change.path, &change.after).await
+            ws.write(&change.path, change.after.as_bytes()).await
         };
         if let Err(error) = written {
             let mut rollback_errors = Vec::new();
@@ -39,7 +39,7 @@ async fn commit(changes: &[Change]) -> Result<(), ToolError> {
             // truncated its destination.
             for previous in changes[..=index].iter().rev() {
                 let _io = crate::iogate::fs_permit().await;
-                if let Err(rollback) = fs::write(&previous.path, &previous.before).await {
+                if let Err(rollback) = ws.write(&previous.path, previous.before.as_bytes()).await {
                     rollback_errors.push(format!("{}: {rollback}", previous.rel));
                 }
             }
@@ -80,11 +80,18 @@ fn normalized_path(ws: &Workspace, rel: &str) -> Result<(String, PathBuf), ToolE
     Ok((rel, path))
 }
 
-async fn read_text(rel: String, path: PathBuf) -> Result<(String, String), ToolError> {
+async fn read_text(
+    ws: Workspace,
+    rel: String,
+    path: PathBuf,
+) -> Result<(String, String), ToolError> {
     let _io = crate::iogate::fs_permit().await;
-    let content = fs::read_to_string(path)
+    let bytes = ws
+        .read(&path)
         .await
         .map_err(|error| ToolError::msg(format!("read {rel} failed: {error}")))?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| ToolError::msg(format!("read {rel} failed: file is not valid UTF-8")))?;
     Ok((rel, content))
 }
 
@@ -92,16 +99,19 @@ async fn read_text(rel: String, path: PathBuf) -> Result<(String, String), ToolE
 /// process-wide filesystem gate; matching does not hold a permit while
 /// other calls are waiting to perform actual I/O.
 async fn read_all(
+    ws: &Workspace,
     paths: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, String>, ToolError> {
     if let Some((rel, path)) = paths.first_key_value().filter(|_| paths.len() == 1) {
         return Ok(BTreeMap::from(
-            [read_text(rel.clone(), path.clone()).await?],
+            [read_text(ws.clone(), rel.clone(), path.clone()).await?],
         ));
     }
     let mut reads = JoinSet::new();
     for (rel, path) in paths {
-        reads.spawn(read_text(rel.clone(), path.clone()));
+        // Workspace is Arc-backed, so each task carries a handle to the
+        // same backend rather than a copy of it.
+        reads.spawn(read_text(ws.clone(), rel.clone(), path.clone()));
     }
     let mut contents = BTreeMap::new();
     while let Some(result) = reads.join_next().await {
@@ -240,7 +250,7 @@ impl Tool for EditFileTool {
             paths.entry(rel).or_insert(path);
         }
 
-        let originals = read_all(&paths).await?;
+        let originals = read_all(&self.ws, &paths).await?;
         let mut contents = originals.clone();
         let mut replacements = 0usize;
         let mut appends = 0usize;
@@ -285,11 +295,11 @@ impl Tool for EditFileTool {
                 after,
             })
             .collect();
-        commit(&changes).await?;
+        commit(&self.ws, &changes).await?;
         if let Some(guard) = &self.guard {
             for change in &changes {
                 let _io = crate::iogate::fs_permit().await;
-                guard.restamp(&change.path).await;
+                guard.restamp(&self.ws, &change.path).await;
             }
         }
         let paths: Vec<&str> = changes.iter().map(|change| change.rel.as_str()).collect();

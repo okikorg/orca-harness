@@ -97,6 +97,11 @@ impl Executor {
         }
     }
 
+    /// Whether commands run in a sandbox rather than as a local process.
+    pub fn is_sandboxed(&self) -> bool {
+        matches!(&self.kind, Kind::Sandbox(_))
+    }
+
     /// The sandbox this executor targets, if any.
     pub(crate) fn as_sandbox(&self) -> Option<&std::sync::Arc<dyn orca_harness_core::Sandbox>> {
         match &self.kind {

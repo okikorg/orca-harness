@@ -103,6 +103,32 @@ pub struct Entry {
     pub is_dir: bool,
 }
 
+/// What a file looks like right now: enough to tell whether it changed
+/// since it was last seen, and nothing more.
+///
+/// This exists for read-before-write bookkeeping. The host's file tools
+/// refuse to overwrite a file the model has not read, by comparing a
+/// stamp taken at read time against the file as it is at write time; on
+/// the host that stamp comes from `std::fs::Metadata`. Without an
+/// equivalent here the check would silently pass inside a sandbox — the
+/// protection would look present and do nothing, which is worse than not
+/// having it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stat {
+    /// Last modification. Optional because not every provider reports
+    /// one; a stamp without it falls back to comparing `len` alone.
+    ///
+    /// A `SystemTime` rather than whole seconds so the host backend keeps
+    /// its full precision: truncating to seconds would let two writes
+    /// inside the same second with the same length compare equal, which
+    /// is exactly the case the read-before-write check exists to catch.
+    /// Providers that only report seconds simply land on a second
+    /// boundary.
+    pub modified: Option<std::time::SystemTime>,
+    pub len: u64,
+    pub is_dir: bool,
+}
+
 #[async_trait]
 pub trait Sandbox: Send + Sync {
     fn capabilities(&self) -> Capabilities;
@@ -127,6 +153,11 @@ pub trait Sandbox: Send + Sync {
     ) -> Result<(), SandboxError>;
 
     async fn list_dir(&self, path: &str) -> Result<Vec<Entry>, SandboxError>;
+
+    /// The file's current [`Stat`], or `None` if it does not exist.
+    /// A missing file is not an error: callers ask precisely because they
+    /// do not know yet, and creating a new file is always allowed.
+    async fn stat(&self, path: &str) -> Result<Option<Stat>, SandboxError>;
 
     async fn shutdown(&self) -> Result<(), SandboxError>;
 }

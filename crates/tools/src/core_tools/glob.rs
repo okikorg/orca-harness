@@ -8,7 +8,6 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::fs;
 
 use orca_harness_core::{Tool, ToolContext, ToolError, ToolSchema};
 
@@ -121,33 +120,18 @@ impl Tool for GlobTool {
             if ctx.cancellation.is_cancelled() {
                 return Err(ToolError::msg("cancelled"));
             }
-            let mut rd = match fs::read_dir(&dir).await {
-                Ok(rd) => rd,
+            let entries = match self.ws.list(&dir).await {
+                Ok(entries) => entries,
                 Err(_) => {
                     skipped_dirs += 1;
                     continue;
                 }
             };
-            loop {
-                let entry = match rd.next_entry().await {
-                    Ok(Some(entry)) => entry,
-                    Ok(None) => break,
-                    Err(_) => {
-                        // Iteration died mid-directory; the rest of this
-                        // directory is unseen.
-                        skipped_dirs += 1;
-                        break;
-                    }
-                };
-                let name = entry.file_name();
-                if matches!(
-                    name.to_str(),
-                    Some(".git") | Some("target") | Some("node_modules")
-                ) {
+            for (name, is_dir) in entries {
+                if matches!(name.as_str(), ".git" | "target" | "node_modules") {
                     continue;
                 }
-                let path = entry.path();
-                let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+                let path = dir.join(&name);
                 if is_dir {
                     stack.push(path);
                     continue;
