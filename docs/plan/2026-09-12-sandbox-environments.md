@@ -289,14 +289,14 @@ rebuilds the agent through the `mcp_reload.rs` path and replaces cached runtimes
   against a fake in-memory sandbox `Session`. Bun must be installed for the real
   runtime tests; a skipped runtime test is not verification.
 
-- [ ] **Give `Workspace` a filesystem backend.** Modify
+- [x] **Give `Workspace` a filesystem backend.** Modify
   `crates/tools/src/core_tools/workspace.rs` and the file tools. Verify path-escape
   rejection still holds on both backends, that `read/write/edit/patch/multi_edit/
   list` operate in-sandbox when so configured, and that `grep`/`glob` execute
   in-sandbox. Add the regression this closes: a sandboxed executor paired with file
   tools must not read a host file.
 
-- [ ] **Assemble by environment, failing closed.** Add
+- [x] **Assemble by environment, failing closed.** Add
   `core_tools_with_environment` to `crates/tools/src/core_tools/mod.rs`. Verify that
   a provider reporting `sessions: false` makes enclosure startup fail with an error
   naming the provider and the tool, that the message is actionable, and that no
@@ -362,55 +362,78 @@ rebuilds the agent through the `mcp_reload.rs` path and replaces cached runtimes
 
 ## Status at hand-over
 
-Branch `feat/sandbox-environments`. Steps 1, 2 and the Docker half of step 6 are
-done, formatted, clippy-clean in the new code, and tested without any API key.
+Branch `feat/sandbox-environments`. Steps 1, 2, 4, 5 and the Docker half of step 6
+are done: formatted, clippy-clean in the new code, and tested without any API key.
+
+**Enclosure now works end to end for `shell` and every file tool.** An agent built
+with `core_tools_in_sandbox` runs its commands and reads and writes its files inside
+the provider, with nothing touching this machine.
 
 Landed:
 
 - `crates/harness-core/src/sandbox.rs` — `Sandbox`, `Session`, `Provisioner`,
-  `Capabilities`, `SandboxError`. No HTTP in the kernel.
-- `Executor` internals are now `Process | Sandbox`, with `local_sh` / `new` / `ssh`
-  / `docker_exec` unchanged and `Executor::sandbox(..)` added. `ShellTool` routes to
-  the provider when given one.
+  `Capabilities`, `Stat`, `SandboxError`. No HTTP in the kernel.
+- `Executor` internals are `Process | Sandbox`, with every previous constructor
+  unchanged. `ShellTool` routes to the provider when given one.
+- `Workspace` gained a backend (`Workspace::sandboxed`) and an I/O facade — `read`,
+  `read_opt`, `write`, `stat`, `list`, `remove_file`. All eight file tools
+  (`read_file`, `write_file`, `edit_file`, `apply_patch`, `multi_edit`, `list_dir`,
+  `grep`, `glob`) go through it instead of `tokio::fs`, so the boundary lives in one
+  place rather than eight.
+- `FileGuard`'s local `Stamp` collapsed into the kernel's `Stat`, so read-before-write
+  means the same thing on both backends.
+- `core_tools_in_sandbox(sandbox, workspace_dir)` — the only supported way to build a
+  sandboxed set. Refuses a provider without `file_api` rather than returning one
+  rooted on the host, and omits the three stateful tools that have no sandbox
+  backend yet.
 - `crates/sandbox-providers` — `EnvironmentSpec` (OpenAI's vocabulary), `Network`,
-  `Packages`, and the keyless Docker adapter implementing the full trait including
-  `spawn` with a real stdin channel.
+  `Packages`, and the keyless Docker adapter implementing the full trait.
 - `orca_harness_sdk::sandbox` re-export module.
-- Tests: `crates/tools/tests/sandbox_executor.rs` (4, fake provider — asserts a
-  sandboxed shell never reaches the host, cancellation wins, empty commands are
-  refused before the provider is called, and the old constructors still exist);
-  `crates/sandbox-providers` unit tests (4, quoting/listing/capability honesty);
-  `tests/docker_roundtrip.rs` (exec, non-zero exit, binary-safe file round trip
-  through a path containing a quote and a space, directory listing, and a live
-  session driven over stdin — it ran against a real daemon here, and skips rather
-  than fails where none is available).
 
-One design change made during implementation: there is deliberately **no**
-`From<SandboxError> for ToolError`. Adding it gave `?` two candidate conversions and
-broke type inference in `tool-extensions/src/mcp/catalog.rs`; callers convert
-explicitly instead.
+Tests, 15 new, all passing with no credentials:
+
+- `tools/tests/sandbox_executor.rs` (4) — a sandboxed shell never reaches the host,
+  cancellation wins before the provider is called, empty commands are refused, and
+  the old `Executor` constructors still exist.
+- `tools/tests/sandbox_workspace.rs` (6) — writes land in the provider and not on
+  disk; read-before-write still refuses an unread overwrite *inside* a sandbox;
+  `list_dir`/`grep`/`glob` walk the sandbox tree; path escapes are still refused; the
+  assembled set contains no host-backed tool; a provider without a file API yields no
+  set at all.
+- `sandbox-providers` unit tests (5) and `tests/docker_roundtrip.rs` (1) — exec,
+  non-zero exit, a binary-safe file round trip through a path containing a quote and
+  a space, listing, `stat` presence and absence, and a live session driven over
+  stdin. Ran against a real daemon; skips where none is available.
+
+Two decisions made during implementation:
+
+1. **No `From<SandboxError> for ToolError`.** It gave `?` two candidate conversions
+   and broke inference in `tool-extensions/src/mcp/catalog.rs`. Callers convert
+   explicitly.
+2. **`Stat::modified` is a `SystemTime`, not whole seconds.** Truncating would let
+   two writes in the same second with the same length compare equal — precisely the
+   case read-before-write exists to catch. Providers reporting only seconds land on a
+   second boundary; the host keeps full precision.
 
 Not yet done, in order:
 
-- **Step 3, the `Spawner` refactor** (`bun_repl`, `py_kernel`, `process`), including
-  `bun_repl`'s `TempSource` host-path dependency. Until this lands, those three tools
-  have no sandbox backend.
-- **Step 4, the `Workspace` filesystem backend.** The file tools still resolve
-  against the host, so the hole documented in `core_tools_with_executor` is closed
-  for `shell` but not yet for files.
-- **Step 5, `core_tools_with_environment`.** Consequently there is no assembly entry
-  point yet, and **enclosure is not usable end to end**: `Executor::sandbox` is
-  correct and tested on its own, but a host wiring it today would get a sandboxed
-  shell beside host file tools. That combination must not ship, and the assembly
-  step is what prevents it.
-- Steps 7 onward: the four remote adapters, staging and transfer, enforcement,
-  the execution axis, and the CLI.
+- **Step 3, the `Spawner` refactor** (`process`, `bun_repl`, `py_kernel`), including
+  `bun_repl`'s `TempSource` host-path dependency. Until it lands, those three tools
+  have no sandbox backend and `core_tools_in_sandbox` deliberately omits them, so a
+  sandboxed agent has no persistent shell session and no REPL.
+- Steps 7 onward: the four remote adapters, capability staging and workspace
+  transfer, enforcement, the execution axis, and the CLI.
+
+Known rough edge: under a sandbox, `grep` and `glob` walk the tree one directory per
+round trip, which is fine for a shallow tree and slow for a deep one. The fix is to
+push the walk into a single in-sandbox `find`/`rg` invocation; deferred rather than
+hidden.
 
 Pre-existing on `main`, not introduced here: four `clippy::result_large_err` errors
 in `harness-core` under the CI gate (a newer clippy lint against `HarnessError` /
-`ModelError`), and a timing-sensitive failure in
-`tool-extensions/tests/web.rs::concurrent_fetches_fan_out_through_the_dispatcher`.
-Both reproduce on a clean checkout.
+`ModelError`), and a failure in
+`tool-extensions/tests/web.rs::concurrent_fetches_fan_out_through_the_dispatcher`
+(a timing assertion). Both reproduce on a clean checkout.
 
 ## Validation commands
 

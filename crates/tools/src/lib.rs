@@ -56,10 +56,10 @@ pub use ask::{
 };
 pub use bun_repl::BunReplTool;
 pub use core_tools::{
-    core_tools, core_tools_with_executor, core_tools_with_guard, core_tools_with_process,
-    core_tools_with_shell_and_process, ApplyPatchTool, BackgroundProcess, BackgroundStats,
-    EditFileTool, Executor, FileGuard, GlobTool, GrepTool, ListDirTool, MultiEditTool,
-    MutationPreflight, ProcessController, ProcessEntry, ProcessNotification,
+    core_tools, core_tools_in_sandbox, core_tools_with_executor, core_tools_with_guard,
+    core_tools_with_process, core_tools_with_shell_and_process, ApplyPatchTool, BackgroundProcess,
+    BackgroundStats, EditFileTool, Executor, FileGuard, GlobTool, GrepTool, ListDirTool,
+    MultiEditTool, MutationPreflight, ProcessController, ProcessEntry, ProcessNotification,
     ProcessNotificationKind, ProcessSnapshot, ProcessSpawn, ProcessTool, ProcessWrite,
     ReadFileTool, ShellTool, Workspace, WriteFileTool,
 };

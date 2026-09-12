@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::{fs, task::JoinSet};
+use tokio::task::JoinSet;
 
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
@@ -28,34 +28,25 @@ struct Change {
     after: Option<Vec<u8>>,
 }
 
-async fn apply_state(change: &Change, after: bool) -> Result<(), std::io::Error> {
+async fn apply_state(ws: &Workspace, change: &Change, after: bool) -> Result<(), ToolError> {
     let _io = crate::iogate::fs_permit().await;
     let state = if after { &change.after } else { &change.before };
     match state {
-        Some(content) => {
-            if let Some(parent) = change.path.parent() {
-                fs::create_dir_all(parent).await?;
-            }
-            fs::write(&change.path, content).await
-        }
-        None => match fs::remove_file(&change.path).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        },
+        Some(content) => ws.write(&change.path, content).await,
+        None => ws.remove_file(&change.path).await,
     }
 }
 
 /// Commit preflighted changes and restore already-written paths if a later
 /// filesystem operation fails. Match/path errors never reach this phase.
-async fn commit(changes: &[Change]) -> Result<(), ToolError> {
+async fn commit(ws: &Workspace, changes: &[Change]) -> Result<(), ToolError> {
     for (index, change) in changes.iter().enumerate() {
-        if let Err(error) = apply_state(change, true).await {
+        if let Err(error) = apply_state(ws, change, true).await {
             let mut rollback_errors = Vec::new();
             // Include the failing change: a failed write may already have
             // created or truncated its destination.
             for previous in changes[..=index].iter().rev() {
-                if let Err(rollback) = apply_state(previous, false).await {
+                if let Err(rollback) = apply_state(ws, previous, false).await {
                     rollback_errors.push(format!("{}: {rollback}", previous.rel));
                 }
             }
@@ -100,17 +91,15 @@ fn normalized_path(ws: &Workspace, rel: &str) -> Result<(String, PathBuf), ToolE
 /// through the process-wide filesystem gate; parsing and matching do not hold
 /// a permit while other calls are waiting to perform actual I/O.
 async fn read_snapshots(
+    ws: &Workspace,
     paths: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, Option<Vec<u8>>>, ToolError> {
     if let Some((rel, path)) = paths.first_key_value().filter(|_| paths.len() == 1) {
         let _io = crate::iogate::fs_permit().await;
-        let snapshot = match fs::read(path).await {
-            Ok(content) => Some(content),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(ToolError::msg(format!("read {rel} failed: {error}")));
-            }
-        };
+        let snapshot = ws
+            .read_opt(path)
+            .await
+            .map_err(|error| ToolError::msg(format!("read {rel} failed: {error}")))?;
         return Ok(BTreeMap::from([(rel.clone(), snapshot)]));
     }
 
@@ -118,13 +107,15 @@ async fn read_snapshots(
     for (rel, path) in paths {
         let rel = rel.clone();
         let path = path.clone();
+        // Workspace is Arc-backed, so each task carries a handle to the
+        // same backend rather than a copy of it.
+        let ws = ws.clone();
         reads.spawn(async move {
             let _io = crate::iogate::fs_permit().await;
-            let snapshot = match fs::read(path).await {
-                Ok(content) => Some(content),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(ToolError::msg(format!("read {rel} failed: {error}"))),
-            };
+            let snapshot = ws
+                .read_opt(&path)
+                .await
+                .map_err(|error| ToolError::msg(format!("read {rel} failed: {error}")))?;
             Ok::<_, ToolError>((rel, snapshot))
         });
     }
@@ -261,7 +252,7 @@ impl Tool for MultiEditTool {
 
         let mut contents = BTreeMap::new();
         let mut originals = BTreeMap::new();
-        for (rel, snapshot) in read_snapshots(&paths).await? {
+        for (rel, snapshot) in read_snapshots(&self.ws, &paths).await? {
             let bytes = snapshot
                 .ok_or_else(|| ToolError::msg(format!("read {rel} failed: file not found")))?;
             let content = String::from_utf8(bytes)
@@ -314,11 +305,11 @@ impl Tool for MultiEditTool {
                 })
             })
             .collect();
-        commit(&changes).await?;
+        commit(&self.ws, &changes).await?;
         if let Some(guard) = &self.guard {
             for change in &changes {
                 let _io = crate::iogate::fs_permit().await;
-                guard.restamp(&change.path).await;
+                guard.restamp(&self.ws, &change.path).await;
             }
         }
         let paths: Vec<&str> = changes.iter().map(|change| change.rel.as_str()).collect();
@@ -407,7 +398,7 @@ impl Tool for ApplyPatchTool {
             resolved.insert(action.path().to_owned(), path);
         }
 
-        let mut snapshots = read_snapshots(&resolved).await?;
+        let mut snapshots = read_snapshots(&self.ws, &resolved).await?;
         let mut changes = Vec::with_capacity(actions.len());
         for action in actions {
             let rel = action.path().to_owned();
@@ -462,12 +453,12 @@ impl Tool for ApplyPatchTool {
                 }
             }
         }
-        commit(&changes).await?;
+        commit(&self.ws, &changes).await?;
         if let Some(guard) = &self.guard {
             for change in &changes {
                 let _io = crate::iogate::fs_permit().await;
                 if change.after.is_some() {
-                    guard.restamp(&change.path).await;
+                    guard.restamp(&self.ws, &change.path).await;
                 } else {
                     guard.forget(&change.path);
                 }

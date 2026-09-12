@@ -16,7 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use orca_harness_core::{
     Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner, Sandbox,
-    SandboxError, Session, SpawnRequest,
+    SandboxError, Session, SpawnRequest, Stat,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -332,6 +332,23 @@ impl Sandbox for DockerSandbox {
         Ok(parse_ls(&String::from_utf8_lossy(&output.stdout)))
     }
 
+    async fn stat(&self, path: &str) -> Result<Option<Stat>, SandboxError> {
+        let mut args = self.exec_args(None, false);
+        // `%Y` mtime, `%s` size, `%F` human-readable type. One call, and
+        // a missing file is reported as absence rather than failure.
+        args.extend([
+            "stat".to_string(),
+            "-c".to_string(),
+            "%Y %s %F".to_string(),
+            path.to_string(),
+        ]);
+        let output = docker(&args).await?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        Ok(parse_stat(&String::from_utf8_lossy(&output.stdout)))
+    }
+
     async fn shutdown(&self) -> Result<(), SandboxError> {
         // `--rm` removes it once stopped; force so a busy container still
         // goes away rather than leaking past the session.
@@ -418,6 +435,25 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
+/// `stat -c '%Y %s %F'` — epoch seconds, size, and a type description
+/// whose wording varies ("directory", "regular file", "symbolic link"),
+/// so only the directory case is matched by name.
+pub(crate) fn parse_stat(line: &str) -> Option<Stat> {
+    let mut parts = line.trim().splitn(3, ' ');
+    let modified = parts
+        .next()?
+        .parse::<u64>()
+        .ok()
+        .map(|secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
+    let len = parts.next()?.parse::<u64>().ok()?;
+    let is_dir = parts.next().is_some_and(|kind| kind.trim() == "directory");
+    Some(Stat {
+        modified,
+        len,
+        is_dir,
+    })
+}
+
 /// `ls -Ap` marks directories with a trailing slash and omits `.`/`..`.
 pub(crate) fn parse_ls(listing: &str) -> Vec<Entry> {
     listing
@@ -495,6 +531,24 @@ mod tests {
             Err(other) => panic!("wrong refusal: {other}"),
             Ok(_) => panic!("restricted network must be refused, not silently ignored"),
         }
+    }
+
+    #[test]
+    fn stat_output_parses_into_a_comparable_stamp() {
+        let stat = parse_stat("1757635200 4096 regular file\n").expect("parse");
+        assert_eq!(
+            stat.modified,
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1757635200))
+        );
+        assert_eq!(stat.len, 4096);
+        assert!(!stat.is_dir);
+
+        let dir = parse_stat("1757635200 64 directory").expect("parse");
+        assert!(dir.is_dir);
+
+        // Garbage must not become a stamp that silently compares equal.
+        assert!(parse_stat("").is_none());
+        assert!(parse_stat("nonsense").is_none());
     }
 
     #[test]

@@ -63,6 +63,22 @@ async fn exec_files_and_a_live_session_round_trip() {
     let entries = sandbox.list_dir("/workspace").await.expect("list");
     assert!(entries.iter().any(|e| e.name == "sub dir" && e.is_dir));
 
+    // stat: a real stamp for what exists, absence for what does not —
+    // the distinction read-before-write protection is built on.
+    let stat = sandbox
+        .stat("/workspace/sub dir/a'b.txt")
+        .await
+        .expect("stat")
+        .expect("the file was just written");
+    assert_eq!(stat.len, content.len() as u64);
+    assert!(!stat.is_dir);
+    assert!(stat.modified.is_some());
+    assert!(sandbox
+        .stat("/workspace/never-written.txt")
+        .await
+        .expect("stat")
+        .is_none());
+
     // A live session with stdin — the capability the REPL tools need and
     // the one that separates providers that can host an enclosure from
     // those that cannot.

@@ -31,6 +31,7 @@ pub use process::{
     ProcessSpawn, ProcessTool, ProcessWrite,
 };
 pub use search::GrepTool;
+pub(crate) use shell::shell_quote;
 pub use shell::{Executor, ShellTool};
 pub use stats::{BackgroundProcess, BackgroundStats};
 pub use workspace::Workspace;
@@ -92,11 +93,59 @@ pub fn core_tools_with_shell_and_process(
     tools
 }
 
+/// The core set for an agent running **inside** `sandbox`: a sandboxed
+/// `shell` plus file tools rooted at `workspace_dir` *within that
+/// sandbox*. Nothing in the returned set touches this machine.
+///
+/// This is the only supported way to build a sandboxed tool set. Pairing
+/// a sandbox executor with a host-rooted [`Workspace`] by hand produces an
+/// agent whose commands run inside and whose files are written outside —
+/// a boundary with a hole in it, and the exact failure this function
+/// exists to make unavailable.
+///
+/// Fails closed rather than degrading:
+///
+/// - a provider without `file_api` cannot back the file tools, so no set
+///   is returned at all instead of one silently rooted on the host.
+///
+/// `process`, `bun_repl` and `py_kernel` are **not** included. They hold
+/// long-lived processes with framed stdin, which needs a spawner this
+/// function does not yet have; including their host-backed versions would
+/// put a local process inside a set that is supposed to have none. Check
+/// [`Capabilities::sessions`](orca_harness_core::Capabilities) and add
+/// them once a sandbox-backed spawner exists.
+pub fn core_tools_in_sandbox(
+    sandbox: Arc<dyn orca_harness_core::Sandbox>,
+    workspace_dir: impl Into<std::path::PathBuf>,
+) -> Result<Vec<Arc<dyn Tool>>, orca_harness_core::SandboxError> {
+    if !sandbox.capabilities().file_api {
+        return Err(orca_harness_core::SandboxError::Unsupported {
+            provider: "this sandbox",
+            capability: "a file API, which the file tools require",
+        });
+    }
+
+    let dir = workspace_dir.into();
+    let ws = Workspace::sandboxed(dir.clone(), sandbox.clone());
+    let shell = ShellTool::new(Executor::sandbox(sandbox)).working_dir(dir.to_string_lossy());
+
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(shell)];
+    tools.extend(file_tools(&ws, &FileGuard::new()));
+    Ok(tools)
+}
+
 /// Like [`core_tools`] but `shell` and `process` target another machine
 /// via `executor` (e.g. `Executor::ssh(...)`). File tools still operate on
 /// the local workspace — pair with a synced or mounted workspace, or drop
 /// them if the target's filesystem is only reachable over the shell.
 pub fn core_tools_with_executor(ws: &Workspace, executor: Executor) -> Vec<Arc<dyn Tool>> {
+    // A sandbox executor beside host-rooted file tools is the straddled
+    // boundary `core_tools_in_sandbox` exists to prevent. Caught in debug
+    // rather than ignored; the enforcement layer refuses it outright.
+    debug_assert!(
+        !(executor.is_sandboxed() && !ws.is_sandboxed()),
+        "sandboxed shell with host file tools: use core_tools_in_sandbox"
+    );
     core_tools_with_shell_and_process(
         ws,
         &FileGuard::new(),

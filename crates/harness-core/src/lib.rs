@@ -47,7 +47,7 @@ pub use limits::Limits;
 pub use model::{DeltaSink, Model, ModelDelta, ModelResponse, Usage};
 pub use sandbox::{
     Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner, Sandbox,
-    SandboxError, Session, SpawnRequest,
+    SandboxError, Session, SpawnRequest, Stat,
 };
 pub use tool::{
     Concurrency, FnTool, Tool, ToolCall, ToolContext, ToolName, ToolRegistry, ToolResult,
