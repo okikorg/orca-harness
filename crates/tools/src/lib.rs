@@ -41,6 +41,7 @@ mod core_tools;
 mod fs_admin;
 mod kernel;
 pub mod retry;
+mod spawner;
 mod subagent;
 mod todo;
 
@@ -65,6 +66,7 @@ pub use core_tools::{
 };
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use kernel::PyKernelTool;
+pub use spawner::{Spawn, Spawned, Spawner};
 pub use subagent::{
     refresh_inventory, subagent_completions_prompt, ActiveInventory, BackgroundAcknowledgement,
     BackgroundJob, BackgroundStatus, CompletionDelivery, CompletionInbox, SpawnExtensions,

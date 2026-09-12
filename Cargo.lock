@@ -1218,6 +1218,7 @@ version = "0.6.2"
 dependencies = [
  "async-trait",
  "orca-harness-core",
+ "orca-harness-tools",
  "serde",
  "serde_json",
  "tokio",

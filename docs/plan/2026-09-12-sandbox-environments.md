@@ -272,7 +272,7 @@ rebuilds the agent through the `mcp_reload.rs` path and replaces cached runtimes
   fake `Sandbox` rather than spawning a process. Add a test asserting no
   `tokio::process::Command` is constructed on that path.
 
-- [ ] **Introduce `Spawner` and move the three stateful tools onto it.** Modify
+- [x] **Introduce `Spawner` and move the REPL tools onto it.** Modify
   `crates/tools/src/bun_repl.rs`, `src/kernel.rs`, `src/core_tools/process.rs`; add
   `src/spawner.rs`. Settle the output-channel shape (above) before writing the local
   implementation — it is the likeliest place this refactor stalls, and it fails as a
@@ -362,78 +362,82 @@ rebuilds the agent through the `mcp_reload.rs` path and replaces cached runtimes
 
 ## Status at hand-over
 
-Branch `feat/sandbox-environments`. Steps 1, 2, 4, 5 and the Docker half of step 6
-are done: formatted, clippy-clean in the new code, and tested without any API key.
+Branch `feat/sandbox-environments`. Steps 1, 2, 4, 5, the REPL half of step 3, and
+the Docker half of step 6 are done: formatted, no new clippy findings, tested
+without any API key.
 
-**Enclosure now works end to end for `shell` and every file tool.** An agent built
-with `core_tools_in_sandbox` runs its commands and reads and writes its files inside
-the provider, with nothing touching this machine.
+**Enclosure works end to end for `shell`, every file tool, `py_kernel` and
+`bun_repl`.** A Python kernel runs inside a real container, keeps state across
+calls, and writes files that appear in the sandbox and not on the host — verified
+against a live daemon, not a fake.
 
 Landed:
 
 - `crates/harness-core/src/sandbox.rs` — `Sandbox`, `Session`, `Provisioner`,
   `Capabilities`, `Stat`, `SandboxError`. No HTTP in the kernel.
-- `Executor` internals are `Process | Sandbox`, with every previous constructor
+- `Executor` internals are `Process | Sandbox`, every previous constructor
   unchanged. `ShellTool` routes to the provider when given one.
-- `Workspace` gained a backend (`Workspace::sandboxed`) and an I/O facade — `read`,
-  `read_opt`, `write`, `stat`, `list`, `remove_file`. All eight file tools
-  (`read_file`, `write_file`, `edit_file`, `apply_patch`, `multi_edit`, `list_dir`,
-  `grep`, `glob`) go through it instead of `tokio::fs`, so the boundary lives in one
-  place rather than eight.
-- `FileGuard`'s local `Stamp` collapsed into the kernel's `Stat`, so read-before-write
-  means the same thing on both backends.
-- `core_tools_in_sandbox(sandbox, workspace_dir)` — the only supported way to build a
-  sandboxed set. Refuses a provider without `file_api` rather than returning one
-  rooted on the host, and omits the three stateful tools that have no sandbox
-  backend yet.
-- `crates/sandbox-providers` — `EnvironmentSpec` (OpenAI's vocabulary), `Network`,
-  `Packages`, and the keyless Docker adapter implementing the full trait.
+- `Workspace` gained a backend and an I/O facade (`read`, `read_opt`, `write`,
+  `stat`, `list`, `remove_file`); all eight file tools go through it rather than
+  `tokio::fs`. `FileGuard`'s `Stamp` collapsed into the kernel's `Stat`, so
+  read-before-write means the same thing on both backends.
+- `crates/tools/src/spawner.rs` — `Spawner`, `Spawn`, `Spawned`. `py_kernel` and
+  `bun_repl` now start their interpreter through it; `.sandbox(..)` puts that
+  interpreter inside the boundary. `bun_repl`'s per-call `TempSource` follows: under
+  a sandbox it is written through the provider, because `.load` is executed *by the
+  REPL* and a host temp file is invisible to a sandboxed interpreter.
+- `core_tools_in_sandbox(sandbox, workspace_dir)` — the only supported way to build
+  a sandboxed set; refuses a provider without `file_api`.
+- `crates/sandbox-providers` — `EnvironmentSpec`, `Network`, `Packages`, and the
+  keyless Docker adapter implementing the whole trait.
 - `orca_harness_sdk::sandbox` re-export module.
 
-Tests, 15 new, all passing with no credentials:
+Tests, 16 new, no credentials required:
 
-- `tools/tests/sandbox_executor.rs` (4) — a sandboxed shell never reaches the host,
-  cancellation wins before the provider is called, empty commands are refused, and
-  the old `Executor` constructors still exist.
-- `tools/tests/sandbox_workspace.rs` (6) — writes land in the provider and not on
-  disk; read-before-write still refuses an unread overwrite *inside* a sandbox;
-  `list_dir`/`grep`/`glob` walk the sandbox tree; path escapes are still refused; the
-  assembled set contains no host-backed tool; a provider without a file API yields no
-  set at all.
-- `sandbox-providers` unit tests (5) and `tests/docker_roundtrip.rs` (1) — exec,
-  non-zero exit, a binary-safe file round trip through a path containing a quote and
-  a space, listing, `stat` presence and absence, and a live session driven over
-  stdin. Ran against a real daemon; skips where none is available.
+- `tools/tests/sandbox_executor.rs` (4) and `tools/tests/sandbox_workspace.rs` (6) —
+  a sandboxed shell never reaches the host; writes land in the provider and not on
+  disk; read-before-write still refuses an unread overwrite inside a sandbox;
+  `list_dir`/`grep`/`glob` walk the sandbox tree; escapes still refused; the
+  assembled set holds no host-backed tool; a provider without a file API yields no
+  set.
+- `sandbox-providers` (5 unit + `docker_roundtrip.rs` + `sandboxed_repl.rs`) — exec,
+  non-zero exit, binary-safe file round trip through a path with a quote and a space,
+  listing, `stat` presence and absence, a live stdin session, and a Python kernel
+  keeping state across calls inside a container. The two integration tests skip where
+  no daemon is available.
 
-Two decisions made during implementation:
+All 261 pre-existing tools tests still pass untouched, which is what makes the host
+path provably unchanged across three refactors (`Executor`, `Workspace`, `Spawner`).
 
-1. **No `From<SandboxError> for ToolError`.** It gave `?` two candidate conversions
-   and broke inference in `tool-extensions/src/mcp/catalog.rs`. Callers convert
-   explicitly.
+Three decisions made during implementation:
+
+1. **No `From<SandboxError> for ToolError`** — it gave `?` two candidate conversions
+   and broke inference in `tool-extensions/src/mcp/catalog.rs`.
 2. **`Stat::modified` is a `SystemTime`, not whole seconds.** Truncating would let
-   two writes in the same second with the same length compare equal — precisely the
-   case read-before-write exists to catch. Providers reporting only seconds land on a
-   second boundary; the host keeps full precision.
+   two writes in the same second with equal length compare equal — the exact case
+   read-before-write exists to catch.
+3. **`Spawned` hands its output back as a channel, not an `AsyncRead`.** A sandbox
+   session has no file descriptor to offer. `bun_repl` already worked this way;
+   `py_kernel` moved from reading `ChildStdout` directly to the same channel, and
+   its stderr stays folded into stdout at the fd level by its own driver, so ordering
+   is unchanged.
 
 Not yet done, in order:
 
-- **Step 3, the `Spawner` refactor** (`process`, `bun_repl`, `py_kernel`), including
-  `bun_repl`'s `TempSource` host-path dependency. Until it lands, those three tools
-  have no sandbox backend and `core_tools_in_sandbox` deliberately omits them, so a
-  sandboxed agent has no persistent shell session and no REPL.
+- **`process`** — background process management (its own controller, notifications,
+  and stats across four files) has no sandbox backend, so `core_tools_in_sandbox`
+  omits it and a sandboxed agent has no background processes.
 - Steps 7 onward: the four remote adapters, capability staging and workspace
   transfer, enforcement, the execution axis, and the CLI.
 
-Known rough edge: under a sandbox, `grep` and `glob` walk the tree one directory per
-round trip, which is fine for a shallow tree and slow for a deep one. The fix is to
-push the walk into a single in-sandbox `find`/`rg` invocation; deferred rather than
-hidden.
+Known rough edge: under a sandbox, `grep` and `glob` walk one directory per round
+trip — fine shallow, slow deep. The fix is a single in-sandbox `find`/`rg`
+invocation; deferred rather than hidden.
 
 Pre-existing on `main`, not introduced here: four `clippy::result_large_err` errors
-in `harness-core` under the CI gate (a newer clippy lint against `HarnessError` /
-`ModelError`), and a failure in
-`tool-extensions/tests/web.rs::concurrent_fetches_fan_out_through_the_dispatcher`
-(a timing assertion). Both reproduce on a clean checkout.
+in `harness-core` under the CI gate, and a timing failure in
+`tool-extensions/tests/web.rs::concurrent_fetches_fan_out_through_the_dispatcher`.
+Both reproduce on a clean checkout.
 
 ## Validation commands
 

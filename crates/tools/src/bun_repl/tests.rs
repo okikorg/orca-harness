@@ -247,7 +247,7 @@ fn ansi_is_removed_without_losing_text() {
 #[test]
 fn temporary_source_is_private_and_removed_on_drop() {
     let source = TempSource::write("console.log('safe')", "\"marker\"").unwrap();
-    let path = source.0.clone();
+    let path = source.path.clone();
     assert!(path.exists());
     #[cfg(unix)]
     {
