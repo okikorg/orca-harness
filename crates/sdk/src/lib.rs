@@ -80,6 +80,24 @@ pub mod providers {
     };
 }
 
+/// Sandbox adapters and the environment declaration hosts build them from.
+///
+/// Two axes, independently optional: an *enclosure* the agent runs inside
+/// (substituting the backends of its own tools), and an *execution* target
+/// it calls out to. A provider reports what it can actually do through
+/// [`Capabilities`](sandbox::Capabilities) — notably whether a live process
+/// accepts stdin, which two of the four hosted providers do not offer — so a
+/// host can refuse to start rather than assemble a half-isolated tool set.
+pub mod sandbox {
+    pub use orca_harness_core::{
+        Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Provisioner, Sandbox,
+        SandboxError, Session, SpawnRequest,
+    };
+    pub use orca_harness_sandbox_providers::{
+        DockerProvisioner, EnvironmentSpec, Network, Packages, SetupCommand,
+    };
+}
+
 /// Subagent, background process, and workflow handles for host orchestration.
 ///
 /// The workflow vocabulary (`Stage`, `Kind`, `RunState`, `StageStatus`,

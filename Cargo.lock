@@ -1213,6 +1213,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orca-harness-sandbox-providers"
+version = "0.6.2"
+dependencies = [
+ "async-trait",
+ "orca-harness-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "orca-harness-sdk"
 version = "0.6.2"
 dependencies = [
@@ -1221,6 +1232,7 @@ dependencies = [
  "orca-harness-extensions",
  "orca-harness-model-providers",
  "orca-harness-provider-auth",
+ "orca-harness-sandbox-providers",
  "orca-harness-tool-extensions",
  "orca-harness-tools",
  "serde_json",

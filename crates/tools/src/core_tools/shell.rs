@@ -23,10 +23,37 @@ use orca_harness_core::{Tool, ToolContext, ToolError, ToolSchema};
 use crate::pgroup;
 
 /// How and where a shell command is executed.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Executor {
-    program: String,
-    leading_args: Vec<String>,
+    kind: Kind,
+}
+
+/// A child process on some machine, or a provider sandbox reached over its
+/// own API. The distinction is internal: every constructor below keeps the
+/// signature it always had, and a sandbox is one more way to be "elsewhere".
+#[derive(Clone)]
+enum Kind {
+    Process {
+        program: String,
+        leading_args: Vec<String>,
+    },
+    Sandbox(std::sync::Arc<dyn orca_harness_core::Sandbox>),
+}
+
+impl std::fmt::Debug for Executor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            Kind::Process {
+                program,
+                leading_args,
+            } => f
+                .debug_struct("Executor")
+                .field("program", program)
+                .field("leading_args", leading_args)
+                .finish(),
+            Kind::Sandbox(_) => f.debug_struct("Executor").field("sandbox", &"..").finish(),
+        }
+    }
 }
 
 impl Executor {
@@ -35,8 +62,10 @@ impl Executor {
     /// the model reads. Set a richer executor if you need profile PATH.
     pub fn local_sh() -> Self {
         Self {
-            program: "sh".into(),
-            leading_args: vec!["-c".into()],
+            kind: Kind::Process {
+                program: "sh".into(),
+                leading_args: vec!["-c".into()],
+            },
         }
     }
 
@@ -50,8 +79,29 @@ impl Executor {
         S: Into<String>,
     {
         Self {
-            program: program.into(),
-            leading_args: leading_args.into_iter().map(Into::into).collect(),
+            kind: Kind::Process {
+                program: program.into(),
+                leading_args: leading_args.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+
+    /// Run commands inside a provider sandbox. Unlike every other
+    /// executor this one does not spawn a local process: the command is
+    /// sent to the sandbox's own API. Pair it with sandbox-backed file
+    /// tools (see [`crate::Workspace`]) — a sandboxed shell beside host
+    /// file tools is a boundary with a hole in it.
+    pub fn sandbox(sandbox: std::sync::Arc<dyn orca_harness_core::Sandbox>) -> Self {
+        Self {
+            kind: Kind::Sandbox(sandbox),
+        }
+    }
+
+    /// The sandbox this executor targets, if any.
+    pub(crate) fn as_sandbox(&self) -> Option<&std::sync::Arc<dyn orca_harness_core::Sandbox>> {
+        match &self.kind {
+            Kind::Sandbox(sandbox) => Some(sandbox),
+            Kind::Process { .. } => None,
         }
     }
 
@@ -69,16 +119,26 @@ impl Executor {
     }
 
     fn is_local_sh(&self) -> bool {
-        self.program == "sh"
+        matches!(&self.kind, Kind::Process { program, .. } if program == "sh")
     }
 
     /// Build a [`Command`] that runs `command_str` through this executor.
     /// For the local `sh` executor `working_dir` becomes the child's real
     /// cwd; for remote executors there is no cwd to set, so it is folded
     /// in as `cd <dir> && …`. Stdio is left for the caller to configure.
+    ///
+    /// Panics for a sandbox executor, which has no local command to build;
+    /// callers reach [`as_sandbox`](Self::as_sandbox) first.
     pub(crate) fn build(&self, command_str: &str, working_dir: Option<&str>) -> Command {
-        let mut cmd = Command::new(&self.program);
-        cmd.args(&self.leading_args);
+        let Kind::Process {
+            program,
+            leading_args,
+        } = &self.kind
+        else {
+            unreachable!("build() on a sandbox executor; check as_sandbox() first")
+        };
+        let mut cmd = Command::new(program);
+        cmd.args(leading_args);
         let effective = match (working_dir, self.is_local_sh()) {
             (Some(_), true) | (None, _) => command_str.to_string(),
             (Some(dir), false) => format!("cd {dir} && {command_str}"),
@@ -149,6 +209,39 @@ impl ShellTool {
         self
     }
 
+    /// The sandbox path: the provider runs the command and reports the
+    /// same three fields, so the tool's contract to the model is unchanged.
+    /// Cancellation still wins the race; the provider enforces the timeout.
+    async fn call_sandbox(
+        &self,
+        sandbox: &dyn orca_harness_core::Sandbox,
+        command_str: &str,
+        ctx: &ToolContext,
+    ) -> Result<Value, ToolError> {
+        let mut request = orca_harness_core::ExecRequest::new(command_str);
+        request.cwd = self.working_dir.clone();
+        request.timeout_ms = self.timeout.map(|t| t.as_millis() as u64);
+
+        let output = tokio::select! {
+            biased;
+            _ = ctx.cancellation.cancelled() => return Err(ToolError::msg("cancelled")),
+            result = sandbox.exec(request) => {
+                result.map_err(|e| ToolError::msg(e.to_string()))?
+            }
+        };
+
+        let (stdout, stdout_truncated) = truncate(output.stdout, self.max_output_bytes);
+        let (stderr, stderr_truncated) = truncate(output.stderr, self.max_output_bytes);
+        Ok(json!({
+            "stdout": stdout,
+            "stderr": stderr,
+            "exitCode": output.exit_code,
+            "success": output.exit_code == 0,
+            "stdoutTruncated": stdout_truncated,
+            "stderrTruncated": stderr_truncated,
+        }))
+    }
+
     fn build_command(&self, command_str: &str) -> Command {
         let mut cmd = self
             .executor
@@ -197,6 +290,10 @@ impl Tool for ShellTool {
             // `sh -c ""` exits 0 doing nothing; succeeding silently would
             // tell the model its (missing) command worked.
             return Err(ToolError::msg("`command` must not be empty"));
+        }
+
+        if let Some(sandbox) = self.executor.as_sandbox() {
+            return self.call_sandbox(sandbox.as_ref(), command_str, ctx).await;
         }
 
         let mut child = self
