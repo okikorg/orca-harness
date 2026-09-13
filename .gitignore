@@ -30,3 +30,6 @@ docs/external/node_modules/
 
 # Local release archives (ci/release.sh build)
 /dist/
+
+# coding agents
+.claude
