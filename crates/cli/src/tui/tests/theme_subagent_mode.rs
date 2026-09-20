@@ -129,6 +129,8 @@ mod mode_rewind_todo_tests {
         // Setting the mode it is already in is not a toggle.
         slash_command(&mut app, "mode plan", &worker, 80);
         assert_eq!(mode.get(), Mode::Plan);
+        slash_command(&mut app, "mode orchestrate", &worker, 80);
+        assert_eq!(mode.get(), Mode::Orchestrate);
         slash_command(&mut app, "mode auto", &worker, 80);
         assert_eq!(mode.get(), Mode::Auto);
         slash_command(&mut app, "mode yolo", &worker, 80);
@@ -154,7 +156,8 @@ mod mode_rewind_todo_tests {
         let mut app = app_with(mode.clone(), TodoList::new());
         slash_command(&mut app, "mode", &worker, 80);
 
-        // Down three times → yolo row, enter lands it with the loud notice.
+        // Down four times → yolo row, enter lands it with the loud notice.
+        handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Down), &worker);
@@ -170,7 +173,8 @@ mod mode_rewind_todo_tests {
         let Some(Overlay::Mode { ref picker }) = app.overlay else {
             panic!("expected the mode picker");
         };
-        assert_eq!(picker.index(), 3);
+        assert_eq!(picker.index(), 4);
+        handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Up), &worker);
         handle_overlay_key(&mut app, key(KeyCode::Up), &worker);

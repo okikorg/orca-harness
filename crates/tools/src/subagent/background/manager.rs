@@ -63,7 +63,7 @@ struct ActiveSubagent {
     spawn: SubagentSpawn,
     cancellation: orca_harness_core::CancellationToken,
     status: BackgroundStatus,
-    on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_cancel: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     peak_running: usize,
     running_children: usize,
 }
@@ -297,7 +297,7 @@ impl SubagentManagerInner {
     pub(crate) fn admit_run(
         self: &Arc<Self>,
         spawn: &SubagentSpawn,
-        on_cancel: Arc<dyn Fn() + Send + Sync>,
+        on_cancel: Arc<dyn Fn(usize) + Send + Sync>,
     ) -> Result<Admission, &'static str> {
         self.admit_job(spawn, Some(on_cancel), None)
     }
@@ -313,7 +313,7 @@ impl SubagentManagerInner {
     fn admit_job(
         self: &Arc<Self>,
         spawn: &SubagentSpawn,
-        on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+        on_cancel: Option<Arc<dyn Fn(usize) + Send + Sync>>,
         expected: Option<u64>,
     ) -> Result<Admission, &'static str> {
         let cap = self.settings.background_limit() as usize;
@@ -454,7 +454,11 @@ impl SubagentManagerInner {
         let callbacks: Vec<_> = state
             .jobs
             .values()
-            .filter_map(|job| job.on_cancel.clone())
+            .filter_map(|job| {
+                job.on_cancel
+                    .clone()
+                    .map(|callback| (callback, job.peak_running))
+            })
             .collect();
         state.jobs.clear();
         state.queue.clear();
@@ -463,8 +467,8 @@ impl SubagentManagerInner {
         // before cancelled workers exit, and their later drops would then
         // incorrectly release capacity held by those replacements.
         drop(state);
-        for callback in callbacks {
-            callback();
+        for (callback, peak_running) in callbacks {
+            callback(peak_running);
         }
         cancelled
     }
@@ -476,9 +480,10 @@ impl SubagentManagerInner {
         };
         job.cancellation.cancel();
         let callback = job.on_cancel.clone();
+        let peak_running = job.peak_running;
         drop(state);
         if let Some(callback) = callback {
-            callback();
+            callback(peak_running);
         }
         true
     }

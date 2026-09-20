@@ -174,6 +174,7 @@ pub(crate) fn mode_picker_lines(
         let description = match mode {
             crate::mode::Mode::Normal => "gated tools ask for approval",
             crate::mode::Mode::Plan => "read-only: investigate and propose, change nothing",
+            crate::mode::Mode::Orchestrate => "delegate substantial work; basic edits allowed",
             crate::mode::Mode::Auto => "safe tools run; unresolved actions get reviewed",
             crate::mode::Mode::Yolo => "every gated tool runs without asking",
         };

@@ -429,6 +429,24 @@ mod main_tests {
             gate.before_tool(&call).await.unwrap(),
             ToolDecision::Deny { .. }
         ));
+
+        // The worker view is what actually reaches workers: orchestrate
+        // does not propagate (its whole point is to push work down to
+        // these agents), while plan does.
+        mode.set(Mode::Orchestrate);
+        let worker_gate = extensions
+            .iter()
+            .find(|ext| ext.name() == "plan-mode")
+            .expect("a plan gate");
+        let gate_call = ToolCall {
+            id: "c3".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"command": "cargo test"}),
+        };
+        assert!(matches!(
+            worker_gate.before_tool(&gate_call).await.unwrap(),
+            ToolDecision::Continue
+        ));
     }
 
     fn planning(mode: Mode) -> Planning {
@@ -516,6 +534,7 @@ mod main_tests {
             no_session: true,
             theme: "default".into(),
             plan: false,
+            orchestrate: false,
             normal: false,
             auto: false,
             yolo: false,
@@ -528,6 +547,14 @@ mod main_tests {
             }
             .mode(),
             Mode::Plan
+        );
+        assert_eq!(
+            Config {
+                orchestrate: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Orchestrate
         );
         assert_eq!(
             Config {
@@ -553,7 +580,8 @@ mod main_tests {
             .mode(),
             Mode::Yolo
         );
-        // Normal outranks auto/yolo, and plan outranks all three.
+        // Orchestrate outranks auto/yolo, normal outranks auto/yolo, and
+        // plan outranks all four.
         assert_eq!(
             Config {
                 normal: true,
@@ -563,6 +591,27 @@ mod main_tests {
             }
             .mode(),
             Mode::Normal
+        );
+        assert_eq!(
+            Config {
+                orchestrate: true,
+                auto: true,
+                yolo: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Orchestrate
+        );
+        // Orchestrate also outranks normal: it is normal's stance with the
+        // top-level agent's mutations removed.
+        assert_eq!(
+            Config {
+                normal: true,
+                orchestrate: true,
+                ..base.clone()
+            }
+            .mode(),
+            Mode::Orchestrate
         );
         assert_eq!(
             Config {
@@ -577,6 +626,7 @@ mod main_tests {
             Config {
                 plan: true,
                 normal: true,
+                orchestrate: true,
                 auto: true,
                 yolo: true,
                 ..base

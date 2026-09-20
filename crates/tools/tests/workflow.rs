@@ -1,11 +1,13 @@
 use orca_harness_core::{
     CancellationToken, Context, Model, ModelError, ModelResponse, Tool, ToolSchema,
 };
-use orca_harness_tools::{SubagentManager, SubagentTool, WorkflowStore, WorkflowTool};
+use orca_harness_tools::{
+    BackgroundStatus, SubagentManager, SubagentTool, WorkflowStore, WorkflowTool,
+};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 mod workflow_support;
-use workflow_support::{ctx, terminal, tool, Echo};
+use workflow_support::{ctx, terminal, tool, wait_until, Echo};
 #[tokio::test]
 async fn fanout_reuses_one_slot_and_one_delivery_reservation_and_replays() {
     let (tool, manager, mut rx, calls, _store) = tool(None, 1);
@@ -84,6 +86,15 @@ async fn cancellation_and_global_reset_settle_once_and_clear_runs() {
         .call(json!({"action":"run","graph":graph}), &ctx())
         .await
         .unwrap();
+    wait_until(
+        || {
+            manager.active().iter().any(|job| {
+                job.spawn.run == ack["runId"].as_u64() && job.status == BackgroundStatus::Running
+            })
+        },
+        "a workflow stage to hold a running slot",
+    )
+    .await;
     manager.cancel_all();
     assert_eq!(
         tool.call(json!({"action":"list"}), &ctx()).await.unwrap()["runs"],
@@ -96,6 +107,18 @@ async fn cancellation_and_global_reset_settle_once_and_clear_runs() {
         .any(|job| job.spawn.id == ack["runId"].as_u64().unwrap()));
     let (n, _) = terminal(&mut rx).await;
     assert!(!manager.is_current(n.generation));
+    let outcome: serde_json::Value = serde_json::from_str(
+        n.result
+            .unwrap_err()
+            .split_once('\n')
+            .expect("cancelled outcome follows the error")
+            .1,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome["peakRunning"], 1,
+        "cancel_all preserves the run's telemetry before clearing manager jobs"
+    );
 }
 #[tokio::test]
 async fn invalid_graph_or_model_has_no_admissions() {

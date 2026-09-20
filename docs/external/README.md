@@ -1,16 +1,17 @@
 # Orcacode external documentation
 
 A dependency-free, static documentation site for people using `orcacode`.
+Run these commands from the repository root.
 
 ```bash
-bun docs/server.ts
+bun docs/external/server.ts
 # open http://localhost:3030
 ```
 
 Set `PORT` to use another port:
 
 ```bash
-PORT=8080 bun docs/server.ts
+PORT=8080 bun docs/external/server.ts
 ```
 
 The site is intentionally plain HTML, CSS, native browser JavaScript modules, and
@@ -38,7 +39,7 @@ audited together.
 ## Included guides
 
 - Install and first session
-- Approvals, plan mode, auto mode, and yolo mode
+- Approvals, plan mode, [orchestrate mode](index.html#orchestrate-mode), auto mode, and yolo mode
 - Providers, models, and persistent configuration
 - Workspace tools, background processes, and output retrieval
 - Durable memory, automatic scoped recall, explicit management, and local storage

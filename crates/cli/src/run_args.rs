@@ -33,6 +33,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut resume_id: Option<String> = None;
     let mut no_session = false;
     let mut plan = false;
+    let mut orchestrate = false;
     let mut normal = false;
     let mut auto = false;
     let mut yolo = false;
@@ -99,6 +100,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             "--resume" => resume_id = Some(value("--resume")?),
             "--no-session" => no_session = true,
             "--plan" => plan = true,
+            "--orchestrate" => orchestrate = true,
             "--normal" => normal = true,
             "--auto" => auto = true,
             "--yolo" => yolo = true,
@@ -180,6 +182,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         no_session,
         theme,
         plan,
+        orchestrate,
         normal,
         auto,
         yolo,

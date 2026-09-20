@@ -47,7 +47,8 @@ pub(crate) fn invocation_tail(args: &[String]) -> Option<&[String]> {
             "--model" | "--base-url" | "--api-key" | "--firecrawl-key" | "--workspace"
             | "--max-steps" | "--subagent-depth" | "--theme" | "--resume" | "-p" | "--prompt" => 2,
             "--openrouter" | "--list-models" | "--continue" | "--no-session" | "--plan"
-            | "--normal" | "--auto" | "--yolo" | "--json" | "--auto-approve" | "-h" | "--help" => 1,
+            | "--orchestrate" | "--normal" | "--auto" | "--yolo" | "--json" | "--auto-approve"
+            | "-h" | "--help" => 1,
             flag if flag.starts_with('-') => return None,
             "plugin" => return Some(&args[index + 1..]),
             _ => return None,

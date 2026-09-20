@@ -7,10 +7,154 @@ use orca_harness_core::{CancellationToken, Tool};
 use orca_harness_dag::{Kind, RunState, StageStatus};
 use orca_harness_tools::{BackgroundStatus, StageTiming, WorkflowSubmission};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 mod workflow_support;
 use workflow_support::{ctx, stage, terminal, tool, wait_until};
+
+#[tokio::test]
+async fn terminal_callback_can_submit_another_workflow() {
+    let manager = orca_harness_tools::SubagentManager::new(0);
+    let owner = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let once = std::sync::Arc::new(AtomicBool::new(false));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback_owner = owner.clone();
+    let callback_once = once.clone();
+    let subagent = std::sync::Arc::new(
+        orca_harness_tools::SubagentTool::with_tools(
+            workflow_support::Echo {
+                calls: Default::default(),
+                held: None,
+            },
+            std::sync::Arc::new(Vec::new),
+        )
+        .background(manager, move |notification| {
+            if notification.spawn.run.is_none() && !callback_once.swap(true, Ordering::SeqCst) {
+                let tool: std::sync::Arc<orca_harness_tools::WorkflowTool<_>> = callback_owner
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade)
+                    .unwrap();
+                let result = tool.submit(WorkflowSubmission::new([stage("nested", "nested", &[])]));
+                let _ = tx.send(result);
+            }
+        }),
+    );
+    let tool = std::sync::Arc::new(
+        orca_harness_tools::WorkflowTool::new(subagent, orca_harness_tools::WorkflowStore::new())
+            .unwrap(),
+    );
+    *owner.lock().unwrap() = Some(std::sync::Arc::downgrade(&tool));
+
+    tool.submit(WorkflowSubmission::new([stage("first", "first", &[])]))
+        .unwrap();
+    let nested = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("terminal callback must not deadlock runtime dispatch")
+        .unwrap();
+    assert!(nested.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stage_callback_cannot_block_dependent_progress() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback_gate = gate.clone();
+    let manager = orca_harness_tools::SubagentManager::new(0);
+    let subagent = std::sync::Arc::new(
+        orca_harness_tools::SubagentTool::with_tools(
+            workflow_support::Echo {
+                calls: calls.clone(),
+                held: None,
+            },
+            std::sync::Arc::new(Vec::new),
+        )
+        .background(manager.clone(), move |notification| {
+            if notification.spawn.stage.as_deref() == Some("first") {
+                let _ = entered_tx.send(());
+                let (lock, wake) = &*callback_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            }
+            let _ = tx.send(notification);
+        }),
+    );
+    let tool =
+        orca_harness_tools::WorkflowTool::new(subagent, orca_harness_tools::WorkflowStore::new())
+            .unwrap();
+    tool.submit(WorkflowSubmission::new([
+        stage("first", "first", &[]),
+        stage("second", "second", &["first"]),
+    ]))
+    .unwrap();
+
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(2)))
+        .await
+        .unwrap()
+        .expect("first stage callback was entered");
+    wait_until(
+        || {
+            manager
+                .active()
+                .iter()
+                .any(|job| job.spawn.stage.as_deref() == Some("second"))
+        },
+        "the dependent stage admission while the host callback is blocked",
+    )
+    .await;
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    assert!(terminal(&mut rx).await.0.result.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn panicking_stage_callback_does_not_strand_the_workflow() {
+    let panicked = std::sync::Arc::new(AtomicBool::new(false));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback_panicked = panicked.clone();
+    let subagent = std::sync::Arc::new(
+        orca_harness_tools::SubagentTool::with_tools(
+            workflow_support::Echo {
+                calls: Default::default(),
+                held: None,
+            },
+            std::sync::Arc::new(Vec::new),
+        )
+        .background(
+            orca_harness_tools::SubagentManager::new(0),
+            move |notification| {
+                if notification.spawn.stage.as_deref() == Some("first")
+                    && !callback_panicked.swap(true, Ordering::SeqCst)
+                {
+                    panic!("simulated host callback panic");
+                }
+                let _ = tx.send(notification);
+            },
+        ),
+    );
+    let tool =
+        orca_harness_tools::WorkflowTool::new(subagent, orca_harness_tools::WorkflowStore::new())
+            .unwrap();
+    tool.submit(WorkflowSubmission::new([
+        stage("first", "first", &[]),
+        stage("second", "second", &["first"]),
+    ]))
+    .unwrap();
+
+    let (done, stages) = terminal(&mut rx).await;
+    assert!(panicked.load(Ordering::SeqCst));
+    assert_eq!(stages, 1, "the panicking stage delivery was interrupted");
+    assert!(
+        done.result.is_ok(),
+        "dependent and terminal delivery survive"
+    );
+}
 
 fn tool_input(stages: &[orca_harness_dag::Stage]) -> Value {
     json!({"action":"run","graph":serde_json::to_value(stages).unwrap()})

@@ -121,6 +121,9 @@ OPTIONS:
   --plan             start in plan mode: read-only tools, and docs/plan/
                      the only writable directory — the agent decides
                      whether to write a plan (/mode opens a picker)
+  --orchestrate      start in orchestrate mode: the agent investigates
+                     and delegates substantial work; basic edits permitted;
+                     spawned workers keep their full tools
   --normal           start in normal mode (default): gated tools ask for approval
   --auto             start in auto mode: safe tools and guarded
                      file edits run; risk-bearing actions are reviewed
@@ -186,6 +189,10 @@ pub struct Config {
     /// and a session that silently came back read-only would be a
     /// puzzle rather than a safeguard.
     pub plan: bool,
+    /// Start with the top-level agent delegating to subagents instead of
+    /// acting on the machine. Like the other modes, this per-session
+    /// stance is not saved.
+    pub orchestrate: bool,
     /// Start with ordinary human approval prompts instead of the default
     /// automatic exact-action review. This per-session choice is not saved.
     pub normal: bool,
@@ -218,6 +225,8 @@ impl Config {
     pub fn mode(&self) -> Mode {
         if self.plan {
             Mode::Plan
+        } else if self.orchestrate {
+            Mode::Orchestrate
         } else if self.normal {
             Mode::Normal
         } else if self.auto {
