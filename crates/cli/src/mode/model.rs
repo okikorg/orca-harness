@@ -6,7 +6,7 @@ use orca_harness_core::{
 
 use super::{Mode, ModeHandle};
 
-const ORCHESTRATE_BRIEFING: &str = "Orchestrate mode is on for the parent: prioritize orchestration and delegation. Investigate, break substantial work into bounded tasks for subagent or workflow, and synthesize results. Small/basic code edits using write_file, edit_file, multi_edit, or apply_patch are permitted; delegate significant implementation and testing. This is a behavioral distinction, not a line-count limit. Shell, process, compute, MCP, and other non-allowlisted tools are blocked for the parent. Workers keep their existing tools and approval behavior.";
+const ORCHESTRATE_BRIEFING: &str = "Orchestrate mode is on for the parent: prioritize orchestration and delegation. Investigate, break substantial work into bounded tasks for subagent or workflow, and synthesize results. Small/basic code edits using write_file, edit_file, multi_edit, or apply_patch are permitted; delegate significant implementation and testing. Delegate command execution needed to verify changes, and if inspection finds a defect after a worker returns, delegate the repair and its tests before reporting completion. Do not claim that you personally ran commands the parent cannot execute. This is a behavioral distinction, not a line-count limit. Shell, process, compute, MCP, and other non-allowlisted tools are blocked for the parent. Workers keep their existing tools and approval behavior.";
 
 pub(crate) struct OrchestrateModel<M> {
     inner: M,

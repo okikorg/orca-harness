@@ -196,6 +196,8 @@ pub(crate) struct WireUsage {
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: WirePromptTokensDetails,
+    #[serde(default)]
+    completion_tokens_details: WireCompletionTokensDetails,
     /// DeepSeek-style cache reporting, used when details are absent.
     #[serde(default)]
     prompt_cache_hit_tokens: u64,
@@ -208,6 +210,11 @@ struct WirePromptTokensDetails {
     /// OpenRouter reports Anthropic cache writes here.
     #[serde(default)]
     cache_write_tokens: u64,
+}
+
+#[derive(Deserialize, Default)]
+struct WireCompletionTokensDetails {
+    reasoning_tokens: Option<u64>,
 }
 
 impl WireUsage {
@@ -233,7 +240,7 @@ impl WireUsage {
             output_tokens: self.completion_tokens,
             cache_read_tokens: cache_read,
             cache_create_tokens: cache_write,
-            reasoning_tokens: None,
+            reasoning_tokens: self.completion_tokens_details.reasoning_tokens,
         }
     }
 }

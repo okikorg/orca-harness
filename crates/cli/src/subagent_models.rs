@@ -5,20 +5,34 @@ use orca_harness_tools::SubagentModel;
 use std::sync::Arc;
 
 pub(crate) fn provider_endpoint(endpoint: &Endpoint, provider: Provider) -> Endpoint {
+    // An explicit budget is safe to reuse for another model behind the same
+    // provider adapter. Across providers, accepted effort names and request
+    // semantics can differ, so retain the previous fail-safe of leaving them
+    // unset. Codex is the known exception within one adapter: its request API
+    // does not support an output-token cap (also enforced by CLI validation).
+    let same_provider = provider == endpoint.provider;
     Endpoint {
         provider,
-        base_url: if provider == endpoint.provider {
+        base_url: if same_provider {
             endpoint.base_url.clone()
         } else {
             provider.base_url().into()
         },
-        api_key: if provider == endpoint.provider {
+        api_key: if same_provider {
             endpoint.api_key.clone()
         } else {
             provider.resolve_key()
         },
-        reasoning_effort: None,
-        max_output_tokens: None,
+        reasoning_effort: if same_provider {
+            endpoint.reasoning_effort.clone()
+        } else {
+            None
+        },
+        max_output_tokens: if same_provider && provider != Provider::OpenAiCodex {
+            endpoint.max_output_tokens
+        } else {
+            None
+        },
         request_session_id: Some(orca_harness_extensions::new_session_id()),
         model_retries: Arc::default(),
         ..endpoint.clone()
@@ -85,6 +99,52 @@ fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orca_harness_core::{Context, ModelResponse};
+    use serde_json::{json, Value};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    async fn one_shot_completion() -> (String, oneshot::Receiver<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0_u8; 4096];
+            let body = loop {
+                let read = stream.read(&mut buf).await.unwrap();
+                assert!(read > 0, "connection closed before request arrived");
+                raw.extend_from_slice(&buf[..read]);
+                let Some(split) = raw.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&raw[..split]).to_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .unwrap()
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap();
+                if raw.len() >= split + 4 + length {
+                    break serde_json::from_slice(&raw[split + 4..split + 4 + length]).unwrap();
+                }
+            };
+            tx.send(body).unwrap();
+            let response = json!({
+                "choices": [{"message": {"content": "done", "tool_calls": []}}]
+            })
+            .to_string();
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
+                response.len()
+            );
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        });
+        (format!("http://{addr}/v1"), rx)
+    }
 
     fn endpoint() -> Endpoint {
         Endpoint {
@@ -150,6 +210,48 @@ mod tests {
         let remote = provider_endpoint(&endpoint, Provider::OpenAi);
         assert_eq!(remote.base_url, Provider::OpenAi.base_url());
         assert_eq!(endpoint.model, "parent");
+    }
+
+    #[tokio::test]
+    async fn same_openrouter_route_sends_parent_budgets_for_worker_model() {
+        let (base_url, captured) = one_shot_completion().await;
+        let mut parent = endpoint();
+        parent.provider = Provider::OpenRouter;
+        parent.base_url = base_url;
+        parent.model = "openrouter/auto".into();
+        parent.reasoning_effort = Some("low".into());
+        parent.max_output_tokens = Some(4096);
+
+        let mut worker = provider_endpoint(&parent, Provider::OpenRouter);
+        worker.model = "z-ai/glm-5".into();
+        assert_eq!(worker.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(worker.max_output_tokens, Some(4096));
+
+        let mut context = Context::new();
+        context.push_user("work");
+        let response = worker.build_model().generate(&context, &[]).await.unwrap();
+        assert!(matches!(response, ModelResponse::Final { .. }));
+        let request = captured.await.unwrap();
+        assert_eq!(request["model"], "z-ai/glm-5");
+        assert_eq!(request["reasoning"], json!({"effort": "low"}));
+        assert_eq!(request["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn cross_provider_and_codex_unsupported_budgets_are_not_inherited() {
+        let mut parent = endpoint();
+        parent.provider = Provider::OpenRouter;
+        parent.reasoning_effort = Some("low".into());
+        parent.max_output_tokens = Some(4096);
+
+        let cross_provider = provider_endpoint(&parent, Provider::Anthropic);
+        assert_eq!(cross_provider.reasoning_effort, None);
+        assert_eq!(cross_provider.max_output_tokens, None);
+
+        parent.provider = Provider::OpenAiCodex;
+        let codex = provider_endpoint(&parent, Provider::OpenAiCodex);
+        assert_eq!(codex.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(codex.max_output_tokens, None);
     }
 
     #[test]

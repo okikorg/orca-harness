@@ -10,7 +10,14 @@ impl Model for GateModel {
         _tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
         self.release.cancelled().await;
-        Ok(ModelResponse::final_text("background complete"))
+        Ok(ModelResponse::Final {
+            text: "background complete".into(),
+            usage: Some(Usage {
+                cache_read_tokens: 31,
+                cache_create_tokens: 37,
+                ..Usage::default()
+            }),
+        })
     }
 }
 
@@ -64,7 +71,20 @@ async fn background_is_default_and_notifies_after_parent_cancellation() {
     let generation = completion.generation;
     assert!(manager.is_current(generation));
     assert_eq!(completion.spawn.call_id, "outer-background");
-    assert_eq!(completion.result.unwrap()["answer"], "background complete");
+    let result = completion.result.unwrap();
+    assert_eq!(result["answer"], "background complete");
+    assert_eq!(result["usage"]["cacheReadTokens"], 31);
+    assert_eq!(result["usage"]["cacheCreateTokens"], 37);
+    assert_eq!(result["timing"]["toolCallElapsed"], json!([]));
+    assert_eq!(result["timing"]["toolCumulativeMs"], 0);
+    assert_eq!(
+        result["timing"]["modelCallElapsedMs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(result["timing"]["modelCumulativeMs"].is_u64());
     assert_eq!(stats.agents(), 0);
     manager.cancel_all();
     assert!(!manager.is_current(generation));
@@ -90,6 +110,9 @@ async fn explicit_foreground_returns_the_answer_without_background_delivery() {
         .unwrap();
     assert_eq!(result["answer"], "direct answer");
     assert_eq!(result["termination"], "completed");
+    assert_eq!(result["usage"]["cacheReadTokens"], 0);
+    assert_eq!(result["usage"]["cacheCreateTokens"], 0);
+    assert!(result["usage"].get("reasoningTokens").is_none());
     assert!(manager.active().is_empty());
     assert!(rx.try_recv().is_err());
 }

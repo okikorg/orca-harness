@@ -27,6 +27,9 @@ fn assert_leading_briefing(context: &Context, durable_system: Option<&str>) {
     assert!(briefing.starts_with("Orchestrate mode is on for the parent"));
     assert!(briefing.contains("Small/basic code edits"));
     assert!(briefing.contains("delegate significant implementation and testing"));
+    assert!(briefing.contains("Delegate command execution needed to verify changes"));
+    assert!(briefing.contains("delegate the repair and its tests before reporting completion"));
+    assert!(briefing.contains("Do not claim that you personally ran commands"));
 }
 
 // Exercise the actual kernel and append-cursor recorder, not a mock sync.

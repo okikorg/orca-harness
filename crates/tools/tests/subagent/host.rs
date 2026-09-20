@@ -1,7 +1,35 @@
 // Typed host operations must behave exactly like the model tool: same
 // routing validation, admission, spawn ids, nesting, and cancellation.
 
-use orca_harness_tools::{BackgroundStatus, SubagentRequest};
+use orca_harness_tools::{BackgroundStatus, SubagentOutcome, SubagentRequest, WorkerTiming};
+
+#[test]
+fn timing_zero_defaults_have_a_stable_serialized_shape() {
+    let value = SubagentOutcome {
+        answer: "done".into(),
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: None,
+        cache_read_tokens: 0,
+        cache_create_tokens: 0,
+        runtime_ms: 0,
+        steps: 0,
+        tool_calls: 0,
+        timing: WorkerTiming::default(),
+        identity: None,
+    }
+    .into_value();
+
+    assert_eq!(
+        value["timing"],
+        json!({
+            "modelCallElapsedMs": [],
+            "modelCumulativeMs": 0,
+            "toolCallElapsed": [],
+            "toolCumulativeMs": 0,
+        })
+    );
+}
 
 fn scripted_final(text: &str) -> Arc<ScriptedModel> {
     Arc::new(ScriptedModel::new(vec![
@@ -10,7 +38,9 @@ fn scripted_final(text: &str) -> Arc<ScriptedModel> {
             usage: Some(Usage {
                 input_tokens: 11,
                 output_tokens: 7,
-                ..Usage::default()
+                reasoning_tokens: Some(3),
+                cache_read_tokens: 19,
+                cache_create_tokens: 23,
             }),
         },
         ModelResponse::Final {
@@ -18,7 +48,9 @@ fn scripted_final(text: &str) -> Arc<ScriptedModel> {
             usage: Some(Usage {
                 input_tokens: 11,
                 output_tokens: 7,
-                ..Usage::default()
+                reasoning_tokens: Some(3),
+                cache_read_tokens: 19,
+                cache_create_tokens: 23,
             }),
         },
     ]))
@@ -44,12 +76,17 @@ async fn typed_foreground_run_matches_the_tool_result() {
         .unwrap();
 
     assert_eq!(typed.answer, "same answer");
+    assert_eq!(typed.reasoning_tokens, Some(3));
+    assert_eq!(typed.cache_read_tokens, 19);
+    assert_eq!(typed.cache_create_tokens, 23);
     assert_eq!(typed.identity.as_ref().unwrap().model, "worker");
     let mut typed_json = typed.into_value();
     let mut tool_json = via_tool;
-    // Wall-clock is the only field that legitimately differs.
+    // Wall-clock fields legitimately differ between these separate runs.
     typed_json["runtimeMs"] = json!(0);
     tool_json["runtimeMs"] = json!(0);
+    typed_json["timing"] = json!(null);
+    tool_json["timing"] = json!(null);
     assert_eq!(typed_json, tool_json);
 }
 
