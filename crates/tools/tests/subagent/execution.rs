@@ -11,7 +11,9 @@ async fn runs_task_and_reports_answer_and_usage() {
         usage: Some(Usage {
             input_tokens: 10,
             output_tokens: 5,
-            ..Default::default()
+            reasoning_tokens: Some(2),
+            cache_read_tokens: 30,
+            cache_create_tokens: 20,
         }),
     }]));
     let (ws, _dir) = temp_ws();
@@ -23,8 +25,29 @@ async fn runs_task_and_reports_answer_and_usage() {
     assert_eq!(out["answer"], "found 3 files");
     assert_eq!(out["usage"]["inputTokens"], 10);
     assert_eq!(out["usage"]["outputTokens"], 5);
+    assert_eq!(out["usage"]["reasoningTokens"], 2);
+    assert_eq!(out["usage"]["cacheReadTokens"], 30);
+    assert_eq!(out["usage"]["cacheCreateTokens"], 20);
     assert_eq!(out["steps"], 1);
     assert_eq!(out["toolCalls"], 0);
+    assert_eq!(
+        out["timing"],
+        json!({
+            "modelCallElapsedMs": out["timing"]["modelCallElapsedMs"],
+            "modelCumulativeMs": out["timing"]["modelCumulativeMs"],
+            "toolCallElapsed": [],
+            "toolCumulativeMs": 0,
+        })
+    );
+    assert_eq!(
+        out["timing"]["modelCallElapsedMs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(out["timing"]["modelCallElapsedMs"][0].is_u64());
+    assert!(out["timing"]["modelCumulativeMs"].is_u64());
     assert_eq!(out["termination"], "completed");
     assert!(out["runtimeMs"].is_u64());
 }
@@ -32,8 +55,23 @@ async fn runs_task_and_reports_answer_and_usage() {
 #[tokio::test]
 async fn telemetry_counts_model_issued_unknown_tool_calls() {
     let model = Arc::new(ScriptedModel::new(vec![
-        ModelResponse::tool_calls(vec![call("1", "missing_tool", json!({}))]),
-        ModelResponse::final_text("recovered"),
+        ModelResponse::ToolCalls {
+            content: None,
+            calls: vec![call("1", "missing_tool", json!({}))],
+            usage: Some(Usage {
+                cache_read_tokens: 7,
+                cache_create_tokens: 11,
+                ..Usage::default()
+            }),
+        },
+        ModelResponse::Final {
+            text: "recovered".into(),
+            usage: Some(Usage {
+                cache_read_tokens: 13,
+                cache_create_tokens: 17,
+                ..Usage::default()
+            }),
+        },
     ]));
     let (ws, _dir) = temp_ws();
     let out = SubagentTool::new(model, &ws)
@@ -44,6 +82,8 @@ async fn telemetry_counts_model_issued_unknown_tool_calls() {
     assert_eq!(out["answer"], "recovered");
     assert_eq!(out["steps"], 2);
     assert_eq!(out["toolCalls"], 1);
+    assert_eq!(out["usage"]["cacheReadTokens"], 20);
+    assert_eq!(out["usage"]["cacheCreateTokens"], 28);
 }
 
 #[tokio::test]
@@ -67,6 +107,20 @@ async fn inner_agent_executes_real_tools() {
         std::fs::read_to_string(dir.join("note.txt")).unwrap(),
         "from the subagent"
     );
+    assert_eq!(
+        out["timing"]["modelCallElapsedMs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        out["timing"]["toolCallElapsed"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(out["timing"]["toolCallElapsed"][0]["name"], "write_file");
+    assert!(out["timing"]["toolCallElapsed"][0]["elapsedMs"].is_u64());
+    assert!(out["timing"]["toolCumulativeMs"].is_u64());
 }
 
 /// A tool `shell`-shaped enough for the retry rule: reports failures as
@@ -198,9 +252,15 @@ async fn parent_deadline_bounds_the_inner_run() {
 #[tokio::test]
 async fn step_limit_exhaustion_is_a_tool_error() {
     // One permitted step that returns tool calls: the run cannot finish.
-    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::tool_calls(vec![
-        call("1", "list_dir", json!({"path": "."})),
-    ])]));
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::ToolCalls {
+        content: None,
+        calls: vec![call("1", "list_dir", json!({"path": "."}))],
+        usage: Some(Usage {
+            cache_read_tokens: 41,
+            cache_create_tokens: 43,
+            ..Usage::default()
+        }),
+    }]));
     let (ws, _dir) = temp_ws();
     let tool = SubagentTool::new(model, &ws).limits(Limits {
         max_steps: 1,
@@ -211,6 +271,8 @@ async fn step_limit_exhaustion_is_a_tool_error() {
     assert!(err.contains("step limit exceeded"), "{err}");
     assert!(err.contains("steps=1"), "{err}");
     assert!(err.contains("toolCalls=1"), "{err}");
+    assert!(err.contains("cacheReadTokens=41"), "{err}");
+    assert!(err.contains("cacheCreateTokens=43"), "{err}");
 }
 
 #[tokio::test]

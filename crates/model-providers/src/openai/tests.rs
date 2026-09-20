@@ -169,3 +169,23 @@ fn tool_order_survives_into_the_request_verbatim() {
 
     assert_eq!(sent, ["read_file", "list_dir", "grep", "glob"]);
 }
+
+#[test]
+fn completion_reasoning_tokens_preserve_absent_zero_and_nonzero() {
+    for (details, expected) in [
+        (json!({}), None),
+        (json!({"reasoning_tokens": 0}), Some(0)),
+        (json!({"reasoning_tokens": 21}), Some(21)),
+    ] {
+        let wire: WireUsage = serde_json::from_value(json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 30,
+            "completion_tokens_details": details,
+        }))
+        .unwrap();
+        let usage = wire.into_usage();
+
+        assert_eq!(usage.output_tokens, 30);
+        assert_eq!(usage.reasoning_tokens, expected);
+    }
+}

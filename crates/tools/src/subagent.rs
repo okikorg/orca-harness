@@ -34,7 +34,9 @@ use crate::{core_tools, BackgroundStats, Workspace};
 mod host;
 mod settings;
 pub(crate) mod spawn;
-pub use host::{BackgroundAcknowledgement, SubagentOutcome, SubagentRequest};
+pub use host::{
+    BackgroundAcknowledgement, SubagentOutcome, SubagentRequest, ToolCallTiming, WorkerTiming,
+};
 pub use settings::*;
 
 type ToolFactory = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;

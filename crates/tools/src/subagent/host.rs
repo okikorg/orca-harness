@@ -62,24 +62,63 @@ pub struct SubagentOutcome {
     pub answer: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub reasoning_tokens: Option<u64>,
+    pub cache_read_tokens: u64,
+    pub cache_create_tokens: u64,
     pub runtime_ms: u128,
     pub steps: u64,
     pub tool_calls: u64,
+    pub timing: WorkerTiming,
     pub identity: Option<SubagentIdentity>,
+}
+
+/// Bounded worker latency samples. Tool durations are cumulative execution
+/// time, so overlapping parallel calls may sum to more than wall-clock time.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkerTiming {
+    pub model_call_elapsed_ms: Vec<u128>,
+    pub model_cumulative_ms: u128,
+    pub tool_call_elapsed: Vec<ToolCallTiming>,
+    pub tool_cumulative_ms: u128,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolCallTiming {
+    pub name: String,
+    pub elapsed_ms: u128,
+}
+
+impl WorkerTiming {
+    fn into_value(self) -> Value {
+        json!({
+            "modelCallElapsedMs": self.model_call_elapsed_ms,
+            "modelCumulativeMs": self.model_cumulative_ms,
+            "toolCallElapsed": self.tool_call_elapsed.into_iter().map(|call| json!({
+                "name": call.name,
+                "elapsedMs": call.elapsed_ms,
+            })).collect::<Vec<_>>(),
+            "toolCumulativeMs": self.tool_cumulative_ms,
+        })
+    }
 }
 
 impl SubagentOutcome {
     /// The JSON the `subagent` tool returns for a completed foreground run.
     pub fn into_value(self) -> Value {
+        let timing = self.timing.into_value();
         json!({
             "answer": self.answer,
-            "usage": {
-                "inputTokens": self.input_tokens,
-                "outputTokens": self.output_tokens,
+            "usage": Usage {
+                input_tokens: self.input_tokens,
+                output_tokens: self.output_tokens,
+                reasoning_tokens: self.reasoning_tokens,
+                cache_read_tokens: self.cache_read_tokens,
+                cache_create_tokens: self.cache_create_tokens,
             },
             "runtimeMs": self.runtime_ms,
             "steps": self.steps,
             "toolCalls": self.tool_calls,
+            "timing": timing,
             "termination": "completed",
             "identity": self.identity,
         })

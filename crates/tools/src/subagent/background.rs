@@ -62,17 +62,24 @@ pub(super) fn subagent_outcome(
     let tool_calls = telemetry.tool_calls();
     let answer = result.map_err(|err| {
         format!(
-            "subagent failed: {err} (runtimeMs={elapsed_ms}, steps={steps}, toolCalls={tool_calls}, inputTokens={}, outputTokens={})",
-            total.input_tokens, total.output_tokens
+            "subagent failed: {err} (runtimeMs={elapsed_ms}, steps={steps}, toolCalls={tool_calls}, inputTokens={}, outputTokens={}, cacheReadTokens={}, cacheCreateTokens={})",
+            total.input_tokens,
+            total.output_tokens,
+            total.cache_read_tokens,
+            total.cache_create_tokens
         )
     })?;
     Ok(SubagentOutcome {
         answer,
         input_tokens: total.input_tokens,
         output_tokens: total.output_tokens,
+        reasoning_tokens: total.reasoning_tokens,
+        cache_read_tokens: total.cache_read_tokens,
+        cache_create_tokens: total.cache_create_tokens,
         runtime_ms: elapsed_ms,
         steps: u64::from(steps),
         tool_calls: u64::from(tool_calls),
+        timing: telemetry.timing(),
         identity: identity.cloned(),
     })
 }

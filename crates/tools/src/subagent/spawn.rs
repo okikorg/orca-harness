@@ -164,13 +164,13 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
 
         let spawn_id = req.id;
 
-        let meter = Meter::default();
-        let telemetry = meter.clone();
-        let started = std::time::Instant::now();
         let mut limits = self.limits.clone();
         if !self.limits_configured {
             limits.max_steps = self.max_depth.max_steps();
         }
+        let meter = Meter::new(limits.max_steps as usize);
+        let telemetry = meter.clone();
+        let started = std::time::Instant::now();
         if let Some(parallel) = self.max_depth.parallel_tools() {
             limits.max_parallel_tools = if parallel == 0 {
                 usize::MAX

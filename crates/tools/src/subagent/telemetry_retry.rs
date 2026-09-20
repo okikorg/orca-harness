@@ -6,9 +6,27 @@ struct Meter {
     usage: Arc<StdMutex<Usage>>,
     steps: Arc<AtomicU32>,
     tool_calls: Arc<AtomicU32>,
+    timing: Arc<StdMutex<TimingMeter>>,
+    timing_entry_limit: usize,
+}
+
+#[derive(Default)]
+struct TimingMeter {
+    model_started: Option<std::time::Instant>,
+    model_call_elapsed_ms: Vec<u128>,
+    model_cumulative_ms: u128,
+    tool_call_elapsed: Vec<ToolCallTiming>,
+    tool_cumulative_ms: u128,
 }
 
 impl Meter {
+    fn new(timing_entry_limit: usize) -> Self {
+        Self {
+            timing_entry_limit,
+            ..Self::default()
+        }
+    }
+
     fn total(&self) -> Usage {
         *self.usage.lock().unwrap()
     }
@@ -20,6 +38,16 @@ impl Meter {
     fn tool_calls(&self) -> u32 {
         self.tool_calls.load(Ordering::Relaxed)
     }
+
+    fn timing(&self) -> WorkerTiming {
+        let timing = self.timing.lock().unwrap();
+        WorkerTiming {
+            model_call_elapsed_ms: timing.model_call_elapsed_ms.clone(),
+            model_cumulative_ms: timing.model_cumulative_ms,
+            tool_call_elapsed: timing.tool_call_elapsed.clone(),
+            tool_cumulative_ms: timing.tool_cumulative_ms,
+        }
+    }
 }
 
 #[async_trait]
@@ -29,11 +57,15 @@ impl Extension for Meter {
     }
 
     fn subscriptions(&self) -> Subscriptions {
-        Subscriptions::none().before_model().after_model()
+        Subscriptions::none()
+            .before_model()
+            .after_model()
+            .around_tool()
     }
 
     async fn before_model(&self, _context: &mut Context) -> Result<(), ExtensionError> {
         self.steps.fetch_add(1, Ordering::Relaxed);
+        self.timing.lock().unwrap().model_started = Some(std::time::Instant::now());
         Ok(())
     }
 
@@ -42,6 +74,15 @@ impl Extension for Meter {
         _context: &mut Context,
         response: &ModelResponse,
     ) -> Result<(), ExtensionError> {
+        let mut timing = self.timing.lock().unwrap();
+        if let Some(started) = timing.model_started.take() {
+            let elapsed_ms = started.elapsed().as_millis();
+            timing.model_cumulative_ms += elapsed_ms;
+            if timing.model_call_elapsed_ms.len() < self.timing_entry_limit {
+                timing.model_call_elapsed_ms.push(elapsed_ms);
+            }
+        }
+        drop(timing);
         if let Some(usage) = response.usage() {
             self.usage.lock().unwrap().add(usage);
         }
@@ -50,6 +91,27 @@ impl Extension for Meter {
                 .fetch_add(calls.len() as u32, Ordering::Relaxed);
         }
         Ok(())
+    }
+
+    async fn around_tool<'a>(
+        &self,
+        call: &ToolCall,
+        input: Value,
+        _ctx: &ToolContext,
+        next: Next<'a>,
+    ) -> Result<Value, ToolError> {
+        let started = std::time::Instant::now();
+        let result = next.run(input).await;
+        let elapsed_ms = started.elapsed().as_millis();
+        let mut timing = self.timing.lock().unwrap();
+        timing.tool_cumulative_ms += elapsed_ms;
+        if timing.tool_call_elapsed.len() < self.timing_entry_limit {
+            timing.tool_call_elapsed.push(ToolCallTiming {
+                name: call.name.clone(),
+                elapsed_ms,
+            });
+        }
+        result
     }
 }
 
