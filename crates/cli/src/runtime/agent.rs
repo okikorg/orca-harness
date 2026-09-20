@@ -13,15 +13,17 @@ use crate::plan::PlanArea;
 
 /// The extensions every spawned subagent gets: a relay that tags its
 /// events with the spawn's identity, context-safe tool-output truncation,
-/// and the same plan gate the orchestrator has.
+/// and the session's tool gate in its worker form.
 ///
 /// The gate has to be here as well, not only on the top-level agent, for
 /// the same reason tool retry is mirrored into subagents: a restriction
 /// that only holds at depth 0 is not a restriction. Spawning is itself
-/// denied in plan mode, so this matters for one case — a subagent that
-/// was already running when the user flipped `/mode`. Without it, that
+/// denied in plan mode, so the reachable case is a subagent already
+/// running when the user flipped `/mode` — without the mirror, that
 /// inner agent would keep writing while the interface says the session
-/// changes nothing.
+/// changes nothing. [`PlanGate::for_worker`] is the worker view of the
+/// same shared handle: orchestrate does not propagate (its whole point
+/// is to push work down to these workers), plan and yolo do.
 pub(crate) fn subagent_extensions(
     spawn: &SubagentSpawn,
     ui: &mpsc::UnboundedSender<UiMsg>,
@@ -56,7 +58,7 @@ pub(crate) fn subagent_extensions(
     let execution_events = events.execution_marker();
     let mut extensions = vec![
         Arc::new(events) as Arc<dyn Extension>,
-        Arc::new(PlanGate::new(mode.clone(), plan_area.clone())) as Arc<dyn Extension>,
+        Arc::new(PlanGate::for_worker(mode.clone(), plan_area.clone())) as Arc<dyn Extension>,
     ];
     let host_hooks = [
         plugin_hooks.map(|hooks| hooks.clone() as Arc<dyn Extension>),

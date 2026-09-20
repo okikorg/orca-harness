@@ -153,10 +153,10 @@ skip the prompt, other directories still ask — and are listed and revocable fr
 
 **Plan mode** — `/mode plan` (or `--plan` at startup) makes the session
 read-only: the agent investigates and proposes, but changes nothing.
-Bare `/mode` opens a picker over all three modes, preselected on the
-current one; `/mode plan`, `/mode yolo`, and `/mode normal` set a mode
-directly. The status line carries `· plan mode` for as long as plan
-mode is on.
+Bare `/mode` opens a picker over all five modes, preselected on the
+current one; `/mode normal`, `/mode plan`, `/mode orchestrate`, `/mode auto`,
+and `/mode yolo` set a mode directly. The status line carries `· plan mode`
+for as long as plan mode is on.
 
 It is an **allowlist**, not a denylist. Only `read_file`, `list_dir`,
 `grep`, `glob`, `file_info`, `read_tool_result`, `memory_search`, `web_fetch`,
@@ -187,6 +187,40 @@ are asked before anything lands on disk. Because the gate runs before
 approval, an "always allow `write_file`" grant cannot widen past this
 directory.
 
+<a id="orchestrate-mode"></a>
+
+**Orchestrate mode** — `/mode orchestrate` (or `--orchestrate` at
+startup) is delegation-first: the parent investigates, delegates substantial
+work through `subagent` and `workflow`, and synthesizes results. Small/basic
+code edits are permitted through `write_file`, `edit_file`, `multi_edit`, and
+`apply_patch`, including source files. Significant implementation and testing
+should be delegated; there is no arbitrary edit-size threshold. Parent shell,
+process, compute, MCP calls, and other non-allowlisted tools remain blocked.
+The model is briefed before requests at startup and after live mode changes;
+leaving the mode removes that parent instruction.
+
+Workers keep their full tools and existing approval behavior: ordinary worker
+tool calls do not acquire interactive approval prompts. Parent gated calls
+still use existing approvals. Orchestrate does not propagate to workers;
+flipping to plan mid-run still restrains an in-flight worker.
+
+Use bare `/mode` to pick it, or `/mode normal` to leave it. The selection is
+session-local, not a saved configuration setting. Worker routing and budgets
+are configured separately with `/subagents`; its `auto` route is not Auto
+session mode. In headless runs, use `--orchestrate --auto-approve -p "…"` to
+permit gated delegation and edits; approval does not unblock parent execution.
+`subagent` must be enabled (do not use `--bare` or exclude it with `--tools`).
+`workflow` is available in the interactive host, not headless runs.
+See the [Orchestrate mode manual](docs/external/index.html#orchestrate-mode)
+for activation examples, the parent allowlist, and mode interactions.
+
+```text
+• orchestrate mode · delegation-first; basic edits permitted, substantial work delegated
+  …investigation…
+  shell cargo test   [denied: orchestrate — delegate this to a worker]
+  subagent "run the focused tests and report failures"
+```
+
 ```text
 • plan mode · read-only: the agent investigates and proposes, but changes nothing
   …investigation…
@@ -195,7 +229,14 @@ directory.
 • plan saved to docs/plan/2026-08-22-rewind-command.md
 ```
 
-An episode ends when you return to normal mode, and `/mode normal` lists
+After a successful interactive turn writes or revises a plan, the TUI asks
+whether to approve it and start implementing (after queued prompts finish).
+This is separate from approving the file write: `y` switches to normal mode
+and starts an implementation turn referencing the saved plans; `n` keeps plan
+mode on. It does not ask again until a plan is written or revised. Headless
+runs do not perform this interactive handoff.
+
+An episode ends when you leave plan mode, and `/mode normal` lists
 the plans that were actually written — observed from tool results, not
 guessed from the filesystem, so a denied or failed write is never
 reported as saved. It says nothing when no plan was written: looking
@@ -224,11 +265,11 @@ Plan mode outranks yolo if both flags are given (`--yolo --plan` starts
 in plan mode): read-only and unprompted is a coherent, safe stance for
 unattended investigation, while letting the louder flag win would turn
 an ambiguous invocation into "everything writable, nobody asked".
+Explicit startup precedence is plan, orchestrate, normal, auto, yolo —
+the safer mode wins.
 
-Note that this repository's own plans live in `docs/superpowers/plans/`,
-the convention the `superpowers` plugin uses. `orcacode` writes to
-`docs/plan/` — one constant, `plan::PLAN_DIR`, if you would rather it
-matched.
+The CLI plan directory is `docs/plan/`, defined by `plan::PLAN_DIR`;
+it is independent of planning conventions used by plugins.
 
 `shell` is excluded on purpose: most of what an agent wants it for while
 planning (`git log`, `cargo check`) is read-only, but deciding that from
@@ -390,8 +431,10 @@ The welcome screen remains usable and shows `MCP connecting · tools pending`.
 Catalog publication remains deterministic; slow connections do not block the
 UI or ordinary tools. Once initialization completes, integration tools are
 registered at the next worker command boundary, without changing a running
-agent's tool set. Changes made during initialization queue one fresh reload.
-Exiting cancels pending connection work.
+agent's tool set. Publishing the MCP catalog preserves local background
+processes and Python/Bun interpreter state. Changes made during initialization
+queue one fresh reload. Exiting cancels pending connection work. Headless runs
+await MCP initialization before the prompt runs.
 
 Servers persist to the config file, either as a bare command string or as
 `{"command": …, "enabled": false}` so a disabled server keeps its command:

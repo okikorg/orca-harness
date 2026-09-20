@@ -26,6 +26,7 @@ pub const GATED_TOOLS: &[&str] = &[
     "pykernel",
     "bun_repl",
     "subagent",
+    "workflow",
     "memory_manage",
 ];
 
@@ -274,13 +275,43 @@ mod tests {
     }
 
     #[test]
-    fn mutations_compute_subagent_and_memory_writes_are_gated() {
+    fn mutations_compute_delegation_and_memory_writes_are_gated() {
         assert!(GATED_TOOLS.contains(&"apply_patch"));
         assert!(GATED_TOOLS.contains(&"multi_edit"));
         assert!(GATED_TOOLS.contains(&"pykernel"));
         assert!(GATED_TOOLS.contains(&"bun_repl"));
         assert!(GATED_TOOLS.contains(&"subagent"));
+        assert!(GATED_TOOLS.contains(&"workflow"));
         assert!(GATED_TOOLS.contains(&"memory_manage"));
+    }
+
+    #[tokio::test]
+    async fn workflow_uses_the_same_interactive_gate_as_subagent() {
+        for name in ["subagent", "workflow"] {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let approval = Approval::with_mode(ModeHandle::default(), tx, "/test-ws".into());
+            let answer = tokio::spawn(async move {
+                match rx.recv().await {
+                    Some(UiMsg::Approval(req)) => {
+                        assert_eq!(req.tool_name, name);
+                        req.respond.send(ApprovalResponse::AllowOnce).unwrap();
+                    }
+                    _ => panic!("expected approval request for {name}"),
+                }
+            });
+
+            let decision = approval.before_tool(&call(name)).await.unwrap();
+            assert!(matches!(decision, ToolDecision::Continue));
+            answer.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn headless_denies_workflow_like_subagent() {
+        for name in ["subagent", "workflow"] {
+            let decision = HeadlessGate.before_tool(&call(name)).await.unwrap();
+            assert!(denied(&decision), "{name} must require --auto-approve");
+        }
     }
 
     /// In yolo no gated tool prompts, whatever the session or saved
@@ -321,8 +352,10 @@ mod tests {
     async fn auto_mode_leaves_gated_calls_to_the_automatic_reviewer() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let approval = Approval::with_mode(ModeHandle::new(Mode::Auto), tx, "/test-ws".into());
-        let decision = approval.before_tool(&call("shell")).await.unwrap();
-        assert!(matches!(decision, ToolDecision::Continue));
+        for name in ["shell", "subagent", "workflow"] {
+            let decision = approval.before_tool(&call(name)).await.unwrap();
+            assert!(matches!(decision, ToolDecision::Continue));
+        }
         assert!(rx.try_recv().is_err(), "auto must not open a human prompt");
     }
 

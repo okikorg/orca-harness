@@ -170,6 +170,8 @@ pub async fn run<M: Model + Clone + 'static>(
     });
     let execution_events = events.execution_marker();
 
+    // Only the parent receives the live orchestration briefing, not workers/reviewers.
+    let model: Arc<dyn Model> = Arc::new(crate::mode::OrchestrateModel::new(model, mode.clone()));
     let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws.root());
     let (meter, usage) = UsageMeter::new();
     // PlanGate first: --plan denies before --yolo/--auto-approve can allow.

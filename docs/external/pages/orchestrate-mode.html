@@ -1,0 +1,96 @@
+<section class="section" id="activate">
+    <h2>Activate orchestration mode</h2>
+    <p>The CLI calls this mode <strong>orchestrate</strong>. Start with
+        <code>--orchestrate</code>, enter <code>/mode orchestrate</code> during an
+        interactive session, or select it from the bare <code>/mode</code> picker.
+        Use <code>/mode normal</code> to leave. The mode is session-local, not a
+        persisted configuration setting; without an explicit mode flag, startup
+        uses normal mode.</p>
+    <div class="terminal"><pre>orcacode --orchestrate
+
+# Headless: permit gated delegation and edits explicitly
+orcacode --orchestrate --auto-approve -p "Delegate focused tests and summarize the results"</pre></div>
+    <p>Configure worker model routing and budgets separately with
+        <code>/subagents</code>; see <a href="#subagents">Subagents</a> for saved
+        routes, preferred models, depth, and execution limits. The worker route
+        named <code>auto</code> is not <code>/mode auto</code> and does not change
+        session approvals. Orchestrate mode does not select a special worker model.</p>
+</section>
+<section class="section" id="parent-tools">
+    <h2>What the parent can do</h2>
+    <p>The parent receives a request-local instruction to investigate, break
+        substantial work into bounded tasks, delegate, and synthesize results.
+        Small/basic native edits are permitted, including source files.
+        Significant implementation and testing should go to workers.</p>
+    <div class="callout warn"><span class="callout-label">GUIDANCE VS ENFORCEMENT</span>
+        <p>“Basic” is behavioral guidance, not an enforced line-count or edit-size
+            limit. The hard boundary is the tool allowlist below. Unlike plan
+            mode, orchestrate does not restrict native edits to
+            <code>docs/plan/</code>. Normal tool validation and approval still apply.</p>
+    </div>
+    <table class="command-table">
+        <thead><tr><th>Parent capability</th><th>Mode gate</th></tr></thead>
+        <tbody>
+            <tr><td>Investigation and session helpers</td><td>Allows <code>read_file</code>,
+                <code>list_dir</code>, <code>grep</code>, <code>glob</code>,
+                <code>file_info</code>, <code>read_tool_result</code>,
+                <code>memory_search</code>, <code>web_fetch</code>,
+                <code>web_search</code>, <code>web_crawl</code>, <code>skill</code>,
+                <code>todo_write</code>, and <code>ask</code>.</td></tr>
+            <tr><td>Native edits</td><td>Allows <code>write_file</code>,
+                <code>edit_file</code>, <code>multi_edit</code>, and <code>apply_patch</code>.</td></tr>
+            <tr><td>Delegation</td><td>Allows <code>subagent</code> and <code>workflow</code>.</td></tr>
+            <tr><td>Everything else</td><td>Denies <code>shell</code>, <code>process</code>,
+                <code>pykernel</code>, <code>bun_repl</code>, MCP calls,
+                <code>memory_manage</code>, and other non-allowlisted or unknown tools.</td></tr>
+        </tbody>
+    </table>
+    <p>Allowed means the mode gate permits the call, not that the tool is installed
+        or approval-free. The interactive host registers <code>workflow</code>;
+        the headless host does not. For headless delegation, keep
+        <code>subagent</code> enabled: <code>--bare</code> omits it, and a
+        <code>--tools</code> filter must include it.</p>
+</section>
+<section class="section" id="delegate">
+    <h2>Delegate execution, not the whole conversation</h2>
+    <p>Give each worker a bounded, self-contained task with relevant paths,
+        constraints, and the exact result expected. For example: “Run the focused
+        authentication tests; report the commands, failures, and relevant file
+        locations. Do not edit files.” The parent can inspect files and reconcile
+        the returned findings. A denied parent <code>shell</code> call is not
+        automatically rerouted: the denial tells the model to delegate through
+        <code>subagent</code> rather than retry the call itself.</p>
+    <p>Workers use their own registered tool set, not the parent's orchestrate
+        allowlist. They can execute commands and make edits when their tools and
+        existing policies permit. This does not copy every optional parent tool
+        into a worker or guarantee that a worker has an MCP tool. Ordinary worker
+        calls do not acquire interactive human-approval prompts just because
+        orchestrate is active. Approve the parent delegation with that scope in mind.</p>
+    <p>See <a href="#subagents">Subagents</a> for worker context, routing, results,
+        and interactive background delivery.</p>
+</section>
+<section class="section" id="approvals-and-modes">
+    <h2>Approvals and other session modes</h2>
+    <ul>
+        <li><strong>Parent approvals remain.</strong> The mode gate runs before
+            approval, so a saved grant cannot unblock a denied tool. In headless
+            runs, <code>--orchestrate</code> alone does not authorize gated
+            <code>subagent</code> calls or edits; use <code>--auto-approve</code>
+            to permit them. That flag does not remove the parent allowlist.</li>
+        <li><strong>Modes are alternatives, not stacked capabilities.</strong>
+            Multiple explicit startup flags resolve in this order:
+            plan, orchestrate, normal, auto, yolo. Thus adding <code>--auto</code>
+            or <code>--yolo</code> to <code>--orchestrate</code> does not bypass
+            its restrictions or approvals; adding <code>--plan</code> selects plan.</li>
+        <li><strong>Interactive changes are live.</strong> The gate reads mode on
+            each tool call. Workers treat orchestrate as normal; other modes
+            propagate through their shared mode handle. Switching to plan
+            restricts the next calls of already-running workers too, rather than
+            retroactively undoing work. The parent's orchestration instruction is
+            present only on model requests made while orchestrate is active;
+            workers do not receive that instruction.</li>
+    </ul>
+    <p>Related guides: <a href="#approvals">Approvals</a>,
+        <a href="#plan-mode">Plan mode</a>, <a href="#auto-mode">Auto mode</a>,
+        and <a href="#headless">Headless runs</a>.</p>
+</section>

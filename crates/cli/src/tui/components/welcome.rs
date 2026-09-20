@@ -40,7 +40,7 @@ impl Welcome<'_> {
             ]),
             row("/help", "commands"),
             row("/models", "switch model"),
-            row("/mode", "plan, auto review, yolo"),
+            row("/mode", "plan, orchestrate, auto, yolo"),
         ];
         let content = super::layout::fit_lines(content, available_width);
         let content_width = content.iter().map(Line::width).max().unwrap_or(0);

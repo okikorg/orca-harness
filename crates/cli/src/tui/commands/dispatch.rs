@@ -487,7 +487,7 @@ pub(crate) fn mode_command(app: &mut App, arg: &str) {
         None => {
             push_error(
                 app,
-                format!("unknown mode: {arg} — valid modes: normal, plan, auto, yolo"),
+                format!("unknown mode: {arg} — valid modes: normal, plan, orchestrate, auto, yolo"),
             );
         }
     }

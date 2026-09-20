@@ -29,6 +29,13 @@
   },
   {
     "group": "WORK SAFELY",
+    "id": "orchestrate-mode",
+    "label": "Orchestrate mode",
+    "title": "Investigate, delegate, synthesize",
+    "lede": "Orchestration mode keeps the parent focused on coordination, permits basic native edits, and delegates substantial implementation and testing to workers."
+  },
+  {
+    "group": "WORK SAFELY",
     "id": "auto-mode",
     "label": "Auto mode",
     "title": "Proceed without repeated prompts",

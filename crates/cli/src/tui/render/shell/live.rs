@@ -80,6 +80,7 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
         }
         crate::mode::Mode::Auto => return "auto".to_string(),
         crate::mode::Mode::Yolo => return "yolo".to_string(),
+        crate::mode::Mode::Orchestrate => return "orchestrate".to_string(),
         crate::mode::Mode::Plan => {}
     }
     match plan.written().len() {
