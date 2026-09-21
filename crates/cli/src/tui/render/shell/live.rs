@@ -289,6 +289,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             Overlay::Sessions { sessions, picker } => {
                 sessions_picker_lines(sessions, app.cfg.session_id.as_deref(), picker, width)
             }
+            Overlay::SidekickStop { ids, picker } => sidekick_stop_lines(app, ids, picker, width),
         };
         if !app.overlay_stack.is_empty() {
             if let Some(span) = lines.first_mut().and_then(|line| line.spans.first_mut()) {

@@ -129,6 +129,41 @@ async fn child_inherits_agent_policy() {
 }
 
 #[tokio::test]
+async fn sidekick_inherits_agent_policy() {
+    let root = temp_dir("sidekick-policy");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let child = Arc::new(ScriptedModel::tool_round(
+        vec![call("f1", "forbidden", json!({}))],
+        "reported denial",
+    ));
+    let agent = harness
+        .agent(child.clone())
+        .policy(ToolPolicy::new().deny(["forbidden"]))
+        .tool(FnTool::new(
+            "forbidden",
+            "must not run",
+            json!({"type": "object"}),
+            |_args, _ctx| async move { Ok(json!({"ran": true})) },
+        ))
+        .subagents(SubagentConfig::default())
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let report = session
+        .subagents()
+        .unwrap()
+        .start_sidekick_foreground(SubagentRequest::new("try it"), None, None)
+        .await
+        .unwrap();
+    assert_eq!(report.answer, "reported denial");
+    assert!(child.observed_contexts()[1].messages().iter().any(
+        |message| matches!(message, Message::Tool { results } if results[0].is_error
+            && results[0].output.to_string().contains("denied"))
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
 async fn child_extension_factory_and_event_relay_run_per_spawn() {
     let root = temp_dir("lifecycle-child-extensions");
     let harness = Harness::builder().workspace(&root).build().unwrap();

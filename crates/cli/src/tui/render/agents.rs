@@ -263,6 +263,8 @@ fn status_label(status: SubagentTranscriptStatus) -> &'static str {
     match status {
         SubagentTranscriptStatus::Queued => "queued",
         SubagentTranscriptStatus::Running => "running",
+        SubagentTranscriptStatus::Idle => "idle",
+        SubagentTranscriptStatus::Stopped => "stopped",
         SubagentTranscriptStatus::Completed => "done",
         SubagentTranscriptStatus::Failed => "failed",
     }
@@ -275,6 +277,8 @@ fn status_mark(status: SubagentTranscriptStatus) -> char {
     match status {
         SubagentTranscriptStatus::Queued => '-',
         SubagentTranscriptStatus::Running => g.waiting,
+        SubagentTranscriptStatus::Idle => g.waiting,
+        SubagentTranscriptStatus::Stopped => '■',
         SubagentTranscriptStatus::Completed => g.done,
         SubagentTranscriptStatus::Failed => g.failed,
     }
@@ -285,6 +289,8 @@ fn status_style(status: SubagentTranscriptStatus) -> Style {
     match status {
         SubagentTranscriptStatus::Queued => t.dim,
         SubagentTranscriptStatus::Running => t.accent,
+        SubagentTranscriptStatus::Idle => t.accent,
+        SubagentTranscriptStatus::Stopped => t.dim,
         SubagentTranscriptStatus::Completed => t.success,
         SubagentTranscriptStatus::Failed => t.error,
     }
@@ -334,8 +340,13 @@ fn transcript_header_lines(transcript: &SubagentTranscript, width: usize) -> Vec
         .parent_id
         .map(|id| format!(" · parent #{id}"))
         .unwrap_or_default();
+    let agent_kind = if transcript.persistent {
+        "⚭ sidekick"
+    } else {
+        "⑂ subagent"
+    };
     lines.push(agent_line(
-        &format!("#{} · {identity}{parent}", transcript.id),
+        &format!("#{} · {agent_kind} · {identity}{parent}", transcript.id),
         width,
         t.dim,
     ));
@@ -452,6 +463,20 @@ fn transcript_body_lines(
             }
             append_block(&mut lines, answer, BlockSpacing::Section, prior);
         }
+    }
+    if transcript.status == SubagentTranscriptStatus::Idle {
+        lines.extend(agent_text(
+            "Sidekick is alive and idle; its execution context is retained for a parent follow-up.",
+            width,
+            t.dim,
+        ));
+    }
+    if transcript.status == SubagentTranscriptStatus::Stopped {
+        lines.extend(agent_text(
+            "Sidekick stopped; this display history is read-only and its execution context cannot be reused.",
+            width,
+            t.dim,
+        ));
     }
     lines
 }

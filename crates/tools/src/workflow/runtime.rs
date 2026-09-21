@@ -445,7 +445,7 @@ impl<M: Model + Clone + 'static> Runtime<M> {
                     stage,
                     request,
                     deadline,
-                } => match self.subagent.prepare_spawn(request, true, deadline) {
+                } => match self.subagent.prepare_spawn(request, true, deadline, false) {
                     Ok(prepared) => {
                         prepared.detach();
                     }

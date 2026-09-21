@@ -284,6 +284,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
+        name: "sidekick",
+        description: "start a persistent sidekick, or choose one to stop",
+        category: "Tools",
+        takes_args: true,
+    },
+    CommandSpec {
         name: "mcp",
         description: "manage standalone MCP and view plugin servers",
         category: "Session",
@@ -421,6 +427,7 @@ mod tests {
                 "models",
                 "provider",
                 "subagents",
+                "sidekick",
                 "mode",
                 "usage",
                 "theme",

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use orca_harness_core::testing::ScriptedModel;
+use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::{CancellationToken, Model, ModelResponse};
 use orca_harness_sdk::orchestration::{BackgroundStatus, SubagentRequest};
 use orca_harness_sdk::{Harness, SdkError, SubagentConfig};
@@ -13,6 +13,7 @@ mod background_support;
 mod common;
 use background_support::{wait_until, Held};
 use common::temp_dir;
+use serde_json::json;
 
 #[tokio::test]
 async fn session_subagents_run_foreground_returns_typed_outcome() {
@@ -40,6 +41,177 @@ async fn session_subagents_run_foreground_returns_typed_outcome() {
     assert_eq!(identity.provider, "sdk");
     assert_eq!(identity.model, "scripted");
     assert!(subagents.active().is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn session_sidekick_retains_context_and_clear_stops_handle() {
+    let root = temp_dir("subagents-sidekick");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::final_text("first"),
+        ModelResponse::final_text("follow-up"),
+    ]));
+    let agent = harness
+        .agent(model.clone())
+        .name("scripted")
+        .subagents(SubagentConfig::default())
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+
+    let first = subagents
+        .start_sidekick_foreground(SubagentRequest::new("inspect"), None, None)
+        .await
+        .unwrap();
+    assert_eq!(first.status.as_str(), "idle");
+    let follow_up = subagents
+        .sidekick_task_foreground(first.spawn_id, "follow up", None, None)
+        .await
+        .unwrap();
+    assert_eq!(follow_up.answer, "follow-up");
+    assert_eq!(model.observed_contexts()[1].messages().len(), 4);
+
+    session.clear().await.unwrap();
+    let error = subagents
+        .sidekick_task_foreground(first.spawn_id, "too late", None, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("sidekick is stopped"), "{error}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn session_sidekick_background_api_returns_immediately_and_notifies() {
+    let root = temp_dir("subagents-sidekick-background");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let release = CancellationToken::new();
+    let agent = harness
+        .agent(Held(release.clone()))
+        .subagents(SubagentConfig::default())
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    let mut notifications = subagents.notifications();
+
+    let acknowledgement = subagents
+        .start_sidekick(SubagentRequest::new("held"))
+        .unwrap();
+    assert_eq!(acknowledgement.status, BackgroundStatus::Running);
+    assert_eq!(
+        subagents
+            .sidekick_task(acknowledgement.spawn_id, "overlap")
+            .unwrap_err()
+            .to_string(),
+        "subagent error: sidekick is busy"
+    );
+    release.cancel();
+    let finished = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let orca_harness_sdk::BackgroundNotification::SubagentFinished(event) =
+                notifications.recv().await.unwrap()
+            {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(finished.spawn.id, acknowledgement.spawn_id);
+    assert_eq!(subagents.pending_completions(), 1);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn model_tool_sidekick_defaults_background_and_parent_continues() {
+    let root = temp_dir("subagents-sidekick-model-tool-background");
+    let harness = Harness::builder().workspace(&root).build().unwrap();
+    let release = CancellationToken::new();
+    let parent = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tool_calls(vec![call(
+            "sidekick-1",
+            "subagent",
+            json!({"task": "held", "persistent": true}),
+        )]),
+        ModelResponse::final_text("parent continued"),
+        ModelResponse::tool_calls(vec![call(
+            "sidekick-2",
+            "subagent",
+            json!({"action": "task", "spawnId": 0, "task": "follow up"}),
+        )]),
+        ModelResponse::final_text("parent continued again"),
+    ]));
+    let agent = harness
+        .agent(parent)
+        .subagents(SubagentConfig::new().model(
+            orca_harness_sdk::orchestration::SubagentModel::new(
+                "flash/held",
+                "held worker",
+                Arc::new(Held(release.clone())) as Arc<dyn Model>,
+            ),
+        ))
+        .build()
+        .unwrap();
+    let session = agent.new_session().ephemeral().open().unwrap();
+    let subagents = session.subagents().unwrap();
+    assert!(subagents
+        .settings()
+        .set_default_model(Some("flash/held".into())));
+
+    let first = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        session.run("start a sidekick"),
+    )
+    .await
+    .expect("the real model tool call must return before the child completes")
+    .unwrap();
+    assert_eq!(first.text, "parent continued");
+    let first_result = first
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            orca_harness_core::Message::Tool { results } => results
+                .iter()
+                .find(|result| result.call_id == "sidekick-1")
+                .map(|result| result.output.clone()),
+            _ => None,
+        })
+        .expect("sidekick acknowledgement");
+    assert_eq!(first_result["spawnId"], 0);
+    assert_eq!(first_result["status"], "running");
+    assert_eq!(first_result["persistent"], true);
+
+    release.cancel();
+    wait_until(
+        || {
+            subagents
+                .sidekick_status(0)
+                .is_ok_and(|status| status.as_str() == "idle")
+        },
+        "sidekick to become idle",
+    )
+    .await;
+    let second = session.run("send the follow-up").await.unwrap();
+    assert_eq!(second.text, "parent continued again");
+    let second_result = second
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            orca_harness_core::Message::Tool { results } => results
+                .iter()
+                .find(|result| result.call_id == "sidekick-2")
+                .map(|result| result.output.clone()),
+            _ => None,
+        })
+        .expect("follow-up acknowledgement");
+    assert_eq!(second_result["spawnId"], 0, "the handle stays stable");
+    assert_eq!(second_result["persistent"], true);
 
     let _ = std::fs::remove_dir_all(&root);
 }

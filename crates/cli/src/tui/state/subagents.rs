@@ -23,6 +23,10 @@ pub(crate) enum SubagentTranscriptStatus {
     /// this state in the same tick they start.
     Queued,
     Running,
+    /// Persistent sidekick is alive with its conversation retained.
+    Idle,
+    /// Persistent sidekick context was released; display history remains.
+    Stopped,
     Completed,
     Failed,
 }
@@ -54,6 +58,10 @@ pub(crate) struct SubagentTranscript {
     pub(crate) identity: Option<orca_harness_tools::SubagentIdentity>,
     pub(crate) status: SubagentTranscriptStatus,
     pub(crate) detached: bool,
+    pub(crate) persistent: bool,
+    /// The initial awaited task returned a handle, so later task failures
+    /// leave this sidekick reusable. `persistent` alone only records intent.
+    pub(crate) sidekick_established: bool,
     pub(crate) started: Instant,
     pub(crate) elapsed: Option<Duration>,
     pub(crate) input_tokens: u64,
@@ -91,6 +99,8 @@ impl SubagentTranscript {
             identity,
             status: SubagentTranscriptStatus::Queued,
             detached: false,
+            persistent: false,
+            sidekick_established: false,
             started: Instant::now(),
             elapsed: None,
             input_tokens: 0,
@@ -257,7 +267,12 @@ impl AgentTab {
     pub(crate) fn admits(self, status: SubagentTranscriptStatus) -> bool {
         match self {
             Self::Running => status.is_active(),
-            Self::Done => status == SubagentTranscriptStatus::Completed,
+            Self::Done => matches!(
+                status,
+                SubagentTranscriptStatus::Idle
+                    | SubagentTranscriptStatus::Stopped
+                    | SubagentTranscriptStatus::Completed
+            ),
             Self::Failed => status == SubagentTranscriptStatus::Failed,
             Self::All => true,
         }

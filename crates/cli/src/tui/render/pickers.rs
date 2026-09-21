@@ -14,6 +14,7 @@ use super::super::subagents::{
     subagent_current, subagent_route_description, subagent_setting_label,
 };
 use super::super::{App, InspectorMode, ViewMode, PICKER_ROWS, SESSIONS_WINDOW};
+use super::transcript::identity_label;
 
 /// Name, category tag, description: the tag sits by the name so the
 /// description can run to the edge instead of stopping short of a
@@ -79,6 +80,47 @@ pub(crate) fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'sta
         "Select provider · ↑↓ move · →/enter use · esc close",
         rows,
         [(12, 12), (36, 36), (0, usize::MAX)],
+        width,
+    )
+}
+
+pub(crate) fn sidekick_stop_lines(
+    app: &App,
+    ids: &[u64],
+    picker: &ListPicker,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let rows = ids
+        .iter()
+        .filter_map(|id| app.subagent_transcripts.get(id))
+        .map(|sidekick| {
+            let model = sidekick
+                .identity
+                .as_ref()
+                .map(|identity| identity_label(identity))
+                .unwrap_or_else(|| "inherited model".into());
+            let tier = sidekick
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.route.as_deref())
+                .and_then(|route| route.split('/').next())
+                .unwrap_or("default");
+            let status = match sidekick.status {
+                crate::tui::state::SubagentTranscriptStatus::Queued => "queued",
+                crate::tui::state::SubagentTranscriptStatus::Running => "working",
+                crate::tui::state::SubagentTranscriptStatus::Idle => "idle",
+                _ => "inactive",
+            };
+            [
+                sidekick.task.clone(),
+                format!("{tier} · {model}"),
+                status.into(),
+            ]
+        });
+    picker.table_lines(
+        "Stop sidekick · ↑↓ move · enter stop · esc cancel",
+        rows,
+        [(20, 36), (18, 36), (0, usize::MAX)],
         width,
     )
 }

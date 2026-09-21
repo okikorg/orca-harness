@@ -306,6 +306,8 @@ pub(crate) enum Overlay {
         sessions: Vec<orca_harness_extensions::SessionFile>,
         picker: ListPicker,
     },
+    /// Live persistent sidekicks selectable for `/sidekick stop`.
+    SidekickStop { ids: Vec<u64>, picker: ListPicker },
 }
 
 pub(crate) use crate::subagent_settings::{SubagentSetting, SUBAGENT_ROWS};

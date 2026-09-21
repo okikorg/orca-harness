@@ -387,7 +387,10 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     workflow_store: &orca_harness_tools::WorkflowStore,
     completions: &CompletionInbox,
     worker: &mpsc::UnboundedSender<crate::msg::WorkerCmd>,
-) -> Agent<Arc<dyn Model>> {
+) -> (
+    Agent<Arc<dyn Model>>,
+    Arc<orca_harness_tools::SubagentTool<Arc<dyn Model>>>,
+) {
     // MCP visibility is a host-side model concern: core keeps its sacred,
     // immutable schema snapshot while this adapter filters it on each
     // provider request using the catalog's current selections.
@@ -541,6 +544,6 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         orca_harness_tools::WorkflowTool::new(subagent.clone(), workflow_store.clone())
             .expect("interactive host provides depth-zero background execution"),
     ));
-    agent = agent.tool_arc(subagent);
-    agent
+    agent = agent.tool_arc(subagent.clone());
+    (agent, subagent)
 }
