@@ -30,11 +30,15 @@ pub(in crate::subagent) fn subagent_parameters(
         }),
     );
     properties.insert(
+        "persistent".into(),
+        json!({"type": "boolean", "default": false, "description": "Opt in to a session-scoped sidekick whose conversation is retained for later action=task calls. Persistent tasks run in the background by default; set background=false to await one explicitly. Ordinary one-shot behavior remains the default."}),
+    );
+    properties.insert(
         "action".into(),
         json!({
             "type": "string",
-            "enum": ["run", "list", "cancel", "cancel_all"],
-            "description": format!("Run a task (default), list active background agents, cancel one spawnId, or cancel all active background agents. {BACKGROUND_DELIVERY}")
+            "enum": ["run", "task", "status", "stop", "list", "cancel", "cancel_all"],
+            "description": format!("Run a task (default), send a task to an idle sidekick, inspect or stop a sidekick handle, list active ordinary background agents, cancel one ordinary spawnId, or cancel all ordinary background agents. {BACKGROUND_DELIVERY}")
         }),
     );
     properties.insert(
@@ -42,7 +46,7 @@ pub(in crate::subagent) fn subagent_parameters(
         json!({
             "type": "integer",
             "minimum": 0,
-            "description": "Background spawn to cancel when action is cancel."
+            "description": "Spawn to address for task, status, stop, or cancel."
         }),
     );
     json!({
@@ -50,6 +54,9 @@ pub(in crate::subagent) fn subagent_parameters(
         "properties": properties,
         "oneOf": [
             {"properties": {"action": {"enum": ["run"]}}, "required": run_required},
+            {"properties": {"action": {"const": "task"}}, "required": ["action", "spawnId", "task"]},
+            {"properties": {"action": {"const": "status"}}, "required": ["action", "spawnId"]},
+            {"properties": {"action": {"const": "stop"}}, "required": ["action", "spawnId"]},
             {"properties": {"action": {"const": "list"}}, "required": ["action"]},
             {"properties": {"action": {"const": "cancel"}}, "required": ["action", "spawnId"]},
             {"properties": {"action": {"const": "cancel_all"}}, "required": ["action"]}
@@ -117,7 +124,29 @@ pub(in crate::subagent) fn subagent_control(
             "action=wait is no longer supported. {BACKGROUND_DELIVERY}"
         ))),
         other => Err(ToolError::msg(format!(
-            "unknown subagent action `{other}`; expected run, list, cancel, or cancel_all"
+            "unknown subagent action `{other}`; expected run, task, status, stop, list, cancel, or cancel_all"
         ))),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_action_lists_sidekick_controls() {
+        let manager = SubagentManager::default();
+        let background = BackgroundConfig {
+            manager,
+            notifier: std::sync::Arc::new(|_| {}),
+            last_list: Default::default(),
+        };
+
+        let error = subagent_control(Some(&background), &json!({"action": "bogus"}))
+            .expect("control action")
+            .expect_err("unknown action")
+            .to_string();
+
+        assert!(error.contains("run, task, status, stop, list, cancel, or cancel_all"));
+    }
 }

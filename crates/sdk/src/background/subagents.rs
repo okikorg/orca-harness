@@ -7,8 +7,9 @@ use std::time::Duration;
 use orca_harness_core::{CancellationToken, Limits, Model};
 use orca_harness_extensions::HarnessEvent;
 use orca_harness_tools::{
-    BackgroundAcknowledgement, BackgroundJob, CompletionInbox, SpawnExtensions, SubagentDepth,
-    SubagentModel, SubagentOutcome, SubagentRequest, SubagentSpawn, SubagentTool,
+    BackgroundAcknowledgement, BackgroundJob, CompletionInbox, SidekickAcknowledgement,
+    SidekickReport, SidekickStatus, SpawnExtensions, SubagentDepth, SubagentModel, SubagentOutcome,
+    SubagentRequest, SubagentSpawn, SubagentTool,
 };
 use tokio::sync::broadcast;
 
@@ -304,6 +305,85 @@ impl Subagents {
         self.tool
             .run_foreground(request, cancellation.unwrap_or_default(), deadline)
             .await
+            .map_err(|error| SdkError::Subagent(error.to_string()))
+    }
+
+    /// Create a session-scoped sidekick and start its first task in the background.
+    /// The returned `spawn_id` is the stable handle for [`sidekick_task`](Self::sidekick_task).
+    /// The child uses the configured subagent tools, model routing, limits, and inherited
+    /// extensions; this API adds no permission or approval bypass.
+    pub fn start_sidekick(
+        &self,
+        request: SubagentRequest,
+    ) -> Result<SidekickAcknowledgement, SdkError> {
+        self.ensure_open()?;
+        self.tool
+            .start_sidekick(request)
+            .map_err(|error| SdkError::Subagent(error.to_string()))
+    }
+
+    /// Start one follow-up in the same retained model conversation. Concurrent calls for the
+    /// same handle are rejected rather than queued. A failed task leaves the sidekick idle;
+    /// stopping or session teardown discards its live context.
+    pub fn sidekick_task(
+        &self,
+        spawn_id: u64,
+        task: impl AsRef<str>,
+    ) -> Result<SidekickAcknowledgement, SdkError> {
+        self.ensure_open()?;
+        self.tool
+            .sidekick_task(spawn_id, task.as_ref())
+            .map_err(|error| SdkError::Subagent(error.to_string()))
+    }
+
+    /// Explicitly await creation and the first sidekick task.
+    pub async fn start_sidekick_foreground(
+        &self,
+        request: SubagentRequest,
+        cancellation: Option<CancellationToken>,
+        deadline: Option<Duration>,
+    ) -> Result<SidekickReport, SdkError> {
+        self.ensure_open()?;
+        self.tool
+            .start_sidekick_foreground(
+                request,
+                cancellation.unwrap_or_default(),
+                deadline.map(|duration| tokio::time::Instant::now() + duration),
+            )
+            .await
+            .map_err(|error| SdkError::Subagent(error.to_string()))
+    }
+
+    /// Explicitly await one follow-up on an idle sidekick.
+    pub async fn sidekick_task_foreground(
+        &self,
+        spawn_id: u64,
+        task: impl AsRef<str>,
+        cancellation: Option<CancellationToken>,
+        deadline: Option<Duration>,
+    ) -> Result<SidekickReport, SdkError> {
+        self.ensure_open()?;
+        self.tool
+            .sidekick_task_foreground(
+                spawn_id,
+                task.as_ref(),
+                cancellation.unwrap_or_default(),
+                deadline.map(|duration| tokio::time::Instant::now() + duration),
+            )
+            .await
+            .map_err(|error| SdkError::Subagent(error.to_string()))
+    }
+
+    pub fn sidekick_status(&self, spawn_id: u64) -> Result<SidekickStatus, SdkError> {
+        self.tool
+            .sidekick_status(spawn_id)
+            .map_err(|error| SdkError::Subagent(error.to_string()))
+    }
+
+    /// Stop a sidekick, canceling an active task and permanently discarding its context.
+    pub fn stop_sidekick(&self, spawn_id: u64) -> Result<(), SdkError> {
+        self.tool
+            .stop_sidekick(spawn_id)
             .map_err(|error| SdkError::Subagent(error.to_string()))
     }
 

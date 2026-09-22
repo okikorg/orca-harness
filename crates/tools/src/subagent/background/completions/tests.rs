@@ -20,6 +20,15 @@ fn notification(generation: u64, id: u64, answer: &str) -> SubagentNotification 
     }
 }
 
+fn retain_sidekick(manager: &SubagentManager, id: u64) {
+    let spawn = notification(0, id, "").spawn;
+    let _ = manager
+        .inner
+        .admit_sidekick(&spawn, false)
+        .unwrap()
+        .into_parts();
+}
+
 #[test]
 fn drain_orders_by_spawn_and_drops_stale_generations() {
     let manager = SubagentManager::new(1);
@@ -35,6 +44,59 @@ fn drain_orders_by_spawn_and_drops_stale_generations() {
     inbox.push(notification(0, 11, "before clear"));
     manager.cancel_all();
     assert!(!inbox.has_ready(), "a cleared conversation owes nothing");
+    assert!(inbox.drain().is_empty());
+}
+
+#[test]
+fn ordinary_cancel_keeps_pending_sidekick_turns_but_filters_ordinary_results() {
+    let manager = SubagentManager::new(1);
+    let inbox = CompletionInbox::new(manager.clone());
+    retain_sidekick(&manager, 10);
+
+    assert!(inbox.push(notification(0, 10, "sidekick before cancel")));
+    assert!(inbox.push(notification(0, 11, "ordinary before cancel")));
+    manager.cancel_all();
+
+    // A new ordinary completion must not replace the already-valid sidekick
+    // report, and repeated turns on one retained handle are delivered once
+    // each.
+    assert!(inbox.push(notification(1, 12, "ordinary after cancel")));
+    assert!(inbox.push(notification(0, 10, "sidekick after cancel")));
+    let batch = inbox.drain();
+    assert_eq!(
+        batch
+            .iter()
+            .map(|notification| (notification.spawn.id, &notification.result))
+            .collect::<Vec<_>>(),
+        vec![
+            (10, &Ok(json!({"answer": "sidekick before cancel"}))),
+            (10, &Ok(json!({"answer": "sidekick after cancel"}))),
+            (12, &Ok(json!({"answer": "ordinary after cancel"}))),
+        ]
+    );
+    assert!(!inbox.has_ready());
+}
+
+#[test]
+fn stopped_reset_and_closed_sidekicks_cannot_deliver_pending_reports() {
+    let manager = SubagentManager::new(1);
+    let inbox = CompletionInbox::new(manager.clone());
+    retain_sidekick(&manager, 10);
+    assert!(inbox.push(notification(0, 10, "stopped")));
+    manager.inner.finish_sidekick(0, 10);
+    assert!(!inbox.has_ready());
+
+    retain_sidekick(&manager, 11);
+    assert!(inbox.push(notification(0, 11, "reset")));
+    manager.reset();
+    assert!(inbox.drain().is_empty());
+
+    // A close is also a full reset and rejects a report that was pending.
+    let manager = SubagentManager::new(1);
+    let inbox = CompletionInbox::new(manager.clone());
+    retain_sidekick(&manager, 12);
+    assert!(inbox.push(notification(0, 12, "closed")));
+    manager.close();
     assert!(inbox.drain().is_empty());
 }
 

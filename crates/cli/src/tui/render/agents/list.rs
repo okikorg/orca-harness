@@ -150,7 +150,9 @@ fn status_index(status: SubagentTranscriptStatus) -> usize {
     match status {
         SubagentTranscriptStatus::Queued => 0,
         SubagentTranscriptStatus::Running => 1,
-        SubagentTranscriptStatus::Completed => 2,
+        SubagentTranscriptStatus::Idle
+        | SubagentTranscriptStatus::Stopped
+        | SubagentTranscriptStatus::Completed => 2,
         SubagentTranscriptStatus::Failed => 3,
     }
 }

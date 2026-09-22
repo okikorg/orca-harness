@@ -35,7 +35,8 @@ mod host;
 mod settings;
 pub(crate) mod spawn;
 pub use host::{
-    BackgroundAcknowledgement, SubagentOutcome, SubagentRequest, ToolCallTiming, WorkerTiming,
+    BackgroundAcknowledgement, SidekickAcknowledgement, SidekickReport, SidekickStatus,
+    SubagentOutcome, SubagentRequest, ToolCallTiming, WorkerTiming,
 };
 pub use settings::*;
 
@@ -148,9 +149,14 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
     /// Error restriction for [`Self::retry_policy`]; `None` retries every `Err`.
     retry_error: Option<ErrorRetryRule>,
     background: Option<BackgroundConfig>,
+    sidekicks: host::SidekickRegistry<M>,
 }
 
 impl<M: Model + Clone + 'static> SubagentTool<M> {
+    /// Saved preferred route model, used by the interactive sidekick command.
+    pub fn max_depth_preferred_model(&self, tier: &str) -> Option<String> {
+        self.max_depth.preferred_model(tier)
+    }
     /// Subagents equipped with [`core_tools`] rooted at `ws`.
     pub fn new(model: M, ws: &Workspace) -> Self {
         let ws = ws.clone();
@@ -184,6 +190,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             ok_failure: None,
             retry_error: None,
             background: None,
+            sidekicks: Default::default(),
         }
     }
 
@@ -337,6 +344,8 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             // Detached nesting needs durable child-context ownership. Keep the
             // first release depth-zero while preserving foreground nesting.
             background: None,
+            // Nested workers cannot detach and do not own session-persistent handles.
+            sidekicks: Default::default(),
         }
     }
 }
@@ -418,7 +427,7 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             ),
         };
         let controls = if self.background.is_some() {
-            format!(" Background execution is the default; set background=false explicitly to wait in the foreground. A background call returns a spawnId immediately; the answer arrives later as a `background_subagent_completions` message batched with any other results ready at that moment. {BACKGROUND_DELIVERY} The acknowledgement's status is `running`, or `queued` when the user's concurrency limit is reached and the agent starts once a running one finishes. To inspect or stop spawned agents, call this subagent tool, not process: action=list answers what is running right now, action=cancel with spawnId or action=cancel_all stops agents.", BACKGROUND_DELIVERY = background::BACKGROUND_DELIVERY)
+            format!(" Background execution is the default; set background=false explicitly to wait in the foreground. Set persistent=true to create a session-scoped sidekick: its spawnId is a stable handle and its actual conversation context is retained for action=task follow-ups until action=stop or session teardown. Sidekicks run one task at a time and reject overlap; their compact final reports, not tool logs, return to the parent. The parent owns intent, ambiguity, planning, and final review: delegate bounded mechanical inspection/edit/test work, request short evidence-backed reports, and have the sidekick escalate unresolved judgment. A background call returns a spawnId immediately; the answer arrives later as a `background_subagent_completions` message batched with any other results ready at that moment. {BACKGROUND_DELIVERY} The acknowledgement's status is `running`, or `queued` when the user's concurrency limit is reached and the agent starts once a running one finishes. To inspect or stop spawned agents, call this subagent tool, not process: action=list answers what is running right now, action=cancel with spawnId or action=cancel_all stops ordinary agents; action=stop releases a sidekick's live context.", BACKGROUND_DELIVERY = background::BACKGROUND_DELIVERY)
         } else {
             String::new()
         };
@@ -442,6 +451,53 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let action = input.get("action").and_then(Value::as_str).unwrap_or("run");
+        if action == "task" {
+            if input.get("persistent").is_some()
+                || input.get("model").is_some()
+                || input.get("systemPrompt").is_some()
+            {
+                return Err(ToolError::msg(
+                    "action=task accepts spawnId, task, and optional background",
+                ));
+            }
+            let id = input
+                .get("spawnId")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ToolError::msg("`spawnId` is required for action=task"))?;
+            let task = input
+                .get("task")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::msg("`task` is required for action=task"))?;
+            return if input.get("background").and_then(Value::as_bool) == Some(false) {
+                self.sidekick_task_foreground(
+                    id,
+                    task,
+                    ctx.cancellation.child_token(),
+                    ctx.deadline,
+                )
+                .await
+                .map(SidekickReport::into_value)
+            } else {
+                self.sidekick_task(id, task)
+                    .map(SidekickAcknowledgement::into_value)
+            };
+        }
+        if action == "stop" {
+            let id = input
+                .get("spawnId")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ToolError::msg("`spawnId` is required for action=stop"))?;
+            self.stop_sidekick(id)?;
+            return Ok(json!({"spawnId": id, "status": "stopped", "termination": "stopped"}));
+        }
+        if action == "status" {
+            let id = input
+                .get("spawnId")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ToolError::msg("`spawnId` is required for action=status"))?;
+            return Ok(json!({"spawnId": id, "status": self.sidekick_status(id)?.as_str()}));
+        }
         if let Some(result) = subagent_control(self.background.as_ref(), &input) {
             return result;
         }
@@ -462,8 +518,31 @@ impl<M: Model + Clone + 'static> Tool for SubagentTool<M> {
             .get("model")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let prepared =
-            self.prepare_request(request, Some(ctx.call_id.clone()), detached, ctx.deadline)?;
+        if input
+            .get("persistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return if input.get("background").and_then(Value::as_bool) == Some(false) {
+                self.start_sidekick_foreground(
+                    request,
+                    ctx.cancellation.child_token(),
+                    ctx.deadline,
+                )
+                .await
+                .map(SidekickReport::into_value)
+            } else {
+                self.start_sidekick(request)
+                    .map(SidekickAcknowledgement::into_value)
+            };
+        }
+        let prepared = self.prepare_request(
+            request,
+            Some(ctx.call_id.clone()),
+            detached,
+            ctx.deadline,
+            false,
+        )?;
         if detached {
             return Ok(prepared.detach().into_value());
         }

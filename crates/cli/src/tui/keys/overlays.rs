@@ -579,6 +579,12 @@ pub(crate) fn handle_overlay_key(
                 },
             }
         }
+        Overlay::SidekickStop { ids, picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => After::CloseAndSend(WorkerCmd::SidekickStop {
+                spawn_id: ids[index],
+            }),
+            _ => After::Nothing,
+        },
     };
     apply_after(app, worker, after);
 }

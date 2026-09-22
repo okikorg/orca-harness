@@ -23,6 +23,7 @@ pub(crate) struct Prepared<M: Model + Clone + 'static> {
     pub(super) timeout: u32,
     pub(super) background: Option<(BackgroundConfig, background::manager::Admission)>,
     pub(super) in_flight: InFlight,
+    pub(super) context: Context,
 }
 impl<M: Model + Clone + 'static> Prepared<M> {
     pub(crate) fn detach(self) -> BackgroundAcknowledgement {
@@ -126,6 +127,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         req: SpawnRequest,
         detached: bool,
         deadline: Option<tokio::time::Instant>,
+        retained_context: bool,
     ) -> Result<Prepared<M>, ToolError> {
         let requested = req.model.as_deref();
         self.validate_model(requested)?;
@@ -161,6 +163,10 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             }
         };
         let system = req.system_prompt.or_else(|| self.system_prompt.clone());
+        let mut context = Context::new();
+        if let Some(system) = &system {
+            context.push_system(system.clone());
+        }
 
         let spawn_id = req.id;
 
@@ -186,8 +192,15 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             limits.deadline =
                 execution_deadline(limits.deadline.into_iter().chain(deadline).min(), timeout);
         }
+        // A persistent sidekick derives its deadline for each task. Keep the
+        // reusable agent free of the one-time deadline while retaining its
+        // step and tool-parallelism limits.
+        let mut agent_limits = limits.clone();
+        if retained_context {
+            agent_limits.deadline = None;
+        }
         let mut agent = Agent::new(model.clone())
-            .limits(limits.clone())
+            .limits(agent_limits)
             .extension(meter);
         if let Some(system) = system {
             agent = agent.system_prompt(system);
@@ -263,6 +276,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             timeout,
             background,
             in_flight: InFlight(self.stats.clone()),
+            context,
         })
     }
 }

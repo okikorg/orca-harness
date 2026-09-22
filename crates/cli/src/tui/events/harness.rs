@@ -105,6 +105,14 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
                 .unwrap_or_else(|| tool_name.clone());
             let inner = if let Some(id) = detached_spawn_id(&tool_name, &output) {
                 mark_subagent_detached(app, id);
+                // A sidekick acknowledgement is intentionally detached, but
+                // unlike a one-shot acknowledgement it is also its current
+                // lifecycle projection. Do not let the generic detached
+                // branch skip it: a follow-up otherwise leaves an Idle row
+                // in Done while its new task is queued or running.
+                if tool_name == "subagent" {
+                    mark_sidekick_result(app, &output);
+                }
                 if tool_name == "workflow" {
                     if let Some(transcript) = app.subagent_transcripts.get_mut(&id) {
                         if transcript.status == SubagentTranscriptStatus::Queued {
@@ -125,6 +133,7 @@ pub(crate) fn handle_harness_event(app: &mut App, event: HarnessEvent, width: us
                 }
                 Vec::new()
             } else if tool_name == "subagent" {
+                mark_sidekick_result(app, &output);
                 fold_subagent_activity(app, &tool_call_id)
             } else {
                 Vec::new()
@@ -371,6 +380,18 @@ fn record_subagent_event(
     event: &HarnessEvent,
 ) {
     let previous_status = app.subagent_transcripts.get(&id).map(|t| t.status);
+    // A sidekick can fail before its first retained report reaches the parent.
+    // The initiating tool call is already in the parent activity, so it is the
+    // earliest authoritative UI-side indication that this spawn is persistent.
+    let initiated_persistent = app.activity_tools.iter().any(|tool| {
+        tool.call_id == call_id
+            && tool.tool_name == "subagent"
+            && tool
+                .input
+                .get("persistent")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+    });
     let transcript = app.subagent_transcripts.entry(id).or_insert_with(|| {
         SubagentTranscript::new(
             id,
@@ -381,10 +402,19 @@ fn record_subagent_event(
             None,
         )
     });
+    transcript.persistent |= initiated_persistent;
+    // Stop is terminal for the handle. Child events already in flight still
+    // belong in the transcript, but must not resurrect or reclassify it.
+    let stopped = transcript.status == SubagentTranscriptStatus::Stopped;
     // The first event out of the inner loop (`AgentStart`, normally) means
     // a queued background worker got its slot. Elapsed restarts so the row
     // times the run rather than the wait.
-    if transcript.status == SubagentTranscriptStatus::Queued {
+    if !stopped
+        && (transcript.status == SubagentTranscriptStatus::Queued
+            || transcript.status == SubagentTranscriptStatus::Idle
+            || (transcript.sidekick_established
+                && transcript.status == SubagentTranscriptStatus::Failed))
+    {
         transcript.status = SubagentTranscriptStatus::Running;
         transcript.started = Instant::now();
     }
@@ -477,7 +507,13 @@ fn record_subagent_event(
             } else {
                 message.clone()
             });
-            transcript.status = SubagentTranscriptStatus::Completed;
+            if !stopped {
+                transcript.status = if transcript.sidekick_established {
+                    SubagentTranscriptStatus::Idle
+                } else {
+                    SubagentTranscriptStatus::Completed
+                };
+            }
             transcript.elapsed = Some(transcript.started.elapsed());
         }
         HarnessEvent::Error { message } => {
@@ -485,7 +521,16 @@ fn record_subagent_event(
             let streamed = std::mem::take(&mut transcript.streaming_assistant);
             transcript.push_assistant(streamed);
             transcript.push_entry(SubagentTranscriptEntry::Error(bounded_text(message)));
-            transcript.status = SubagentTranscriptStatus::Failed;
+            // A persistent sidekick retains its handle after a failed or
+            // cancelled task. The Error entry records that task's failure;
+            // Idle says the sidekick itself can accept another task.
+            if !stopped {
+                transcript.status = if transcript.sidekick_established {
+                    SubagentTranscriptStatus::Idle
+                } else {
+                    SubagentTranscriptStatus::Failed
+                };
+            }
             transcript.elapsed = Some(transcript.started.elapsed());
         }
         HarnessEvent::AgentStart | HarnessEvent::ToolInputDelta { .. } => {}
@@ -537,6 +582,7 @@ fn advance_workflow_stage(
     let state = match status {
         SubagentTranscriptStatus::Queued => StageState::Queued,
         SubagentTranscriptStatus::Running => StageState::Running,
+        SubagentTranscriptStatus::Idle | SubagentTranscriptStatus::Stopped => StageState::Done,
         SubagentTranscriptStatus::Completed => StageState::Done,
         SubagentTranscriptStatus::Failed => StageState::Failed,
     };
@@ -554,6 +600,70 @@ fn mark_subagent_detached(app: &mut App, id: u64) {
     if terminal {
         app.subagent_activity.remove(&id);
     }
+}
+
+fn mark_sidekick_result(app: &mut App, output: &serde_json::Value) {
+    let Some(id) = output.get("spawnId").and_then(serde_json::Value::as_u64) else {
+        return;
+    };
+    let Some(transcript) = app.subagent_transcripts.get_mut(&id) else {
+        return;
+    };
+    if transcript.status == SubagentTranscriptStatus::Stopped {
+        return;
+    }
+    if output
+        .get("persistent")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        transcript.persistent = true;
+        transcript.sidekick_established = true;
+        transcript.status = match output.get("status").and_then(serde_json::Value::as_str) {
+            Some("queued") => SubagentTranscriptStatus::Queued,
+            Some("running") | Some("busy") => SubagentTranscriptStatus::Running,
+            _ => transcript.status,
+        };
+        app.invalidate_agent_list();
+        return;
+    }
+    match output
+        .get("termination")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("retained") => {
+            transcript.persistent = true;
+            transcript.sidekick_established = true;
+            transcript.status = SubagentTranscriptStatus::Idle;
+        }
+        Some("stopped") => {
+            transcript.persistent = true;
+            transcript.sidekick_established = false;
+            transcript.status = SubagentTranscriptStatus::Stopped;
+        }
+        _ => match output.get("status").and_then(serde_json::Value::as_str) {
+            // A successful status lookup itself proves that the runtime
+            // returned a reusable handle after initial creation.
+            Some("idle") => {
+                transcript.persistent = true;
+                transcript.sidekick_established = true;
+                transcript.status = SubagentTranscriptStatus::Idle;
+            }
+            Some("busy") => {
+                transcript.persistent = true;
+                transcript.sidekick_established = true;
+                transcript.status = SubagentTranscriptStatus::Running;
+            }
+            Some("stopped") => {
+                transcript.persistent = true;
+                transcript.sidekick_established = false;
+                transcript.status = SubagentTranscriptStatus::Stopped;
+            }
+            _ => return,
+        },
+    }
+    transcript.elapsed = Some(transcript.started.elapsed());
+    app.invalidate_agent_list();
 }
 
 fn detached_spawn_id(tool_name: &str, output: &serde_json::Value) -> Option<u64> {

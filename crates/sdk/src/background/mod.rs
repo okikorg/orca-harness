@@ -208,12 +208,14 @@ impl BackgroundServices {
     /// a new generation so results of workers still winding down are
     /// refused rather than delivered to the replaced conversation.
     pub(crate) fn clear(&self) {
+        self.subagents.stop_all_sidekicks();
         self.inbox.reset();
     }
 
     /// Refuse every later admission, then cancel and clear as
     /// [`clear`](Self::clear) does.
     pub(crate) fn close(&self) {
+        self.subagents.stop_all_sidekicks();
         self.inbox.manager().close();
         self.inbox.reset();
     }
@@ -226,6 +228,7 @@ impl BackgroundServices {
 /// workers that honour their token.
 impl Drop for BackgroundServices {
     fn drop(&mut self) {
+        self.subagents.stop_all_sidekicks();
         self.inbox.reset();
     }
 }

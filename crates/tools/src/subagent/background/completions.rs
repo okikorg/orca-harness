@@ -33,7 +33,6 @@ pub const DEFAULT_COMPLETION_CAPACITY: usize = 128;
 
 #[derive(Default)]
 struct ReadyBatch {
-    generation: Option<u64>,
     notifications: Vec<SubagentNotification>,
 }
 
@@ -97,19 +96,19 @@ impl CompletionInbox {
     /// stage, whose outcome reaches the parent only inside its run's terminal
     /// result.
     ///
-    /// The manager reserves capacity before starting the job. All entries in
-    /// this batch share a generation, making readiness checks constant-time.
+    /// The manager reserves capacity before starting the job. A retained
+    /// sidekick may validly report across an ordinary-job generation change,
+    /// so validity is checked for each entry when it is consumed.
     pub fn push(&self, notification: SubagentNotification) -> bool {
         if notification.spawn.run.is_some() {
             return false;
         }
         let mut ready = self.ready.lock().unwrap();
-        if !self.manager.is_current(notification.generation) {
+        if !self
+            .manager
+            .accepts_notification(notification.generation, notification.spawn.id)
+        {
             return false;
-        }
-        if ready.generation != Some(notification.generation) {
-            ready.notifications.clear();
-            ready.generation = Some(notification.generation);
         }
         ready.notifications.push(notification);
         true
@@ -117,13 +116,10 @@ impl CompletionInbox {
 
     pub fn has_ready(&self) -> bool {
         let mut ready = self.ready.lock().unwrap();
-        if ready
-            .generation
-            .is_some_and(|generation| !self.manager.is_current(generation))
-        {
-            ready.notifications.clear();
-            ready.generation = None;
-        }
+        ready.notifications.retain(|notification| {
+            self.manager
+                .accepts_notification(notification.generation, notification.spawn.id)
+        });
         !ready.notifications.is_empty()
     }
 
@@ -147,14 +143,11 @@ impl CompletionInbox {
     pub fn drain(&self) -> Vec<SubagentNotification> {
         let mut ready = self.ready.lock().unwrap();
         let mut batch = std::mem::take(&mut ready.notifications);
-        if ready
-            .generation
-            .is_some_and(|generation| !self.manager.is_current(generation))
-        {
-            batch.clear();
-        }
-        ready.generation = None;
         drop(ready);
+        batch.retain(|notification| {
+            self.manager
+                .accepts_notification(notification.generation, notification.spawn.id)
+        });
         batch.sort_unstable_by_key(|notification| notification.spawn.id);
         for notification in &batch {
             self.manager
@@ -168,7 +161,7 @@ impl CompletionInbox {
         // cancel_all runs each live run's on_cancel, which finishes its DAG;
         // dropping the outputs afterwards leaves nothing behind for a run the
         // replaced conversation can no longer name.
-        self.manager.cancel_all();
+        self.manager.reset();
         if let Some(workflows) = &self.workflows {
             workflows.clear();
         }

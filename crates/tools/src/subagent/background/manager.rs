@@ -54,7 +54,13 @@ struct SubagentManagerState {
     running: usize,
     completion_capacity: Option<usize>,
     /// Reservations survive worker completion until the host consumes it.
-    unacknowledged: std::collections::HashSet<u64>,
+    /// Completion reservations by spawn. Sidekicks reuse one spawn id, so
+    /// each completed turn needs its own reservation rather than set-style
+    /// deduplication.
+    unacknowledged: std::collections::HashMap<u64, usize>,
+    /// Ordinary jobs cancelled without ending the session. Their late
+    /// notifications stay host-observable but must not enter the parent.
+    suppressed: std::collections::HashSet<u64>,
     /// Set by [`SubagentManager::close`]: every later admission is refused.
     closed: bool,
 }
@@ -66,6 +72,10 @@ struct ActiveSubagent {
     on_cancel: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     peak_running: usize,
     running_children: usize,
+    /// Retained sidekicks share manager admission and lifetime but are not
+    /// ordinary detached completions exposed by `active`.
+    sidekick: bool,
+    sidekick_active: bool,
 }
 
 pub(crate) struct SubagentManagerInner {
@@ -97,7 +107,7 @@ struct ManagerLifetime(std::sync::Weak<SubagentManagerInner>);
 impl Drop for ManagerLifetime {
     fn drop(&mut self) {
         if let Some(inner) = self.0.upgrade() {
-            inner.cancel_all();
+            inner.reset();
         }
     }
 }
@@ -179,7 +189,8 @@ impl SubagentManager {
                 queue: std::collections::VecDeque::new(),
                 running: 0,
                 completion_capacity: None,
-                unacknowledged: std::collections::HashSet::new(),
+                unacknowledged: std::collections::HashMap::new(),
+                suppressed: std::collections::HashSet::new(),
                 closed: false,
             }),
             settings,
@@ -209,8 +220,15 @@ impl SubagentManager {
     /// Release a completion reservation after its result has been consumed.
     pub fn acknowledge(&self, generation: u64, spawn_id: u64) {
         let mut state = self.inner.state.lock().unwrap();
-        if state.generation == generation {
-            state.unacknowledged.remove(&spawn_id);
+        if state.generation == generation
+            || state.jobs.get(&spawn_id).is_some_and(|job| job.sidekick)
+        {
+            if let Some(count) = state.unacknowledged.get_mut(&spawn_id) {
+                *count -= 1;
+                if *count == 0 {
+                    state.unacknowledged.remove(&spawn_id);
+                }
+            }
         }
     }
 
@@ -223,6 +241,12 @@ impl SubagentManager {
 
     pub fn cancel_all(&self) -> usize {
         self.inner.cancel_all()
+    }
+    /// Replace the current session generation, cancelling ordinary workers
+    /// and retained sidekicks. Session lifecycle owners use this; the model
+    /// tool's `cancel_all` intentionally affects ordinary workers only.
+    pub fn reset(&self) -> usize {
+        self.inner.reset()
     }
     /// Stop admitting work for good, then cancel every admitted job as
     /// [`cancel_all`](Self::cancel_all) does. Every admission path (host
@@ -245,6 +269,13 @@ impl SubagentManager {
 
     pub fn is_current(&self, generation: u64) -> bool {
         self.inner.is_current(generation)
+    }
+
+    pub(crate) fn accepts_notification(&self, generation: u64, spawn_id: u64) -> bool {
+        let state = self.inner.state.lock().unwrap();
+        (state.generation == generation
+            || state.jobs.get(&spawn_id).is_some_and(|job| job.sidekick))
+            && !state.suppressed.contains(&spawn_id)
     }
 
     /// Workers still holding a slot or an admitted job: every job in the
@@ -291,7 +322,7 @@ impl SubagentManagerInner {
         self: &Arc<Self>,
         spawn: &SubagentSpawn,
     ) -> Result<Admission, &'static str> {
-        self.admit_job(spawn, None, None)
+        self.admit_job(spawn, None, None, false)
     }
 
     pub(crate) fn admit_run(
@@ -299,7 +330,7 @@ impl SubagentManagerInner {
         spawn: &SubagentSpawn,
         on_cancel: Arc<dyn Fn(usize) + Send + Sync>,
     ) -> Result<Admission, &'static str> {
-        self.admit_job(spawn, Some(on_cancel), None)
+        self.admit_job(spawn, Some(on_cancel), None, false)
     }
 
     pub(crate) fn admit_stage(
@@ -307,7 +338,7 @@ impl SubagentManagerInner {
         spawn: &SubagentSpawn,
         generation: u64,
     ) -> Result<Admission, &'static str> {
-        self.admit_job(spawn, None, Some(generation))
+        self.admit_job(spawn, None, Some(generation), false)
     }
 
     fn admit_job(
@@ -315,6 +346,7 @@ impl SubagentManagerInner {
         spawn: &SubagentSpawn,
         on_cancel: Option<Arc<dyn Fn(usize) + Send + Sync>>,
         expected: Option<u64>,
+        sidekick: bool,
     ) -> Result<Admission, &'static str> {
         let cap = self.settings.background_limit() as usize;
         let mut state = self.state.lock().unwrap();
@@ -325,10 +357,10 @@ impl SubagentManagerInner {
             return Err("workflow generation was cancelled");
         }
         if let Some(capacity) = state.completion_capacity.filter(|_| spawn.run.is_none()) {
-            if state.unacknowledged.len() >= capacity {
+            if state.unacknowledged.values().sum::<usize>() >= capacity {
                 return Err("background completion capacity reached; consume pending subagent results before spawning more");
             }
-            state.unacknowledged.insert(spawn.id);
+            *state.unacknowledged.entry(spawn.id).or_default() += 1;
         }
         let cancellation = state.cancellation.child_token();
         let no_slot = on_cancel.is_some();
@@ -345,6 +377,8 @@ impl SubagentManagerInner {
                 on_cancel,
                 peak_running: 0,
                 running_children: 0,
+                sidekick,
+                sidekick_active: sidekick,
             },
         );
         if !no_slot {
@@ -405,7 +439,7 @@ impl SubagentManagerInner {
         }
     }
 
-    pub(super) async fn acquire(
+    pub(crate) async fn acquire(
         self: &Arc<Self>,
         spawn_id: u64,
         cancellation: &orca_harness_core::CancellationToken,
@@ -441,14 +475,53 @@ impl SubagentManagerInner {
 
     pub fn close(&self) -> usize {
         self.state.lock().unwrap().closed = true;
-        self.cancel_all()
+        self.reset()
     }
 
-    /// Cancel every admitted job and begin a fresh notification generation.
+    /// Cancel ordinary jobs without replacing session-owned sidekicks.
     pub fn cancel_all(&self) -> usize {
+        let mut state = self.state.lock().unwrap();
+        let ids = state
+            .jobs
+            .iter()
+            .filter(|(_, job)| !job.sidekick)
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let cancelled = ids.len();
+        state.generation = state.generation.wrapping_add(1);
+        state.cancellation = orca_harness_core::CancellationToken::new();
+        let callbacks = ids
+            .iter()
+            .filter_map(|id| state.jobs.get(id))
+            .filter_map(|job| {
+                job.cancellation.cancel();
+                job.on_cancel
+                    .clone()
+                    .map(|callback| (callback, job.peak_running))
+            })
+            .collect::<Vec<_>>();
+        for id in &ids {
+            state.jobs.remove(id);
+            state.unacknowledged.remove(id);
+            state.suppressed.insert(*id);
+        }
+        state.queue.retain(|id| !ids.contains(id));
+        drop(state);
+        for (callback, peak_running) in callbacks {
+            callback(peak_running);
+        }
+        self.wake();
+        cancelled
+    }
+
+    /// Replace the session generation and cancel every kind of work.
+    pub(crate) fn reset(&self) -> usize {
         let mut state = self.state.lock().unwrap();
         let cancelled = state.jobs.len();
         state.cancellation.cancel();
+        for job in state.jobs.values() {
+            job.cancellation.cancel();
+        }
         state.generation = state.generation.wrapping_add(1);
         state.cancellation = orca_harness_core::CancellationToken::new();
         let callbacks: Vec<_> = state
@@ -463,6 +536,7 @@ impl SubagentManagerInner {
         state.jobs.clear();
         state.queue.clear();
         state.unacknowledged.clear();
+        state.suppressed.clear();
         // Retain live slots: resetting this count would admit replacements
         // before cancelled workers exit, and their later drops would then
         // incorrectly release capacity held by those replacements.
@@ -470,6 +544,7 @@ impl SubagentManagerInner {
         for (callback, peak_running) in callbacks {
             callback(peak_running);
         }
+        self.wake();
         cancelled
     }
 
@@ -497,7 +572,9 @@ impl SubagentManagerInner {
         let mut jobs = state
             .jobs
             .values()
-            .filter(|job| workflows || (job.spawn.run.is_none() && job.on_cancel.is_none()))
+            .filter(|job| {
+                !job.sidekick && (workflows || (job.spawn.run.is_none() && job.on_cancel.is_none()))
+            })
             .map(|job| BackgroundJob {
                 spawn: job.spawn.clone(),
                 status: job.status,
@@ -520,7 +597,12 @@ impl SubagentManagerInner {
             .values()
             .filter(|job| job.on_cancel.is_none() && job.status == BackgroundStatus::Running)
             .count();
-        state.jobs.len() + state.running.saturating_sub(slotted)
+        let retained_idle = state
+            .jobs
+            .values()
+            .filter(|job| job.sidekick && !job.sidekick_active)
+            .count();
+        state.jobs.len().saturating_sub(retained_idle) + state.running.saturating_sub(slotted)
     }
 
     pub(crate) fn run_peak(&self, id: u64) -> usize {
@@ -552,5 +634,89 @@ impl SubagentManagerInner {
         }
         drop(state);
         self.wake();
+    }
+
+    pub(crate) fn admit_sidekick(
+        self: &Arc<Self>,
+        spawn: &SubagentSpawn,
+        completion: bool,
+    ) -> Result<Admission, &'static str> {
+        let admission = self.admit_job(spawn, None, None, true)?;
+        if !completion {
+            self.state.lock().unwrap().unacknowledged.remove(&spawn.id);
+        }
+        Ok(admission)
+    }
+
+    pub(crate) fn queue_sidekick(
+        self: &Arc<Self>,
+        _generation: u64,
+        spawn_id: u64,
+        completion: bool,
+    ) -> Result<Option<Slot>, &'static str> {
+        let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return Err("sidekick is stopped");
+        }
+        let Some(job) = state.jobs.get(&spawn_id) else {
+            return Err("sidekick is stopped");
+        };
+        if job.cancellation.is_cancelled() || !job.sidekick {
+            return Err("sidekick is stopped");
+        }
+        if completion {
+            if let Some(capacity) = state.completion_capacity {
+                if state.unacknowledged.values().sum::<usize>() >= capacity {
+                    return Err("background completion capacity reached; consume pending subagent results before spawning more");
+                }
+                *state.unacknowledged.entry(spawn_id).or_default() += 1;
+            }
+        }
+        let job = state.jobs.get_mut(&spawn_id).unwrap();
+        job.status = BackgroundStatus::Queued;
+        job.sidekick_active = true;
+        state.queue.push_back(spawn_id);
+        drop(state);
+        let cap = self.settings.background_limit() as usize;
+        let slot = self
+            .try_start(spawn_id, cap)
+            .then(|| Slot(self.clone(), None));
+        if slot.is_none() {
+            self.wake();
+        }
+        Ok(slot)
+    }
+
+    pub(crate) fn sidekick_idle(&self, _generation: u64, spawn_id: u64) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(job) = state.jobs.get_mut(&spawn_id) {
+            job.status = BackgroundStatus::Queued;
+            job.sidekick_active = false;
+        }
+        state.queue.retain(|id| *id != spawn_id);
+        drop(state);
+        self.wake();
+    }
+
+    pub(crate) fn finish_sidekick(&self, _generation: u64, spawn_id: u64) {
+        let mut state = self.state.lock().unwrap();
+        state.jobs.remove(&spawn_id);
+        state.queue.retain(|id| *id != spawn_id);
+        state.unacknowledged.remove(&spawn_id);
+        state.suppressed.insert(spawn_id);
+        drop(state);
+        self.wake();
+    }
+
+    pub(crate) fn sidekick_live(&self, _generation: u64, spawn_id: u64) -> bool {
+        let state = self.state.lock().unwrap();
+        state
+            .jobs
+            .get(&spawn_id)
+            .is_some_and(|job| job.sidekick && !job.cancellation.is_cancelled())
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.state.lock().unwrap().generation
     }
 }

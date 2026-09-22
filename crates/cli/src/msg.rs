@@ -356,6 +356,15 @@ pub enum WorkerCmd {
     /// hidden run for an idle parent, and is a no-op once the inbox is
     /// empty.
     BackgroundSubagentsReady,
+    /// Start a session-persistent sidekick through the registered subagent tool.
+    SidekickStart {
+        task: String,
+        tier: Option<String>,
+    },
+    /// Release one selected session-persistent sidekick.
+    SidekickStop {
+        spawn_id: u64,
+    },
     /// Reset the conversation to just the system prompt.
     Clear,
     /// Deterministically compact the conversation in place.
