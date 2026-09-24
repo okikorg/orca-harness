@@ -4,7 +4,6 @@ use runs::run_interactive_context;
 use runs::{process_notification_prompt, rotate_for_clear, run_and_report};
 
 use super::context::{context_from, repair_dangling_tool_calls, rewind_cut};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -22,8 +21,30 @@ struct CancelSubagentsOnDrop(SubagentManager);
 
 impl Drop for CancelSubagentsOnDrop {
     fn drop(&mut self) {
-        self.0.cancel_all();
+        // `cancel_all` spares sidekicks by design; session end must not.
+        self.0.close();
     }
+}
+
+type BuiltAgent = (
+    Agent<Arc<dyn Model>>,
+    Arc<orca_harness_tools::SubagentTool<Arc<dyn Model>>>,
+);
+
+/// Rebuild the parent agent, carrying live sidekicks onto the new
+/// `subagent` tool so they outlive model switches and reloads.
+fn rebuild<F>(
+    build: &mut F,
+    endpoint: &Endpoint,
+    preserve_local_tools: bool,
+    previous: &orca_harness_tools::SubagentTool<Arc<dyn Model>>,
+) -> BuiltAgent
+where
+    F: FnMut(&Endpoint, bool) -> BuiltAgent,
+{
+    let built = build(endpoint, preserve_local_tools);
+    built.1.adopt_sidekicks(previous);
+    built
 }
 
 /// A path shown to the user: relative to the working directory when it
@@ -43,10 +64,7 @@ fn workspace_relative(path: &std::path::Path) -> String {
 /// local-tool preservation only when publishing a completed MCP reload.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn worker<F>(
-    built: (
-        Agent<Arc<dyn Model>>,
-        Arc<orca_harness_tools::SubagentTool<Arc<dyn Model>>>,
-    ),
+    built: BuiltAgent,
     system: String,
     mut endpoint: Endpoint,
     mut build: F,
@@ -66,19 +84,9 @@ pub(crate) async fn worker<F>(
     completions: CompletionInbox,
     ui: mpsc::UnboundedSender<UiMsg>,
 ) where
-    F: FnMut(
-        &Endpoint,
-        bool,
-    ) -> (
-        Agent<Arc<dyn Model>>,
-        Arc<orca_harness_tools::SubagentTool<Arc<dyn Model>>>,
-    ),
+    F: FnMut(&Endpoint, bool) -> BuiltAgent,
 {
     let (mut agent, mut subagent) = built;
-    // Rebuilding the parent agent replaces its registered tool, but a
-    // sidekick must keep the exact tool instance that owns its retained
-    // context until explicit stop or session teardown.
-    let mut sidekicks = HashMap::new();
     let _subagent_shutdown = CancelSubagentsOnDrop(subagent_manager.clone());
     let mut user_shell_call_id = 0_u64;
     let mut background_subagent_sequence = 0_u64;
@@ -260,7 +268,6 @@ pub(crate) async fn worker<F>(
                             output: ack.into_value(),
                             is_error: false,
                         }));
-                        sidekicks.insert(spawn_id, subagent.clone());
                     }
                     Err(error) => {
                         let message = format!("sidekick start failed: {error}");
@@ -274,13 +281,8 @@ pub(crate) async fn worker<F>(
                     }
                 }
             }
-            WorkerCmd::SidekickStop { spawn_id } => match sidekicks
-                .get(&spawn_id)
-                .unwrap_or(&subagent)
-                .stop_sidekick(spawn_id)
-            {
+            WorkerCmd::SidekickStop { spawn_id } => match subagent.stop_sidekick(spawn_id) {
                 Ok(()) => {
-                    sidekicks.remove(&spawn_id);
                     let _ = ui.send(UiMsg::Event(HarnessEvent::ToolResult {
                     tool_call_id: format!("sidekick-stop-{spawn_id}"), tool_name: "subagent".into(),
                     output: serde_json::json!({"spawnId": spawn_id, "status": "stopped", "termination": "stopped"}), is_error: false,
@@ -310,12 +312,12 @@ pub(crate) async fn worker<F>(
                 files.clear();
                 planning.area.end();
                 completions.reset();
-                sidekicks.clear();
+                subagent.stop_all_sidekicks();
                 // The manager cancellation above stops detached subagents. A
                 // fresh agent also drops process and interpreter tools, whose
                 // Drop implementations stop their background work. Do this
                 // before acknowledging success to the UI.
-                (agent, subagent) = build(&endpoint, false);
+                (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                 let _ = ui.send(UiMsg::SessionCleared { id: new_session_id });
             }
             WorkerCmd::Compact => {
@@ -487,6 +489,7 @@ pub(crate) async fn worker<F>(
                             let _ = ui.send(UiMsg::Notice(warning.clone()));
                         }
                         completions.reset();
+                        subagent.stop_all_sidekicks();
                         context = loaded.context;
                         let _ = ui.send(UiMsg::SessionLoaded {
                             id: loaded.meta.id,
@@ -522,7 +525,7 @@ pub(crate) async fn worker<F>(
                     model,
                 ) {
                     Ok(_) => {
-                        (agent, subagent) = build(&endpoint, false);
+                        (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                         let result = config::save_subagent_settings(&endpoint.subagent_settings);
                         let note = match result {
                             Ok(_) => format!("subagent {tier} model saved; applies to new spawns"),
@@ -605,7 +608,7 @@ pub(crate) async fn worker<F>(
                         };
                         endpoint = candidate;
                         let _ = config::save_provider(provider.label());
-                        (agent, subagent) = build(&endpoint, false);
+                        (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                         spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                         let _ = ui.send(UiMsg::ProviderChanged {
                             provider,
@@ -626,7 +629,7 @@ pub(crate) async fn worker<F>(
                 // Best-effort preference cache; a failed write only means
                 // the next session starts on the provider default.
                 let _ = config::save_model(endpoint.provider.label(), &endpoint.model);
-                (agent, subagent) = build(&endpoint, false);
+                (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 if ui
                     .send(UiMsg::ModelChanged {
@@ -660,7 +663,7 @@ pub(crate) async fn worker<F>(
                 };
                 endpoint = candidate;
                 let _ = config::save_provider(provider.label());
-                (agent, subagent) = build(&endpoint, false);
+                (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 let changed = UiMsg::ProviderChanged {
                     provider,
@@ -673,7 +676,7 @@ pub(crate) async fn worker<F>(
             WorkerCmd::ReloadExtensions => {
                 // The UI already saved the toggle; build_agent reads the
                 // config, so rebuilding is all that is left to do.
-                (agent, subagent) = build(&endpoint, false);
+                (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
             }
             WorkerCmd::ReloadMcp => {
                 mcp_reload.request(&mcp, &ui, &command_tx);
@@ -684,7 +687,7 @@ pub(crate) async fn worker<F>(
                     let _ = ui.send(UiMsg::Notice(line));
                 }
                 // Catalog publication must not kill local processes or REPL state.
-                (agent, subagent) = build(&endpoint, true);
+                (agent, subagent) = rebuild(&mut build, &endpoint, true, &subagent);
                 let inventory = mcp.startup_inventory();
                 let _ = ui.send(UiMsg::Notice(format!(
                     "MCP initialization complete · {} servers · {} tools available · /mcp for status",
@@ -711,7 +714,7 @@ pub(crate) async fn worker<F>(
                 for line in skills.reload() {
                     let _ = ui.send(UiMsg::Notice(line));
                 }
-                (agent, subagent) = build(&endpoint, false);
+                (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
             }
             WorkerCmd::ReloadSkills => {
                 // Rescan (cheap) and rebuild, so a skill created or
@@ -733,7 +736,7 @@ pub(crate) async fn worker<F>(
                         }
                     }
                 }
-                (agent, subagent) = build(&endpoint, false);
+                (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
             }
         }
     }
