@@ -4,7 +4,7 @@
 
 **A small, fast coding agent for your terminal, built on an embeddable Rust agent harness.**
 
-One 6.5 MB static binary. One process. Any model.
+One static binary (6.5 MB on macOS). One process. Any model.
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/okikorg/orca-harness?label=release)](https://github.com/okikorg/orca-harness/releases)
