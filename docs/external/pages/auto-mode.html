@@ -14,8 +14,10 @@
         stopping for every shell command, write, or edit.
     </p>
     <p>
-        Normal mode with human approval prompts is the startup default; pass
-        <code>--auto</code> to opt into automatic admission and review.
+        Normal mode is the startup default: gated tools ask for approval in the
+        interactive CLI, but are denied in headless runs unless
+        <code>--auto-approve</code> is supplied. Pass <code>--auto</code> to opt
+        into automatic admission and review.
         Explicit startup precedence is plan, orchestrate, normal, auto, then yolo. Bare
         <code>--auto-approve</code> retains its legacy normal-headless behavior;
         explicit <code>--auto</code> still enables review.
@@ -129,8 +131,10 @@
         A missing root request, reviewer error, 30-second timeout, malformed
         response, unknown decision, or unexplained caution fails closed. The
         tool does not run and Orcacode returns the failure to the agent. Auto
-        accepts exactly one <code>permission_decision</code> result containing
-        <code>clear</code> or a non-empty <code>caution</code> reason.
+        accepts either a single <code>permission_decision</code> tool call or a
+        final response containing valid JSON. Both require <code>decision</code>
+        and <code>reason</code> fields: the decision must be <code>clear</code>
+        or <code>caution</code>, with a non-empty reason for caution.
     </p>
 </section>
 

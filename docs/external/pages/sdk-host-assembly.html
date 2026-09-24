@@ -52,7 +52,7 @@ let agent = harness
     })
     .events(true)
     .usage(true)
-    .build()?;</pre></div><ul><li>Configure parent and delegated models independently when they need different providers or limits.</li><li>Give the parent and children separate step budgets.</li><li>Use an exact allowlist for high-risk presets; tool presence does not grant permission.</li><li>Bound process count, retries, output size, and total host runtime.</li></ul></section>
+    .build()?;</pre></div><ul><li>Configure parent and delegated models independently when they need different providers or limits.</li><li>Give the parent and children separate step budgets.</li><li>Use an exact allowlist for high-risk presets; tool presence does not grant permission.</li><li>This example caps process count, retry attempts, and tool-result string size, but not wall-clock time. Set <code>Limits.deadline</code> for parent and child runs as needed, or enforce an outer host timeout for the whole operation.</li></ul></section>
 <section class="section" id="sdk-state-services"><h2>Attach stateful services</h2><h3>Memory</h3><p><code>harness.memory()</code> opens the workspace-scoped SQLite store. <code>MemoryConfig::new</code> enables automatic recall and read-only search; <code>MemoryConfig::read_write</code> also exposes model-initiated mutation.</p><div class="terminal"><pre>let memory = harness.memory()?;
 memory.save(
     "Release reviews distinguish evidence from claims.",
@@ -78,6 +78,15 @@ if !status.healthy {
     return Err("ticket MCP server is unhealthy".into());
 }
 // After all sessions stop: mcp.disconnect("tickets");</pre></div><p>MCP tools use names such as <code>mcp__tickets__lookup</code>. Skill and MCP catalogs are snapshotted at run boundaries; changing them does not rewrite an active run’s tool registry.</p></section>
+<section class="section" id="sdk-session-lifecycle"><h2>Choose a session lifecycle</h2><p><code>Agent::run(request)</code> opens a fresh ephemeral session for a one-shot request. For multiple turns or imported history, open a session explicitly. <code>context(messages)</code> seeds its conversation; <code>persistent()</code> saves that history so <code>agent.resume_session(&amp;id)</code> can reopen it later. Resuming restores the transcript, not live built-in tool state such as processes or todos.</p><div class="terminal"><pre>use orca_harness_sdk::RunRequest;
+
+let session = agent.new_session()
+    .context(messages)
+    .persistent()
+    .open()?;
+let id = session.id().expect("persistent session id");
+let result = session.continue_run(RunRequest::continuation()).await?;
+// Later: let resumed = agent.resume_session(&amp;id)?;</pre></div><p>Continuation adds no user turn and requires existing conversation beyond the system prompt. Attach <code>RunRequest::cancellation(token)</code> when the caller owns cancellation: cancelling the token stops the run, but cancelling the run does not cancel the caller's token.</p></section>
 <section class="section" id="sdk-partial-outcomes"><h2>Preserve partial outcomes</h2><p>Use <code>run_outcome</code> or <code>RunHandle::outcome</code> when accounting and partial transcript state matter. Record them before collapsing the outcome into a simple success/error result.</p><div class="terminal"><pre>let outcome = session.run_outcome(request).await?;
 
 println!(

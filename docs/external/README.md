@@ -1,7 +1,8 @@
 # Orcacode external documentation
 
-A dependency-free, static documentation site for people using `orcacode`.
-Run these commands from the repository root.
+A static documentation site for people using `orcacode` (source checkout
+version 0.7.0, Apache-2.0). Run these commands from the repository root;
+Bun is needed to serve the site, but no build or package install is required.
 
 ```bash
 bun docs/external/server.ts
@@ -15,8 +16,10 @@ PORT=8080 bun docs/external/server.ts
 ```
 
 The site is intentionally plain HTML, CSS, native browser JavaScript modules, and
-inline SVG: no build, package install, or framework is required. The content
-reflects the CLI and configuration behavior in this repository.
+inline SVG: no framework is required. The content reflects the CLI and
+configuration behavior in this repository. For binary installation on macOS,
+Linux, or Windows, see the [repository README](../../README.md#try-it). The Rust
+SDK is built from this workspace; it is not yet published on crates.io.
 
 ## Content structure
 
@@ -47,11 +50,27 @@ directory in the landing site (`landing/public/orcacode/docs` in the
 rsync -a --exclude README.md --exclude server.ts docs/external/ ../agent-orc/landing/public/orcacode/docs/
 ```
 
+## Validation
+
+Run the dependency-free structural checker with Python 3:
+
+```bash
+python3 docs/external/check.py
+```
+
+It checks registered page fragments, required metadata, navigation parents,
+section IDs, duplicate DOM IDs, internal page/section routes, and local asset
+paths. It does not fetch external URLs or verify source-code claims; root-relative
+links served by the landing site are skipped. After editing, also serve the site
+and check navigation, search, and Copy Markdown in a browser. The displayed
+documentation review date is not a release date.
+
 ## Included guides
 
 - Install and first session
 - Approvals, plan mode, [orchestrate mode](index.html#orchestrate-mode), auto mode, and yolo mode
-- Providers, models, and persistent configuration
+- Providers (local OpenAI-compatible, OpenAI API, OpenRouter, Vercel AI Gateway,
+  CheaperInference, Anthropic, and ChatGPT/Codex), models, and persistent configuration
 - Workspace tools, background processes, and output retrieval
 - Durable memory, automatic scoped recall, explicit management, and local storage
 - Sessions, task lists, and transcript controls

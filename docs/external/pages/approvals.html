@@ -34,10 +34,18 @@
 <section class="section" id="gated-tools">
     <h2>What is gated</h2>
     <p>
-        Shell commands, file writes and edits, persistent Python and Bun
-        compute, background processes, and subagents ask before they run.
-        Read-only file inspection and directory search do not require a prompt
-        in normal mode.
+        In interactive Normal mode, shell commands, file writes and edits,
+        Python and Bun compute tools, subagent and workflow calls,
+        <code>web_fetch</code>, and <code>memory_manage</code> require approval.
+        The <code>process</code> tool for managing background processes is not
+        on this approval list; shell commands are. Read-only file inspection
+        and directory search do not require a prompt.
+    </p>
+    <p>
+        Headless runs cannot show these prompts: gated calls are denied by
+        default. Use <code>--auto-approve</code> to permit them in headless
+        Normal mode, or see <a href="#headless/headless-safety">headless approval options</a>
+        for other modes.
     </p>
     <p>
         The prompt is about the operation, not the agent’s wording. A precise
