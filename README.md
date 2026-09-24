@@ -13,7 +13,7 @@ One static binary (6.5 MB on macOS). One process. Any model.
 
 [Install](#install) · [Quick start](#quick-start) · [Docs](https://orcapods.ai/orcacode/docs/#start) · [Embed the harness](#embed-the-harness) · [Contributing](#contributing)
 
-<img src="docs/assets/screenshots/answer.png" alt="Orcacode answering a question about this repository in plan mode, citing file and line numbers" width="900">
+<img src="docs/assets/screenshots/answer.png" alt="Orcacode answering a question about this repository in plan mode and citing the files it read" width="900">
 
 </div>
 
@@ -129,8 +129,8 @@ a full multi-provider setup in three steps.
     <td align="center">Tool calls fan out in parallel and group per turn</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/answer.png" alt="A finished answer citing dispatcher.rs line ranges"></td>
-    <td width="50%"><img src="docs/assets/screenshots/models.png" alt="The model picker listing a live provider catalog with context sizes and prices"></td>
+    <td width="50%"><img src="docs/assets/screenshots/answer.png" alt="A finished answer that cites the dispatcher, agent loop and test files it read"></td>
+    <td width="50%"><img src="docs/assets/screenshots/models.png" alt="The model picker listing the live OpenAI Codex catalog with context sizes"></td>
   </tr>
   <tr>
     <td align="center">Answers cite the code they read</td>
