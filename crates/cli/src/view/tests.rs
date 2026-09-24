@@ -6,6 +6,7 @@ mod tests {
 
     #[test]
     fn default_view_theme_uses_the_colored_palette() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         // Palettes are pure; the active theme is process-global and can be
         // switched by the TUI, so assert on the palette itself rather than
         // the global (tests run in parallel and may switch it).
@@ -16,6 +17,7 @@ mod tests {
 
     #[test]
     fn orca_theme_uses_the_mint_and_paper_palette() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let t = theme_for(ThemeName::Orca);
         assert_eq!(t.dim.fg, Some(Color::Rgb(127, 127, 127)));
         assert_eq!(t.accent.fg, Some(Color::Rgb(89, 224, 154)));
@@ -25,6 +27,7 @@ mod tests {
 
     #[test]
     fn truncate_flattens_and_cuts_with_ellipsis() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         assert_eq!(truncate_line("hello", 10), "hello");
         assert_eq!(truncate_line("hello world", 8), "hello w…");
         assert_eq!(truncate_line("line one\nline two", 20), "line one");
@@ -32,6 +35,7 @@ mod tests {
 
     #[test]
     fn sanitize_expands_tabs_to_stops_and_drops_controls() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         // A raw tab in a cell moves the real terminal cursor to the next
         // tab stop while the draw buffer budgets one column, desyncing
         // the two and leaving ghost cells the differ never repaints.
@@ -47,6 +51,7 @@ mod tests {
 
     #[test]
     fn sanitize_strips_ansi_escape_sequences_whole() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         assert_eq!(sanitize_cells("\u{1b}[31mred\u{1b}[0m plain"), "red plain");
         assert_eq!(sanitize_cells("\u{1b}]0;title\u{7}body"), "body");
         assert_eq!(sanitize_cells("dangling\u{1b}"), "dangling");
@@ -54,12 +59,14 @@ mod tests {
 
     #[test]
     fn truncate_line_never_passes_control_bytes_through() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         assert_eq!(truncate_line("205M\t/tmp", 20), "205M    /tmp");
         assert_eq!(truncate_line("\u{1b}[1mbold\u{1b}[0m", 20), "bold");
     }
 
     #[test]
     fn code_lines_render_tabs_as_spaces_not_raw_cells() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = highlighted_code_lines("205M\t/Users/x\n12K\t/tmp/y\n", "text", 60, "");
         for line in &lines {
             for span in &line.spans {
@@ -85,6 +92,7 @@ mod tests {
 
     #[test]
     fn markdown_plain_text_wraps_with_indent() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = markdown_lines("alpha beta gamma delta", 14, "  ");
         assert!(lines.len() >= 2, "should wrap: {lines:?}");
         for line in &lines {
@@ -100,6 +108,8 @@ mod tests {
 
     #[test]
     fn markdown_styles_bold_and_inline_code() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+        set_theme(ThemeName::Default);
         let lines = markdown_lines("use **bold** and `code` now", 80, "");
         assert_eq!(lines.len(), 1);
         let bold = lines[0]
@@ -122,6 +132,7 @@ mod tests {
 
     #[test]
     fn markdown_renders_code_fences_as_bordered_verbatim_lines() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = markdown_lines("before\n```rust\nlet x = 1; // long\n```\nafter", 80, "  ");
         let texts: Vec<String> = lines.iter().map(flat).collect();
         assert!(
@@ -136,6 +147,7 @@ mod tests {
 
     #[test]
     fn rust_fences_render_with_multiple_token_colors() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let source = "pub fn greet(name: &str) -> bool { name == \"orca\" }";
         let lines = markdown_lines(&format!("```rust\n{source}\n```"), 100, "  ");
         let code_line = lines.first().expect("highlighted code line");
@@ -159,6 +171,7 @@ mod tests {
 
     #[test]
     fn inspector_code_highlights_and_wraps_without_ellipsis() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         set_theme(ThemeName::Default);
         let source = "let deterministic_result = compute_parallel_tool_output();";
         let lines = highlighted_code_lines(source, "rust", 32, "  ");
@@ -177,6 +190,7 @@ mod tests {
 
     #[test]
     fn inspector_code_preserves_indentation_and_blank_lines() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         set_theme(ThemeName::Default);
         let source = "fn main() {\n    if ready {\n        run();\n    }\n\n    finish();\n}";
         let rendered = highlighted_code_lines(source, "rust", 80, "  ")
@@ -191,6 +205,7 @@ mod tests {
 
     #[test]
     fn monochrome_code_blocks_do_not_emit_token_colors() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = render_code_block(
             &["pub fn greet() -> bool { true }"],
             "rust",
@@ -210,6 +225,7 @@ mod tests {
 
     #[test]
     fn truncated_code_does_not_corrupt_following_line_highlights() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let source = [
             "let value = 1; /* a deliberately long comment that closes here */",
             "pub fn next() {}",
@@ -230,6 +246,7 @@ mod tests {
 
     #[test]
     fn markdown_bullets_and_headers() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = markdown_lines("## Title\n- item one\n* item two", 80, "  ");
         let texts: Vec<String> = lines.iter().map(flat).collect();
         assert!(texts.contains(&"  ## Title".to_string()), "{texts:?}");
@@ -243,6 +260,7 @@ mod tests {
 
     #[test]
     fn markdown_ordered_sections_render_nested_emphasis_without_markers() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = markdown_lines(
             "1. **Agent**\n8. **Host / CLI (`orcacode`)**\n   continued explanation",
             80,
@@ -277,6 +295,7 @@ mod tests {
 
     #[test]
     fn markdown_horizontal_rule_uses_terminal_rule() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = markdown_lines("before\n---\nafter", 24, "  ");
         let texts: Vec<String> = lines.iter().map(flat).collect();
 
@@ -288,6 +307,7 @@ mod tests {
 
     #[test]
     fn fenced_diagrams_are_not_rendered_in_italics() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let lines = markdown_lines("```text\n┌──────┐\n│ CORE │\n└──────┘\n```", 40, "  ");
         let diagram_spans = lines
             .iter()
@@ -304,6 +324,8 @@ mod tests {
 
     #[test]
     fn markdown_renders_gfm_tables_without_source_delimiters() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+        set_theme(ThemeName::Default);
         let markdown = "| Action | What I can do | How to ask |\n\
                         | --- | --- | --- |\n\
                         | **Run shell** | Execute a command | `shell ls` |\n\
@@ -353,6 +375,7 @@ mod tests {
 
     #[test]
     fn markdown_table_wraps_cells_to_the_terminal_width() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         let markdown = "| Name | Description |\n\
                         | --- | --- |\n\
                         | renderer | This description is long enough to wrap over several terminal lines |\n\
@@ -373,6 +396,7 @@ mod tests {
 
     #[test]
     fn scroll_window_follows_the_bottom_by_default() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         assert_eq!(scroll_window(100, 20, 0), (80, 100));
         // Shorter transcript than the viewport: show everything.
         assert_eq!(scroll_window(5, 20, 0), (0, 5));
@@ -381,6 +405,7 @@ mod tests {
 
     #[test]
     fn scroll_window_moves_up_and_clamps_at_the_top() {
+        let _theme = crate::tui::THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
         assert_eq!(scroll_window(100, 20, 30), (50, 70));
         // Scrolling past the top pins the first page.
         assert_eq!(scroll_window(100, 20, 500), (0, 20));

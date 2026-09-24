@@ -418,7 +418,7 @@ fn sidekick_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Wo
             push_error(app, USAGE);
             return;
         }
-        let ids = app
+        let mut ids = app
             .subagent_transcripts
             .values()
             .filter(|sidekick| {
@@ -432,6 +432,7 @@ fn sidekick_command(app: &mut App, args: &str, worker: &mpsc::UnboundedSender<Wo
             })
             .map(|sidekick| sidekick.id)
             .collect::<Vec<_>>();
+        ids.sort_unstable();
         if ids.is_empty() {
             push_notice(app, "No active sidekicks.");
         } else {

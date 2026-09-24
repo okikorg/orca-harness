@@ -144,7 +144,7 @@ const QUEUE_PREVIEW_ROWS: usize = 3;
 /// take this lock; without it they race whenever the harness happens to
 /// schedule them together.
 #[cfg(test)]
-static THEME_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static THEME_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The transcript-spacing preference is process-global and seeded by
 /// `App::new` from the config file. Tests that construct an `App` while

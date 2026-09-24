@@ -129,6 +129,9 @@ impl<M: Model + Clone + 'static> Drop for SidekickRegistryInner<M> {
     }
 }
 
+/// A sidekick admitted for one task: its handle, the task, and its slot.
+type AdmittedSidekick<M> = (Arc<Sidekick<M>>, String, Option<background::manager::Slot>);
+
 struct Sidekick<M: Model + Clone + 'static> {
     agent: Agent<M>,
     context: Mutex<Context>,
@@ -379,7 +382,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         &self,
         request: SubagentRequest,
         completion: bool,
-    ) -> Result<(Arc<Sidekick<M>>, String, Option<background::manager::Slot>), ToolError> {
+    ) -> Result<AdmittedSidekick<M>, ToolError> {
         if self.background.is_none() {
             return Err(ToolError::msg(
                 "persistent sidekicks require session-owned background subagents",
@@ -743,6 +746,24 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
 
     pub fn stop_all_sidekicks(&self) -> usize {
         self.sidekicks.inner.stop_all()
+    }
+
+    /// Move `previous`'s live and stopped sidekick handles onto this tool.
+    /// A host that rebuilds its parent agent (model switch, reload) calls
+    /// this so sidekicks survive the rebuild instead of stopping when the
+    /// old tool drops. Each sidekick owns its own agent and context, so it
+    /// keeps the configuration it was spawned with.
+    pub fn adopt_sidekicks(&self, previous: &Self) {
+        if Arc::ptr_eq(&self.sidekicks.inner, &previous.sidekicks.inner) {
+            return;
+        }
+        let live = std::mem::take(&mut *previous.sidekicks.inner.live.lock().unwrap());
+        self.sidekicks.inner.live.lock().unwrap().extend(live);
+        let stopped = std::mem::take(&mut *previous.sidekicks.inner.stopped_order.lock().unwrap());
+        previous.sidekicks.inner.stopped.lock().unwrap().clear();
+        for id in stopped {
+            self.sidekicks.inner.remember_stopped(id);
+        }
     }
 
     fn sidekick_lookup_error(&self, spawn_id: u64) -> ToolError {

@@ -21,9 +21,9 @@ pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const ORCACODE_USER_AGENT: &str = concat!("orcacode/", env!("CARGO_PKG_VERSION"));
 // Codex uses this protocol-client version for catalog compatibility filtering.
 // It is deliberately independent of Orcacode's package version.
-// Verified against the authenticated catalog: 0.144.1 omits gpt-6-astra,
-// while 0.153.3 advertises it for the same account.
-const CODEX_PROTOCOL_VERSION: &str = "0.153.3";
+// Verified against the authenticated catalog: 0.153.3 omits gpt-6-sol and
+// gpt-6-luna, while 0.155.1 advertises both for the same account.
+const CODEX_PROTOCOL_VERSION: &str = "0.155.1";
 
 /// The shared process client. Codex's user agent rides on each request
 /// instead of the client, because the client is shared with every other
@@ -385,7 +385,7 @@ mod catalog_tests {
     fn catalog_identifies_the_client_version() {
         assert_eq!(
             super::catalog_url("https://example.test/codex/"),
-            "https://example.test/codex/models?client_version=0.153.3"
+            "https://example.test/codex/models?client_version=0.155.1"
         );
     }
 

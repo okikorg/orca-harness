@@ -471,6 +471,41 @@ async fn sidekick_follow_up_reuses_context_and_stop_is_terminal() {
 }
 
 #[tokio::test]
+async fn rebuilt_tool_adopts_live_sidekicks_with_their_context() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::final_text("alpha report"),
+        ModelResponse::final_text("beta report"),
+        ModelResponse::final_text("follow-up report"),
+    ]));
+    let (ws, _dir) = temp_ws();
+    let manager = orca_harness_tools::SubagentManager::new(0);
+    let old = SubagentTool::new(model.clone(), &ws).background(manager.clone(), |_| {});
+    let live = old
+        .start_sidekick_foreground(SubagentRequest::new("inspect alpha"), CancellationToken::new(), None)
+        .await
+        .unwrap();
+    let stopped = old
+        .start_sidekick_foreground(SubagentRequest::new("inspect beta"), CancellationToken::new(), None)
+        .await
+        .unwrap();
+    old.stop_sidekick(stopped.spawn_id).unwrap();
+
+    let rebuilt = SubagentTool::new(model.clone(), &ws).background(manager, |_| {});
+    rebuilt.adopt_sidekicks(&old);
+    drop(old);
+
+    assert_eq!(rebuilt.sidekick_status(live.spawn_id).unwrap().as_str(), "idle");
+    assert_eq!(rebuilt.sidekick_status(stopped.spawn_id).unwrap().as_str(), "stopped");
+    let follow_up = rebuilt
+        .sidekick_task_foreground(live.spawn_id, "check gamma", CancellationToken::new(), None)
+        .await
+        .unwrap();
+    assert_eq!(follow_up.answer, "follow-up report");
+    let observed = model.observed_contexts();
+    assert_eq!(observed.last().unwrap().messages().len(), 4, "alpha context survives the rebuild");
+}
+
+#[tokio::test]
 async fn cancel_all_leaves_idle_sidekick_available() {
     let (ws, _dir) = temp_ws();
     let manager = orca_harness_tools::SubagentManager::new(0);
