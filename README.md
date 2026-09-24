@@ -263,6 +263,19 @@ of 1.28 s serially. For latency-bound tools the harness turns
 [benchmarks page](https://orcapods.ai/orcacode/docs/#benchmarks) has the
 method.
 
+Host startup, measured on an Apple M4 Pro (macOS arm64) with the v0.7.0
+release build: 100 measured process launches after 10 warmups, using isolated
+config, workspace and skill fixtures. Host initialization with session
+recording off takes **4.1 ms** (standard deviation 0.3 ms); creating a new
+session takes 4.2 ms. `--help` takes 2.7 ms, and the process-launch floor on
+that machine is 0.9 ms. The benchmark uses `ORCA_BENCH=1` and exits after
+host/agent initialization, before the terminal UI or any model request, so
+these are fresh process launches with warmed OS caches — not cache-cold
+launches, and not time to the first visible prompt. Reproduce with
+`./benchmarks/startup/run.sh`; results are written to
+`benchmarks/results/startup/`. CI enforces startup budgets on Linux; macOS
+numbers are informational.
+
 ### Footprint
 
 All rows were measured on the same Apple Silicon Mac, as the core CLI with no
