@@ -60,9 +60,10 @@ python3 docs/external/check.py
 
 It checks registered page fragments, required metadata, navigation parents,
 section IDs, duplicate DOM IDs, internal page/section routes, and local asset
-paths. It does not fetch external URLs or verify source-code claims. After editing,
-also serve the site and check navigation, search, and Copy Markdown in a browser.
-The displayed documentation review date is not a release date.
+paths. It does not fetch external URLs or verify source-code claims; root-relative
+links served by the landing site are skipped. After editing, also serve the site
+and check navigation, search, and Copy Markdown in a browser. The displayed
+documentation review date is not a release date.
 
 ## Included guides
 
