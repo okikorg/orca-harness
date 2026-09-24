@@ -13,7 +13,22 @@ One static binary (6.5 MB on macOS). One process. Any model.
 
 [Install](#install) · [Quick start](#quick-start) · [Docs](https://orcapods.ai/orcacode/docs/#start) · [Embed the harness](#embed-the-harness) · [Contributing](#contributing)
 
-<img src="docs/assets/screenshots/answer.png" alt="Orcacode in plan mode: a question, the parallel tool calls it ran, and a three-point answer citing the files it read" width="900">
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/welcome.png" alt="Orcacode welcome screen showing version, model and workspace"></td>
+    <td width="50%"><img src="docs/assets/screenshots/working.png" alt="Orcacode mid-run, with parallel search and read tool calls grouped in an activity rail"></td>
+  </tr>
+  <tr>
+    <td align="center">Start in any repo, on any provider</td>
+    <td align="center">Tool calls fan out in parallel and group per turn</td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/assets/screenshots/answer.png" alt="Orcacode in plan mode: a question, the parallel tool calls it ran, and a three-point answer citing the files it read"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">Answers cite the files they read</td>
+  </tr>
+</table>
 
 </div>
 
@@ -116,19 +131,6 @@ orcacode --bare --no-session -p "List the files here" # read-only tools, no extr
 
 The [start guide](https://orcapods.ai/orcacode/docs/#start) goes from here to
 a full multi-provider setup in three steps.
-
-## A look around
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/assets/screenshots/welcome.png" alt="Orcacode welcome screen showing version, model and workspace"></td>
-    <td width="50%"><img src="docs/assets/screenshots/working.png" alt="Orcacode mid-run, with parallel search and read tool calls grouped in an activity rail"></td>
-  </tr>
-  <tr>
-    <td align="center">Start in any repo, on any provider</td>
-    <td align="center">Tool calls fan out in parallel and group per turn</td>
-  </tr>
-</table>
 
 ## Features
 
