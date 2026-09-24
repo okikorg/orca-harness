@@ -13,7 +13,7 @@ use crate::sse::SseLineBuffer;
 #[derive(Deserialize)]
 struct WireChunk {
     error: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     choices: Vec<WireChunkChoice>,
     usage: Option<WireUsage>,
 }
@@ -30,8 +30,19 @@ struct WireDelta {
     /// Reasoning channel; compat servers use either name.
     reasoning: Option<String>,
     reasoning_content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     tool_calls: Vec<WireToolCallDelta>,
+}
+
+/// Some compatible servers send `null` for an empty list (notably
+/// `"choices": null` in an error chunk). Treat it as empty so the chunk
+/// still parses and its `error` reaches the caller.
+fn null_as_empty<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Deserialize)]
@@ -256,6 +267,23 @@ mod tests {
                 retryable
             );
         }
+    }
+
+    #[test]
+    fn null_lists_parse_as_empty() {
+        let mut acc = ChunkAccumulator::new();
+        let deltas = apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":null,"usage":null}"#,
+                r#"{"choices":[{"delta":{"content":"ok","tool_calls":null}}]}"#,
+            ],
+        );
+        assert_eq!(delta_tags(&deltas), ["text:ok"]);
+
+        let payload = r#"{"choices":null,"error":{"code":"rate_limit_exceeded","message":"busy"}}"#;
+        let failure = ChunkAccumulator::new().apply(payload).unwrap_err();
+        assert!(failure.to_string().contains("busy"), "{failure}");
     }
 
     fn apply_all(acc: &mut ChunkAccumulator, payloads: &[&str]) -> Vec<ModelDelta> {

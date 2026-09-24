@@ -36,6 +36,17 @@ The architecture and concurrency schematics remain inline with their owning
 page and use `diagrams.css`, so page copy and its visual explanation can be
 audited together.
 
+## Publishing
+
+The live manual at https://orcapods.ai/orcacode/docs/ is a copy of this
+directory in the landing site (`landing/public/orcacode/docs` in the
+`okikorg/orca` repository). Keep the two identical, apart from this README and
+`server.ts`, which exist only here: edit here, then copy the files across.
+
+```bash
+rsync -a --exclude README.md --exclude server.ts docs/external/ ../agent-orc/landing/public/orcacode/docs/
+```
+
 ## Included guides
 
 - Install and first session
@@ -47,6 +58,6 @@ audited together.
 - Complete current tool and extension reference, including mode and availability rules
 - Rust SDK guide set with focused subpages for first-agent setup, production host assembly, and background lifecycle management
 - Benchmark methodology, checked-in results, regression budgets, MCP retrieval accuracy, and subagent stress evidence
-- Subagents and multi-provider worker routing, MCP servers, and skills (including discovery, scope, and lifecycle diagrams)
+- Subagents, sidekicks, and multi-provider worker routing, MCP servers, and skills (including discovery, scope, and lifecycle diagrams)
 - Headless automation and troubleshooting
 - Harness architecture, design philosophy, and benchmark methodology/results

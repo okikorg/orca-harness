@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -123,6 +123,7 @@ pub async fn run<M: Model + Clone + 'static>(
     let counted_tool_calls = tool_calls.clone();
     let saw_delta = Arc::new(AtomicBool::new(false));
     let saw = saw_delta.clone();
+    let line = OpenLine::default();
     let events = EventStream::from_fn(move |ev: HarnessEvent| {
         if matches!(ev, HarnessEvent::ToolCall { .. }) {
             counted_tool_calls.fetch_add(1, Ordering::Relaxed);
@@ -136,16 +137,15 @@ pub async fn run<M: Model + Clone + 'static>(
         match &ev {
             HarnessEvent::AssistantDelta { text } => {
                 saw.store(true, Ordering::Relaxed);
-                print!("{text}");
-                std::io::stdout().flush().ok();
+                line.write(OpenLine::STDOUT, text);
             }
             HarnessEvent::ReasoningDelta { text } => {
-                eprint!("{text}");
-                std::io::stderr().flush().ok();
+                line.write(OpenLine::STDERR, text);
             }
             HarnessEvent::ToolCall {
                 tool_name, input, ..
             } => {
+                line.close();
                 eprintln!("• {}", presentation::tool_call_line(tool_name, input));
             }
             HarnessEvent::ToolResult {
@@ -154,16 +154,15 @@ pub async fn run<M: Model + Clone + 'static>(
                 is_error,
                 ..
             } => {
+                line.close();
                 eprintln!(
                     "  {}",
                     presentation::tool_result_summary(tool_name, output, *is_error)
                 );
             }
-            HarnessEvent::Result { message } => {
-                if !saw.load(Ordering::Relaxed) && !message.is_empty() {
-                    print!("{message}");
-                    std::io::stdout().flush().ok();
-                }
+            // `write` skips an empty message.
+            HarnessEvent::Result { message } if !saw.load(Ordering::Relaxed) => {
+                line.write(OpenLine::STDOUT, message);
             }
             _ => {}
         }
@@ -372,5 +371,51 @@ pub async fn run<M: Model + Clone + 'static>(
             eprintln!("error: {err}");
             1
         }
+    }
+}
+
+/// Which stream, if any, the headless transcript left mid-line. Answer text
+/// goes to stdout while reasoning and tool rows go to stderr; on a terminal
+/// they share one screen, so a switch between streams must end the other
+/// stream's unfinished line or the two run together.
+#[derive(Clone, Default)]
+struct OpenLine(Arc<AtomicU8>);
+
+impl OpenLine {
+    const NONE: u8 = 0;
+    const STDOUT: u8 = 1;
+    const STDERR: u8 = 2;
+
+    fn close(&self) {
+        match self.0.swap(Self::NONE, Ordering::Relaxed) {
+            Self::STDOUT => {
+                println!();
+                std::io::stdout().flush().ok();
+            }
+            Self::STDERR => eprintln!(),
+            _ => {}
+        }
+    }
+
+    fn write(&self, stream: u8, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.0.load(Ordering::Relaxed) != stream {
+            self.close();
+        }
+        if stream == Self::STDOUT {
+            print!("{text}");
+            std::io::stdout().flush().ok();
+        } else {
+            eprint!("{text}");
+            std::io::stderr().flush().ok();
+        }
+        let open = if text.ends_with('\n') {
+            Self::NONE
+        } else {
+            stream
+        };
+        self.0.store(open, Ordering::Relaxed);
     }
 }

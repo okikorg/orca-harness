@@ -22,6 +22,20 @@ class BinarySizeTests(unittest.TestCase):
                     )
                     self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
 
+    def test_linux_musl_targets_have_their_own_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp) / "x86_64-unknown-linux-musl" / "release"
+            directory.mkdir(parents=True)
+            binary = directory / "orcacode"
+            for size, expected in [(8_999_999, 0), (9_000_000, 1)]:
+                with self.subTest(size=size):
+                    with binary.open("wb") as handle:
+                        handle.truncate(size)
+                    result = subprocess.run(
+                        ["bash", str(GATE), str(binary)], capture_output=True, text=True
+                    )
+                    self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+
     def test_missing_binary_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(

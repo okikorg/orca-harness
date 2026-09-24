@@ -2,9 +2,9 @@
   {
     "group": "START HERE",
     "id": "start",
-    "label": "Welcome",
-    "title": "Your Orcacode field manual",
-    "lede": "Orcacode is the interactive terminal host for Orca Harness. It works inside a chosen workspace, asks before gated actions by default, and keeps your work as a recoverable session."
+    "label": "Start here",
+    "title": "A prompt, your workflow, your product",
+    "lede": "Three steps from an empty terminal to Orcacode working in your repo unattended. Every command on this page runs as written on orcacode 0.7.0."
   },
   {
     "group": "GETTING STARTED",
@@ -46,7 +46,7 @@
     "id": "providers",
     "label": "Providers & models",
     "title": "Choose a provider and model",
-    "lede": "Orcacode supports local OpenAI-compatible servers, OpenAI API, OpenRouter, and the OpenAI Codex provider for a ChatGPT subscription."
+    "lede": "Orcacode supports local OpenAI-compatible servers, the OpenAI API, a ChatGPT subscription through OpenAI Codex, the native Anthropic API, OpenRouter, Vercel AI Gateway, and CheaperInference."
   },
   {
     "group": "USE THE AGENT",

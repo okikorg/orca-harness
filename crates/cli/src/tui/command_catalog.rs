@@ -267,7 +267,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "provider",
-        description: "switch provider (openrouter, openai, local)",
+        description: "switch provider (local, openai, openai-codex, anthropic, openrouter, ...)",
         category: "General",
         takes_args: false,
     },
