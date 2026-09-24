@@ -46,7 +46,7 @@
     "id": "providers",
     "label": "Providers & models",
     "title": "Choose a provider and model",
-    "lede": "Orcacode supports local OpenAI-compatible servers, the OpenAI API, a ChatGPT subscription through OpenAI Codex, the native Anthropic API, OpenRouter, Vercel AI Gateway, and CheaperInference."
+    "lede": "Orcacode supports local OpenAI-compatible servers, OpenAI API, OpenRouter, Vercel AI Gateway, CheaperInference, Anthropic, and the OpenAI Codex provider for a ChatGPT subscription."
   },
   {
     "group": "USE THE AGENT",
@@ -109,7 +109,7 @@
     "id": "sdk",
     "label": "Rust SDK",
     "title": "Embed Orca Harness in Rust",
-    "lede": "The orca-harness-sdk crate is a CLI-independent facade for composing models, tools, extensions, sessions, memory, skills, MCP, events, cancellation, and long-context recovery in your own Rust host."
+    "lede": "The orca-harness-sdk crate (not yet on crates.io) is a CLI-independent facade for composing models, tools, extensions, sessions, memory, skills, MCP, events, cancellation, and long-context recovery in your own Rust host."
   },
   {
     "group": "EMBED",

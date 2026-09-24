@@ -14,7 +14,10 @@ orcacode --orchestrate --auto-approve -p "Delegate focused tests and summarize t
         <code>/subagents</code>; see <a href="#subagents">Subagents</a> for saved
         routes, preferred models, depth, and execution limits. The worker route
         named <code>auto</code> is not <code>/mode auto</code> and does not change
-        session approvals. Orchestrate mode does not select a special worker model.</p>
+        session approvals. Orchestrate mode does not select a special worker model.
+        A worker model on the same provider retains the parent's configured
+        reasoning effort and output-token cap, except that OpenAI Codex does not
+        accept the cap; cross-provider routes inherit neither setting.</p>
 </section>
 <section class="section" id="parent-tools">
     <h2>What the parent can do</h2>
@@ -66,8 +69,10 @@ orcacode --orchestrate --auto-approve -p "Delegate focused tests and summarize t
         into a worker or guarantee that a worker has an MCP tool. Ordinary worker
         calls do not acquire interactive human-approval prompts just because
         orchestrate is active. Approve the parent delegation with that scope in mind.</p>
-    <p>See <a href="#subagents">Subagents</a> for worker context, routing, results,
-        and interactive background delivery.</p>
+    <p>Completed worker results include reasoning/cache token usage and model/tool
+        timing. Tool durations are cumulative, so parallel calls can total more
+        than wall-clock time. See <a href="#subagents">Subagents</a> for worker
+        context, routing, results, and interactive background delivery.</p>
 </section>
 <section class="section" id="approvals-and-modes">
     <h2>Approvals and other session modes</h2>

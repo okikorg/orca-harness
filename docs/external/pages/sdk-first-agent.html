@@ -25,7 +25,7 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
 }</pre></div><p>The workspace must already exist and is canonicalized during <code>build()</code>. State defaults to <code>&lt;workspace&gt;/.orca</code>; use <code>.state_dir(...)</code> when generated state should live elsewhere.</p><h3>One shot or multiple turns</h3><p><code>agent.run(...)</code> creates a fresh ephemeral session for each call. Retain a session when later requests need earlier context:</p><div class="terminal"><pre>let session = agent.new_session().open()?; // ephemeral by default
 session.run("My preferred language is Rust.").await?;
 let answer = session.run("Which language did I mention?").await?;</pre></div></section>
-<section class="section" id="sdk-tools-policy"><h2>Add tools behind a policy</h2><p><code>FnTool</code> turns an async Rust closure into a model-callable JSON boundary. Validate arguments in the closure even when the schema marks them as required.</p><div class="terminal"><pre>use orca_harness_sdk::{FnTool, ToolPolicy};
+<section class="section" id="sdk-tools-policy"><h2>Add tools behind a policy</h2><p><code>FnTool</code> turns an async Rust closure into a model-callable JSON boundary. Validate arguments in the closure even when the schema marks them as required.</p><div class="terminal"><pre>use orca_harness_sdk::{FnTool, ToolError, ToolPolicy};
 use serde_json::json;
 
 let lookup = FnTool::new(
@@ -40,7 +40,8 @@ let lookup = FnTool::new(
     |args, _context| async move {
         let id = args["id"]
             .as_u64()
-            .ok_or_else(|| "id must be a positive integer".to_string())?;
+            .filter(|id| *id > 0)
+            .ok_or_else(|| ToolError::msg("id must be a positive integer"))?;
         Ok(json!({ "id": id, "status": "open" }))
     },
 );
@@ -64,7 +65,18 @@ let request = RunRequest::new("Inspect the failing tests")
 let result = session.run(request).await?;
 eprintln!("steps: {}", result.metered_steps);
 eprintln!("tokens: {:?}", result.usage);
-println!("{}", result.text);</pre></div></section>
+println!("{}", result.text);</pre></div><h3>Continue, cancel, and inspect outcomes</h3><p><code>continue_run</code> asks for another assistant turn on the current transcript without appending a user message; it requires an existing turn to continue. Pass a caller-owned token to cancel a run from elsewhere:</p><div class="terminal"><pre>use orca_harness_sdk::{CancellationToken, RunRequest};
+
+let cancel = CancellationToken::new();
+let request = RunRequest::new("Investigate further")
+    .cancellation(cancel.clone()); // cancel.cancel() can stop this run
+let outcome = session.run_outcome(request).await?;
+if let Err(error) = &amp;outcome.execution {
+    eprintln!("run stopped: {error}; steps: {}", outcome.metered_steps);
+}
+eprintln!("partial usage: {:?}", outcome.usage);
+// After a turn, to generate another assistant turn without a new prompt:
+let next = session.continue_run(RunRequest::continuation()).await?;</pre></div><p><code>run()</code> returns an error on execution or persistence failure, discarding partial accounting. <code>run_outcome()</code> retains the transcript and usage even on failure or cancellation; check <code>execution</code> and <code>persistence</code> separately. It still returns an error if the run cannot start.</p></section>
 <section class="section" id="sdk-persistence"><h2>Persist and branch conversations</h2><p>Ephemeral sessions retain history only while the value is alive. Persistent sessions record transcripts beneath the harness state directory and can be listed, resumed, and forked.</p><div class="terminal"><pre>let session = agent.new_session().persistent().open()?;
 let id = session.id().expect("persistent session id");
 session.run("Review the current design").await?;
@@ -74,4 +86,5 @@ for saved in harness.sessions().list() {
 }
 
 let resumed = agent.resume_session(&amp;id)?;
-let branch = resumed.fork().await?;</pre></div><table class="command-table"><thead><tr><th>Operation</th><th>Effect</th></tr></thead><tbody><tr><td><code>messages()</code></td><td>Clone the in-memory conversation.</td></tr><tr><td><code>fork()</code></td><td>Create a persistent child with inherited context and a new ID.</td></tr><tr><td><code>clear()</code></td><td>Reset context and rotate a persistent session to a new ID.</td></tr><tr><td><code>reset_in_place()</code></td><td>Reset while retaining the persistent session ID.</td></tr><tr><td><code>load_warnings()</code></td><td>Return non-fatal warnings encountered during restore.</td></tr></tbody></table><p>Persistence restores conversation and truncation-recovery data, not live processes, REPLs, detached workers, workflows, notifications, or pending completions.</p></section>
+let branch = resumed.fork().await?;</pre></div><h3>Import existing context</h3><p>Seed a new session from messages you already have; a persistent session writes the imported history on open:</p><div class="terminal"><pre>let messages = previous_session.messages().await;
+let imported = agent.new_session().persistent().context(messages).open()?;</pre></div><p>The agent's system prompt replaces a leading imported system message, or is prepended if none exists. Without an agent system prompt, a leading imported system message remains. <code>open()</code> rejects malformed history, including unmatched tool-call exchanges.</p><table class="command-table"><thead><tr><th>Operation</th><th>Effect</th></tr></thead><tbody><tr><td><code>messages()</code></td><td>Clone the in-memory conversation.</td></tr><tr><td><code>fork()</code></td><td>Create a persistent child with inherited context and a new ID.</td></tr><tr><td><code>clear()</code></td><td>Reset context and rotate a persistent session to a new ID.</td></tr><tr><td><code>reset_in_place()</code></td><td>Reset while retaining the persistent session ID.</td></tr><tr><td><code>load_warnings()</code></td><td>Return non-fatal warnings encountered during restore.</td></tr></tbody></table><p>Persistence restores conversation and truncation-recovery data, not live processes, REPLs, detached workers, workflows, notifications, or pending completions.</p></section>

@@ -4,9 +4,11 @@
         The harness owns agent configuration, context, model invocation, the
         agent loop, tool dispatch, concurrent execution, cancellation,
         deadlines, limits, tool-call/result pairing, deterministic result
-        ordering, and the extension lifecycle. It deliberately does not own a
-        fleet: distributed scheduling, durable sessions, microVM lifecycle,
-        networking, tenancy, and control-plane APIs belong around it.
+        ordering, and the extension lifecycle. The core kernel leaves session
+        persistence to its host; the optional extensions crate provides JSONL
+        transcript storage, and the Rust SDK offers persistent sessions.
+        Fleet-scale scheduling, microVM lifecycle, networking, tenancy, and
+        control-plane APIs remain outside this local execution stack.
     </p>
     <figure
         class="system-diagram"
@@ -123,7 +125,7 @@
             />
             <rect class="diagram-zone" x="32" y="382" width="896" height="24" />
             <text class="diagram-zone-title" x="48" y="399">
-                OUTSIDE THE HARNESS: SCHEDULING · DURABLE SESSIONS · ISOLATION ·
+                FLEET CONCERNS: SCHEDULING · CONTROL PLANES · ISOLATION ·
                 NETWORKING · TENANCY
             </text>
         </svg>
@@ -158,14 +160,17 @@
             <tr>
                 <td><code>model-providers</code></td>
                 <td>
-                    OpenAI-compatible, OpenRouter, and Codex model adapters.
+                    Anthropic, OpenAI-compatible, OpenRouter, Codex, Vercel AI
+                    Gateway, and CheaperInference model adapters.
                 </td>
             </tr>
             <tr>
                 <td><code>tools</code></td>
                 <td>
-                    Workspace files, shell/processes, Python/Bun compute,
-                    subagents, tasks, and questions.
+                    Workspace files, shell/processes, Python compute,
+                    subagents, workflows, todo planning, and questions. A Bun
+                    REPL is included but currently broken on recent Bun:
+                    <code>bun-repl</code> refuses piped stdin.
                 </td>
             </tr>
             <tr>
@@ -176,8 +181,12 @@
                 <td><code>extensions</code></td>
                 <td>
                     Events, policy, compaction, truncation, retry, usage, and
-                    sessions.
+                    optional JSONL session persistence.
                 </td>
+            </tr>
+            <tr>
+                <td><code>sdk</code></td>
+                <td>Session APIs, including optional disk-backed sessions and background work.</td>
             </tr>
             <tr>
                 <td><code>orcacode</code></td>
@@ -192,6 +201,12 @@
         The dependency direction is intentional: tools and extensions depend on
         the core contracts; the core does not depend on an individual provider,
         tool, terminal UI, or control plane.
+    </p>
+    <p>
+        In SDK sessions, subagents, workflows, and processes share session-owned
+        lifetimes. Typed host operations and model tools use the same underlying
+        services; see <a href="#subagents/subagent-background">subagents</a> and
+        <a href="#tool-reference/execution-tools-reference">the tool reference</a> for usage.
     </p>
 </section>
 <section class="section" id="turn-lifecycle">

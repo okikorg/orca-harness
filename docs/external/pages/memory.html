@@ -1,7 +1,7 @@
 <section class="section" id="memory-contract">
   <h2>Deliberate storage, automatic recall</h2>
   <p>Memory is durable context that you ask Orcacode to keep or that the model identifies as stable and useful beyond the current session. It is not the session transcript, a project instruction file, or an automatic summary of everything you say. Orcacode does not run a background extraction process.</p>
-  <div class="callout"><span class="callout-label">THE WRITE RULE</span><p>The system prompt instructs the model to call <code>memory_manage</code> when you explicitly ask or when directly stated user information is stable and likely to help in future sessions. It must skip ordinary conversation, one-off task details, current progress, duplicates, secrets, and unverified inferences. Repository-specific information uses workspace scope; clearly universal information may use global scope. In normal mode, the approval gate is your final decision on the proposed mutation.</p></div>
+  <div class="callout"><span class="callout-label">THE WRITE RULE</span><p>The system prompt instructs the model to call <code>memory_manage</code> when you explicitly ask or when directly stated user information is stable and likely to help in future sessions. It must skip ordinary conversation, one-off task details, current progress, duplicates, secrets, and unverified inferences. Repository-specific information uses workspace scope; clearly universal information may use global scope. In interactive normal mode, you decide on a proposed mutation when an approval prompt is shown; earlier session or workspace grants can allow later calls without another prompt.</p></div>
   <p>Recall is automatic. Before each model request, Orcacode searches for records related to the latest user message. Matching records are added to a temporary request context as user-owned reference material, never as system policy or permission to act. The durable conversation itself is not modified.</p>
 </section>
 
@@ -79,7 +79,7 @@
 <span class="prompt">&gt;</span> Remember globally that I prefer concise status updates.
 <span class="prompt">&gt;</span> Show my recent memories.
 <span class="prompt">&gt;</span> Forget the release-check memory.</pre></div>
-  <p>In an interactive normal-mode session, a <code>memory_manage</code> call appears as an approval request before SQLite changes. Headless runs deny it unless <code>--auto-approve</code> is set; yolo mode bypasses the approval gate. After a mutation, the model is instructed to report what changed and whether it is workspace or global.</p>
+  <p>In interactive normal mode, <code>memory_manage</code> prompts before changing SQLite unless already allowed for the session or workspace. You can allow a call once or grant ongoing permission for the session or workspace. In headless normal mode, the call is denied unless <code>--auto-approve</code> is set. Plan mode denies it; Auto mode sends it through automatic review, while Yolo bypasses approval. After a mutation, the model is instructed to report what changed and whether it is workspace or global.</p>
   <p>The elapsed time shown for an interactive mutation can include the time spent waiting for approval. The memory Criterion suite measures raw SQLite forget and <code>memory_manage/forget_no_approval</code> separately so database and tool overhead are not confused with human response time.</p>
   <p>Each record has one of four kinds: <code>preference</code>, <code>fact</code>, <code>workflow</code>, or <code>decision</code>. Public identifiers use the form <code>mem_</code> followed by 32 lowercase hexadecimal characters. The random 128-bit ID is the only identifier accepted by update and forget; SQLite row numbers remain private.</p>
 </section>
@@ -102,5 +102,5 @@
 
 <section class="section" id="memory-extension">
   <h2>Why it is not in <code>/extensions</code></h2>
-  <p>Memory is built into Orcacode as a model wrapper plus the <code>memory_search</code> and <code>memory_manage</code> tools. The <code>/extensions</code> picker manages the host's toggleable lifecycle extensions, such as truncation and retry. Memory is always composed into interactive and headless agents, so it is not a toggle in that picker.</p>
+  <p>Memory is built into Orcacode as a model wrapper plus the <code>memory_search</code> and <code>memory_manage</code> tools. The <code>/extensions</code> picker manages the host's toggleable lifecycle extensions, such as truncation and retry. Memory is composed into interactive agents and ordinary headless agents, but headless <code>--bare</code> skips automatic recall and memory tools; it is not toggleable through that picker.</p>
 </section>

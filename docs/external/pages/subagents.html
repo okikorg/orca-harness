@@ -31,7 +31,7 @@
         </tbody>
       </table>
       <h3>Nesting uses the same policy</h3>
-      <p>The route and preferred-model settings are shared through the complete subagent tree, up to the configured depth limit of 5. Under <code>inherit</code>, each child inherits its immediate parent: if <code>auto</code> first creates a flash worker and that worker later inherits, its child also uses that flash model. Under <code>preference</code>, every nested call must choose one of the same currently preferred models. A fixed tier remains fixed at every level.</p>
+      <p>The route and preferred-model settings are shared through the complete subagent tree, up to the configured depth limit. Under <code>inherit</code>, each child inherits its immediate parent: if <code>auto</code> first creates a flash worker and that worker later inherits, its child also uses that flash model. Under <code>preference</code>, every nested call must choose one of the same currently preferred models. A fixed tier remains fixed at every level.</p>
       <div class="terminal"><pre>Main agent: local/local/my-model
 └─ auto chooses flash/openai/my-fast-model
    └─ nested call omits model
