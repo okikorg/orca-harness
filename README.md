@@ -13,6 +13,12 @@ One static binary (6.5 MB on macOS). One process. Any model.
 
 [Install](#install) · [Quick start](#quick-start) · [Docs](https://orcapods.ai/orcacode/docs/#start) · [Embed the harness](#embed-the-harness) · [Contributing](#contributing)
 
+</div>
+
+## What it is
+
+<div align="center">
+
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/screenshots/welcome.png" alt="Orcacode welcome screen showing version, model and workspace"></td>
@@ -31,8 +37,6 @@ One static binary (6.5 MB on macOS). One process. Any model.
 </table>
 
 </div>
-
-## What it is
 
 Orcacode is a terminal coding agent. It reads your repo, runs commands, edits
 files, and delegates work to parallel subagents, and it asks before any of
