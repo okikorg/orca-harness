@@ -33,3 +33,7 @@ docs/external/node_modules/
 
 # coding agents
 .claude
+
+# Working notes stay local: internal studies and plan-mode output
+/docs/internal/
+/docs/plan/
