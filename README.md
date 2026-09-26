@@ -330,7 +330,7 @@ the chart above, smallest download first.
 
 ### Harness comparison
 
-The latest Orcacode against four other coding agents, all measured in one run
+The latest Orcacode against three other coding agents, all measured in one run
 on 2026-09-26. Each runs headless against the same 16 synthetic repository
 tasks (14 read, 2 edit) with `anthropic/claude-haiku-4.5` through OpenRouter at
 low reasoning effort: 3 repetitions per task, so 48 attempts per harness. Every
@@ -341,8 +341,7 @@ column.
 
 | Harness                    |   Correct | Timeouts | Median time | Median TTFT | First event | Total tokens |   Turns |      Cost |
 | :------------------------- | --------: | -------: | ----------: | ----------: | ----------: | -----------: | ------: | --------: |
-| **Orcacode 0.7.0**         | **42/48** |    **0** |  **4.45 s** |  **1.10 s** |     10.5 ms |     **384k** |     175 | **$0.44** |
-| KISS 0.0.18                |     41/48 |    **0** |      4.65 s |      1.14 s |  **9.9 ms** |         513k |     194 |     $0.51 |
+| **Orcacode 0.7.0**         | **42/48** |    **0** |  **4.45 s** |  **1.10 s** |   **10.5 ms** |     **384k** |     175 | **$0.44** |
 | Oh My Pi (`omp`) 18.0.3    |     41/48 |    **0** |      5.53 s |      1.63 s |      472 ms |         877k | **143** |     $0.84 |
 | Pi 0.85.1                  |     41/48 |        3 |      6.18 s |      1.25 s |      181 ms |         779k |     208 |     $0.67 |
 | Claude Code 2.1.280        |     30/48 |        7 |      7.08 s |      1.17 s |      139 ms |       1,856k |     496 |     $1.33 |
