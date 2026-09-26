@@ -244,11 +244,57 @@ container through an `Executor` (`Executor::ssh("user@host")`,
 
 ## Performance
 
-The number that matters is the overhead between a model emitting tool calls
-and those tools doing work. Measured on a 4-core Linux box (release build,
-tokio multi-thread) with no-op tools:
+<div align="center">
 
-| Metric                     |    p50 |    p99 |    target |
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/benchmarks/cold-start.png" alt="Orcacode 0.7.0 cold start, mean of 100 runs on an Apple M4 Pro: the OS starting any process 0.85 ms, printing the help screen 2.75 ms, ready for a prompt 4.13 ms, opening a new session 4.24 ms, loading 64 skills 5.76 ms, resuming 2,000 messages 4.57 ms"></td>
+    <td width="50%"><img src="docs/assets/benchmarks/footprint.png" alt="Shipped size and idle memory for eight coding agents: Orcacode 6.5 MB and 26 MB, fx 6.4 and 21, pi 131 and 211, grok 134.3 and 90, Claude Code 256.9 and 456, prime-agent 265 and 400, Codex 277.7 and 340, omp 296 and 406"></td>
+  </tr>
+  <tr>
+    <td align="center">Ready for a prompt in 4.13 ms</td>
+    <td align="center">6.5 MB on disk, about 26 MB idle</td>
+  </tr>
+</table>
+
+</div>
+
+| Measure                                   | Orcacode 0.7.0 | Details                                 |
+| :---------------------------------------- | -------------: | :-------------------------------------- |
+| Cold start, ready for a prompt            |        4.13 ms | [Startup](#startup)                     |
+| Binary size, macOS arm64                  |         6.5 MB | [Footprint](#footprint)                 |
+| Idle memory                               |         ~26 MB | [Footprint](#footprint)                 |
+| 100-call tool fan-out, p99                |         288 µs | [Kernel dispatch](#kernel-dispatch)     |
+| Live tasks correct, Haiku 4.5               |          42/48 | [Harness comparison](#harness-comparison) |
+
+### Startup
+
+Mean of 100 launches after 10 warmups, v0.7.0 release build on an Apple M4 Pro
+(macOS arm64), measured 2026-09-24 with isolated config, workspace and skill
+fixtures. With `ORCA_BENCH=1` the process exits as soon as the host and agent
+are ready to take a prompt, before the terminal UI draws or any model request.
+These are fresh process launches with warm OS caches, not launches after a
+reboot.
+
+| Launch                               |    Mean | Above the process floor |
+| :----------------------------------- | ------: | ----------------------: |
+| Process floor (`/usr/bin/true`)      | 0.85 ms |                       — |
+| `orcacode --help`                    | 2.75 ms |                 1.90 ms |
+| **Ready for a prompt**               | **4.13 ms** (σ 0.3 ms) |   **3.28 ms** |
+| Ready, creating a new session        | 4.24 ms |                 3.39 ms |
+| Ready, with 64 skills installed      | 5.76 ms |                 4.91 ms |
+| Ready, resuming 2,000 messages       | 4.57 ms |                 3.72 ms |
+
+Reproduce with `./benchmarks/startup/run.sh`; results go to
+`benchmarks/results/startup/`. CI enforces startup budgets on Linux; numbers
+from other machines differ, so compare runs from one machine only.
+
+### Kernel dispatch
+
+The overhead between a model emitting tool calls and those tools doing work,
+with no-op tools on a 4-core Linux box (release build, tokio multi-thread):
+
+| Tool calls                 |    p50 |    p99 |    target |
 | :------------------------- | -----: | -----: | --------: |
 | 1 call, dispatch           | 0.4 µs | 0.6 µs |   < 10 µs |
 | 10 calls, fan-out          |  60 µs | 121 µs | < ~100 µs |
@@ -256,43 +302,68 @@ tokio multi-thread) with no-op tools:
 | 100 calls, full round-trip | 183 µs | 326 µs |    < 1 ms |
 
 With real tools, 64 `shell` subprocesses of 20 ms each finish in 66 ms instead
-of 1.28 s serially. For latency-bound tools the harness turns
+of 1.28 s serially: for latency-bound tools the harness turns
 `sum(latencies)` into `max(latency)`. Reproduce with
 `cargo run --release --example fanout_probe -- 100 300` and
 `./benchmarks/kernel/run.sh`; the
 [benchmarks page](https://orcapods.ai/orcacode/docs/#benchmarks) has the
 method.
 
-Host startup, measured on an Apple M4 Pro (macOS arm64) with the v0.7.0
-release build: 100 measured process launches after 10 warmups, using isolated
-config, workspace and skill fixtures. Host initialization with session
-recording off takes **4.1 ms** (standard deviation 0.3 ms); creating a new
-session takes 4.2 ms. `--help` takes 2.7 ms, and the process-launch floor on
-that machine is 0.9 ms. The benchmark uses `ORCA_BENCH=1` and exits after
-host/agent initialization, before the terminal UI or any model request, so
-these are fresh process launches with warmed OS caches — not cache-cold
-launches, and not time to the first visible prompt. Reproduce with
-`./benchmarks/startup/run.sh`; results are written to
-`benchmarks/results/startup/`. CI enforces startup budgets on Linux; macOS
-numbers are informational.
-
 ### Footprint
 
-All rows were measured on the same Apple Silicon Mac, as the core CLI with no
-MCP servers, idle in a live session (RSS summed over the process tree with
-`ps` after about 10 s). Orcacode 0.7.0 was measured on 2026-09-24; the other
-rows on 2026-08-22 (memory) and 2026-08-27 (binary size). 1 MB = 1,000,000
-bytes.
+The core CLI with no MCP servers, idle in a live session, all on the same
+Apple Silicon Mac. Idle memory is RSS summed over the process tree with `ps`
+after about 10 s. Orcacode 0.7.0 was measured on 2026-09-24; the other rows on
+2026-08-22 (memory) and 2026-08-27 (size). 1 MB = 1,000,000 bytes. Rows follow
+the chart above, smallest download first.
 
-| CLI (version)                                     |                  Binary | Idle RSS | Processes     |
-| :------------------------------------------------ | ----------------------: | -------: | :------------ |
-| **Orcacode 0.7.0**                                |              **6.5 MB** | **~26 MB** | **1**       |
-| Grok Build 1.0.5                                  |                134.3 MB |   ~90 MB | 1             |
-| `pi` 0.84.2                                       |          131 MB install |  ~211 MB | 1 + node      |
-| Codex 0.149.0-alpha.4.1 (bundled with ChatGPT)    | 220.5 MB + 57.2 MB host |  ~340 MB | up to 3       |
-| `prime-agent` 0.7.4                               |          265 MB install |  ~400 MB | 1 + node + py |
-| `omp` 17.4.2                                      |      233 MB + 63 MB bun |  ~406 MB | 1 + bun       |
-| Claude Code 2.1.220                               |                256.9 MB |  ~456 MB | 1             |
+| CLI (version)                                  |          Shipped size |   Idle RSS | Processes     |
+| :--------------------------------------------- | --------------------: | ---------: | :------------ |
+| **Orcacode 0.7.0**                             |            **6.5 MB** | **~26 MB** | **1**         |
+| fx 0.0.5                                       |                6.4 MB |     ~21 MB | not recorded  |
+| `pi` 0.84.2                                    |        131 MB install |    ~211 MB | 1 + node      |
+| Grok Build 1.0.5                               |              134.3 MB |     ~90 MB | 1             |
+| Claude Code 2.1.220                            |              256.9 MB |    ~456 MB | 1             |
+| `prime-agent` 0.7.4                            |        265 MB install |    ~400 MB | 1 + node + py |
+| Codex 0.149.0-alpha.4.1 (bundled with ChatGPT) | 277.7 MB (220.5 + 57.2 host) | ~340 MB | up to 3 |
+| `omp` 17.4.2                                   | 296 MB (233 + 63 bun) |    ~406 MB | 1 + bun       |
+
+### Harness comparison
+
+The latest Orcacode against four other coding agents, all measured in one run
+on 2026-09-26. Each runs headless against the same 16 synthetic repository
+tasks (14 read, 2 edit) with `anthropic/claude-haiku-4.5` through OpenRouter at
+low reasoning effort: 3 repetitions per task, so 48 attempts per harness. Every
+attempt gets a fresh copy of the fixture and isolated harness state, and the
+execution order rotates. Answers are scored by exact match, and edits are
+checked against the files the task allows. Bold marks the best value in each
+column.
+
+| Harness                    |   Correct | Timeouts | Median time | Median TTFT | First event | Total tokens |   Turns |      Cost |
+| :------------------------- | --------: | -------: | ----------: | ----------: | ----------: | -----------: | ------: | --------: |
+| **Orcacode 0.7.0**         | **42/48** |    **0** |  **4.45 s** |  **1.10 s** |     10.5 ms |     **384k** |     175 | **$0.44** |
+| KISS 0.0.18                |     41/48 |    **0** |      4.65 s |      1.14 s |  **9.9 ms** |         513k |     194 |     $0.51 |
+| Oh My Pi (`omp`) 18.0.3    |     41/48 |    **0** |      5.53 s |      1.63 s |      472 ms |         877k | **143** |     $0.84 |
+| Pi 0.85.1                  |     41/48 |        3 |      6.18 s |      1.25 s |      181 ms |         779k |     208 |     $0.67 |
+| Claude Code 2.1.280        |     30/48 |        7 |      7.08 s |      1.17 s |      139 ms |       1,856k |     496 |     $1.33 |
+
+- **Median time:** process start to exit, median over all 48 attempts.
+- **Median TTFT:** process start to the first token the model generates.
+- **First event:** process start to the harness's first streamed event,
+  measured inside the live run. It is not the same measurement as the
+  4.13 ms cold start above.
+- **Cost:** Haiku 4.5 list prices applied to the reported token classes; a
+  comparison, not an invoice.
+- **Noise:** with three repetitions, time gaps of a few hundred milliseconds
+  are within noise; the accuracy, token and turn gaps are more stable.
+  Provider latency also moves between days, so compare harnesses within one
+  run only.
+
+The full per-task results are in the
+[report](benchmarks/results/harness-comparison/20260926T131127Z/report.html);
+method and parity notes are in
+[`benchmarks/harness-comparison/`](benchmarks/harness-comparison/README.md).
+Reproduce with `python3 benchmarks/harness-comparison/run.py --harness all`.
 
 ## Develop
 

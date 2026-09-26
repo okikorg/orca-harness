@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-HARNESS_ORDER = ("orca", "pi", "omp", "claude")
+HARNESS_ORDER = ("orca", "pi", "omp", "claude", "kiss")
 HARNESS_NAMES = {
     "orca": "Orcacode",
     "pi": "Pi",
     "omp": "Oh My Pi",
+    "kiss": "KISS",
     "claude": "Claude Code",
 }
 
@@ -113,7 +114,7 @@ def tool_timings(
                 if isinstance(tool_id, str) and tool_id in starts:
                     durations.append(max(0.0, elapsed - starts.pop(tool_id)))
                     first_end = elapsed if first_end is None else first_end
-        elif harness in {"pi", "omp"}:
+        elif harness in {"pi", "omp", "kiss"}:
             if event.get("type") == "tool_execution_start":
                 tool_id = event.get("toolCallId")
                 if isinstance(tool_id, str):
@@ -142,7 +143,7 @@ def first_delta_times(
                 first_model = elapsed if first_model is None else first_model
             if event_type == "assistant_delta":
                 first_answer = elapsed if first_answer is None else first_answer
-        elif harness in {"pi", "omp"}:
+        elif harness in {"pi", "omp", "kiss"}:
             if event.get("type") == "turn_start":
                 agent_start = elapsed if agent_start is None else agent_start
             if event.get("type") == "message_update":
@@ -324,6 +325,7 @@ def parse_raw(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         "orca": orca_metrics,
         "pi": pi_metrics,
         "omp": pi_metrics,
+        "kiss": pi_metrics,
         "claude": claude_metrics,
     }
     metrics = parsers[harness](events)
@@ -496,7 +498,7 @@ def task_comparison(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tools_median": median(row["tool_calls"] for row in harness_rows),
                 "turns_median": median(row["turns"] for row in harness_rows),
             }
-        for peer in ("pi", "omp", "claude"):
+        for peer in ("pi", "omp", "claude", "kiss"):
             if "orca" not in item or peer not in item:
                 continue
             item[f"orca_minus_{peer}_wall_ms"] = difference(

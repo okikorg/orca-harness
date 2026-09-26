@@ -47,7 +47,7 @@ SAFETY_SUFFIX = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a balanced, isolated four-harness benchmark."
+        description="Run a balanced, isolated multi-harness benchmark."
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--effort", default="low")
@@ -60,9 +60,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--harness",
-        choices=("all", "both", "orca", "pi", "omp", "claude"),
+        choices=("all", "both", "orca-kiss", "orca", "pi", "omp", "claude", "kiss"),
         default="all",
-        help="'both' retains the Orcacode/Pi-only profile",
+        help="'both' retains the Orcacode/Pi-only profile; 'orca-kiss' pairs Orcacode with KISS",
     )
     parser.add_argument(
         "--task",
@@ -88,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pi-bin", default="pi")
     parser.add_argument("--omp-bin", default="omp")
     parser.add_argument("--claude-bin", default="claude")
+    parser.add_argument("--kiss-bin", default="kiss")
     parser.add_argument("--tasks", type=Path, default=HERE / "tasks.json")
     parser.add_argument("--fixture", type=Path, default=HERE / "fixture")
     parser.add_argument("--output", type=Path)
@@ -166,9 +167,11 @@ def resolve_binary(value: str) -> str:
 
 def harnesses(choice: str) -> list[str]:
     if choice == "all":
-        return ["orca", "pi", "omp", "claude"]
+        return ["orca", "pi", "omp", "claude", "kiss"]
     if choice == "both":
         return ["orca", "pi"]
+    if choice == "orca-kiss":
+        return ["orca", "kiss"]
     return [choice]
 
 
@@ -256,6 +259,32 @@ def build_command(
             prompt,
         ]
 
+    if name == "kiss":
+        # KISS mirrors Pi's CLI and JSON event stream; the provider is part of
+        # the model id rather than a separate flag.
+        tools = ["read", "grep", "find", "ls"]
+        if task["mode"] == "edit":
+            tools.extend(("edit", "write"))
+        return [
+            binary,
+            "--model",
+            f"openrouter/{args.model}",
+            "--thinking",
+            args.effort,
+            "--mode",
+            "json",
+            "--print",
+            "--no-session",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-themes",
+            "--no-context-files",
+            "--no-approve",
+            "--tools",
+            ",".join(tools),
+            prompt,
+        ]
+
     if name == "omp":
         if omp_config is None:
             raise ValueError("Oh My Pi requires an isolated discovery config")
@@ -333,6 +362,17 @@ def prepare_environment(
         environment["PI_CACHE_RETENTION"] = (
             "short" if args.prompt_cache else "none"
         )
+    if name == "orca":
+        # The user's config.json can add startup work even under --bare (for
+        # example subagent_models entries), so give every attempt a fresh one.
+        environment["ORCA_CONFIG_DIR"] = str(temp_root / "orca-config")
+        Path(environment["ORCA_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
+        return environment
+    if name == "kiss":
+        # KISS keeps settings, auth, and sessions under $HOME/.kiss.
+        environment["HOME"] = str(temp_root / "kiss-home")
+        Path(environment["HOME"]).mkdir(parents=True, exist_ok=True)
+        return environment
     if name == "omp":
         environment["HOME"] = str(omp_runtime_home or temp_root / "omp-home")
         Path(environment["HOME"]).mkdir(parents=True, exist_ok=True)
@@ -615,6 +655,7 @@ def main() -> int:
         "pi": args.pi_bin,
         "omp": args.omp_bin,
         "claude": args.claude_bin,
+        "kiss": args.kiss_bin,
     }
     binaries = {
         name: resolve_binary(binary_args[name]) for name in selected_harnesses

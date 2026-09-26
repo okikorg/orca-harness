@@ -5,6 +5,10 @@ headless harnesses on the same isolated workload. It measures correctness,
 latency, tool behavior, token use, cache behavior, and normalized token cost. It
 does not run a server and never points any harness at the repository checkout.
 
+`--harness orca-kiss` runs Orcacode against
+[KISS](https://github.com/racetozero/kiss) alone; `all` includes KISS as a fifth harness. KISS mirrors Pi's CLI and JSON event stream, so it reuses Pi's parser and
+shares Pi's caveat about step and output-token ceilings.
+
 The benchmark is scripted before execution:
 
 - [`run.py`](run.py) copies the fixture for every attempt, alternates harness
@@ -85,6 +89,7 @@ python3 benchmarks/harness-comparison/run.py --dry-run --profile edit
 python3 benchmarks/harness-comparison/run.py --dry-run --harness both
 python3 benchmarks/harness-comparison/run.py --dry-run --harness omp
 python3 benchmarks/harness-comparison/run.py --dry-run --harness claude
+python3 benchmarks/harness-comparison/run.py --dry-run --harness orca-kiss
 ```
 
 ## Run and analyze
