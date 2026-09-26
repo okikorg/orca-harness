@@ -322,6 +322,9 @@ extensions.
    add tests for behavior you change.
 3. Run `cargo test --workspace`, `cargo clippy --workspace --all-targets` and
    `cargo fmt --all` before opening a pull request.
+4. AI tools and agents are fine for most changes. Changes to
+   `crates/harness-core` need human review. See
+   [CONTRIBUTING.md](CONTRIBUTING.md#using-ai-tools-and-agents).
 
 By contributing you agree that your contributions are licensed under the
 Apache License 2.0.
