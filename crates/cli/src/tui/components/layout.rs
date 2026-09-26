@@ -35,3 +35,36 @@ pub(super) fn wrapped(
         })
         .collect()
 }
+
+/// `left` with `right` anchored at the right edge of `width`. When both
+/// do not fit with a cell between them, `right` gives way: it is always
+/// the recoverable half (a hint, a duration, a count).
+pub(super) fn right_align(
+    left: Vec<ratatui::text::Span<'static>>,
+    right: Vec<ratatui::text::Span<'static>>,
+    width: usize,
+) -> Line<'static> {
+    let used = crate::view::spans_width(&left);
+    let tail = crate::view::spans_width(&right);
+    if right.is_empty() || used + 1 + tail > width {
+        return fit(Line::from(left), width);
+    }
+    let mut spans = left;
+    spans.push(ratatui::text::Span::raw(" ".repeat(width - used - tail)));
+    spans.extend(right);
+    Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::text::Span;
+
+    #[test]
+    fn right_align_anchors_the_tail_and_drops_it_when_tight() {
+        let line = right_align(vec![Span::raw("left")], vec![Span::raw("2ms")], 12);
+        assert_eq!(line.to_string(), "left     2ms");
+        let tight = right_align(vec![Span::raw("left")], vec![Span::raw("2ms")], 7);
+        assert_eq!(tight.to_string(), "left");
+    }
+}

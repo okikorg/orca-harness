@@ -5,7 +5,7 @@ use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
 use crate::tui::components::section::Section;
 use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
-use crate::view::glyphs::{ui_style, UiStyle};
+use crate::view::glyphs::{branch_shape, mark_shape, ui_style, BranchShape, MarkShape, UiStyle};
 use crate::view::{self, theme};
 
 use super::super::format::age_label;
@@ -257,6 +257,8 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         ("approvals", approvals_status),
         ("spacing", transcript_spacing().label().to_string()),
         ("style", ui_style().label().to_string()),
+        ("marks", mark_shape().label().to_string()),
+        ("branches", branch_shape().label().to_string()),
     ];
     let mut lines = picker.table_lines(
         "Settings · ↑↓ move · →/enter open · esc close",
@@ -389,6 +391,42 @@ pub(crate) fn style_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static
     });
     picker.table_lines(
         "Style · ↑↓ move · →/enter use · esc close",
+        rows,
+        [(14, 14), (42, 42), (0, usize::MAX)],
+        width,
+    )
+}
+
+pub(crate) fn marks_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let current = mark_shape();
+    let rows = MarkShape::ALL.iter().map(|shape| {
+        let note = if *shape == current { "current" } else { "" };
+        [
+            shape.label().to_string(),
+            shape.description().to_string(),
+            note.to_string(),
+        ]
+    });
+    picker.table_lines(
+        "Marks · ↑↓ move · →/enter use · esc close",
+        rows,
+        [(14, 14), (42, 42), (0, usize::MAX)],
+        width,
+    )
+}
+
+pub(crate) fn branches_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
+    let current = branch_shape();
+    let rows = BranchShape::ALL.iter().map(|shape| {
+        let note = if *shape == current { "current" } else { "" };
+        [
+            shape.label().to_string(),
+            shape.description().to_string(),
+            note.to_string(),
+        ]
+    });
+    picker.table_lines(
+        "Branches · ↑↓ move · →/enter use · esc close",
         rows,
         [(14, 14), (42, 42), (0, usize::MAX)],
         width,

@@ -35,6 +35,7 @@ pub async fn run(
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(cfg);
+    app.recent_sessions = recent_sessions(&app.cfg.workspace_root);
     super::event_loop::run_loop(
         &mut terminal,
         &mut app,
@@ -67,6 +68,24 @@ fn resume_hint(session_id: Option<&str>) -> Option<String> {
     Some(format!(
         "\nResume this session with:\n  orcacode resume {id}"
     ))
+}
+
+/// The newest two recorded sessions for this workspace, for the welcome
+/// card. Missing storage is simply no sessions.
+fn recent_sessions(workspace_root: &str) -> Vec<crate::tui::components::welcome::RecentSession> {
+    let Some(base) = crate::config::sessions_dir() else {
+        return Vec::new();
+    };
+    let dir = base.join(orca_harness_extensions::workspace_key(workspace_root));
+    orca_harness_extensions::SessionFile::list(&dir)
+        .into_iter()
+        .take(2)
+        .map(|session| crate::tui::components::welcome::RecentSession {
+            age: crate::tui::format::age_label(session.meta.created_at),
+            model: session.meta.model,
+            id: session.meta.id,
+        })
+        .collect()
 }
 
 #[cfg(test)]

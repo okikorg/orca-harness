@@ -45,7 +45,7 @@ fn transcript(width: usize, frame: usize) -> Vec<Line<'static>> {
         "2 tools",
         t.dim,
     );
-    for (last, mark, call, detail, elapsed) in [
+    let rows = [
         (
             false,
             g.done.to_string(),
@@ -60,7 +60,8 @@ fn transcript(width: usize, frame: usize) -> Vec<Line<'static>> {
             "running",
             "0.4s",
         ),
-    ] {
+    ];
+    for (last, mark, call, detail, elapsed) in rows {
         work.push(
             tool_row::ToolRow {
                 branch: tree::TreeBranch {
@@ -141,6 +142,7 @@ fn component_widths_and_cursor_stay_inside_the_pane() {
                 tool_name: "shell",
                 detail: "cargo test -p orcacode components",
                 yes_no: false,
+                selected: None,
             }
             .lines(width),
         );
@@ -225,6 +227,13 @@ fn component_widths_and_cursor_stay_inside_the_pane() {
             version: "0.1",
             model: "provider/model",
             workspace: "/workspace/orca-harness",
+            effort: Some("high"),
+            branch: Some("feat/a-rather-long-branch-name"),
+            recent: &[welcome::RecentSession {
+                id: "3f2a91c0-aaaa".into(),
+                model: "provider/a-long-model-name".into(),
+                age: "2h ago".into(),
+            }],
         }
         .lines(20, 5, width);
         assert!(welcome.len() <= 5);
@@ -268,9 +277,19 @@ fn spinner_changes_only_marker_cells_and_completion_is_static() {
             1,
             "only the Work marker moves; running tools keep their square"
         );
-        assert!(a.contains("✓ Read · "));
-        assert!(a.contains("□ Shell · cargo test"));
-        assert!(b.contains("□ Shell · cargo test"));
+        let g = glyphs();
+        assert!(
+            crate::tui::text::has_row(&a, &[&g.done.to_string(), "Read"]),
+            "{a}"
+        );
+        assert!(
+            crate::tui::text::has_row(&a, &["□", "Shell", "cargo test"]),
+            "{a}"
+        );
+        assert!(
+            crate::tui::text::has_row(&b, &["□", "Shell", "cargo test"]),
+            "{b}"
+        );
         for mark in glyphs().running {
             assert_eq!(view::cell_width(&mark.to_string()), 1);
         }
@@ -307,12 +326,16 @@ fn narrow_questions_and_approval_choices_keep_their_meaning() {
     let question = text(form().lines(40));
     assert!(question.contains("components?"));
     assert!(question.contains("layout"));
-    assert!(question.contains("esc cancel"));
+    assert!(
+        crate::tui::text::has_row(&question, &["esc", "cancel"]),
+        "{question}"
+    );
     let approval = text(
         approval::ApprovalPrompt {
             tool_name: "shell",
             detail: "cargo test",
             yes_no: false,
+            selected: None,
         }
         .lines(20),
     );
@@ -373,7 +396,10 @@ fn render_readable_tool_failures() {
             }
         }
         let rendered = screen(lines, width as u16);
-        assert!(rendered.contains("Read · docs/"));
+        assert!(
+            crate::tui::text::has_row(&rendered, &["Read", "docs/"]),
+            "{rendered}"
+        );
         assert!(rendered.contains("File not found"));
         assert!(!rendered.contains("read_file"));
         assert!(!rendered.contains("\"error\""));

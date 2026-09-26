@@ -214,7 +214,7 @@ async fn approval_is_drawn_before_following_worker_events() {
         .map(|cell| cell.symbol())
         .collect();
     assert!(
-        screen.contains("approval required"),
+        screen.contains("Approval required"),
         "approval must render without waiting for the frame deadline"
     );
 }

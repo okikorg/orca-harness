@@ -17,7 +17,7 @@ fn inspector_write_input_renders_source_instead_of_escaped_json() {
         approval: None,
     };
     let inspector = flat_lines(&tool_inspector_lines(&tool, 80));
-    assert!(inspector.contains("content · markdown · 3 lines · 26 B"));
+    assert!(inspector.contains("CONTENT · markdown · 3 lines · 26 B"), "{inspector}");
     assert!(inspector.contains("README.md"));
     assert!(inspector.contains("# Orca"));
     assert!(inspector.contains("    indented code"));
@@ -124,7 +124,7 @@ fn notifications_use_the_shared_leading_glyph() {
 /// reads as model output. The glyph stays the same; the error label and
 /// color distinguish severity even in monochrome.
 #[test]
-fn errors_use_the_same_glyph_as_notices_with_an_error_body() {
+fn errors_take_the_failure_mark_and_notices_keep_the_bullet() {
     let _theme = THEME_GUARD.lock().unwrap_or_else(|err| err.into_inner());
     let mut app = test_app();
 
@@ -133,8 +133,10 @@ fn errors_use_the_same_glyph_as_notices_with_an_error_body() {
 
     let notice = &app.pending_history[app.pending_history.len() - 2];
     let error = app.pending_history.last().expect("error line");
-    assert_eq!(line_text(error), "• error: unknown mode: pkan");
-    // Same leading glyph, so both lines start in the same column.
+    let failed = crate::view::glyphs::glyphs().failed;
+    assert_eq!(line_text(error), format!("{failed} error: unknown mode: pkan"));
+    // One-cell marks, so both lines start in the same column; the mark
+    // itself says which is which.
     assert_eq!(line_text(notice).chars().next(), Some('•'));
     assert_eq!(error.spans[0].style, theme().error);
     // Severity is the body's job, and it differs from a notice.
@@ -268,8 +270,7 @@ fn tool_results_connect_under_their_calls() {
         80,
     );
     let joined = flat_lines(&activity_lines(&app, 80, true));
-    assert!(joined.contains("Shell · $ ls"));
-    assert!(joined.contains("✓ Shell · $ ls · exit 0 · a.rs"));
+    assert!(crate::tui::text::has_row(&joined, &["✓", "Shell", "$ ls", "exit 0 · a.rs"]), "{joined}");
 }
 
 fn flat_lines(lines: &[Line]) -> String {
@@ -340,7 +341,7 @@ fn thinking_joins_the_rail_and_the_expand_log() {
         joined.contains("Thinking"),
         "thinking group first: {joined}"
     );
-    assert!(joined.contains("Read · a.rs"));
+    assert!(crate::tui::text::has_row(&joined, &["Read", "a.rs"]), "{joined}");
     let record = app.tool_log.last().expect("thinking recorded");
     assert_eq!(record.tool_name, "thinking");
     assert_eq!(record.output, serde_json::json!("let me check the file"));

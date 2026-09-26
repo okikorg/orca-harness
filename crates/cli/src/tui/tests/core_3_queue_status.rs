@@ -108,8 +108,8 @@
         // The queue count is a word in the text-only style and a mark in
         // the marked one; both say the same thing in the same width.
         for (style, queued) in [
-            (UiStyle::Minimal, "q 1 · enter resume · /queue clear"),
-            (UiStyle::Glyph, "□ 1 · enter resume · /queue clear"),
+            (UiStyle::Minimal, "q 1 · enter resume  /queue clear"),
+            (UiStyle::Glyph, "□ 1 · enter resume  /queue clear"),
         ] {
             set_ui_style(style);
             let screen = rendered_rows(&mut app, 100, 24).join("\n");
@@ -412,6 +412,43 @@
     }
 
     #[test]
+    fn approval_enter_confirms_only_a_choice_the_arrows_picked() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let request = |app: &mut App| {
+            let (respond, rx) = tokio::sync::oneshot::channel();
+            app.approval = Some(crate::msg::ApprovalRequest {
+                tool_name: "shell".into(),
+                detail: "shell $ ls".into(),
+                yes_no: false,
+                respond,
+            });
+            app.approval_choice = None;
+            rx
+        };
+        let mut app = test_app();
+        let _rx = request(&mut app);
+        // An enter meant for the composer does not answer the prompt.
+        assert_eq!(handle_approval_key(&mut app, key(KeyCode::Enter)), None);
+        assert!(app.approval.is_some());
+        // ↓ lands on the first answer, ↓ again on the second.
+        assert_eq!(handle_approval_key(&mut app, key(KeyCode::Down)), None);
+        assert_eq!(handle_approval_key(&mut app, key(KeyCode::Down)), None);
+        assert_eq!(app.approval_choice, Some(1));
+        assert_eq!(
+            handle_approval_key(&mut app, key(KeyCode::Enter)),
+            Some(ApprovalResponse::AllowAlways)
+        );
+        assert!(app.approval.is_none() && app.approval_choice.is_none());
+        // ↑ from nothing lands on the last answer: deny.
+        let _rx = request(&mut app);
+        handle_approval_key(&mut app, key(KeyCode::Up));
+        assert_eq!(
+            handle_approval_key(&mut app, key(KeyCode::Enter)),
+            Some(ApprovalResponse::Deny)
+        );
+    }
+
+    #[test]
     fn approval_verdicts_align_under_the_call() {
         let mut app = test_app();
         handle_harness_event(
@@ -435,8 +472,7 @@
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
         );
         let joined = flat_lines(&activity_lines(&app, 80, true));
-        assert!(joined.contains("Shell · $ ls"));
-        assert!(joined.contains("□ Shell · $ ls · approved"));
+        assert!(crate::tui::text::has_row(&joined, &["□", "Shell", "$ ls", "approved"]), "{joined}");
     }
 
     #[test]

@@ -257,19 +257,7 @@ fn activity_lines_from(
         };
         let (glyph, status_style) = tool_mark(tool, live, spinner_frame);
         let glyph = glyph.as_str();
-        let mut detail = tool
-            .output
-            .as_ref()
-            .filter(|_| !tool.is_error)
-            .map(|output| view::tool_result_summary(&tool.tool_name, output, false))
-            .unwrap_or_default();
-        if let Some(approval) = &tool.approval {
-            detail = if detail.is_empty() {
-                approval.clone()
-            } else {
-                format!("{approval} · {detail}")
-            };
-        }
+        let detail = tool_detail(tool);
         let elapsed = tool_timing_label(tool, false);
         let selected = selected_tool == Some(index);
         let connector = Connector::for_row(selected_tool.is_some(), selected);
@@ -288,8 +276,8 @@ fn activity_lines_from(
                     width,
                     branch_style: t.dim,
                     glyph_style: status_style,
-                    label_style: row_style,
-                    identity_style: t.accent,
+                    label_style: t.dim,
+                    identity_style: t.dim,
                     task_style: row_style,
                 };
                 let continuation = row.continuation();
@@ -352,4 +340,20 @@ fn activity_lines_from(
     }
     work.append_to(&mut lines);
     lines
+}
+
+/// A tool row's result column: the summary of a successful output, led by
+/// any approval verdict.
+fn tool_detail(tool: &ToolActivity) -> String {
+    let detail = tool
+        .output
+        .as_ref()
+        .filter(|_| !tool.is_error)
+        .map(|output| view::tool_result_summary(&tool.tool_name, output, false))
+        .unwrap_or_default();
+    match &tool.approval {
+        Some(approval) if detail.is_empty() => approval.clone(),
+        Some(approval) => format!("{approval} · {detail}"),
+        None => detail,
+    }
 }

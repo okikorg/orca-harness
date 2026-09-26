@@ -29,6 +29,8 @@ impl App {
             .and_then(TranscriptSpacing::from_slug)
             .unwrap_or(TranscriptSpacing::Comfortable);
         let style = UiStyle::stored();
+        let shape = crate::view::glyphs::MarkShape::stored();
+        let branches = crate::view::glyphs::BranchShape::stored();
         // The preferences are process-global; serialize the writes against
         // tests that transition the pickers live (see `PREFERENCE_GUARD`).
         let _guard = super::PREFERENCE_GUARD
@@ -36,6 +38,8 @@ impl App {
             .unwrap_or_else(|err| err.into_inner());
         set_transcript_spacing(spacing);
         set_ui_style(style);
+        crate::view::glyphs::set_mark_shape(shape);
+        crate::view::glyphs::set_branch_shape(branches);
         Self {
             cfg,
             git_branch,
@@ -55,6 +59,8 @@ impl App {
             run: RunState::Idle,
             next_run_id: 0,
             approval: None,
+            approval_choice: None,
+            recent_sessions: Vec::new(),
             ask: None,
             composer: String::new(),
             cursor: 0,
@@ -88,6 +94,7 @@ impl App {
             activity_tools: Vec::new(),
             view_mode: ViewMode::stored(),
             split_tool: None,
+            split_tab: Default::default(),
             split_snapshot: None,
             split_inspector_cache: None,
             inspector_mode: super::state::InspectorMode::stored(),

@@ -59,9 +59,10 @@ pub enum PickerEvent {
 }
 
 impl ListPicker {
-    /// The plain dim header every `&str` entry point renders.
+    /// The dim header every `&str` entry point renders, its keys set in
+    /// the shared key style.
     fn plain_header(header: &str) -> Line<'static> {
-        Line::from(Span::styled(header.to_string(), theme().dim))
+        Line::from(super::keys::header_spans(header, theme().dim))
     }
 
     /// The header as shown: the action strip while armed, the space hint
@@ -83,7 +84,9 @@ impl ListPicker {
             return header;
         }
         let mut header = header;
-        header.spans.push(Span::styled(" · space actions", t.dim));
+        header.spans.push(Span::styled("  ", t.dim));
+        header.spans.push(Span::styled("space", t.key));
+        header.spans.push(Span::styled(" actions", t.dim));
         header
     }
 

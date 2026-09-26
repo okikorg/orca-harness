@@ -8,7 +8,7 @@ fn append_shell_result(lines: &mut Vec<Line<'static>>, output: &Value, width: us
             continue;
         }
         let (preview, omitted) = window_text(text);
-        let mut section = section(format!("{label} · {}", line_label(text)));
+        let mut section = section(width, format!("{label} · {}", line_label(text)));
         section.extend(inspector_text(&preview, width, style));
         if omitted {
             section.push(Line::from(Span::styled(
@@ -22,7 +22,7 @@ fn append_shell_result(lines: &mut Vec<Line<'static>>, output: &Value, width: us
         .get("exitCode")
         .and_then(Value::as_i64)
         .unwrap_or_default();
-    let mut result = section(format!("result · exit {exit}"));
+    let mut result = section(width, format!("result · exit {exit}"));
     if string(output, "stdout").is_empty() && string(output, "stderr").is_empty() {
         result.extend(inspector_text(
             "Command finished without output",
@@ -45,7 +45,7 @@ fn append_file_result(
         .get("bytes")
         .and_then(Value::as_u64)
         .unwrap_or(content.len() as u64);
-    let mut source = section(format!(
+    let mut source = section(width, format!(
         "source · {language} · {} · {}",
         line_label(content),
         inspector_size_label(bytes)
@@ -106,7 +106,7 @@ fn append_mutation_result(lines: &mut Vec<Line<'static>>, output: &Value, width:
                 .join(", "),
         ));
     }
-    let mut result = section("result");
+    let mut result = section(width, "result");
     result.extend(inspector_fields(rows, width));
     result.append_to(lines);
 }
@@ -122,7 +122,7 @@ fn append_collection(
         append_generic_value(lines, "result", output, width);
         return;
     };
-    let mut result = section(format!("{label} · {}", items.len()));
+    let mut result = section(width, format!("{label} · {}", items.len()));
     if items.is_empty() {
         result.extend(inspector_text(&format!("No {label}"), width, theme().dim));
     } else {
@@ -148,7 +148,7 @@ fn append_grep_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usi
         append_generic_value(lines, "result", output, width);
         return;
     };
-    let mut result = section(format!("matches · {}", matches.len()));
+    let mut result = section(width, format!("matches · {}", matches.len()));
     if matches.is_empty() {
         result.extend(inspector_text("No matching lines", width, theme().dim));
     } else {
@@ -187,7 +187,7 @@ fn append_process_result(lines: &mut Vec<Line<'static>>, output: &Value, width: 
     } else {
         "stopped".to_owned()
     };
-    let mut process = section("process");
+    let mut process = section(width, "process");
     process.extend(inspector_fields(
         [("id", string(output, "id").to_owned()), ("state", state)]
             .into_iter()
@@ -216,7 +216,7 @@ fn append_ask(lines: &mut Vec<Line<'static>>, value: &Value, label: &str, width:
         append_generic_value(lines, label, value, width);
         return;
     };
-    let mut section = section(format!("{label} · {} topics", topics.len()));
+    let mut section = section(width, format!("{label} · {} topics", topics.len()));
     for topic in topics.iter().take(3) {
         let title = ["topic", "title", "question"]
             .into_iter()
@@ -312,7 +312,7 @@ fn append_todos(lines: &mut Vec<Line<'static>>, value: &Value, width: usize) {
 
 fn append_kernel_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {
     let state = string(output, "state");
-    let mut result = section(format!(
+    let mut result = section(width, format!(
         "result · {}",
         if state.is_empty() { "complete" } else { state }
     ));
@@ -360,7 +360,7 @@ fn append_subagent_result(lines: &mut Vec<Line<'static>>, output: &Value, width:
 }
 
 fn append_web_fetch_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {
-    let mut response = section("response");
+    let mut response = section(width, "response");
     response.extend(inspector_fields(
         [
             (
@@ -391,7 +391,7 @@ fn append_ranked_results(lines: &mut Vec<Line<'static>>, output: &Value, width: 
 }
 
 fn append_crawl_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {
-    let mut result = section("crawl");
+    let mut result = section(width, "crawl");
     result.extend(inspector_fields(
         [
             ("status", string(output, "status").to_owned()),
@@ -416,7 +416,7 @@ fn append_crawl_result(lines: &mut Vec<Line<'static>>, output: &Value, width: us
     ));
     result.append_to(lines);
     if let Some(pages) = output.get("pages").and_then(Value::as_array) {
-        let mut list = section(format!("pages · {}", pages.len()));
+        let mut list = section(width, format!("pages · {}", pages.len()));
         for page in pages.iter().take(30) {
             let title = string(page, "title");
             let url = string(page, "url");
@@ -431,7 +431,7 @@ fn append_crawl_result(lines: &mut Vec<Line<'static>>, output: &Value, width: us
 }
 
 fn append_paged_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {
-    let mut page = section("stored result");
+    let mut page = section(width, "stored result");
     page.extend(inspector_fields(
         [
             ("tool", string(output, "toolName").to_owned()),
@@ -489,7 +489,7 @@ fn append_generic_value(lines: &mut Vec<Line<'static>>, label: &str, value: &Val
             rows.push((key.as_str(), compact_value(child)));
         }
         if !rows.is_empty() {
-            let mut fields = section(label);
+            let mut fields = section(width, label);
             fields.extend(inspector_fields(rows, width));
             fields.append_to(lines);
         }
@@ -499,7 +499,7 @@ fn append_generic_value(lines: &mut Vec<Line<'static>>, label: &str, value: &Val
         return;
     }
     if let Some(values) = value.as_array() {
-        let mut result = section(format!("{label} · {} items", values.len()));
+        let mut result = section(width, format!("{label} · {} items", values.len()));
         for value in values.iter().take(40) {
             result.push(Line::from(Span::raw(view::truncate_line(
                 &format!("    {}", compact_value(value)),

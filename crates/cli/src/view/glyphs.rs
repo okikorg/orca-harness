@@ -87,9 +87,164 @@ pub fn ui_style() -> UiStyle {
     }
 }
 
-/// The active style's table.
+/// The shape of the state marks, a preference beside the style: squares
+/// (`□ ■`) or circles (`○ ●`). Either way hollow is work and solid is
+/// done; only the outline changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkShape {
+    Square,
+    Circle,
+}
+
+impl MarkShape {
+    pub const ALL: [Self; 2] = [Self::Square, Self::Circle];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Square => "Square",
+            Self::Circle => "Circle",
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Square => "square",
+            Self::Circle => "circle",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Square => "□ running, ■ done",
+            Self::Circle => "○ running, ● done",
+        }
+    }
+
+    pub fn from_slug(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|shape| shape.slug() == value)
+    }
+
+    /// The persisted choice, Square when none is saved.
+    pub fn stored() -> Self {
+        crate::config::stored_marks()
+            .as_deref()
+            .and_then(Self::from_slug)
+            .unwrap_or(Self::Square)
+    }
+}
+
+#[cfg(not(test))]
+static SHAPE: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(test)]
+thread_local! {
+    static SHAPE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+pub fn set_mark_shape(shape: MarkShape) {
+    #[cfg(not(test))]
+    SHAPE.store(shape as u8, Ordering::Relaxed);
+    #[cfg(test)]
+    SHAPE.with(|cell| cell.set(shape as u8));
+}
+
+pub fn mark_shape() -> MarkShape {
+    #[cfg(not(test))]
+    let raw = SHAPE.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let raw = SHAPE.with(std::cell::Cell::get);
+    match raw {
+        1 => MarkShape::Circle,
+        _ => MarkShape::Square,
+    }
+}
+
+/// How a rail's last branch turns: a square elbow (`└─`) or a rounded
+/// curve (`╰─`). Mid-rail rows keep `├─` either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchShape {
+    Elbow,
+    Curve,
+}
+
+impl BranchShape {
+    pub const ALL: [Self; 2] = [Self::Elbow, Self::Curve];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Elbow => "Elbow",
+            Self::Curve => "Curve",
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Elbow => "elbow",
+            Self::Curve => "curve",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Elbow => "├─ row, └─ last row",
+            Self::Curve => "├─ row, ╰─ last row",
+        }
+    }
+
+    /// The corner the last row's branch starts with.
+    pub fn corner(self) -> &'static str {
+        match self {
+            Self::Elbow => "└",
+            Self::Curve => "╰",
+        }
+    }
+
+    pub fn from_slug(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|shape| shape.slug() == value)
+    }
+
+    /// The persisted choice, Elbow when none is saved.
+    pub fn stored() -> Self {
+        crate::config::stored_branches()
+            .as_deref()
+            .and_then(Self::from_slug)
+            .unwrap_or(Self::Elbow)
+    }
+}
+
+#[cfg(not(test))]
+static BRANCH: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(test)]
+thread_local! {
+    static BRANCH: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+pub fn set_branch_shape(shape: BranchShape) {
+    #[cfg(not(test))]
+    BRANCH.store(shape as u8, Ordering::Relaxed);
+    #[cfg(test)]
+    BRANCH.with(|cell| cell.set(shape as u8));
+}
+
+pub fn branch_shape() -> BranchShape {
+    #[cfg(not(test))]
+    let raw = BRANCH.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let raw = BRANCH.with(std::cell::Cell::get);
+    match raw {
+        1 => BranchShape::Curve,
+        _ => BranchShape::Elbow,
+    }
+}
+
+/// The active style's table, in the active mark shape.
 pub fn glyphs() -> &'static Glyphs {
-    ui_style().glyphs()
+    match (ui_style(), mark_shape()) {
+        (style, MarkShape::Square) => style.glyphs(),
+        (UiStyle::Minimal, MarkShape::Circle) => &MINIMAL_ROUND,
+        (UiStyle::Glyph, MarkShape::Circle) => &GLYPH_ROUND,
+    }
 }
 
 pub struct Glyphs {
@@ -99,12 +254,14 @@ pub struct Glyphs {
     pub running: &'static [char],
     /// A section label or the status spinner while the run is live.
     pub active: &'static [char],
-    /// A tool row that finished; drawn in the success color.
+    /// A tool row that finished; drawn in the success color. In the Glyph
+    /// style it is the solid square: hollow is work, solid is done.
     pub done: char,
     /// A tool row that failed; drawn in the error color.
     pub failed: char,
-    /// A section label at rest, and the idle run state. Distinct from
-    /// `done` so a finished section does not read as one more tool.
+    /// A section label at rest, and the idle run state. The Glyph style
+    /// shares `done`'s solid square (a section at rest is finished) and
+    /// tells them apart by colour: dim here, success on a tool row.
     pub section: char,
     /// A live background process count in the status bar.
     pub process: char,
@@ -126,6 +283,9 @@ pub struct Glyphs {
     pub branch: &'static str,
     /// Selected picker row marker.
     pub cursor: &'static str,
+    /// Hangs a failed row's error detail off its branch; a space where the
+    /// style draws no structure.
+    pub hook: &'static str,
     /// Prefix of the finished-turn footer; empty for none. Both styles
     /// leave it empty: a mark on a dim summary row only pulls the eye.
     pub footer: &'static str,
@@ -206,7 +366,17 @@ impl Glyphs {
     }
 }
 
-pub static MINIMAL: Glyphs = Glyphs {
+pub static MINIMAL: Glyphs = MINIMAL_TABLE;
+
+/// Minimal with circles: only the hollow work mark changes; its done
+/// mark is a check and its section mark already a dot.
+pub static MINIMAL_ROUND: Glyphs = Glyphs {
+    waiting: '○',
+    running: &['○'],
+    ..MINIMAL_TABLE
+};
+
+const MINIMAL_TABLE: Glyphs = Glyphs {
     waiting: '□',
     running: &['□'],
     active: &['·', ' '],
@@ -223,16 +393,29 @@ pub static MINIMAL: Glyphs = Glyphs {
     workspace: "",
     branch: "",
     cursor: "▸",
+    hook: " ",
     footer: "",
 };
 
-pub static GLYPH: Glyphs = Glyphs {
+pub static GLYPH: Glyphs = GLYPH_TABLE;
+
+/// Glyph with circles: the same hollow-work, solid-done rule in `○ ●`.
+pub static GLYPH_ROUND: Glyphs = Glyphs {
+    waiting: '○',
+    running: &['○'],
+    active: &['○', '●'],
+    done: '●',
+    section: '●',
+    ..GLYPH_TABLE
+};
+
+const GLYPH_TABLE: Glyphs = Glyphs {
     waiting: '□',
     running: &['□'],
     active: &['□', '■'],
-    done: '✓',
+    done: '■',
     failed: '×',
-    section: '□',
+    section: '■',
     process: '⚙',
     attention: '!',
     status_marks: true,
@@ -243,12 +426,38 @@ pub static GLYPH: Glyphs = Glyphs {
     workspace: "\u{2302}",
     branch: "\u{2442}",
     cursor: "›",
+    hook: "╰",
     footer: "",
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Circles keep the square tables' rule: hollow is work, solid is
+    /// done, one cell each, and everything but the state marks unchanged.
+    #[test]
+    fn circles_swap_only_the_state_marks() {
+        for (square, round) in [(&GLYPH, &GLYPH_ROUND), (&MINIMAL, &MINIMAL_ROUND)] {
+            assert_eq!(round.waiting, '○');
+            assert!(round.running.iter().all(|mark| *mark == '○'));
+            assert_eq!(round.failed, square.failed);
+            assert_eq!(round.cursor, square.cursor);
+            assert_eq!(round.rail, square.rail);
+            for mark in [round.waiting, round.done, round.section] {
+                assert_eq!(crate::view::cell_width(&mark.to_string()), 1);
+            }
+        }
+        assert_eq!((GLYPH_ROUND.done, GLYPH_ROUND.section), ('●', '●'));
+        assert_eq!(GLYPH_ROUND.active, &['○', '●']);
+        assert_eq!(MINIMAL_ROUND.done, MINIMAL.done);
+        set_ui_style(UiStyle::Glyph);
+        set_mark_shape(MarkShape::Circle);
+        assert_eq!(glyphs().done, '●');
+        set_mark_shape(MarkShape::Square);
+        assert_eq!(glyphs().done, '■');
+        set_ui_style(UiStyle::Minimal);
+    }
 
     #[test]
     fn every_style_fills_every_slot() {
@@ -303,7 +512,7 @@ mod tests {
     #[test]
     fn a_counted_mark_never_costs_more_than_its_word() {
         assert_eq!(MINIMAL.counted(MINIMAL.done, "todo", "2/5"), "todo 2/5");
-        assert_eq!(GLYPH.counted(GLYPH.done, "todo", "2/5"), "✓ 2/5");
+        assert_eq!(GLYPH.counted(GLYPH.done, "todo", "2/5"), "■ 2/5");
         assert_eq!(MINIMAL.counted(MINIMAL.waiting, "q", "3"), "q 3");
         assert_eq!(GLYPH.counted(GLYPH.waiting, "q", "3"), "□ 3");
         assert_eq!(MINIMAL.counted(MINIMAL.process, "procs", "2"), "procs 2");

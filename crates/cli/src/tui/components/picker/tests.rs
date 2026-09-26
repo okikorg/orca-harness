@@ -153,7 +153,7 @@ fn armed_header_shows_the_action_strip() {
             .map(|s| s.content.as_ref())
             .collect()
     };
-    assert_eq!(text(&picker), "  Header · esc close · space actions");
+    assert_eq!(text(&picker), "  Header · esc close  space actions");
     picker.on_key(KeyCode::Char(' '));
     assert_eq!(
         text(&picker),

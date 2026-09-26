@@ -27,29 +27,53 @@ pub fn progress_list(label: &str, items: &[ProgressItem<'_>], width: usize) -> V
         .iter()
         .filter(|item| matches!(item.state, ProgressState::Completed))
         .count();
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("  {label}"), t.strong),
-        Span::styled(format!(" · {done}/{} done", items.len()), t.dim),
-    ])];
+    let g = glyphs();
+    let mut header = vec![Span::styled(format!("  {label}"), t.strong)];
+    // A meter where the style draws one, the plain count otherwise.
+    match g.meter_bar(16, done as f64 / items.len() as f64) {
+        Some(bar) => {
+            let filled = bar
+                .chars()
+                .take_while(|&c| Some(c) == g.meter.map(|m| m.0))
+                .count();
+            let used: String = bar.chars().take(filled).collect();
+            let free: String = bar.chars().skip(filled).collect();
+            header.push(Span::raw("  "));
+            header.push(Span::styled(used, t.accent));
+            header.push(Span::styled(free, t.dim));
+            header.push(Span::styled(format!(" {done}/{}", items.len()), t.dim));
+        }
+        None => header.push(Span::styled(
+            format!(" · {done}/{} done", items.len()),
+            t.dim,
+        )),
+    }
+    let mut lines = vec![Line::from(header)];
     let last = items.len() - 1;
     for (index, item) in items.iter().enumerate() {
         let branch = TreeBranch {
             indent: "  ",
             last: index == last,
         };
-        let g = glyphs();
-        let (marker, style) = match item.state {
-            ProgressState::Completed => (g.done.to_string(), t.dim),
-            ProgressState::Active => (g.cursor.to_string(), t.strong),
-            ProgressState::Pending => (g.waiting.to_string(), t.dim),
+        // Hollow is work, solid is done: the active item is the same
+        // hollow mark as a pending one, told apart by colour and weight.
+        let (marker, marker_style, style) = match item.state {
+            ProgressState::Completed => (
+                g.done,
+                t.success,
+                t.dim.add_modifier(ratatui::style::Modifier::CROSSED_OUT),
+            ),
+            ProgressState::Active => (g.running_frame(0), t.accent, t.strong),
+            ProgressState::Pending => (g.waiting, t.dim, t.dim),
         };
-        let prefix = format!("{}{marker} ", branch.prefix());
+        let prefix = branch.prefix();
         let content = view::truncate_line(
             item.content,
-            width.saturating_sub(view::cell_width(&prefix)),
+            width.saturating_sub(view::cell_width(&prefix) + 2),
         );
         lines.push(Line::from(vec![
-            Span::styled(prefix, style),
+            Span::styled(prefix, t.dim),
+            Span::styled(format!("{marker} "), marker_style),
             Span::styled(content, style),
         ]));
     }

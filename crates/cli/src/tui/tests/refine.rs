@@ -118,8 +118,8 @@ mod refine_command_tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(prompt.contains("y yes"), "{prompt}");
-        assert!(prompt.contains("n no"), "{prompt}");
+        assert!(crate::tui::text::has_row(&prompt, &["Yes", "y"]), "{prompt}");
+        assert!(crate::tui::text::has_row(&prompt, &["No", "n"]), "{prompt}");
         assert!(!prompt.contains("always"));
 
         // a and A are dead keys here; y answers.
@@ -156,7 +156,7 @@ mod refine_command_tests {
             &tx,
             90,
         );
-        assert!(printed(&app).contains("• error: refine: nothing to refine"));
+        assert!(printed(&app).contains(&format!("{} error: refine: nothing to refine", crate::view::glyphs::glyphs().failed)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

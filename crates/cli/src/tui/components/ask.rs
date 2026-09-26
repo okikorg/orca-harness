@@ -189,34 +189,57 @@ impl AskForm {
     pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
         let t = theme();
         let g = glyphs();
+        let topics = self.request.topics.len();
+        let mut progress = vec![Span::styled(
+            format!("{} of {topics}", self.topic + 1),
+            t.dim,
+        )];
+        if let Some(bar) = g.meter_bar(10, (self.topic + 1) as f64 / topics.max(1) as f64) {
+            let used = bar
+                .chars()
+                .take_while(|&c| Some(c) == g.meter.map(|m| m.0))
+                .count();
+            progress.push(Span::raw("  "));
+            progress.push(Span::styled(
+                bar.chars().take(used).collect::<String>(),
+                t.accent,
+            ));
+            progress.push(Span::styled(
+                bar.chars().skip(used).collect::<String>(),
+                t.dim,
+            ));
+        }
         let mut lines = vec![
             Line::from(""),
-            Line::from(vec![
-                Span::styled(format!("  {} ", g.attention), t.accent),
-                Span::styled("Clarification needed", t.strong),
-                Span::styled(
-                    format!(
-                        " · topic {} of {}",
-                        self.topic + 1,
-                        self.request.topics.len()
-                    ),
-                    t.dim,
-                ),
-            ]),
+            super::layout::right_align(
+                vec![
+                    Span::styled(format!("  {} ", g.attention), t.accent),
+                    Span::styled("Clarification needed", t.strong),
+                ],
+                progress,
+                width,
+            ),
         ];
 
+        // Topics read as tabs: the current one bold, the rest dim, each
+        // behind its answered (solid) or open (hollow) mark.
         let mut topic_line = vec![Span::raw("    ")];
         for (index, topic) in self.request.topics.iter().enumerate() {
             if index > 0 {
-                topic_line.push(Span::styled("   ", t.dim));
+                topic_line.push(Span::raw("    "));
             }
-            let glyph = if self.topic_complete_at(index) {
-                g.done
+            let (glyph, glyph_style) = if self.topic_complete_at(index) {
+                (g.done, t.success)
             } else {
-                g.waiting
+                (g.waiting, t.dim)
             };
-            let style = if index == self.topic { t.select } else { t.dim };
-            topic_line.push(Span::styled(format!("{glyph} {}", topic.title), style));
+            let style = if index == self.topic {
+                t.strong.add_modifier(ratatui::style::Modifier::BOLD)
+            } else {
+                t.dim
+            };
+            topic_line.push(Span::styled(format!("{glyph} "), glyph_style));
+            topic_line.push(Span::styled(topic.title.clone(), style));
         }
         lines.push(Line::from(topic_line));
         lines.push(Line::from(""));
@@ -227,9 +250,12 @@ impl AskForm {
             topic.questions.iter().zip(&draft.questions).enumerate()
         {
             let active = question_index == self.focus;
+            // One cursor on screen: a choice question carries it on the
+            // option row, so its heading is marked by weight alone.
+            let cursor = active && question.options.is_empty();
             lines.extend(super::layout::wrapped(
                 &question.question,
-                &format!("  {} ", if active { g.cursor } else { " " }),
+                &format!("  {} ", if cursor { g.cursor } else { " " }),
                 width,
                 if active { t.strong } else { t.dim },
             ));
@@ -255,84 +281,119 @@ impl AskForm {
                 for (option_index, option) in question.options.iter().enumerate() {
                     let selected = answer.values.iter().any(|value| value == &option.label);
                     let cursor = active && answer.option == option_index;
-                    let marker = if selected { g.done } else { g.waiting };
-                    lines.extend(super::layout::wrapped(
+                    lines.extend(option_lines(
                         &option.label,
-                        &format!("      {} {marker} ", if cursor { g.cursor } else { " " }),
+                        option.description.as_deref(),
+                        OptionMark { selected, cursor },
                         width,
-                        if selected || cursor { t.strong } else { t.dim },
                     ));
-                    if let Some(description) = &option.description {
-                        // The explanation the agent wrote is the point of
-                        // the option: wrap it rather than cut it.
-                        let description = view::sanitize_cells(description);
-                        for part in textwrap::wrap(&description, width.saturating_sub(10).max(1)) {
-                            lines
-                                .push(Line::from(Span::styled(format!("          {part}"), t.dim)));
-                        }
-                    }
                 }
             }
             lines.push(Line::from(""));
         }
 
+        // Other is the last choice in the list, with its input inline.
         let active = self.focus == topic.questions.len();
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {} ", if active { g.cursor } else { " " }),
-                if active { t.accent } else { t.dim },
-            ),
-            Span::styled("Other", if active { t.strong } else { t.dim }),
-            Span::styled(
-                view::truncate_line(
-                    " · optional answer outside these choices",
-                    width.saturating_sub(9),
-                ),
-                t.dim,
-            ),
-        ]));
-        let additional = if draft.additional_context.is_empty() {
-            "Type another answer or requirement…"
+        let filled = !draft.additional_context.is_empty();
+        let (additional, additional_style) = if filled {
+            (
+                draft.additional_context.as_str(),
+                ratatui::style::Style::default(),
+            )
         } else {
-            &draft.additional_context
+            ("Type another answer or requirement…", t.dim)
         };
+        let lead = format!("  {} ", if active { g.cursor } else { " " });
+        let marker = if filled { g.done } else { g.waiting };
+        let head = vec![
+            Span::styled(lead, if active { t.accent } else { t.dim }),
+            Span::styled(format!("{marker} "), if filled { t.success } else { t.dim }),
+            Span::styled("Other", if active { t.strong } else { t.dim }),
+            Span::styled("  optional answer outside these choices", t.dim),
+        ];
+        lines.push(super::layout::fit(Line::from(head), width));
         lines.push(Line::from(vec![
             Span::styled("      │ ", if active { t.accent } else { t.dim }),
             Span::styled(
                 view::truncate_line(additional, width.saturating_sub(9)),
-                if draft.additional_context.is_empty() {
-                    t.dim
-                } else {
-                    ratatui::style::Style::default()
-                },
+                additional_style,
             ),
         ]));
-        // Keep each key paired with its action when the legend reflows.
-        let mut hints = String::from("    ");
-        for hint in [
-            "↑↓ question",
-            "←→ option",
-            "space choose",
-            "tab next topic",
-            "enter send",
-            "esc cancel",
-        ] {
-            let separator = if hints.trim().is_empty() { "" } else { " · " };
-            if view::cell_width(&hints) + view::cell_width(separator) + view::cell_width(hint)
-                > width
-            {
-                if !hints.trim().is_empty() {
-                    lines.push(Line::from(Span::styled(std::mem::take(&mut hints), t.dim)));
-                }
-                hints = format!("    {hint}");
-            } else {
-                hints.push_str(separator);
-                hints.push_str(hint);
-            }
-        }
-        lines.extend(super::layout::wrapped(hints.trim(), "    ", width, t.dim));
+        lines.push(Line::from(""));
+        lines.extend(super::keys::hint_rows(
+            &[
+                ("↑↓", "question"),
+                ("←→", "option"),
+                ("space", "choose"),
+                ("tab", "next topic"),
+                ("enter", "send"),
+                ("esc", "cancel"),
+            ],
+            "  ",
+            width,
+        ));
         super::layout::fit_lines(lines, width)
     }
+}
+
+/// Cells before an option's label: indent, cursor, mark.
+const OPTION_LEAD: usize = 6;
+
+#[derive(Clone, Copy)]
+struct OptionMark {
+    selected: bool,
+    cursor: bool,
+}
+
+/// One choice: cursor, mark and label, its description wrapped beneath it. The cursor
+/// row is marked by the cursor and weight, never by a fill.
+fn option_lines(
+    label: &str,
+    description: Option<&str>,
+    mark: OptionMark,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let t = theme();
+    let g = glyphs();
+    let marker = if mark.selected { g.done } else { g.waiting };
+    let lead = vec![
+        Span::styled(
+            format!("  {} ", if mark.cursor { g.cursor } else { " " }),
+            if mark.cursor { t.accent } else { t.dim },
+        ),
+        Span::styled(
+            format!("{marker} "),
+            if mark.selected { t.success } else { t.dim },
+        ),
+    ];
+    let label_style = if mark.selected || mark.cursor {
+        t.strong
+    } else {
+        ratatui::style::Style::default()
+    };
+    let label = view::sanitize_cells(label);
+    let body = width.saturating_sub(OPTION_LEAD).max(1);
+    let mut lines = Vec::new();
+    for (index, part) in textwrap::wrap(&label, body).into_iter().enumerate() {
+        let mut spans = if index == 0 {
+            lead.clone()
+        } else {
+            vec![Span::raw(" ".repeat(OPTION_LEAD))]
+        };
+        spans.push(Span::styled(part.into_owned(), label_style));
+        lines.push(Line::from(spans));
+    }
+    if let Some(description) = description.map(view::sanitize_cells) {
+        // The explanation the agent wrote is the point of the option:
+        // wrap it rather than cut it.
+        for part in textwrap::wrap(&description, body) {
+            lines.push(Line::from(Span::styled(
+                format!("{}{part}", " ".repeat(OPTION_LEAD)),
+                t.dim,
+            )));
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -392,9 +453,24 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("□ Scope"));
-        assert!(text.contains("Other · optional answer outside these choices"));
+        assert!(text.contains(&format!("{} Scope", glyphs().waiting)));
+        assert!(text.contains("Other  optional answer outside these choices"));
         assert!(text.contains("Type another answer"));
+    }
+
+    #[test]
+    fn every_description_sits_under_its_label_without_a_fill() {
+        let lines = form().lines(100);
+        let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+        let beta = text.iter().position(|line| line.contains("Beta")).unwrap();
+        assert!(!text[beta].contains("Ship"), "{text:?}");
+        assert!(
+            text[beta + 1].trim_start().starts_with("Ship quickly"),
+            "{text:?}"
+        );
+        assert!(lines
+            .iter()
+            .all(|line| line.spans.iter().all(|span| span.style.bg.is_none())));
     }
 
     #[test]

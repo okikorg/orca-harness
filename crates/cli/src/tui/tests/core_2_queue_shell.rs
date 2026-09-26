@@ -46,12 +46,10 @@ fn parallel_batch_results_are_labeled_with_their_tool() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let list_call = joined.find("List directory · .").unwrap();
-    let list_result = joined.find("· 2 entries").unwrap();
-    let shell_call = joined.find("Shell · $ git log").unwrap();
-    let shell_result = joined.find("· exit 0 · abc123").unwrap();
+    // Each result sits on its own call's row.
     assert!(
-        list_call < list_result && shell_call < shell_result,
+        crate::tui::text::has_row(&joined, &["List directory", ".", "2 entries"])
+            && crate::tui::text::has_row(&joined, &["Shell", "$ git log", "exit 0 · abc123"]),
         "results stay attached: {joined}"
     );
 
@@ -77,8 +75,7 @@ fn parallel_batch_results_are_labeled_with_their_tool() {
         80,
     );
     let joined = flat_lines(&activity_lines(&app, 80, true));
-    assert!(joined.contains("Shell · $ ls"));
-    assert!(joined.contains("✓ Shell · $ ls · exit 0"));
+    assert!(crate::tui::text::has_row(&joined, &["✓", "Shell", "$ ls", "exit 0"]), "{joined}");
 }
 
 #[test]

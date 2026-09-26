@@ -137,6 +137,24 @@ pub fn save_style(slug: &str) -> io::Result<PathBuf> {
     save_str(None, "style", slug)
 }
 
+/// The state-mark shape last selected in `/settings` (`square` or `circle`).
+pub fn stored_marks() -> Option<String> {
+    stored_str(None, "marks")
+}
+
+pub fn save_marks(slug: &str) -> io::Result<PathBuf> {
+    save_str(None, "marks", slug)
+}
+
+/// The rail branch shape last selected in `/settings` (`elbow` or `curve`).
+pub fn stored_branches() -> Option<String> {
+    stored_str(None, "branches")
+}
+
+pub fn save_branches(slug: &str) -> io::Result<PathBuf> {
+    save_str(None, "branches", slug)
+}
+
 /// Persist the complete live subagent preference set. Keeping this as one
 /// object prevents a partially-updated picker choice from leaving related
 /// routing fields out of sync.

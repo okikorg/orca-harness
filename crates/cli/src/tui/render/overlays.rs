@@ -297,6 +297,53 @@ pub(crate) fn effort_picker_lines(picker: &EffortPicker, width: usize) -> Vec<Li
 /// Exact figures live behind /usage, never here. The full form adds the
 /// style's meter when it has one; the `compact` form is what a tight row
 /// falls back to.
+/// The context segment as spans: the meter's used cells take the accent,
+/// then the warning colour past 70%, then the error colour past 90%, so
+/// a filling window reads at a glance. The text matches
+/// [`context_segment`] cell for cell.
+pub(crate) fn context_spans(
+    tokens: u64,
+    window: Option<u64>,
+    compact: bool,
+) -> Vec<ratatui::text::Span<'static>> {
+    use ratatui::text::Span;
+    let t = crate::view::theme();
+    let text = context_segment(tokens, window, compact);
+    let Some(window) = window.filter(|window| *window > 0) else {
+        return vec![Span::styled(text, t.dim)];
+    };
+    let percent = 100 * tokens / window;
+    let level = if percent >= 90 {
+        t.error
+    } else if percent >= 70 {
+        t.warn
+    } else {
+        t.accent
+    };
+    let Some((used, free)) = crate::view::glyphs::glyphs().meter else {
+        return vec![Span::styled(
+            text,
+            if percent >= 70 { level } else { t.dim },
+        )];
+    };
+    let filled: String = text.chars().take_while(|&c| c == used).collect();
+    let empty: String = text
+        .chars()
+        .skip(filled.chars().count())
+        .take_while(|&c| c == free)
+        .collect();
+    let rest: String = text
+        .chars()
+        .skip(filled.chars().count() + empty.chars().count())
+        .collect();
+    let rest_style = if percent >= 70 { level } else { t.dim };
+    [(filled, level), (empty, t.dim), (rest, rest_style)]
+        .into_iter()
+        .filter(|(text, _)| !text.is_empty())
+        .map(|(text, style)| Span::styled(text, style))
+        .collect()
+}
+
 pub(crate) fn context_segment(tokens: u64, window: Option<u64>, compact: bool) -> String {
     let Some(window) = window.filter(|window| *window > 0) else {
         return format!("ctx ~{}", fmt_tokens(tokens));

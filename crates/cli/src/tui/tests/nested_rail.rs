@@ -55,8 +55,10 @@ mod nested_rail_tests {
         );
 
         let live = rail_text(&app);
+        // Task first, then the model's short name; the full route lives in
+        // the inspector.
         assert!(
-            live.contains("Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            crate::tui::text::has_row(&live, &["Subagent", "Explore the benchmarks directory", "claude-sonnet-5"]),
             "{live}"
         );
         assert!(!live.contains("{\"task\""), "raw JSON should be replaced: {live}");
@@ -84,7 +86,7 @@ mod nested_rail_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            completed.contains("Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            crate::tui::text::has_row(&completed, &["Subagent", "Explore the benchmarks directory", "claude-sonnet-5"]),
             "{completed}"
         );
 
@@ -98,7 +100,7 @@ mod nested_rail_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            failed.contains("Subagent · openrouter:anthropic/claude-sonnet-5 · Explore the benchmarks directory"),
+            crate::tui::text::has_row(&failed, &["Subagent", "Explore the benchmarks directory", "claude-sonnet-5"]),
             "{failed}"
         );
     }
@@ -161,7 +163,10 @@ mod nested_rail_tests {
         );
         let text = rail_text(&app);
         let inner_line = text.lines().find(|l| l.contains("List directory · ")).unwrap();
-        assert!(inner_line.contains("✓"), "completed glyph: {inner_line:?}");
+        assert!(
+            inner_line.contains(crate::view::glyphs::glyphs().done),
+            "completed glyph: {inner_line:?}"
+        );
     }
 
     #[test]
@@ -201,7 +206,7 @@ mod nested_rail_tests {
             },
         );
         let text = rail_text(&app);
-        let child = text.lines().find(|l| l.contains("Subagent · inner")).unwrap();
+        let child = text.lines().find(|l| crate::tui::text::has_row(l, &["Subagent", "inner"])).unwrap();
         let grandchild = text.lines().find(|l| l.contains("Search")).unwrap();
         let indent = |l: &str| l.chars().take_while(|c| *c == ' ').count();
         assert!(
@@ -285,11 +290,12 @@ mod nested_rail_tests {
         );
 
         let text = rail_text(&app);
-        assert_eq!(text.matches("openrouter:vendor/alpha").count(), 1, "{text}");
-        assert_eq!(text.matches("openrouter:vendor/beta").count(), 1, "{text}");
-        assert!(text.contains("✓ Subagent · openrouter:vendor/alpha · task alpha"), "{text}");
-        let alpha = text.find("vendor/alpha").unwrap();
-        let beta = text.find("vendor/beta").unwrap();
+        assert_eq!(text.matches("task alpha").count(), 1, "{text}");
+        assert_eq!(text.matches("task beta").count(), 1, "{text}");
+        let done = crate::view::glyphs::glyphs().done.to_string();
+        assert!(crate::tui::text::has_row(&text, &[&done, "Subagent", "task alpha", "alpha"]), "{text}");
+        let alpha = text.find("task alpha").unwrap();
+        let beta = text.find("task beta").unwrap();
         let grep = text.find("Search").unwrap();
         assert!(alpha < beta && beta < grep, "beta's child stays below beta: {text}");
         assert!(!text[alpha..beta].contains("Search"), "grep must not appear under alpha: {text}");
@@ -307,8 +313,8 @@ mod nested_rail_tests {
             )),
         );
         let retried = rail_text(&app);
-        assert!(!retried.contains("openrouter:vendor/beta ·"), "stale attempt: {retried}");
-        assert_eq!(retried.matches("openrouter:vendor/beta-retry").count(), 1, "{retried}");
+        assert!(!retried.lines().any(|line| line.trim_end().ends_with(" beta")), "stale attempt: {retried}");
+        assert_eq!(retried.matches("beta-retry").count(), 1, "{retried}");
     }
 
     #[test]

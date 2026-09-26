@@ -100,6 +100,41 @@ pub struct Theme {
     pub success: Style,
     /// Inline code and code-block text.
     pub code: Style,
+    /// The key half of a key hint; the action half is [`Self::dim`].
+    pub key: Style,
+    /// One colour per non-normal mode, so the status bar tells them apart
+    /// at a glance. Mono has no colour to spend; the word carries it.
+    pub modes: ModeStyles,
+}
+
+/// The status-bar colour of each non-normal mode.
+#[derive(Clone, Copy)]
+pub struct ModeStyles {
+    pub plan: Style,
+    pub orchestrate: Style,
+    pub auto: Style,
+    pub yolo: Style,
+}
+
+impl ModeStyles {
+    fn rgb(
+        plan: (u8, u8, u8),
+        orchestrate: (u8, u8, u8),
+        auto: (u8, u8, u8),
+        yolo: (u8, u8, u8),
+    ) -> Self {
+        let style = |(r, g, b): (u8, u8, u8)| {
+            Style::default()
+                .fg(Color::Rgb(r, g, b))
+                .add_modifier(Modifier::BOLD)
+        };
+        Self {
+            plan: style(plan),
+            orchestrate: style(orchestrate),
+            auto: style(auto),
+            yolo: style(yolo),
+        }
+    }
 }
 
 pub fn mono_theme() -> Theme {
@@ -114,6 +149,13 @@ pub fn mono_theme() -> Theme {
         error: bold,
         success: Style::default(),
         code: Style::default().add_modifier(Modifier::ITALIC),
+        key: bold,
+        modes: ModeStyles {
+            plan: bold,
+            orchestrate: bold,
+            auto: bold,
+            yolo: bold,
+        },
     }
 }
 
@@ -137,6 +179,13 @@ pub fn default_theme() -> Theme {
         error: Style::default().fg(ERROR),
         success: Style::default().fg(Color::Green),
         code: Style::default().fg(PRIMARY),
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (136, 161, 187),
+            (176, 146, 206),
+            (112, 184, 162),
+            (222, 190, 92),
+        ),
     }
 }
 
@@ -157,6 +206,13 @@ pub fn orca_theme() -> Theme {
         error: Style::default().fg(Color::Rgb(224, 128, 128)),
         success: Style::default().fg(MINT),
         code: Style::default().fg(PAPER),
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (89, 224, 154),
+            (150, 170, 240),
+            (230, 190, 110),
+            (224, 128, 128),
+        ),
     }
 }
 
@@ -175,6 +231,13 @@ pub(super) fn dracula_theme() -> Theme {
         error: Style::default().fg(Color::Rgb(255, 85, 85)), // red
         success: Style::default().fg(Color::Rgb(80, 250, 123)), // green
         code: Style::default().fg(Color::Rgb(139, 233, 253)), // cyan
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (139, 233, 253),
+            (189, 147, 249),
+            (80, 250, 123),
+            (255, 184, 108),
+        ),
     }
 }
 
@@ -193,6 +256,13 @@ pub(super) fn solarized_dark_theme() -> Theme {
         error: Style::default().fg(Color::Rgb(220, 50, 47)), // red
         success: Style::default().fg(Color::Rgb(133, 153, 0)), // green
         code: Style::default().fg(Color::Rgb(42, 161, 152)), // cyan
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (38, 139, 210),
+            (108, 113, 196),
+            (42, 161, 152),
+            (203, 75, 22),
+        ),
     }
 }
 
@@ -211,6 +281,13 @@ pub(super) fn one_dark_theme() -> Theme {
         error: Style::default().fg(Color::Rgb(224, 108, 117)), // red
         success: Style::default().fg(Color::Rgb(152, 195, 121)), // green
         code: Style::default().fg(Color::Rgb(86, 182, 194)), // cyan
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (97, 175, 239),
+            (198, 120, 221),
+            (86, 182, 194),
+            (209, 154, 102),
+        ),
     }
 }
 
@@ -229,6 +306,13 @@ pub(super) fn monokai_theme() -> Theme {
         error: Style::default().fg(Color::Rgb(249, 38, 114)), // pink
         success: Style::default().fg(Color::Rgb(166, 226, 46)), // green
         code: Style::default().fg(Color::Rgb(102, 217, 239)), // cyan
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (102, 217, 239),
+            (174, 129, 255),
+            (166, 226, 46),
+            (253, 151, 31),
+        ),
     }
 }
 
@@ -247,6 +331,13 @@ pub(super) fn nord_theme() -> Theme {
         error: Style::default().fg(Color::Rgb(191, 97, 106)), // nord11
         success: Style::default().fg(Color::Rgb(163, 190, 140)), // nord14
         code: Style::default().fg(Color::Rgb(136, 192, 208)), // nord8
+        key: Style::default().add_modifier(Modifier::BOLD),
+        modes: ModeStyles::rgb(
+            (136, 192, 208),
+            (180, 142, 173),
+            (163, 190, 140),
+            (208, 135, 112),
+        ),
     }
 }
 

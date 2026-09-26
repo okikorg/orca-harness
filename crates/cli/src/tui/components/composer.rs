@@ -1,7 +1,13 @@
 //! The composer: a spine, the prompt text wrapped to the width, image
 //! pills, and the cursor. Long input grows the composer a row at a time
 //! up to [`COMPOSER_MAX_ROWS`]; past that the rows scroll to keep the
-//! cursor in view.
+//! cursor in view, and an arrow in the spine of an edge row says text is
+//! out of sight that way.
+//!
+//! The spine's colour says what enter will do (the caller picks it: the
+//! accent to send, dim while a turn runs and input queues, the warning
+//! colour in yolo), and a leading slash command the catalog knows is
+//! set in the accent, like a pill.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -11,6 +17,10 @@ use crate::view;
 /// Rows the composer may occupy before it scrolls.
 pub const COMPOSER_MAX_ROWS: usize = 6;
 const SPINE: &str = "│ ";
+/// The spine of the top row when rows are hidden above it.
+const SCROLL_UP: &str = "↑ ";
+/// The spine of the bottom row when rows are hidden below it.
+const SCROLL_DOWN: &str = "↓ ";
 
 pub struct Composer<'a> {
     text: &'a str,
@@ -20,6 +30,10 @@ pub struct Composer<'a> {
     accent: Style,
     dim: Style,
     pills: &'a [(usize, usize)],
+    /// The spine's style; the accent unless the caller says otherwise.
+    spine: Style,
+    /// Char range of a recognised leading `/command`.
+    command: Option<(usize, usize)>,
 }
 
 pub struct ComposerRender {
@@ -57,7 +71,21 @@ impl<'a> Composer<'a> {
             accent,
             dim,
             pills,
+            spine: accent,
+            command: None,
         }
+    }
+
+    /// Colour the spine for the composer's state.
+    pub fn spine(mut self, style: Style) -> Self {
+        self.spine = style;
+        self
+    }
+
+    /// Mark `[start, end)` (chars) as a recognised slash command.
+    pub fn command(mut self, range: Option<(usize, usize)>) -> Self {
+        self.command = range;
+        self
     }
 
     fn inner_width(&self) -> usize {
@@ -102,7 +130,7 @@ impl<'a> Composer<'a> {
             return ComposerRender {
                 lines: super::layout::fit_lines(
                     vec![Line::from(vec![
-                        Span::styled(SPINE, self.accent),
+                        Span::styled(SPINE, self.spine),
                         Span::styled(self.placeholder.to_string(), self.dim),
                     ])],
                     self.width,
@@ -121,25 +149,46 @@ impl<'a> Composer<'a> {
         let last = (first + COMPOSER_MAX_ROWS).min(rows);
 
         let mut lines = Vec::with_capacity(last - first);
+        let command_style = self.accent.add_modifier(ratatui::style::Modifier::BOLD);
         for row in first..last {
-            let mut spans = vec![Span::styled(SPINE, self.accent)];
+            let mut spans = vec![Span::styled(SPINE, self.spine)];
             let mut run = String::new();
-            let mut run_pill = false;
+            let mut run_kind = RunKind::Plain;
             for cell in cells.iter().filter(|cell| cell.row == row) {
-                let in_pill = self
+                let kind = if self
                     .pills
                     .iter()
-                    .any(|(start, end)| cell.index >= *start && cell.index < *end);
-                if in_pill != run_pill && !run.is_empty() {
-                    spans.push(styled_run(std::mem::take(&mut run), run_pill, self.accent));
+                    .any(|(start, end)| cell.index >= *start && cell.index < *end)
+                {
+                    RunKind::Pill
+                } else if self
+                    .command
+                    .is_some_and(|(start, end)| cell.index >= start && cell.index < end)
+                {
+                    RunKind::Command
+                } else {
+                    RunKind::Plain
+                };
+                if kind != run_kind && !run.is_empty() {
+                    spans.push(run_kind.span(std::mem::take(&mut run), self.accent, command_style));
                 }
-                run_pill = in_pill;
+                run_kind = kind;
                 run.push(cell.ch);
             }
             if !run.is_empty() {
-                spans.push(styled_run(run, run_pill, self.accent));
+                spans.push(run_kind.span(run, self.accent, command_style));
             }
             lines.push(Line::from(spans));
+        }
+        // Rows out of sight are flagged in the spine of the edge row, so
+        // scrolled text is never a surprise. The spine cell is the one
+        // place a full row always has room for it.
+        if first > 0 {
+            lines[0].spans[0] = Span::styled(SCROLL_UP, self.spine);
+        }
+        if last < rows {
+            let index = lines.len() - 1;
+            lines[index].spans[0] = Span::styled(SCROLL_DOWN, self.spine);
         }
         ComposerRender {
             lines: super::layout::fit_lines(lines, self.width),
@@ -150,12 +199,29 @@ impl<'a> Composer<'a> {
     }
 }
 
-fn styled_run(text: String, pill: bool, accent: Style) -> Span<'static> {
-    if pill {
-        Span::styled(text, accent)
-    } else {
-        Span::raw(text)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Plain,
+    Pill,
+    Command,
+}
+
+impl RunKind {
+    fn span(self, text: String, accent: Style, command: Style) -> Span<'static> {
+        match self {
+            Self::Plain => Span::raw(text),
+            Self::Pill => Span::styled(text, accent),
+            Self::Command => Span::styled(text, command),
+        }
     }
+}
+
+/// The char range of a leading `/command` when `is_command` knows the
+/// word, for [`Composer::command`].
+pub fn command_range(text: &str, is_command: impl Fn(&str) -> bool) -> Option<(usize, usize)> {
+    let rest = text.strip_prefix('/')?;
+    let word: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+    (!word.is_empty() && is_command(&word)).then(|| (0, 1 + word.chars().count()))
 }
 
 #[cfg(test)]
@@ -248,6 +314,49 @@ mod tests {
         .render();
         assert_eq!(text(&head.lines[0]), "│ abcdefghi");
         assert_eq!(head.cursor_y, 0);
+    }
+
+    #[test]
+    fn hidden_rows_are_flagged_in_the_spine_of_the_edge_rows() {
+        let long: String = (0..90).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        // width 30 → 27 cells a row; 90 chars → 4 rows, all visible.
+        let fits =
+            Composer::new(&long, 90, "", 30, Style::default(), Style::default(), &[]).render();
+        assert!(fits.lines.iter().all(|line| text(line).starts_with(SPINE)));
+        let long = long.repeat(3);
+        let tail =
+            Composer::new(&long, 270, "", 30, Style::default(), Style::default(), &[]).render();
+        assert!(text(&tail.lines[0]).starts_with(SCROLL_UP));
+        assert!(text(tail.lines.last().unwrap()).starts_with(SPINE));
+        let head =
+            Composer::new(&long, 0, "", 30, Style::default(), Style::default(), &[]).render();
+        assert!(text(&head.lines[0]).starts_with(SPINE));
+        assert!(text(head.lines.last().unwrap()).starts_with(SCROLL_DOWN));
+        assert!(head.lines.iter().all(|line| line.width() <= 30));
+    }
+
+    #[test]
+    fn a_known_slash_command_takes_the_accent_and_the_spine_takes_its_state() {
+        let accent = Style::default().fg(ratatui::style::Color::Cyan);
+        let dim = Style::default().fg(ratatui::style::Color::DarkGray);
+        let text = "/models gpt";
+        let range = command_range(text, |word| word == "models");
+        assert_eq!(range, Some((0, 7)));
+        assert_eq!(command_range("/nope x", |word| word == "models"), None);
+        assert_eq!(command_range("models", |_| true), None);
+        let rendered = Composer::new(text, 11, "", 40, accent, dim, &[])
+            .spine(dim)
+            .command(range)
+            .render();
+        let spans = &rendered.lines[0].spans;
+        assert_eq!(spans[0].style, dim, "spine follows the state");
+        assert_eq!(spans[1].content.as_ref(), "/models");
+        assert!(spans[1]
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(spans[1].style.fg, accent.fg);
+        assert_eq!(spans[2].content.as_ref(), " gpt");
     }
 
     #[test]

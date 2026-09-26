@@ -148,10 +148,10 @@ fn debug_inspector_body_lines(tool: &ToolActivity, width: usize) -> Vec<Line<'st
     let t = theme();
     let inner = width.saturating_sub(4).max(16);
     let mut lines = Vec::new();
-    let mut input = Section::inspector("input", t.dim);
+    let mut input = Section::inspector("input", t.dim).ruled(inner);
     append_inspector_input(&mut input, tool, inner);
     input.append_to(&mut lines);
-    let mut output_section = Section::inspector("output", t.dim);
+    let mut output_section = Section::inspector("output", t.dim).ruled(inner);
     if let Some(output) = &tool.output {
         let language = inspector_output_language(tool, output);
         if let Some(facts) = inspector_code_facts(tool, output, language) {

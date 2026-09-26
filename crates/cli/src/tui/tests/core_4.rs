@@ -185,8 +185,9 @@
 
         let joined = flat_lines(&activity_lines_selected(&app, 180, true, Some(0)));
         assert!(
-            joined.contains("Shell · $ cargo test --workspace · 2.0s"),
-            "elapsed follows the call without an alignment gap: {joined}"
+            crate::tui::text::has_row(&joined, &["Shell", "$ cargo test --workspace", "2.0s"])
+                && !joined.contains(&" ".repeat(12)),
+            "elapsed sits in the rail's time column, not at the pane edge: {joined}"
         );
     }
 
@@ -257,7 +258,7 @@
         );
         let joined = flat_lines(&activity_lines(&app, 100, true));
         assert!(
-            joined.contains("× Shell · $ cargo test") && joined.contains("Exit 1"),
+            crate::tui::text::has_row(&joined, &["×", "Shell", "$ cargo test"]) && joined.contains("Exit 1"),
             "failure state shown: {joined}"
         );
         assert!(
@@ -441,7 +442,7 @@
         app.scroll_hint_at = Some(Instant::now() - SCROLL_HINT - Duration::from_secs(1));
         let status = status_row(&mut app);
         assert!(
-            status.contains("scrolled · pgdn to follow"),
+            status.contains("scrolled  pgdn to follow"),
             "hint should settle back: {status}"
         );
         assert!(!app.scroll_hint_live(), "expired hint should stop the tick");

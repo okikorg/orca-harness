@@ -10,6 +10,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::view;
+use crate::view::glyphs::{branch_shape, BranchShape};
 
 /// Rows stop growing past this many cells even on a very wide terminal.
 pub const ROW_CAP: usize = 132;
@@ -56,10 +57,10 @@ pub struct TreeBranch<'a> {
 
 impl TreeBranch<'_> {
     pub fn glyph(&self) -> &'static str {
-        if self.last {
-            "└─"
-        } else {
-            "├─"
+        match (self.last, branch_shape()) {
+            (false, _) => "├─",
+            (true, BranchShape::Elbow) => "└─",
+            (true, BranchShape::Curve) => "╰─",
         }
     }
 
