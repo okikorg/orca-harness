@@ -50,6 +50,7 @@ mod policy;
 mod read_tool_result;
 mod retry;
 mod session;
+mod tool_images;
 mod truncation;
 mod usage;
 

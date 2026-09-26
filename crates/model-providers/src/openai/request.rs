@@ -61,6 +61,7 @@ impl OpenAiModel {
 
 pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
     let mut out = Vec::with_capacity(context.messages().len());
+    let mut recent = crate::tool_images::Recent::new(context);
     for message in context.messages() {
         match message {
             Message::System { content } => {
@@ -112,9 +113,35 @@ pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
                 out.push(m);
             }
             Message::Tool { results } => {
+                // `role: tool` content cannot hold images. After the whole
+                // batch (tool messages must stay contiguous), one user message
+                // carries them, each group labelled with its call id.
+                let mut parts = Vec::new();
                 for result in results {
+                    let (output, images) = crate::tool_images::split(&result.output);
                     let mut message = json!({"role": "tool", "tool_call_id": result.call_id});
-                    message["content"] = Value::String(result.output.to_string());
+                    message["content"] = Value::String(output.to_string());
+                    out.push(message);
+                    let images = recent.fresh(images);
+                    if images.is_empty() {
+                        continue;
+                    }
+                    parts.push(json!({
+                        "type": "text",
+                        "text": format!(
+                            "Images returned by tool call {} ({}):",
+                            result.call_id, result.tool_name
+                        )
+                    }));
+                    parts.extend(images.iter().map(|image| {
+                        let mut part = json!({"type": "image_url", "image_url": {}});
+                        part["image_url"]["url"] = Value::String(image.data_url());
+                        part
+                    }));
+                }
+                if !parts.is_empty() {
+                    let mut message = json!({"role": "user", "content": null});
+                    message["content"] = Value::Array(parts);
                     out.push(message);
                 }
             }

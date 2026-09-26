@@ -142,6 +142,21 @@
     }
 
     #[test]
+    fn image_results_show_count_type_and_size_not_data() {
+        let image = json!({"media_type": "image/png", "bytes": 43_008});
+        let out = json!({"content": "Took a screenshot", "_images": [image]});
+        assert_eq!(
+            tool_result_summary("mcp__browser__screenshot", &out, false),
+            "1 image (image/png, 42.0 kB) · Took a screenshot"
+        );
+        let out = json!({"width": 10, "_images": [image, image]});
+        assert_eq!(
+            tool_result_summary("mcp__browser__screenshot", &out, false),
+            "2 images (image/png, 84.0 kB) · width"
+        );
+    }
+
+    #[test]
     fn shell_results_show_exit_and_first_output_line() {
         let out =
             json!({"stdout": "ok 12 tests\nmore", "stderr": "", "exitCode": 0, "success": true});

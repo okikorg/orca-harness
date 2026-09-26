@@ -14,6 +14,7 @@ pub mod http_error;
 pub mod openai;
 pub mod openai_codex;
 pub mod openrouter;
+pub mod tool_images;
 pub mod vercel;
 
 pub use anthropic::AnthropicModel;

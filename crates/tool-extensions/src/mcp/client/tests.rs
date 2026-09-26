@@ -116,9 +116,56 @@ fn call_output_joins_text_and_prefers_structured_content() {
     assert_eq!(call_output(&structured).unwrap(), json!({ "count": 3 }));
 
     // Non-text content passes through raw rather than being dropped.
-    let image = json!({ "content": [{ "type": "image", "data": "abc" }] });
+    let audio = json!({ "content": [{ "type": "audio", "data": "abc" }] });
     assert_eq!(
-        call_output(&image).unwrap(),
+        call_output(&audio).unwrap(),
+        json!({ "content": [{ "type": "audio", "data": "abc" }] })
+    );
+}
+
+#[test]
+fn call_output_moves_images_out_of_the_text() {
+    let result = json!({ "content": [
+        { "type": "text", "text": "before" },
+        { "type": "image", "data": "iVBO", "mimeType": "image/png" },
+        { "type": "text", "text": "between" },
+        { "type": "image", "data": "/9j/", "mimeType": "image/jpeg" },
+    ]});
+    assert_eq!(
+        call_output(&result).unwrap(),
+        json!({
+            "content": "before\n[image 1]\nbetween\n[image 2]",
+            "_images": [
+                { "media_type": "image/png", "data": "iVBO" },
+                { "media_type": "image/jpeg", "data": "/9j/" },
+            ],
+        })
+    );
+
+    // Structured content still wins as the output; the images ride along.
+    let structured = json!({
+        "content": [{ "type": "image", "data": "iVBO", "mimeType": "image/png" }],
+        "structuredContent": { "width": 10 },
+    });
+    assert_eq!(
+        call_output(&structured).unwrap(),
+        json!({ "width": 10, "_images": [{ "media_type": "image/png", "data": "iVBO" }] })
+    );
+
+    // Types providers reject and oversized images become notes, not data.
+    let unsupported = json!({ "content": [
+        { "type": "image", "data": "PHN2Zz4=", "mimeType": "image/svg+xml" },
+        { "type": "image", "data": "A".repeat(5 * 1024 * 1024 + 1), "mimeType": "image/png" },
+    ]});
+    assert_eq!(
+        call_output(&unsupported).unwrap(),
+        json!({ "content": "[image omitted: image/svg+xml is not supported]\n[image omitted: 5.0 MB is over the 5 MB limit]" })
+    );
+
+    // An image missing its data or type is left as raw content.
+    let broken = json!({ "content": [{ "type": "image", "data": "abc" }] });
+    assert_eq!(
+        call_output(&broken).unwrap(),
         json!({ "content": [{ "type": "image", "data": "abc" }] })
     );
 }

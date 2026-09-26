@@ -47,6 +47,58 @@ fn user_images_follow_text_as_data_urls() {
 }
 
 #[test]
+fn tool_result_images_follow_the_tool_batch_in_one_user_message() {
+    use orca_harness_core::{ToolCall, ToolResult};
+    let calls: Vec<ToolCall> = ["c1", "c2", "c3"]
+        .iter()
+        .map(|id| ToolCall {
+            id: (*id).into(),
+            name: "shot".into(),
+            arguments: json!({}),
+        })
+        .collect();
+    let image = |data: &str| json!({"media_type": "image/png", "data": data});
+    let mut context = context();
+    context.push_assistant_tool_calls(None, calls.clone());
+    context.append_tool_results(vec![
+        ToolResult::ok(
+            &calls[0],
+            json!({"content": "[image 1]", "_images": [image("AAAA")]}),
+        ),
+        ToolResult::ok(&calls[1], json!("ok")),
+        ToolResult::ok(
+            &calls[2],
+            json!({"content": "[image 1]\n[image 2]", "_images": [image("BBBB"), image("CCCC")]}),
+        ),
+    ]);
+
+    let messages = encode_messages(&context);
+    let roles: Vec<&str> = messages
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["user", "assistant", "tool", "tool", "tool", "user"]);
+    assert_eq!(messages[2]["content"], "{\"content\":\"[image 1]\"}");
+    let url = |data: &str| json!({"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{data}")}});
+    assert_eq!(
+        messages[5]["content"],
+        json!([
+            {"type": "text", "text": "Images returned by tool call c1 (shot):"},
+            url("AAAA"),
+            {"type": "text", "text": "Images returned by tool call c3 (shot):"},
+            url("BBBB"),
+            url("CCCC"),
+        ])
+    );
+
+    // No images, no extra message.
+    let mut plain = self::context();
+    plain.push_assistant_tool_calls(None, vec![calls[1].clone()]);
+    plain.append_tool_results(vec![ToolResult::ok(&calls[1], json!("ok"))]);
+    assert_eq!(encode_messages(&plain).len(), 3);
+}
+
+#[test]
 fn parallel_tool_calls_is_omitted_when_unset() {
     let model = OpenAiModel::new("m");
     let body = model.request_body(&context(), &schemas());

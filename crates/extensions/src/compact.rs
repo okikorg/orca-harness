@@ -22,6 +22,10 @@ use crate::truncation::TruncationStore;
 /// Rough bytes-per-token used for all estimates (no tokenizer in the
 /// harness; provider-reported usage is the ground truth between runs).
 const APPROX_BYTES_PER_TOKEN: usize = 4;
+/// Flat token estimate per tool image. Base64 length says little about
+/// what a provider bills for an image (roughly width x height / 750,
+/// capped near this), so image data counts at this rate instead.
+const APPROX_IMAGE_TOKENS: usize = 1_600;
 
 /// Per-result serialized-output size below which stage 1 leaves a tool
 /// result alone: eliding tiny outputs saves nothing and costs a stub.
@@ -90,7 +94,14 @@ pub(crate) fn estimated_context_tokens(context: &Context) -> u64 {
 }
 
 fn message_bytes(message: &Message) -> usize {
-    serde_json::to_string(message).map(|s| s.len()).unwrap_or(0)
+    let bytes = serde_json::to_string(message).map(|s| s.len()).unwrap_or(0);
+    let Message::Tool { results } = message else {
+        return bytes;
+    };
+    results.iter().fold(bytes, |bytes, result| {
+        let (count, data) = crate::tool_images::measure(&result.output);
+        bytes.saturating_sub(data) + count * APPROX_IMAGE_TOKENS * APPROX_BYTES_PER_TOKEN
+    })
 }
 
 fn context_bytes(messages: &[Message]) -> usize {
@@ -128,10 +139,14 @@ fn elide_tool_results(messages: &mut [Message], store: &TruncationStore) -> (Vec
             continue;
         };
         for result in results {
-            let Ok(full) = serde_json::to_string(&result.output) else {
+            // The store keeps text; images are dropped for good.
+            let (images, _) = crate::tool_images::measure(&result.output);
+            let mut text = result.output.clone();
+            crate::tool_images::take(&mut text);
+            let Ok(full) = serde_json::to_string(&text) else {
                 continue;
             };
-            if full.len() < ELIDE_MIN_BYTES {
+            if full.len() < ELIDE_MIN_BYTES && images == 0 {
                 continue;
             }
             let hint: String = full.chars().take(120).collect();
@@ -144,9 +159,11 @@ fn elide_tool_results(messages: &mut [Message], store: &TruncationStore) -> (Vec
                     result.call_id
                 ),
             });
+            if images > 0 {
+                result.output["_imagesDropped"] = json!(images);
+            }
             elided.push(result.call_id.clone());
-            saved += full
-                .len()
+            saved += (full.len() + images * APPROX_IMAGE_TOKENS * APPROX_BYTES_PER_TOKEN)
                 .saturating_sub(message_bytes_of_value(&result.output));
         }
     }
@@ -387,6 +404,37 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("c1"));
+    }
+
+    #[test]
+    fn images_count_at_a_flat_rate_and_are_dropped_when_elided() {
+        let data = "A".repeat(400_000);
+        let shot =
+            json!({"content": "[image 1]", "_images": [{"media_type": "image/png", "data": data}]});
+        let mut context = Context::new();
+        context.append_tool_results(vec![result("c3", "shot", json!({"content": "[image 1]"}))]);
+        let text_only = estimated_context_tokens(&context);
+        context = Context::new();
+        context.append_tool_results(vec![result("c3", "shot", shot)]);
+        let overhead = estimated_context_tokens(&context) - text_only;
+        // The key and image wrapper add a few tokens; the base64 adds none.
+        assert!(
+            (APPROX_IMAGE_TOKENS as u64..APPROX_IMAGE_TOKENS as u64 + 20).contains(&overhead),
+            "image counted as {overhead} tokens"
+        );
+
+        let store = TruncationStore::default();
+        let mut messages = context.messages().to_vec();
+        let (elided, saved) = elide_tool_results(&mut messages, &store);
+        assert_eq!(elided, vec!["c3"]);
+        assert!(saved > APPROX_IMAGE_TOKENS * APPROX_BYTES_PER_TOKEN / 2);
+        let Message::Tool { results } = &messages[0] else {
+            panic!("expected tool message");
+        };
+        assert!(results[0].output.get("_images").is_none());
+        assert_eq!(results[0].output["_imagesDropped"], json!(1));
+        let (_, stored) = store.get("c3").unwrap();
+        assert!(!stored.contains("AAAA"), "the store keeps text only");
     }
 
     #[test]

@@ -265,6 +265,8 @@ impl Extension for Truncation {
         if result.tool_name == READ_TOOL_RESULT {
             return Ok(result);
         }
+        // Image data is sent as images, not text: never cut or store it.
+        let images = crate::tool_images::take(&mut result.output);
         // Capture the original before mutating, but only when something
         // will actually be trimmed and there is a store to keep it.
         let full = match &self.store {
@@ -295,6 +297,7 @@ impl Extension for Truncation {
                 }
             }
         }
+        crate::tool_images::restore(&mut result.output, images);
         Ok(result)
     }
 }

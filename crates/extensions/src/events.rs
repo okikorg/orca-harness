@@ -264,7 +264,8 @@ impl Extension for EventStream {
             .emit(HarnessEvent::ToolResult {
                 tool_call_id: result.call_id.clone(),
                 tool_name: result.tool_name.clone(),
-                output: result.output.clone(),
+                // Images appear as media type and size, never base64.
+                output: crate::tool_images::summarize(&result.output),
                 is_error: result.is_error,
             })
             .await;
