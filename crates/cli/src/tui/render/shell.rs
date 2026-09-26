@@ -4,9 +4,9 @@
 // returns `Vec<Line>`; the terminal loop in the parent `run`/`draw`
 // drives the actual frames.
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::components::approval::ApprovalPrompt;
@@ -28,85 +28,12 @@ use super::overlays::{context_segment, context_spans};
 use super::transcript::*;
 
 mod live;
+mod split;
 pub(crate) use live::*;
+pub(crate) use split::*;
 
-/// Breathing room between inspector content and the terminal edge. The
-/// renderer asks the padded block for its inner width, so previews wrap to
-/// the real content box rather than compensating with scattered subtraction.
-const INSPECTOR_PADDING: Padding = Padding::right(1);
-/// Narrowest terminal that fits the inspector beside the transcript.
-pub(crate) const SPLIT_MIN_WIDTH: usize = 100;
-/// Shortest terminal that fits the inspector under the transcript.
-const STACK_MIN_HEIGHT: usize = 18;
-
-/// Where the inspector goes in split view. Geometry is decided here once;
-/// the transcript wrap width and the wheel routing both follow it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum SplitKind {
-    Off,
-    /// Inspector on the right, 42% of the width.
-    SideBySide,
-    /// Too narrow for a second column: inspector under the transcript.
-    Stacked,
-}
-
-impl SplitKind {
-    pub(crate) fn side_by_side(mode: ViewMode, width: usize) -> bool {
-        mode == ViewMode::Split && width >= SPLIT_MIN_WIDTH
-    }
-
-    pub(crate) fn for_area(mode: ViewMode, width: usize, height: usize) -> Self {
-        if Self::side_by_side(mode, width) {
-            Self::SideBySide
-        } else if mode == ViewMode::Split && height >= STACK_MIN_HEIGHT {
-            Self::Stacked
-        } else {
-            Self::Off
-        }
-    }
-
-    /// `[conversation, inspector]`; both are the whole area when off.
-    fn areas(self, area: Rect) -> [Rect; 2] {
-        match self {
-            Self::SideBySide => self.areas_at(area, 58),
-            Self::Stacked => self.areas_at(area, 60),
-            Self::Off => [area, area],
-        }
-    }
-
-    /// `[first, second]` with `first_percent` of the width (side by side)
-    /// or the height (stacked) going to the first pane.
-    pub(crate) fn areas_at(self, area: Rect, first_percent: u16) -> [Rect; 2] {
-        let constraints = [
-            Constraint::Percentage(first_percent),
-            Constraint::Percentage(100 - first_percent),
-        ];
-        match self {
-            Self::SideBySide => Layout::horizontal(constraints).areas(area),
-            Self::Stacked => Layout::vertical(constraints).areas(area),
-            Self::Off => [area, area],
-        }
-    }
-
-    /// The second pane's chrome: a divider on the side it shares with the
-    /// first pane and a padded outer edge.
-    pub(crate) fn block(self, border_style: ratatui::style::Style) -> Block<'static> {
-        let borders = match self {
-            Self::Stacked => Borders::TOP,
-            Self::SideBySide | Self::Off => Borders::LEFT,
-        };
-        Block::default()
-            .borders(borders)
-            .border_style(border_style)
-            .padding(INSPECTOR_PADDING)
-    }
-
-    pub(crate) fn content_width(self, area: Rect) -> usize {
-        self.block(ratatui::style::Style::default())
-            .inner(area)
-            .width as usize
-    }
-}
+#[cfg(test)]
+mod tests;
 
 /// Rows the layout keeps for the conversation around the live region:
 /// three transcript rows, the composer gap and the status line.
@@ -613,114 +540,4 @@ pub(crate) fn mode_label(mode: &str) -> Segment {
         spans.push(Span::styled(format!(" {rest}"), t.dim));
     }
     Segment::spans(spans, status_bar::KEEP)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_mode_takes_its_own_colour_without_a_fill() {
-        let t = theme();
-        let render = |mode: &str| StatusBar::new().push(mode_label(mode)).line(40, t.dim);
-        let plan = render("plan · 1 plan");
-        assert!(plan.to_string().starts_with(" plan · 1 plan"), "{plan}");
-        let style_of = |mode: &str| {
-            render(mode)
-                .spans
-                .iter()
-                .find(|s| s.content == mode)
-                .map(|s| s.style)
-                .unwrap()
-        };
-        let styles: Vec<_> = ["plan", "orchestrate", "auto", "yolo"]
-            .into_iter()
-            .map(style_of)
-            .collect();
-        assert!(styles.iter().all(|style| style.bg.is_none()), "no fill");
-        for (index, style) in styles.iter().enumerate() {
-            assert!(
-                styles[index + 1..].iter().all(|other| other.fg != style.fg),
-                "modes share a colour: {styles:?}"
-            );
-        }
-        assert_eq!(render("").to_string().trim(), "");
-    }
-
-    #[test]
-    fn every_colour_theme_gives_the_modes_distinct_colours() {
-        use crate::view::ThemeName;
-        for name in ThemeName::ALL
-            .into_iter()
-            .filter(|name| *name != ThemeName::Mono)
-        {
-            let m = crate::view::theme_for(name).modes;
-            let fgs = [m.plan.fg, m.orchestrate.fg, m.auto.fg, m.yolo.fg];
-            for (index, fg) in fgs.iter().enumerate() {
-                assert!(fg.is_some());
-                assert!(!fgs[index + 1..].contains(fg), "{name:?}: {fgs:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_context_meter_takes_its_level_colour() {
-        let t = theme();
-        let spans = |tokens| context_spans(tokens, Some(100), false);
-        let joined = |tokens| {
-            spans(tokens)
-                .iter()
-                .map(|s| s.content.to_string())
-                .collect::<String>()
-        };
-        for tokens in [30, 75, 95] {
-            assert_eq!(joined(tokens), context_segment(tokens, Some(100), false));
-        }
-        let colour = |tokens| spans(tokens)[0].style;
-        if glyphs().meter.is_some() {
-            assert_eq!(colour(30), t.accent);
-            assert_eq!(colour(75), t.warn);
-            assert_eq!(colour(95), t.error);
-        } else {
-            assert_eq!(colour(30), t.dim);
-            assert_eq!(colour(95), t.error);
-        }
-    }
-
-    #[test]
-    fn a_shorter_hint_drops_its_last_piece_only() {
-        assert_eq!(shorter_hint("a · b · c"), "a · b");
-        assert_eq!(shorter_hint("alone"), "alone");
-    }
-
-    #[test]
-    fn inspector_content_width_comes_from_the_padded_block() {
-        let area = Rect::new(0, 0, 50, 20);
-        let block = SplitKind::SideBySide.block(ratatui::style::Style::default());
-        assert_eq!(
-            SplitKind::SideBySide.content_width(area),
-            block.inner(area).width as usize
-        );
-        assert_eq!(block.inner(area).right(), area.right() - 1);
-    }
-
-    #[test]
-    fn split_falls_back_to_stacking_on_narrow_terminals() {
-        assert_eq!(
-            SplitKind::for_area(ViewMode::Split, 120, 24),
-            SplitKind::SideBySide
-        );
-        assert_eq!(
-            SplitKind::for_area(ViewMode::Split, 90, 30),
-            SplitKind::Stacked
-        );
-        assert_eq!(SplitKind::for_area(ViewMode::Split, 90, 12), SplitKind::Off);
-        assert_eq!(
-            SplitKind::for_area(ViewMode::Classic, 200, 60),
-            SplitKind::Off
-        );
-        let [top, bottom] = SplitKind::Stacked.areas(Rect::new(0, 0, 90, 30));
-        assert_eq!(top.width, 90);
-        assert_eq!(top.height + bottom.height, 30);
-    }
 }

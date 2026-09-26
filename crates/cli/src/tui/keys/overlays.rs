@@ -1,6 +1,7 @@
 use super::effects::After;
 use super::*;
 mod apply;
+mod settings;
 use apply::apply_after;
 
 pub(crate) fn handle_overlay_key(
@@ -25,12 +26,14 @@ pub(crate) fn handle_overlay_key(
     // Side effects are represented separately so overlay matching only
     // decides what should happen after its mutable borrow ends.
     // Read before the overlay borrow: the settings rows need these.
-    let current_provider = app.cfg.provider;
-    let current_view = app.view_mode;
-    let current_inspector = app.inspector_mode;
-    let current_spacing = transcript_spacing();
-    let current_style = ui_style();
-    let workspace_root = app.cfg.workspace_root.clone();
+    let now = settings::Current {
+        provider: app.cfg.provider,
+        view: app.view_mode,
+        inspector: app.inspector_mode,
+        spacing: transcript_spacing(),
+        style: ui_style(),
+        workspace_root: app.cfg.workspace_root.clone(),
+    };
     let current_session = app.cfg.session_id.clone();
     let Some(overlay) = app.overlay.as_mut() else {
         return;
@@ -161,114 +164,7 @@ pub(crate) fn handle_overlay_key(
             _ => After::Nothing,
         },
         Overlay::Settings { picker } => match picker.on_key(key.code) {
-            PickerEvent::Activated(row) => match row {
-                0 => {
-                    let selected = Provider::ALL
-                        .iter()
-                        .position(|p| *p == current_provider)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Providers {
-                        picker: ListPicker::with_selected(Provider::ALL.len(), selected),
-                    })
-                }
-                1 => After::FetchModels,
-                2 => {
-                    let current = view::theme_name();
-                    let selected = view::ThemeName::ALL
-                        .iter()
-                        .position(|name| *name == current)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Themes {
-                        picker: ListPicker::with_selected(view::ThemeName::ALL.len(), selected),
-                    })
-                }
-                3 => {
-                    let selected = ViewMode::ALL
-                        .iter()
-                        .position(|mode| *mode == current_view)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Views {
-                        picker: ListPicker::with_selected(ViewMode::ALL.len(), selected),
-                    })
-                }
-                4 => {
-                    let selected = InspectorMode::ALL
-                        .iter()
-                        .position(|mode| *mode == current_inspector)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Inspector {
-                        picker: ListPicker::with_selected(InspectorMode::ALL.len(), selected),
-                    })
-                }
-                5 => {
-                    if current_provider.key_env().is_none() {
-                        After::CloseWithNote(format!(
-                            "the {} endpoint needs no api key",
-                            current_provider.label()
-                        ))
-                    } else {
-                        After::Push(Overlay::ApiKey {
-                            provider: current_provider,
-                            input: String::new(),
-                        })
-                    }
-                }
-                6 => {
-                    let tools = crate::config::stored_approvals(&workspace_root);
-                    if tools.is_empty() {
-                        After::CloseWithNote("no saved approvals for this workspace".into())
-                    } else {
-                        After::Push(Overlay::Approvals {
-                            picker: ListPicker::new(tools.len()),
-                            tools,
-                        })
-                    }
-                }
-                7 => {
-                    let selected = TranscriptSpacing::ALL
-                        .iter()
-                        .position(|spacing| *spacing == current_spacing)
-                        .unwrap_or(1);
-                    After::Push(Overlay::TranscriptSpacing {
-                        picker: ListPicker::with_selected(TranscriptSpacing::ALL.len(), selected),
-                    })
-                }
-                8 => {
-                    let selected = UiStyle::ALL
-                        .iter()
-                        .position(|style| *style == current_style)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Style {
-                        picker: ListPicker::with_selected(UiStyle::ALL.len(), selected),
-                    })
-                }
-                9 => {
-                    let current = crate::view::glyphs::mark_shape();
-                    let selected = crate::view::glyphs::MarkShape::ALL
-                        .iter()
-                        .position(|shape| *shape == current)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Marks {
-                        picker: ListPicker::with_selected(
-                            crate::view::glyphs::MarkShape::ALL.len(),
-                            selected,
-                        ),
-                    })
-                }
-                _ => {
-                    let current = crate::view::glyphs::branch_shape();
-                    let selected = crate::view::glyphs::BranchShape::ALL
-                        .iter()
-                        .position(|shape| *shape == current)
-                        .unwrap_or(0);
-                    After::Push(Overlay::Branches {
-                        picker: ListPicker::with_selected(
-                            crate::view::glyphs::BranchShape::ALL.len(),
-                            selected,
-                        ),
-                    })
-                }
-            },
+            PickerEvent::Activated(row) => settings::open_row(row, &now),
             _ => After::Nothing,
         },
         Overlay::Subagents { picker } => match picker.on_key(key.code) {
@@ -360,7 +256,7 @@ pub(crate) fn handle_overlay_key(
         Overlay::Approvals { tools, picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => {
                 let tool = tools[index].clone();
-                match crate::config::remove_approval(&workspace_root, &tool) {
+                match crate::config::remove_approval(&now.workspace_root, &tool) {
                     Ok(_) => {
                         tools.retain(|t| *t != tool);
                         picker.set_len(tools.len());
