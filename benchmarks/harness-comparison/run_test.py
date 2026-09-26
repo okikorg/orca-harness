@@ -10,21 +10,18 @@ import run
 
 
 class RunTest(unittest.TestCase):
-    def test_harness_selection_and_four_way_order_rotate(self):
-        self.assertEqual(run.harnesses("all"), ["orca", "pi", "omp", "claude"])
+    def test_harness_selection_and_order_rotate(self):
+        self.assertEqual(run.harnesses("all"), ["orca", "pi", "omp", "claude", "kiss"])
         self.assertEqual(run.harnesses("both"), ["orca", "pi"])
         selected = run.harnesses("all")
         self.assertEqual(
-            run.balanced_order(selected, 0, 0), ["orca", "pi", "omp", "claude"]
+            run.balanced_order(selected, 0, 0), ["orca", "pi", "omp", "claude", "kiss"]
         )
         self.assertEqual(
-            run.balanced_order(selected, 0, 1), ["pi", "omp", "claude", "orca"]
+            run.balanced_order(selected, 0, 1), ["pi", "omp", "claude", "kiss", "orca"]
         )
         self.assertEqual(
-            run.balanced_order(selected, 0, 2), ["omp", "claude", "orca", "pi"]
-        )
-        self.assertEqual(
-            run.balanced_order(selected, 0, 3), ["claude", "orca", "pi", "omp"]
+            run.balanced_order(selected, 0, 4), ["kiss", "orca", "pi", "omp", "claude"]
         )
 
     def test_prompt_cache_defaults_on_and_can_be_disabled(self):
