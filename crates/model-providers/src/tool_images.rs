@@ -80,13 +80,67 @@ impl Recent {
     }
 
     /// Drop this result's images that are older than the most recent
-    /// [`MAX_TOOL_IMAGES`].
-    pub(crate) fn fresh<'a>(&mut self, mut images: Vec<ToolImage<'a>>) -> Vec<ToolImage<'a>> {
+    /// [`MAX_TOOL_IMAGES`]. Each kept image comes with its 1-based number
+    /// in the result, which its `[image N]` text marker names.
+    pub(crate) fn fresh<'a>(&mut self, images: Vec<ToolImage<'a>>) -> Vec<(usize, ToolImage<'a>)> {
         let skip = self.stale.min(images.len());
         self.stale -= skip;
-        images.drain(..skip);
         images
+            .into_iter()
+            .enumerate()
+            .skip(skip)
+            .map(|(i, image)| (i + 1, image))
+            .collect()
     }
+}
+
+/// The text sent beside a result's images. A lone `content` string is
+/// unwrapped so its `[image N]` markers read as plain text.
+pub(crate) fn text_of(output: &Value) -> Cow<'_, str> {
+    match output {
+        Value::String(text) => Cow::Borrowed(text),
+        Value::Object(object) if object.len() == 1 => match object.get("content") {
+            Some(Value::String(text)) => Cow::Borrowed(text),
+            _ => Cow::Owned(output.to_string()),
+        },
+        _ => Cow::Owned(output.to_string()),
+    }
+}
+
+/// One piece of a tool result, in the order the tool returned it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Part<'a> {
+    Text(String),
+    Image(ToolImage<'a>),
+}
+
+/// Split `text` after each image's `[image N]` marker and put the image
+/// there, so text and images keep their original order. Images whose
+/// marker is missing follow the text. Blank text pieces are dropped.
+pub(crate) fn interleave<'a>(text: &str, images: Vec<(usize, ToolImage<'a>)>) -> Vec<Part<'a>> {
+    let mut parts = Vec::new();
+    let mut unplaced = Vec::new();
+    let mut rest = text;
+    let push_text = |parts: &mut Vec<Part<'a>>, text: &str| {
+        if !text.trim().is_empty() {
+            parts.push(Part::Text(text.to_string()));
+        }
+    };
+    for (number, image) in images {
+        let marker = format!("[image {number}]");
+        match rest.find(&marker) {
+            Some(at) => {
+                let end = at + marker.len();
+                push_text(&mut parts, &rest[..end]);
+                parts.push(Part::Image(image));
+                rest = &rest[end..];
+            }
+            None => unplaced.push(image),
+        }
+    }
+    push_text(&mut parts, rest);
+    parts.extend(unplaced.into_iter().map(Part::Image));
+    parts
 }
 
 #[cfg(test)]
@@ -113,6 +167,48 @@ mod tests {
         let (text, images) = split(&odd);
         assert_eq!(*text, odd);
         assert!(images.is_empty());
+    }
+
+    #[test]
+    fn interleave_places_each_image_after_its_marker() {
+        let png = ToolImage {
+            media_type: "image/png",
+            data: "A",
+        };
+        let jpg = ToolImage {
+            media_type: "image/jpeg",
+            data: "B",
+        };
+        let text = "before\n[image 1]\nbetween\n[image 2]";
+        assert_eq!(
+            interleave(text, vec![(1, png), (2, jpg)]),
+            vec![
+                Part::Text("before\n[image 1]".into()),
+                Part::Image(png),
+                Part::Text("\nbetween\n[image 2]".into()),
+                Part::Image(jpg),
+            ]
+        );
+        // Image 1 fell out of the request window: its marker stays as text.
+        assert_eq!(
+            interleave(text, vec![(2, jpg)]),
+            vec![Part::Text(text.into()), Part::Image(jpg)]
+        );
+        // No markers (e.g. structured output): images follow the text.
+        assert_eq!(
+            interleave("{\"width\":10}", vec![(1, png)]),
+            vec![Part::Text("{\"width\":10}".into()), Part::Image(png)]
+        );
+    }
+
+    #[test]
+    fn text_of_unwraps_only_a_lone_content_string() {
+        assert_eq!(text_of(&json!({"content": "a [image 1]"})), "a [image 1]");
+        assert_eq!(text_of(&json!("plain")), "plain");
+        assert_eq!(
+            text_of(&json!({"content": "a", "x": 1})),
+            "{\"content\":\"a\",\"x\":1}"
+        );
     }
 
     #[test]

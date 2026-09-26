@@ -60,22 +60,26 @@ impl AnthropicModel {
                 Message::Tool { results } => ("user", results.iter().map(|result| {
                     let (output, images) = crate::tool_images::split(&result.output);
                     let images = recent.fresh(images);
-                    let text = output.as_str().map(str::to_owned).unwrap_or_else(|| output.to_string());
                     let mut block = json!({
                         "type": "tool_result", "tool_use_id": result.call_id,
-                        "content": text, "is_error": result.is_error
+                        "content": output.as_str().map(str::to_owned).unwrap_or_else(|| output.to_string()),
+                        "is_error": result.is_error
                     });
                     // Images go inside their own tool_result, so each stays
-                    // tied to the call that produced it.
+                    // tied to the call that produced it, in the order the
+                    // tool returned text and images.
                     if !images.is_empty() {
-                        let mut parts = Vec::with_capacity(images.len() + 1);
-                        if !text.is_empty() {
-                            parts.push(json!({"type": "text", "text": text}));
-                        }
-                        parts.extend(images.iter().map(|image| json!({
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": image.media_type, "data": image.data}
-                        })));
+                        let text = crate::tool_images::text_of(&output);
+                        let parts = crate::tool_images::interleave(&text, images)
+                            .into_iter()
+                            .map(|part| match part {
+                                crate::tool_images::Part::Text(text) => json!({"type": "text", "text": text}),
+                                crate::tool_images::Part::Image(image) => json!({
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": image.media_type, "data": image.data}
+                                }),
+                            })
+                            .collect();
                         block["content"] = Value::Array(parts);
                     }
                     block

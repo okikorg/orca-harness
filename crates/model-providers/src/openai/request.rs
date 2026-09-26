@@ -122,22 +122,20 @@ pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
                     let mut message = json!({"role": "tool", "tool_call_id": result.call_id});
                     message["content"] = Value::String(output.to_string());
                     out.push(message);
-                    let images = recent.fresh(images);
-                    if images.is_empty() {
-                        continue;
-                    }
-                    parts.push(json!({
-                        "type": "text",
-                        "text": format!(
-                            "Images returned by tool call {} ({}):",
-                            result.call_id, result.tool_name
-                        )
-                    }));
-                    parts.extend(images.iter().map(|image| {
+                    // Each image is labelled with its call and its
+                    // `[image N]` marker in that call's output.
+                    for (number, image) in recent.fresh(images) {
+                        parts.push(json!({
+                            "type": "text",
+                            "text": format!(
+                                "[image {number}] from tool call {} ({}):",
+                                result.call_id, result.tool_name
+                            )
+                        }));
                         let mut part = json!({"type": "image_url", "image_url": {}});
                         part["image_url"]["url"] = Value::String(image.data_url());
-                        part
-                    }));
+                        parts.push(part);
+                    }
                 }
                 if !parts.is_empty() {
                     let mut message = json!({"role": "user", "content": null});

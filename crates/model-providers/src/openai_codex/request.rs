@@ -55,12 +55,20 @@ pub(crate) fn body(
                 // carries images inside the call's own output.
                 let images = recent.fresh(images);
                 if !images.is_empty() {
-                    let mut parts = vec![json!({"type": "input_text", "text": item["output"]})];
-                    parts.extend(images.iter().map(|image| {
-                        let mut part = json!({"type": "input_image", "detail": "auto"});
-                        part["image_url"] = Value::String(image.data_url());
-                        part
-                    }));
+                    let text = crate::tool_images::text_of(&output);
+                    let parts = crate::tool_images::interleave(&text, images)
+                        .into_iter()
+                        .map(|part| match part {
+                            crate::tool_images::Part::Text(text) => {
+                                json!({"type": "input_text", "text": text})
+                            }
+                            crate::tool_images::Part::Image(image) => {
+                                let mut part = json!({"type": "input_image", "detail": "auto"});
+                                part["image_url"] = Value::String(image.data_url());
+                                part
+                            }
+                        })
+                        .collect();
                     item["output"] = Value::Array(parts);
                 }
                 item
@@ -195,7 +203,7 @@ mod tests {
             json!({
                 "type": "function_call_output", "call_id": "c1",
                 "output": [
-                    {"type": "input_text", "text": "{\"content\":\"[image 1]\"}"},
+                    {"type": "input_text", "text": "[image 1]"},
                     {"type": "input_image", "image_url": "data:image/png;base64,iVBO", "detail": "auto"}
                 ]
             })

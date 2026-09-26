@@ -83,10 +83,11 @@ fn tool_result_images_follow_the_tool_batch_in_one_user_message() {
     assert_eq!(
         messages[5]["content"],
         json!([
-            {"type": "text", "text": "Images returned by tool call c1 (shot):"},
+            {"type": "text", "text": "[image 1] from tool call c1 (shot):"},
             url("AAAA"),
-            {"type": "text", "text": "Images returned by tool call c3 (shot):"},
+            {"type": "text", "text": "[image 1] from tool call c3 (shot):"},
             url("BBBB"),
+            {"type": "text", "text": "[image 2] from tool call c3 (shot):"},
             url("CCCC"),
         ])
     );
