@@ -213,6 +213,17 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .unwrap_or_else(|| output.to_string());
         return truncate_line(&format!("error: {message}"), 120);
     }
+    let images = images_label(output);
+    let without_images;
+    let output = match output.as_object() {
+        Some(object) if images.is_some() => {
+            let mut object = object.clone();
+            object.remove("_images");
+            without_images = Value::Object(object);
+            &without_images
+        }
+        _ => output,
+    };
     let summary = match name {
         "shell" => {
             let exit = output
@@ -301,7 +312,33 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             text
         }
     });
+    let summary = match images {
+        Some(images) if summary == "ok" => images,
+        Some(images) => format!("{images} · {summary}"),
+        None => summary,
+    };
     truncate_line(&summary, 120)
+}
+
+/// `1 image (image/png, 42.0 kB)` from the `_images` summary the event
+/// stream puts in place of image data.
+fn images_label(output: &Value) -> Option<String> {
+    let images = output
+        .get("_images")?
+        .as_array()
+        .filter(|images| !images.is_empty())?;
+    let bytes: u64 = images.iter().filter_map(|i| i["bytes"].as_u64()).sum();
+    let mut types: Vec<&str> = images
+        .iter()
+        .filter_map(|i| i["media_type"].as_str())
+        .collect();
+    types.dedup();
+    Some(format!(
+        "{} ({}, {})",
+        count_label(images.len(), "image", "images"),
+        types.join(", "),
+        byte_label(bytes)
+    ))
 }
 
 /// `3 bytes`, `5.0 kB`, `1.2 MB`.

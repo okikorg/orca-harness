@@ -20,6 +20,7 @@ impl AnthropicModel {
         }
         let mut system = Vec::new();
         let mut messages: Vec<Value> = Vec::new();
+        let mut recent = crate::tool_images::Recent::new(context);
         for message in context.messages() {
             let (role, blocks) = match message {
                 Message::System { content } => {
@@ -56,11 +57,33 @@ impl AnthropicModel {
                     })));
                     ("assistant", blocks)
                 }
-                Message::Tool { results } => ("user", results.iter().map(|result| json!({
-                    "type": "tool_result", "tool_use_id": result.call_id,
-                    "content": result.output.as_str().map(str::to_owned).unwrap_or_else(|| result.output.to_string()),
-                    "is_error": result.is_error
-                })).collect()),
+                Message::Tool { results } => ("user", results.iter().map(|result| {
+                    let (output, images) = crate::tool_images::split(&result.output);
+                    let images = recent.fresh(images);
+                    let mut block = json!({
+                        "type": "tool_result", "tool_use_id": result.call_id,
+                        "content": output.as_str().map(str::to_owned).unwrap_or_else(|| output.to_string()),
+                        "is_error": result.is_error
+                    });
+                    // Images go inside their own tool_result, so each stays
+                    // tied to the call that produced it, in the order the
+                    // tool returned text and images.
+                    if !images.is_empty() {
+                        let text = crate::tool_images::text_of(&output);
+                        let parts = crate::tool_images::interleave(&text, images)
+                            .into_iter()
+                            .map(|part| match part {
+                                crate::tool_images::Part::Text(text) => json!({"type": "text", "text": text}),
+                                crate::tool_images::Part::Image(image) => json!({
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": image.media_type, "data": image.data}
+                                }),
+                            })
+                            .collect();
+                        block["content"] = Value::Array(parts);
+                    }
+                    block
+                }).collect()),
             };
             if blocks.is_empty() {
                 continue;

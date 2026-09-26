@@ -119,3 +119,32 @@ async fn store_evicts_oldest_when_over_budget() {
     );
     assert!(reader.call(json!({"callId": "new"}), &ctx()).await.is_ok());
 }
+
+#[tokio::test]
+async fn image_data_is_never_truncated_or_stored() {
+    let store = TruncationStore::default();
+    let trunc = Truncation::new(100).store(store.clone());
+    let reader = ReadToolResultTool::new(store);
+    let image = json!({ "media_type": "image/png", "data": "A".repeat(1000) });
+    let c = call("shot-1", "mcp__browser__screenshot");
+
+    // Small text beside a large image: nothing to truncate.
+    let small = json!({ "content": "[image 1]", "_images": [image.clone()] });
+    let out = trunc
+        .after_tool(&c, result(&c, small.clone()))
+        .await
+        .unwrap();
+    assert_eq!(out.output, small);
+
+    // Large text beside it: the text is cut, the image kept whole and
+    // left out of the stored original.
+    let large = json!({ "content": "x".repeat(1000), "_images": [image.clone()] });
+    let out = trunc.after_tool(&c, result(&c, large)).await.unwrap();
+    assert_eq!(out.output["_truncated"], json!(true));
+    assert_eq!(out.output["_images"], json!([image]));
+    let full = reader
+        .call(json!({ "callId": "shot-1" }), &ctx())
+        .await
+        .unwrap();
+    assert!(!full.to_string().contains("AAAA"), "{full}");
+}

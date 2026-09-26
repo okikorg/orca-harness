@@ -17,6 +17,90 @@ fn tools() -> Vec<ToolSchema> {
     }]
 }
 
+fn shot(data: &str) -> Value {
+    json!({"content": "[image 1]", "_images": [{"media_type": "image/png", "data": data}]})
+}
+
+#[test]
+fn tool_result_images_become_image_blocks_inside_the_tool_result() {
+    let calls: Vec<ToolCall> = [("toolu_1", "shot"), ("toolu_2", "list")]
+        .iter()
+        .map(|(id, name)| ToolCall {
+            id: (*id).into(),
+            name: (*name).into(),
+            arguments: json!({}),
+        })
+        .collect();
+    let mut context = Context::new();
+    context.push_user("Look");
+    context.push_assistant_tool_calls(None, calls.clone());
+    let mixed = json!({
+        "content": "before\n[image 1]\nbetween\n[image 2]",
+        "_images": [
+            {"media_type": "image/png", "data": "iVBO"},
+            {"media_type": "image/jpeg", "data": "/9j/"},
+        ]
+    });
+    context.append_tool_results(vec![
+        ToolResult::ok(&calls[0], mixed),
+        ToolResult::ok(&calls[1], json!("done")),
+    ]);
+    let body = AnthropicModel::new("claude-test")
+        .request_body(&context, &[], &no_thinking())
+        .unwrap();
+    let results = &body["messages"][2]["content"];
+    assert_eq!(
+        results[0],
+        json!({
+            "type": "tool_result", "tool_use_id": "toolu_1", "is_error": false,
+            "content": [
+                {"type": "text", "text": "before\n[image 1]"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBO"}},
+                {"type": "text", "text": "\nbetween\n[image 2]"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}}
+            ]
+        })
+    );
+    // A result without images keeps the plain string form.
+    assert_eq!(results[1]["content"], "done");
+}
+
+#[test]
+fn only_the_most_recent_tool_images_are_sent() {
+    let max = crate::tool_images::MAX_TOOL_IMAGES;
+    let mut context = Context::new();
+    context.push_user("Browse");
+    for step in 0..max + 3 {
+        let call = ToolCall {
+            id: format!("toolu_{step}"),
+            name: "shot".into(),
+            arguments: json!({}),
+        };
+        context.push_assistant_tool_calls(None, vec![call.clone()]);
+        context.append_tool_results(vec![ToolResult::ok(&call, shot(&format!("img{step}")))]);
+    }
+    let body = AnthropicModel::new("claude-test")
+        .request_body(&context, &[], &no_thinking())
+        .unwrap();
+    let sent: Vec<&str> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().unwrap())
+        .filter(|block| block["type"] == "tool_result")
+        .flat_map(|block| block["content"].as_array().into_iter().flatten())
+        .filter_map(|part| part["source"]["data"].as_str())
+        .collect();
+    assert_eq!(sent.len(), max);
+    assert_eq!(sent[0], "img3");
+    // The oldest results fall back to their text, markers included and
+    // base64 left out.
+    assert_eq!(
+        body["messages"][2]["content"][0]["content"],
+        "{\"content\":\"[image 1]\"}"
+    );
+}
+
 #[tokio::test]
 async fn native_request_headers_caching_images_and_tool_round_trip() {
     let mut context = Context::new();

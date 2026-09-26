@@ -12,6 +12,7 @@ pub(crate) fn body(
 ) -> Value {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
+    let mut recent = crate::tool_images::Recent::new(context);
     for message in context.messages() {
         match message {
             Message::System { content } => instructions.push(content.as_str()),
@@ -47,8 +48,29 @@ pub(crate) fn body(
                 }));
             }
             Message::Tool { results } => input.extend(results.iter().map(|result| {
+                let (output, images) = crate::tool_images::split(&result.output);
                 let mut item = json!({"type": "function_call_output", "call_id": result.call_id});
-                item["output"] = Value::String(result.output.to_string());
+                item["output"] = Value::String(output.to_string());
+                // The output may instead be a list of input items, which
+                // carries images inside the call's own output.
+                let images = recent.fresh(images);
+                if !images.is_empty() {
+                    let text = crate::tool_images::text_of(&output);
+                    let parts = crate::tool_images::interleave(&text, images)
+                        .into_iter()
+                        .map(|part| match part {
+                            crate::tool_images::Part::Text(text) => {
+                                json!({"type": "input_text", "text": text})
+                            }
+                            crate::tool_images::Part::Image(image) => {
+                                let mut part = json!({"type": "input_image", "detail": "auto"});
+                                part["image_url"] = Value::String(image.data_url());
+                                part
+                            }
+                        })
+                        .collect();
+                    item["output"] = Value::Array(parts);
+                }
                 item
             })),
         }
@@ -158,6 +180,33 @@ mod tests {
                 {"type": "input_text", "text": "describe"},
                 {"type": "input_image", "image_url": "data:image/jpeg;base64,/9j/", "detail": "auto"}
             ])
+        );
+    }
+
+    #[test]
+    fn tool_result_images_become_input_images_in_the_call_output() {
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "shot".into(),
+            arguments: json!({}),
+        };
+        let mut context = Context::new();
+        context.push_assistant_tool_calls(None, vec![call.clone()]);
+        context.append_tool_results(vec![ToolResult::ok(
+            &call,
+            json!({"content": "[image 1]", "_images": [{"media_type": "image/png", "data": "iVBO"}]}),
+        )]);
+
+        let value = body("codex", &context, &[], true, &[], None, None);
+        assert_eq!(
+            value["input"][1],
+            json!({
+                "type": "function_call_output", "call_id": "c1",
+                "output": [
+                    {"type": "input_text", "text": "[image 1]"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,iVBO", "detail": "auto"}
+                ]
+            })
         );
     }
 
