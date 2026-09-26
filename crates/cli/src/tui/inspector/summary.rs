@@ -19,8 +19,8 @@ pub(super) fn lines(tool: &ToolActivity, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn section(label: impl Into<String>) -> Section {
-    Section::inspector(label, theme().dim)
+fn section(width: usize, label: impl Into<String>) -> Section {
+    Section::inspector(label, theme().dim).ruled(width)
 }
 
 fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
@@ -45,7 +45,7 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
             Style::default(),
         ),
         "grep" => {
-            let mut input = section("search");
+            let mut input = section(width, "search");
             input.extend(inspector_fields(
                 [
                     ("query", string(&tool.input, "query").to_owned()),
@@ -58,7 +58,7 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
             input.append_to(lines);
         }
         "glob" => {
-            let mut input = section("search");
+            let mut input = section(width, "search");
             input.extend(inspector_fields(
                 [
                     ("pattern", string(&tool.input, "pattern").to_owned()),
@@ -96,7 +96,7 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
             Style::default(),
         ),
         "skill" => {
-            let mut input = section("skill");
+            let mut input = section(width, "skill");
             input.extend(inspector_fields(
                 [
                     ("name", string(&tool.input, "name").to_owned()),
@@ -176,7 +176,7 @@ fn append_code_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width:
     } else {
         "typescript"
     };
-    let mut input = section(format!("code · {language}"));
+    let mut input = section(width, format!("code · {language}"));
     input.extend(
         CodePreview {
             text: &code,
@@ -200,11 +200,14 @@ fn append_file_content(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, widt
     let path = string(&tool.input, "path");
     let content = string(&tool.input, "content");
     let language = language_for_path(path).unwrap_or("text");
-    let mut input = section(format!(
-        "content · {language} · {} · {}",
-        line_label(content),
-        inspector_size_label(content.len() as u64)
-    ));
+    let mut input = section(
+        width,
+        format!(
+            "content · {language} · {} · {}",
+            line_label(content),
+            inspector_size_label(content.len() as u64)
+        ),
+    );
     let (preview, omitted) = limit_inspector_preview(content);
     input.extend(
         CodePreview {
@@ -233,7 +236,7 @@ fn append_edit_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width:
         width,
         Style::default(),
     );
-    let mut change = section("change");
+    let mut change = section(width, "change");
     for (prefix, field, style) in [("- ", "old", theme().error), ("+ ", "new", theme().success)] {
         let text = view::sanitize_cells(string(&tool.input, field));
         let (text, omitted) = limit_inspector_preview(&text);
@@ -264,11 +267,14 @@ fn append_multi_edit_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, 
 fn append_patch_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
     let patch = string(&tool.input, "patch");
     let (preview, omitted) = limit_inspector_preview(patch);
-    let mut input = section(format!(
-        "patch · {} · {}",
-        line_label(patch),
-        inspector_size_label(patch.len() as u64)
-    ));
+    let mut input = section(
+        width,
+        format!(
+            "patch · {} · {}",
+            line_label(patch),
+            inspector_size_label(patch.len() as u64)
+        ),
+    );
     input.extend(
         CodePreview {
             text: &preview,
@@ -289,7 +295,7 @@ fn append_patch_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width
 }
 
 fn append_process_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
-    let mut input = section("process");
+    let mut input = section(width, "process");
     input.extend(inspector_fields(
         [
             ("action", string(&tool.input, "action").to_owned()),
@@ -316,7 +322,7 @@ fn text_section(
         return;
     }
     let (preview, omitted) = limit_inspector_preview(text);
-    let mut section = section(label);
+    let mut section = section(width, label);
     section.extend(inspector_text(&preview, width, style));
     if omitted {
         section.push(Line::from(Span::styled(

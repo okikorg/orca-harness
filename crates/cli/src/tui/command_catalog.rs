@@ -26,7 +26,7 @@ pub const HOTKEYS: &[HotkeySpec] = &[
     },
     HotkeySpec {
         keys: "Tab",
-        description: "complete the selected slash command",
+        description: "complete the selected slash command; in split view, switch the side pane",
         category: "Composer",
     },
     HotkeySpec {
@@ -82,6 +82,11 @@ pub const HOTKEYS: &[HotkeySpec] = &[
     HotkeySpec {
         keys: "Ctrl+O",
         description: "expand the latest work or tool output",
+        category: "Actions",
+    },
+    HotkeySpec {
+        keys: "Ctrl+T",
+        description: "toggle between the main and split views",
         category: "Actions",
     },
     HotkeySpec {

@@ -14,6 +14,34 @@ pub(crate) fn line_text(line: &Line<'_>) -> String {
         .collect()
 }
 
+/// Whether some line of `text` holds `cells` in order with only
+/// whitespace or `·` separators between them: a rail row matched by its
+/// cells, whatever joins them.
+#[cfg(test)]
+pub(crate) fn has_row(text: &str, cells: &[&str]) -> bool {
+    let normal = |text: &str| {
+        text.split_whitespace()
+            .filter(|word| *word != "·")
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let wanted = normal(&cells.join(" "));
+    text.lines().any(|line| normal(line).contains(&wanted))
+}
+
+/// Byte offset of the first line of `text` that [`has_row`] matches.
+#[cfg(test)]
+pub(crate) fn row_offset(text: &str, cells: &[&str]) -> Option<usize> {
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if has_row(line, cells) {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
 /// Drop the `·…○` connector "leaf" spans that join a rail to its last
 /// row once that row has been pulled out of the transcript. Purely
 /// cosmetic: keeps the fold markers from pointing at nothing.

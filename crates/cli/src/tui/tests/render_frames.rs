@@ -153,7 +153,7 @@ fn streaming_mermaid_holds_a_stable_placeholder_until_the_fence_closes() {
 }
 
 #[test]
-fn approval_legend_reflows_on_a_sixty_column_frame() {
+fn approval_choices_list_inside_a_sixty_column_frame() {
     let (respond, _answer) = tokio::sync::oneshot::channel();
     let mut app = test_app();
     app.approval = Some(crate::msg::ApprovalRequest {
@@ -165,18 +165,24 @@ fn approval_legend_reflows_on_a_sixty_column_frame() {
 
     let rows = rendered_rows(&mut app, 60, 24);
     let screen = rows.join("\n");
-    assert!(screen.contains("? approval required · shell"), "{screen}");
+    assert!(screen.contains("? Approval required · shell"), "{screen}");
     assert!(screen.contains("│ shell $ cargo test"), "{screen}");
-    let legend: Vec<&String> = rows
-        .iter()
-        .filter(|row| {
-            row.starts_with("    ") && (row.contains("allow once") || row.contains("deny"))
-        })
-        .collect();
-    assert_eq!(legend.len(), 2, "four choices over two rows: {screen}");
+    // One row per answer, each ending in its key inside the frame.
+    for (label, key) in [
+        ("Allow once", "y"),
+        ("Always this session", "a"),
+        ("Always for workspace", "A"),
+        ("Deny", "n"),
+    ] {
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(label) && row.trim_end().ends_with(&format!("{key} │"))),
+            "{label}: {screen}"
+        );
+    }
     assert!(
-        rows.iter().all(|row| !row.starts_with("e)")),
-        "no mid-word wrap: {screen}"
+        rows.iter().all(|row| row.chars().count() <= 60),
+        "the frame fits: {screen}"
     );
     assert!(screen.contains("answering approval above"), "{screen}");
     let status = last_row(&rows);
@@ -260,7 +266,7 @@ fn a_tight_status_row_shortens_the_hint_before_dropping_the_model() {
     let rows = rendered_rows(&mut app, 70, 20);
     let status = last_row(&rows);
     assert!(status.starts_with(" local:test ·"), "{status}");
-    assert!(!status.contains("wheel scroll"), "{status}");
+    assert!(!status.contains("ctrl+t split"), "the last hint gives way: {status}");
     assert!(status.contains("ctrl+o expand"), "{status}");
 }
 
@@ -358,15 +364,17 @@ fn glyph_style_reads_every_mark_from_the_table() {
         let g = UiStyle::Glyph.glyphs();
         assert!(screen.contains(&format!("{} Work ·", g.active[0])), "{screen}");
         assert!(
-            screen.contains(&format!("└─ {} Shell · $ true", g.running[0])),
+            crate::tui::text::has_row(&screen, &["└─", &g.running[0].to_string(), "Shell", "$ true"]),
             "{screen}"
         );
         assert_eq!(g.running, &['□']);
         assert_eq!(g.active, &['□', '■']);
-        assert_eq!(g.section, '□');
+        // Hollow is work, solid is done.
+        assert_eq!(g.section, '■');
+        assert_eq!(g.done, '■');
         assert_eq!(g.attention, '!');
         assert_eq!(g.cursor, "›");
-        assert_eq!(g.done, UiStyle::Minimal.glyphs().done);
+        assert_eq!(UiStyle::Minimal.glyphs().done, '✓');
         assert!(screen.contains("writing"), "{screen}");
     });
 }

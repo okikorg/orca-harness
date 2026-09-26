@@ -202,6 +202,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
                 tool_name: &request.tool_name,
                 detail: &request.detail,
                 yes_no: request.yes_no,
+                selected: app.approval_choice,
             }
             .lines(width),
         );
@@ -222,6 +223,8 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),
             Overlay::TranscriptSpacing { picker } => transcript_spacing_lines(picker, width),
             Overlay::Style { picker } => style_lines(picker, width),
+            Overlay::Marks { picker } => marks_lines(picker, width),
+            Overlay::Branches { picker } => branches_lines(picker, width),
             Overlay::Inspector { picker } => {
                 inspector_picker_lines(app.inspector_mode, picker, width)
             }

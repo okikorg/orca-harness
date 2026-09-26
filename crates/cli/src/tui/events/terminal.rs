@@ -231,6 +231,8 @@ pub(crate) fn handle_terminal_event(
         // Deliberately not ctrl+s (XOFF on most terminals — the app would
         // appear to hang) and not a plain letter the composer needs.
         KeyCode::Char('y') if ctrl => copy_command(app, ""),
+        // Main and split trade places; tab picks the split's pane.
+        KeyCode::Char('t') if ctrl => toggle_view(app),
         // Line scroll on shift+arrows: PgUp/PgDn are fn+arrows on a laptop
         // keyboard, which terminals often swallow for their own scrollback
         // before the app ever sees them.
@@ -275,6 +277,8 @@ pub(crate) fn handle_terminal_event(
                     format!("/{}", spec.name)
                 };
                 app.cursor = app.composer.chars().count();
+            } else if app.view_mode == super::super::state::ViewMode::Split {
+                next_split_tab(app);
             }
         }
         KeyCode::Enter => {
@@ -418,4 +422,33 @@ fn status_items(app: &App) -> Vec<StatusFocus> {
         items.push(StatusFocus::Todo);
     }
     items
+}
+
+/// Main ↔ split. The view is saved like the `/settings` choice, so the
+/// layout you leave on is the one you start with; the pane's tab is kept
+/// for the session.
+pub(crate) fn toggle_view(app: &mut App) {
+    use super::super::state::ViewMode;
+    match app.view_mode {
+        ViewMode::Classic => app.view_mode = ViewMode::Split,
+        ViewMode::Split => {
+            app.view_mode = ViewMode::Classic;
+            crate::tui::text::clear_tool_connectors(&mut app.transcript);
+            crate::tui::text::clear_tool_connectors(&mut app.pending_history);
+            app.split_inspector_cache = None;
+        }
+    }
+    app.split_scroll = 0;
+    // Best effort: an unsaved view still applies for this session.
+    let _ = crate::config::save_view(app.view_mode.slug());
+}
+
+/// Tools ↔ agents in the split's right pane.
+fn next_split_tab(app: &mut App) {
+    use super::super::state::SplitTab;
+    app.split_tab = match app.split_tab {
+        SplitTab::Tools => SplitTab::Agents,
+        SplitTab::Agents => SplitTab::Tools,
+    };
+    app.split_scroll = 0;
 }

@@ -505,6 +505,7 @@ pub(crate) fn request_plan_approval(app: &mut App) {
         return;
     }
     let (respond, _) = tokio::sync::oneshot::channel();
+    app.approval_choice = None;
     app.approval = Some(crate::msg::ApprovalRequest {
         tool_name: PLAN_APPROVAL.into(),
         detail: format!(

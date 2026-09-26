@@ -449,7 +449,7 @@
         set_transcript_spacing(TranscriptSpacing::Comfortable);
         let _ = crate::config::save_transcript_spacing("comfortable");
 
-        // The style row is the last one; it flips the glyph table live.
+        // The style row flips the glyph table live.
         set_ui_style(UiStyle::Minimal);
         app.overlay = Some(Overlay::Settings {
             picker: ListPicker::with_selected(SETTINGS_ROWS, 8),
@@ -466,6 +466,53 @@
         assert_eq!(UiStyle::stored(), UiStyle::Glyph);
         set_ui_style(UiStyle::Minimal);
         let _ = crate::config::save_style("minimal");
+
+        // The marks row is the last one; it swaps squares for circles
+        // live, keeping hollow for work and solid for done.
+        use crate::view::glyphs::{mark_shape, set_mark_shape, MarkShape};
+        set_mark_shape(MarkShape::Square);
+        set_ui_style(UiStyle::Glyph);
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 9),
+        });
+        press(&mut app, &tx, KeyCode::Enter);
+        match &app.overlay {
+            Some(Overlay::Marks { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the marks overlay"),
+        }
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert_eq!(mark_shape(), MarkShape::Circle);
+        assert_eq!(crate::config::stored_marks().as_deref(), Some("circle"));
+        assert_eq!(MarkShape::stored(), MarkShape::Circle);
+        let g = crate::view::glyphs::glyphs();
+        assert_eq!((g.waiting, g.done), ('○', '●'));
+        set_mark_shape(MarkShape::Square);
+        set_ui_style(UiStyle::Minimal);
+        let _ = crate::config::save_marks("square");
+
+        // Branches, the row after marks, round the rail's last corner.
+        use crate::view::glyphs::{branch_shape, set_branch_shape, BranchShape};
+        set_branch_shape(BranchShape::Elbow);
+        app.overlay = Some(Overlay::Settings {
+            picker: ListPicker::with_selected(SETTINGS_ROWS, 10),
+        });
+        press(&mut app, &tx, KeyCode::Enter);
+        match &app.overlay {
+            Some(Overlay::Branches { picker }) => assert_eq!(picker.index(), 0),
+            _ => panic!("expected the branches overlay"),
+        }
+        press(&mut app, &tx, KeyCode::Down);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert_eq!(branch_shape(), BranchShape::Curve);
+        assert_eq!(crate::config::stored_branches().as_deref(), Some("curve"));
+        let end = crate::tui::components::tree::TreeBranch {
+            indent: "",
+            last: true,
+        };
+        assert_eq!(end.prefix(), "╰─ ");
+        set_branch_shape(BranchShape::Elbow);
+        let _ = crate::config::save_branches("elbow");
     }
 
     #[test]

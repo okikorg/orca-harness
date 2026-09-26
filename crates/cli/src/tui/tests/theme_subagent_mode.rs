@@ -142,7 +142,7 @@ mod mode_rewind_todo_tests {
         slash_command(&mut app, "mode sideways", &worker, 80);
         assert_eq!(mode.get(), Mode::Normal);
         // Glyphed like every other system line, not flush-left.
-        assert!(texts(&app).contains("• error: unknown mode: sideways"));
+        assert!(texts(&app).contains(&format!("{} error: unknown mode: sideways", crate::view::glyphs::glyphs().failed)));
     }
 
     /// The picker is preselected on the current mode and enter applies
@@ -401,16 +401,19 @@ mod mode_rewind_todo_tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("todo · 1/3 done"), "{rendered}");
+        let g = crate::view::glyphs::glyphs();
+        assert!(rendered.contains("todo") && rendered.contains("1/3"), "{rendered}");
         assert!(
-            rendered.contains("├─ ✓ inspect the rendering"),
+            rendered.contains(&format!("├─ {} inspect the rendering", g.done)),
             "{rendered}"
         );
+        // Hollow is work: the active item shares the pending mark and is
+        // told apart by colour and weight.
         assert!(
-            rendered.contains(&format!("├─ {} add a visible progress cue", crate::view::glyphs::glyphs().cursor)),
+            rendered.contains(&format!("├─ {} add a visible progress cue", g.running_frame(0))),
             "{rendered}"
         );
-        assert!(rendered.contains("└─ □ verify it"), "{rendered}");
+        assert!(rendered.contains(&format!("└─ {} verify it", g.waiting)), "{rendered}");
     }
 
     #[tokio::test]
@@ -432,9 +435,10 @@ mod mode_rewind_todo_tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("todo · 2/2 done"), "{rendered}");
-        assert!(rendered.contains("├─ ✓ inspect"), "{rendered}");
-        assert!(rendered.contains("└─ ✓ verify"), "{rendered}");
+        let g = crate::view::glyphs::glyphs();
+        assert!(rendered.contains("todo") && rendered.contains("2/2"), "{rendered}");
+        assert!(rendered.contains(&format!("├─ {} inspect", g.done)), "{rendered}");
+        assert!(rendered.contains(&format!("└─ {} verify", g.done)), "{rendered}");
     }
 
     #[tokio::test]

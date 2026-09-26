@@ -278,7 +278,9 @@ fn status_mark(status: SubagentTranscriptStatus) -> char {
         SubagentTranscriptStatus::Queued => '-',
         SubagentTranscriptStatus::Running => g.waiting,
         SubagentTranscriptStatus::Idle => g.waiting,
-        SubagentTranscriptStatus::Stopped => '■',
+        // A stopped agent keeps the unstarted mark, like a stopped
+        // workflow stage: solid would say it finished.
+        SubagentTranscriptStatus::Stopped => '-',
         SubagentTranscriptStatus::Completed => g.done,
         SubagentTranscriptStatus::Failed => g.failed,
     }
@@ -294,6 +296,72 @@ fn status_style(status: SubagentTranscriptStatus) -> Style {
         SubagentTranscriptStatus::Completed => t.success,
         SubagentTranscriptStatus::Failed => t.error,
     }
+}
+
+/// The split pane's Agents tab: every subagent in spawn-tree order, one
+/// compact row each, `mark task · status · model · time`.
+pub(crate) fn split_agent_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let rows = agent_rows_on(app, AgentTab::All);
+    if rows.is_empty() {
+        return vec![
+            Line::from(Span::styled("  No subagents yet.", t.dim)),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Delegated work shows here as it starts.",
+                t.dim,
+            )),
+        ];
+    }
+    let mut lines = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(transcript) = app.subagent_transcripts.get(&row.id) else {
+            continue;
+        };
+        let mark = status_mark(transcript.status);
+        let lead = format!("  {}", row.prefix);
+        // The mark already says running, done or failed.
+        let mut tail = Vec::new();
+        if let Some(identity) = &transcript.identity {
+            tail.push(crate::tui::components::subagent_row::short_identity(
+                &identity_label(identity),
+            ));
+        }
+        tail.push(elapsed_label(transcript_elapsed(transcript)));
+        let tail = format!(" · {}", tail.join(" · "));
+        let task_width =
+            width.saturating_sub(view::cell_width(&lead) + 2 + view::cell_width(&tail));
+        let task = terse_task(&transcript.task, &app.cfg.workspace_root);
+        let task = view::truncate_line(&task, task_width.max(8));
+        lines.push(crate::tui::components::layout_fit(
+            Line::from(vec![
+                Span::styled(lead, t.dim),
+                Span::styled(format!("{mark} "), status_style(transcript.status)),
+                Span::raw(task),
+                Span::styled(tail, t.dim),
+            ]),
+            width,
+        ));
+    }
+    lines
+}
+
+/// The task's first line with the workspace path made relative and the
+/// home directory as `~`: the preview names the work, not where it lives.
+fn terse_task(task: &str, workspace_root: &str) -> String {
+    let mut task = task.lines().next().unwrap_or_default().trim().to_string();
+    let root = workspace_root.trim_end_matches('/');
+    if !root.is_empty() {
+        task = task.replace(&format!("{root}/"), "").replace(root, ".");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = home.to_string_lossy();
+        let home = home.trim_end_matches('/');
+        if !home.is_empty() {
+            task = task.replace(&format!("{home}/"), "~/");
+        }
+    }
+    task
 }
 
 fn transcript_elapsed(transcript: &SubagentTranscript) -> Duration {

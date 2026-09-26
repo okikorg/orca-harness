@@ -184,15 +184,15 @@
             "work totals missing: {joined}"
         );
         assert!(
-            joined.contains("Read · src/tui.rs"),
+            crate::tui::text::has_row(&joined, &["Read", "src/tui.rs"]),
             "completed call missing: {joined}"
         );
         assert!(
-            joined.contains("✓ Read · src/tui.rs · read 2.0 kB"),
+            crate::tui::text::has_row(&joined, &["✓", "Read", "src/tui.rs", "read 2.0 kB"]),
             "result missing: {joined}"
         );
         assert!(
-            joined.contains("Shell · $ cargo test"),
+            crate::tui::text::has_row(&joined, &["Shell", "$ cargo test"]),
             "running call missing: {joined}"
         );
         assert!(joined.contains("□"), "running state missing: {joined}");
@@ -241,7 +241,7 @@
             "history summarized: {joined}"
         );
         assert!(
-            joined.contains("□ Shell · $ cargo test --workspace"),
+            crate::tui::text::has_row(&joined, &["□", "Shell", "$ cargo test --workspace"]),
             "running tool retained: {joined}"
         );
         assert!(
@@ -293,8 +293,7 @@
         let work = joined.find("Work · 1 tool").expect("work rail");
         let answer = joined.find("Everything passed.").expect("answer");
         assert!(work < answer, "work precedes answer: {joined}");
-        assert!(joined.contains("Shell · $ cargo test"));
-        assert!(joined.contains("✓ Shell · $ cargo test · exit 0 · 42 tests passed"));
+        assert!(crate::tui::text::has_row(&joined, &["✓", "Shell", "$ cargo test", "exit 0 · 42 tests passed"]), "{joined}");
         assert!(
             !joined.contains("private reasoning text"),
             "completed thinking is collapsed"
@@ -302,8 +301,7 @@
 
         let details = flat_lines(&app.work_log.last().expect("work tree retained").lines);
         assert!(details.contains("Thinking"));
-        assert!(details.contains("Shell · $ cargo test"));
-        assert!(details.contains("✓ Shell · $ cargo test · exit 0 · 42 tests passed"));
+        assert!(crate::tui::text::has_row(&details, &["✓", "Shell", "$ cargo test", "exit 0 · 42 tests passed"]), "{details}");
         assert!(
             app.work_log.last().expect("work tree retained").expanded,
             "completed rails are expanded by default"
@@ -317,8 +315,8 @@
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded.contains("Shell · $ cargo test"));
-        let tool = expanded.find("Shell · $ cargo test").expect("expanded tool");
+        let tool = crate::tui::text::row_offset(&expanded, &["Shell", "$ cargo test"])
+            .expect("expanded tool");
         let answer = expanded.find("Everything passed.").expect("answer");
         assert!(tool < answer, "work expands in place: {expanded}");
         let once = app.transcript.len();

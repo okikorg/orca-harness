@@ -83,6 +83,24 @@ pub(super) fn apply_after(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCm
             };
             push_notice(app, note);
         }
+        After::CloseAndSetMarks(shape) => {
+            finish_picker_flow(app);
+            crate::view::glyphs::set_mark_shape(shape);
+            let note = match crate::config::save_marks(shape.slug()) {
+                Ok(_) => format!("marks set to {}", shape.label()),
+                Err(err) => format!("marks set to {} (not saved: {err})", shape.label()),
+            };
+            push_notice(app, note);
+        }
+        After::CloseAndSetBranches(shape) => {
+            finish_picker_flow(app);
+            crate::view::glyphs::set_branch_shape(shape);
+            let note = match crate::config::save_branches(shape.slug()) {
+                Ok(_) => format!("branches set to {}", shape.label()),
+                Err(err) => format!("branches set to {} (not saved: {err})", shape.label()),
+            };
+            push_notice(app, note);
+        }
         After::CloseAndSetInspector(mode) => {
             finish_picker_flow(app);
             app.inspector_mode = mode;

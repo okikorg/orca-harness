@@ -290,7 +290,7 @@ fn tool_mark(tool: &ToolActivity, live: bool, frame: usize) -> (String, ratatui:
     let t = theme();
     let g = glyphs();
     match tool.status(live) {
-        ToolStatus::Running => (g.running_frame(frame).to_string(), t.dim),
+        ToolStatus::Running => (g.running_frame(frame).to_string(), t.accent),
         ToolStatus::Done => (g.done.to_string(), t.success),
         ToolStatus::Failed => (g.failed.to_string(), t.error),
         ToolStatus::Abandoned => (g.failed.to_string(), t.warn),
@@ -356,8 +356,8 @@ pub(crate) fn nested_spawn_rows(
                     width,
                     branch_style: t.dim,
                     glyph_style: style,
-                    label_style: t.accent,
-                    identity_style: t.accent,
+                    label_style: t.dim,
+                    identity_style: t.dim,
                     task_style: t.accent,
                 }
                 .line(),

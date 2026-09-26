@@ -26,6 +26,9 @@ pub(super) enum After {
     /// Close, persist, and activate transcript section spacing.
     CloseAndSetTranscriptSpacing(TranscriptSpacing),
     CloseAndSetStyle(UiStyle),
+    /// Close, persist, and activate the state-mark shape.
+    CloseAndSetMarks(crate::view::glyphs::MarkShape),
+    CloseAndSetBranches(crate::view::glyphs::BranchShape),
     /// Close, persist, and activate split inspector rendering.
     CloseAndSetInspector(InspectorMode),
     /// Close and drop a dim status line into the history.

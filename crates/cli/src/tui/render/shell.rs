@@ -10,8 +10,10 @@ use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::tui::components::approval::ApprovalPrompt;
-use crate::tui::components::composer::Composer;
+use crate::tui::components::composer::{command_range, Composer};
+use crate::tui::components::keys;
 use crate::tui::components::status_bar::{self, Segment, StatusBar};
+use crate::tui::components::tabs::tab_strip;
 use crate::tui::components::welcome::Welcome;
 use crate::view::glyphs::glyphs;
 use crate::view::theme;
@@ -19,9 +21,10 @@ use crate::view::theme;
 use super::super::inspector::{
     empty_tool_inspector_lines, tool_inspector_body_lines, tool_inspector_header_lines,
 };
+use super::super::state::SplitTab;
 use super::super::{App, InspectorBodyCache, StatusFocus, ViewMode};
 use super::agents::draw_agent_browser;
-use super::overlays::context_segment;
+use super::overlays::{context_segment, context_spans};
 use super::transcript::*;
 
 mod live;
@@ -135,6 +138,15 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         "ask anything · @ add files · /help commands"
     };
     let pill_spans = super::super::input::image_marker_spans(&app.pastes, &app.composer);
+    // The spine says what enter will do: queue while a turn runs, send
+    // without a check in yolo, send otherwise.
+    let spine = if app.running() {
+        theme().dim
+    } else if app.cfg.mode.get() == crate::mode::Mode::Yolo {
+        theme().warn
+    } else {
+        theme().accent
+    };
     let composer = Composer::new(
         &app.composer,
         app.cursor,
@@ -144,6 +156,12 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         theme().dim,
         &pill_spans,
     )
+    .spine(spine)
+    .command(command_range(&app.composer, |word| {
+        super::super::command_catalog::COMMANDS
+            .iter()
+            .any(|spec| spec.name == word)
+    }))
     .render();
     let composer_height = composer.lines.len();
 
@@ -205,6 +223,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             version: env!("CARGO_PKG_VERSION"),
             model: &app.cfg.model_name,
             workspace: &app.cfg.workspace_name,
+            effort: app.reasoning_effort.as_deref(),
+            branch: app.git_branch.as_deref(),
+            recent: &app.recent_sessions,
         }
         .lines(frame.area().height as usize, height, transcript_width);
         frame.render_widget(Paragraph::new(Text::from(welcome)), transcript_area);
@@ -229,7 +250,31 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .or(app.split_snapshot.as_ref());
         let border_style = theme().dim;
         let inspector_width = split.content_width(inspector_area);
-        let (header, body) = if let Some(tool) = inspected {
+        // The pane's tabs lead its header in both tabs, so switching never
+        // moves the strip.
+        let agents = app.subagent_transcripts.len();
+        let agents_label = if agents == 0 {
+            "Agents".to_string()
+        } else {
+            format!("Agents {agents}")
+        };
+        let active_tab = match app.split_tab {
+            SplitTab::Tools => 0,
+            SplitTab::Agents => 1,
+        };
+        let mut tab_line = tab_strip(&["Tools", &agents_label], active_tab, "");
+        tab_line.spans.insert(0, Span::raw("  "));
+        tab_line.spans.push(Span::raw("   "));
+        tab_line
+            .spans
+            .extend(keys::hint_spans(&[("tab", "switch")]));
+        let tab_line = crate::tui::components::layout_fit(tab_line, inspector_width);
+        let (header, body) = if app.split_tab == SplitTab::Agents {
+            (
+                vec![tab_line.clone(), Line::from("")],
+                super::agents::split_agent_lines(app, inspector_width),
+            )
+        } else if let Some(tool) = inspected {
             let complete = tool.elapsed.is_some();
             let cache_valid = app.split_inspector_cache.as_ref().is_some_and(|cache| {
                 cache.call_id == tool.call_id
@@ -259,6 +304,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             )
         } else {
             (empty_tool_inspector_lines(), Vec::new())
+        };
+        let header = if app.split_tab == SplitTab::Tools {
+            let mut lines = vec![tab_line.clone(), Line::from("")];
+            lines.extend(header);
+            lines
+        } else {
+            header
         };
         let header_len = header.len();
         let [header_area, body_area] =
@@ -311,59 +363,113 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             tool_name: &request.tool_name,
             detail: &request.detail,
             yes_no: request.yes_no,
+            selected: app.approval_choice,
         }
-        .hint()
+        .hint_pairs()
     });
-    let hint = if let Some(hint) = approval_hint.as_deref() {
+    // What ctrl+t does next, named from where the layout is now.
+    let view_hint = match app.view_mode {
+        ViewMode::Classic => "split",
+        ViewMode::Split => "main",
+    };
+    // Key hints as (key, action) pairs; an empty key is a plain note.
+    let hint: Vec<(&str, &str)> = if let Some(hint) = approval_hint {
         hint
     } else if app.status_focus.is_some() {
-        "←→ move · enter open · ↑/esc composer"
+        vec![("←→", "move"), ("enter", "open"), ("↑/esc", "composer")]
     } else if app.scroll > 0 {
         // Fresh scroll: name the two ways to get text out, since capture
         // means a plain drag will not select. Then it settles back to the
         // shorter form so the status line is not permanently crowded.
         if app.scroll_hint_live() && split_active {
             // A drag crosses both panes here, so name the key that does not.
-            "drag spans panes · /copy tool copies one · pgdn to follow"
+            vec![
+                ("", "drag spans panes"),
+                ("/copy tool", "copies one"),
+                ("pgdn", "to follow"),
+            ]
         } else if app.scroll_hint_live() {
-            "opt/shift+drag selects · ctrl+y copies · pgdn to follow"
+            vec![
+                ("opt/shift+drag", "selects"),
+                ("ctrl+y", "copies"),
+                ("pgdn", "to follow"),
+            ]
         } else {
-            "scrolled · pgdn to follow"
+            vec![("", "scrolled"), ("pgdn", "to follow")]
         }
     } else if app.ask.is_some() {
-        "↑↓ question · ←→ option · space choose · tab topic · enter send"
+        vec![
+            ("↑↓", "question"),
+            ("←→", "option"),
+            ("space", "choose"),
+            ("tab", "next topic"),
+            ("enter", "send"),
+        ]
     } else if app.overlay.is_some() && app.approval.is_none() {
         if app.overlay_stack.is_empty() {
-            "↑↓ move · →/enter use · esc close"
+            vec![("↑↓", "move"), ("→/enter", "use"), ("esc", "close")]
         } else {
-            "↑↓ move · ← back · →/enter use · esc close"
+            vec![
+                ("↑↓", "move"),
+                ("←", "back"),
+                ("→/enter", "use"),
+                ("esc", "close"),
+            ]
         }
     } else if app.palette_query().is_some() && app.approval.is_none() {
-        "↑↓ move · →/enter use · tab complete · esc close"
+        vec![
+            ("↑↓", "move"),
+            ("→/enter", "use"),
+            ("tab", "complete"),
+            ("esc", "close"),
+        ]
     } else if split_active && app.running() && app.activity_tools.is_empty() {
-        "split ready · waiting for tool call · esc interrupt"
+        vec![
+            ("", "split ready"),
+            ("", "waiting for tool call"),
+            ("esc", "interrupt"),
+        ]
     } else if app.running() {
-        "enter queue · esc interrupt"
+        vec![("enter", "queue"), ("esc", "interrupt")]
     } else if !app.prompt_queue.is_empty() {
-        "enter resume · /queue clear"
+        vec![("enter", "resume"), ("/queue", "clear")]
     } else if app.last_answer.is_some() {
         // Only advertise copy once there is something to copy. The
-        // status line has room for four hints, and before the first
-        // answer lands scrolling is the more useful thing to name.
-        "enter send · @ paths · ctrl+y copy · ctrl+o expand"
+        // status line has room for four hints; the composer's placeholder
+        // already names @, so copy takes its place here.
+        vec![
+            ("enter", "send"),
+            ("ctrl+y", "copy"),
+            ("ctrl+o", "expand"),
+            ("ctrl+t", view_hint),
+        ]
     } else {
-        "enter send · @ paths · ctrl+o expand · wheel scroll"
+        vec![
+            ("enter", "send"),
+            ("@", "paths"),
+            ("ctrl+o", "expand"),
+            ("ctrl+t", view_hint),
+        ]
     };
     let mut status = StatusBar::new();
-    let context = Segment::new(
-        context_segment(app.context_tokens, app.context_window, false),
-        status_bar::CONTEXT,
-    )
-    .with_compact(context_segment(
-        app.context_tokens,
-        app.context_window,
-        true,
-    ));
+    let context = if app.status_focus == Some(StatusFocus::Context) {
+        Segment::new(
+            context_segment(app.context_tokens, app.context_window, false),
+            status_bar::CONTEXT,
+        )
+        .with_compact(context_segment(
+            app.context_tokens,
+            app.context_window,
+            true,
+        ))
+        .with_style(theme().select)
+    } else {
+        Segment::spans(
+            context_spans(app.context_tokens, app.context_window, false),
+            status_bar::CONTEXT,
+        )
+        .with_compact_spans(context_spans(app.context_tokens, app.context_window, true))
+    };
     status
         .push(Segment::new(
             format!("{}:{}", app.cfg.provider.label(), app.cfg.model_name),
@@ -385,15 +491,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             },
             status_bar::KEEP,
         ))
-        .push(Segment::new(
-            mode_segment(&app.cfg.mode, &app.cfg.plan),
-            status_bar::KEEP,
-        ))
-        .push(if app.status_focus == Some(StatusFocus::Context) {
-            context.with_style(theme().select)
-        } else {
-            context
-        });
+        .push(mode_label(&mode_segment(&app.cfg.mode, &app.cfg.plan)))
+        .push(context);
     let active_agents = app
         .subagent_transcripts
         .values()
@@ -436,7 +535,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             queue_segment(app.prompt_queue.len()),
             status_bar::COUNTS,
         ))
-        .push(Segment::new(hint, status_bar::HINT).with_compact(shorter_hint(hint)));
+        .push(hint_segment(&hint));
     let (workspace, workspace_compact) =
         workspace_segment(&app.cfg.workspace_name, app.git_branch.as_deref());
     status.trailing(Segment::new(workspace, status_bar::WORKSPACE).with_compact(workspace_compact));
@@ -472,6 +571,7 @@ pub(crate) fn stabilize_transcript_scroll(app: &mut App, max_scroll: usize) {
 
 /// The hint without its last ` · piece`: a tight row gives up the least
 /// useful key before it gives up the model name.
+#[cfg(test)]
 pub(crate) fn shorter_hint(hint: &str) -> String {
     hint.rsplit_once(" · ")
         .map(|(head, _)| head)
@@ -479,9 +579,113 @@ pub(crate) fn shorter_hint(hint: &str) -> String {
         .to_string()
 }
 
+/// The key-hint segment, bold keys and dim actions; its compact form
+/// drops the last pair, the least useful key, before the bar drops
+/// anything else.
+pub(crate) fn hint_segment(hint: &[(&str, &str)]) -> Segment {
+    let segment = Segment::spans(keys::hint_spans(hint), status_bar::HINT);
+    match hint.split_last() {
+        Some((_, head)) if !head.is_empty() => segment.with_compact_spans(keys::hint_spans(head)),
+        _ => segment,
+    }
+}
+
+/// A non-normal mode in its own colour, so each mode is known without
+/// reading the row: plan, orchestrate, auto and yolo each take a distinct
+/// bold colour from the theme, anything after the word stays dim. Text
+/// only, no fill: a filled badge is heavier than the rest of the row.
+/// Normal mode says nothing.
+pub(crate) fn mode_label(mode: &str) -> Segment {
+    let t = theme();
+    if mode.is_empty() {
+        return Segment::new("", status_bar::KEEP);
+    }
+    let (word, rest) = mode.split_once(' ').unwrap_or((mode, ""));
+    let style = match word {
+        "plan" => t.modes.plan,
+        "orchestrate" => t.modes.orchestrate,
+        "auto" => t.modes.auto,
+        "yolo" => t.modes.yolo,
+        _ => t.strong,
+    };
+    let mut spans = vec![Span::styled(word.to_string(), style)];
+    if !rest.is_empty() {
+        spans.push(Span::styled(format!(" {rest}"), t.dim));
+    }
+    Segment::spans(spans, status_bar::KEEP)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_mode_takes_its_own_colour_without_a_fill() {
+        let t = theme();
+        let render = |mode: &str| StatusBar::new().push(mode_label(mode)).line(40, t.dim);
+        let plan = render("plan · 1 plan");
+        assert!(plan.to_string().starts_with(" plan · 1 plan"), "{plan}");
+        let style_of = |mode: &str| {
+            render(mode)
+                .spans
+                .iter()
+                .find(|s| s.content == mode)
+                .map(|s| s.style)
+                .unwrap()
+        };
+        let styles: Vec<_> = ["plan", "orchestrate", "auto", "yolo"]
+            .into_iter()
+            .map(style_of)
+            .collect();
+        assert!(styles.iter().all(|style| style.bg.is_none()), "no fill");
+        for (index, style) in styles.iter().enumerate() {
+            assert!(
+                styles[index + 1..].iter().all(|other| other.fg != style.fg),
+                "modes share a colour: {styles:?}"
+            );
+        }
+        assert_eq!(render("").to_string().trim(), "");
+    }
+
+    #[test]
+    fn every_colour_theme_gives_the_modes_distinct_colours() {
+        use crate::view::ThemeName;
+        for name in ThemeName::ALL
+            .into_iter()
+            .filter(|name| *name != ThemeName::Mono)
+        {
+            let m = crate::view::theme_for(name).modes;
+            let fgs = [m.plan.fg, m.orchestrate.fg, m.auto.fg, m.yolo.fg];
+            for (index, fg) in fgs.iter().enumerate() {
+                assert!(fg.is_some());
+                assert!(!fgs[index + 1..].contains(fg), "{name:?}: {fgs:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_context_meter_takes_its_level_colour() {
+        let t = theme();
+        let spans = |tokens| context_spans(tokens, Some(100), false);
+        let joined = |tokens| {
+            spans(tokens)
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        for tokens in [30, 75, 95] {
+            assert_eq!(joined(tokens), context_segment(tokens, Some(100), false));
+        }
+        let colour = |tokens| spans(tokens)[0].style;
+        if glyphs().meter.is_some() {
+            assert_eq!(colour(30), t.accent);
+            assert_eq!(colour(75), t.warn);
+            assert_eq!(colour(95), t.error);
+        } else {
+            assert_eq!(colour(30), t.dim);
+            assert_eq!(colour(95), t.error);
+        }
+    }
 
     #[test]
     fn a_shorter_hint_drops_its_last_piece_only() {

@@ -147,16 +147,18 @@ fn stage_line(stage: &StageRow, last: bool, width: usize) -> Line<'static> {
         branch: TreeBranch { indent: "  ", last },
         glyph: &mark,
         label: "Stage",
-        identity: &stage.id,
-        task: &task,
+        // The stage's name leads, like a subagent's task; its model and
+        // detail take the right-hand column and give way first.
+        identity: &task,
+        task: &stage.id,
         elapsed: &stage.elapsed().map(elapsed_label).unwrap_or_default(),
         connector: Connector::None,
         width,
         branch_style: t.dim,
         glyph_style: style,
         label_style: t.dim,
-        identity_style: style,
-        task_style: t.dim,
+        identity_style: t.dim,
+        task_style: style,
     }
     .line()
 }

@@ -2,6 +2,7 @@
 
 use ratatui::text::{Line, Span};
 
+use crate::view::glyphs::glyphs;
 use crate::view::theme;
 
 #[derive(Clone, Copy)]
@@ -36,8 +37,14 @@ impl Notification {
             NotificationKind::Notice => t.dim,
             NotificationKind::Error => t.error,
         };
+        // A notice keeps the quiet bullet; an error takes the rails'
+        // failure mark, so the mark alone says which one it is.
+        let mark = match self.kind {
+            NotificationKind::Notice => "•".to_string(),
+            NotificationKind::Error => glyphs().failed.to_string(),
+        };
         Line::from(vec![
-            Span::styled("• ", body),
+            Span::styled(format!("{mark} "), body),
             Span::styled(
                 match self.kind {
                     NotificationKind::Notice => self.text,
@@ -54,12 +61,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notice_and_error_share_the_system_glyph() {
-        for line in [
-            Notification::notice("connected").line(),
-            Notification::error("failed").line(),
-        ] {
-            assert_eq!(line.spans[0].content.as_ref(), "• ");
-        }
+    fn notice_and_error_are_told_apart_by_their_mark() {
+        let notice = Notification::notice("connected").line();
+        let error = Notification::error("failed").line();
+        assert_eq!(notice.spans[0].content.as_ref(), "• ");
+        assert_eq!(
+            error.spans[0].content.as_ref(),
+            format!("{} ", glyphs().failed)
+        );
     }
 }

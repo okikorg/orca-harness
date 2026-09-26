@@ -108,6 +108,18 @@ pub(crate) fn handle_overlay_key(
             PickerEvent::Activated(index) => After::CloseAndSetStyle(UiStyle::ALL[index]),
             _ => After::Nothing,
         },
+        Overlay::Marks { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                After::CloseAndSetMarks(crate::view::glyphs::MarkShape::ALL[index])
+            }
+            _ => After::Nothing,
+        },
+        Overlay::Branches { picker } => match picker.on_key(key.code) {
+            PickerEvent::Activated(index) => {
+                After::CloseAndSetBranches(crate::view::glyphs::BranchShape::ALL[index])
+            }
+            _ => After::Nothing,
+        },
         Overlay::Inspector { picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => After::CloseAndSetInspector(InspectorMode::ALL[index]),
             _ => After::Nothing,
@@ -221,13 +233,39 @@ pub(crate) fn handle_overlay_key(
                         picker: ListPicker::with_selected(TranscriptSpacing::ALL.len(), selected),
                     })
                 }
-                _ => {
+                8 => {
                     let selected = UiStyle::ALL
                         .iter()
                         .position(|style| *style == current_style)
                         .unwrap_or(0);
                     After::Push(Overlay::Style {
                         picker: ListPicker::with_selected(UiStyle::ALL.len(), selected),
+                    })
+                }
+                9 => {
+                    let current = crate::view::glyphs::mark_shape();
+                    let selected = crate::view::glyphs::MarkShape::ALL
+                        .iter()
+                        .position(|shape| *shape == current)
+                        .unwrap_or(0);
+                    After::Push(Overlay::Marks {
+                        picker: ListPicker::with_selected(
+                            crate::view::glyphs::MarkShape::ALL.len(),
+                            selected,
+                        ),
+                    })
+                }
+                _ => {
+                    let current = crate::view::glyphs::branch_shape();
+                    let selected = crate::view::glyphs::BranchShape::ALL
+                        .iter()
+                        .position(|shape| *shape == current)
+                        .unwrap_or(0);
+                    After::Push(Overlay::Branches {
+                        picker: ListPicker::with_selected(
+                            crate::view::glyphs::BranchShape::ALL.len(),
+                            selected,
+                        ),
                     })
                 }
             },

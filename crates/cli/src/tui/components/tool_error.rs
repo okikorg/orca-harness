@@ -31,18 +31,33 @@ pub(crate) fn lines(output: &Value, width: usize, continuation: &str) -> Vec<Lin
         Some(code) => format!("Exit {code} · {message}"),
         None => message,
     };
-    let prefix = format!("    {continuation}   ");
+    // The detail hangs off its row: the hook in the error colour where the
+    // style draws structure, plain indent where it does not.
+    let hook = crate::view::glyphs::glyphs().hook;
+    let prefix = format!("    {continuation}{hook} ");
+    let under_hook = format!(
+        "    {continuation}{} ",
+        " ".repeat(crate::view::cell_width(hook))
+    );
     let message = crate::view::sanitize_cells(&message);
     let body_width = width
         .saturating_sub(crate::view::cell_width(&prefix))
         .max(1);
+    let t = crate::view::theme();
     let mut lines: Vec<_> = textwrap::wrap(&message, body_width)
         .into_iter()
-        .map(|part| {
+        .enumerate()
+        .map(|(index, part)| {
+            let mark = if index == 0 {
+                format!("{hook} ")
+            } else {
+                " ".repeat(crate::view::cell_width(hook) + 1)
+            };
             super::layout::fit(
                 Line::from(vec![
-                    ratatui::text::Span::styled(prefix.clone(), crate::view::theme().dim),
-                    ratatui::text::Span::styled(part.into_owned(), crate::view::theme().error),
+                    ratatui::text::Span::styled(format!("    {continuation}"), t.dim),
+                    ratatui::text::Span::styled(mark, t.error),
+                    ratatui::text::Span::styled(part.into_owned(), t.error),
                 ]),
                 width,
             )
@@ -51,14 +66,9 @@ pub(crate) fn lines(output: &Value, width: usize, continuation: &str) -> Vec<Lin
     if lines.len() > 3 {
         lines.truncate(2);
         lines.extend(
-            super::layout::wrapped(
-                "… inspect for full error",
-                &prefix,
-                width,
-                crate::view::theme().dim,
-            )
-            .into_iter()
-            .take(1),
+            super::layout::wrapped("… inspect for full error", &under_hook, width, t.dim)
+                .into_iter()
+                .take(1),
         );
     }
     lines
@@ -72,7 +82,10 @@ mod tests {
         let output = serde_json::json!({"error": "read failed: No such file or directory (os error 2); nearest existing directory docs/architecture is empty"});
         let rows = lines(&output, 80, "│ ");
         assert!(rows.iter().all(|row| row.width() <= 80));
-        assert!(rows[0].to_string().starts_with("    │    File not found"));
+        let hook = crate::view::glyphs::glyphs().hook;
+        assert!(rows[0]
+            .to_string()
+            .starts_with(&format!("    │ {hook} File not found")));
         assert!(!rows.iter().any(|row| row.to_string().contains("\"error\"")));
         assert!(rows.iter().any(|row| row.to_string().contains("empty")));
         assert!(output.get("error").is_some());

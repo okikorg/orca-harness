@@ -28,8 +28,10 @@ const SEPARATOR: &str = " · ";
 /// Cells between the last segment and a right-anchored trailing segment.
 const TRAILING_GAP: usize = 2;
 
-/// One piece of the bar. Every segment renders in the bar's own style:
-/// presence, not paint, is the signal.
+/// One piece of the bar. Most segments render in the bar's own style:
+/// presence is the signal. A few carry their own spans where paint adds
+/// information a glance needs: the mode chip, the context meter's level,
+/// and bold keys in the hint.
 #[derive(Clone, Debug)]
 pub struct Segment {
     text: String,
@@ -37,6 +39,10 @@ pub struct Segment {
     compact: Option<String>,
     priority: u8,
     style: Option<Style>,
+    /// Styled spans whose text is `text`; drawn in place of it.
+    rich: Option<Vec<Span<'static>>>,
+    /// Styled spans for `compact`.
+    compact_rich: Option<Vec<Span<'static>>>,
 }
 
 impl Segment {
@@ -46,7 +52,26 @@ impl Segment {
             compact: None,
             priority,
             style: None,
+            rich: None,
+            compact_rich: None,
         }
+    }
+
+    /// A segment drawn from styled spans; its text is theirs.
+    pub fn spans(spans: Vec<Span<'static>>, priority: u8) -> Self {
+        let mut segment = Self::new(plain(&spans), priority);
+        segment.rich = Some(spans);
+        segment
+    }
+
+    /// A styled compact form, taken like [`Self::with_compact`].
+    pub fn with_compact_spans(mut self, spans: Vec<Span<'static>>) -> Self {
+        let compact = plain(&spans);
+        if compact != self.text {
+            self.compact = Some(compact);
+            self.compact_rich = Some(spans);
+        }
+        self
     }
 
     /// A shorter form to show when the row is tight. Decoration gives way
@@ -56,8 +81,24 @@ impl Segment {
         let compact = compact.into();
         if compact != self.text {
             self.compact = Some(compact);
+            self.compact_rich = None;
         }
         self
+    }
+
+    /// Switch to the compact form, spans and all.
+    fn take_compact(&mut self) {
+        if let Some(compact) = self.compact.take() {
+            self.text = compact;
+            self.rich = self.compact_rich.take();
+        }
+    }
+
+    fn rendered(&self, style: Style) -> Vec<Span<'static>> {
+        match &self.rich {
+            Some(spans) => spans.clone(),
+            None => vec![Span::styled(self.text.clone(), self.style.unwrap_or(style))],
+        }
     }
 
     pub fn with_style(mut self, style: Style) -> Self {
@@ -119,14 +160,14 @@ impl StatusBar {
             // The workspace gives way first: its folder name is the most
             // recoverable thing on the row.
             if let Some(segment) = trailing.as_mut().filter(|s| s.compact.is_some()) {
-                segment.text = segment.compact.take().expect("checked above");
+                segment.take_compact();
                 continue;
             }
             // Compact forms first, in bar order, so a tight row loses its
             // decoration (the context meter) before its key hints, and
             // both before any segment.
             if let Some(segment) = kept.iter_mut().find(|segment| segment.compact.is_some()) {
-                segment.text = segment.compact.take().expect("checked above");
+                segment.take_compact();
                 continue;
             }
             // Drop the lowest priority; on a tie, the rightmost goes first.
@@ -166,21 +207,19 @@ impl StatusBar {
             if index > 0 {
                 spans.push(Span::styled(SEPARATOR, style));
             }
-            spans.push(Span::styled(
-                segment.text.clone(),
-                segment.style.unwrap_or(style),
-            ));
+            spans.extend(segment.rendered(style));
         }
         if let Some(segment) = trailing {
             let pad = slack.saturating_sub(segment.width()).max(TRAILING_GAP);
             spans.push(Span::styled(" ".repeat(pad), style));
-            spans.push(Span::styled(
-                segment.text.clone(),
-                segment.style.unwrap_or(style),
-            ));
+            spans.extend(segment.rendered(style));
         }
         Line::from(spans)
     }
+}
+
+fn plain(spans: &[Span<'_>]) -> String {
+    spans.iter().map(|span| span.content.as_ref()).collect()
 }
 
 #[cfg(test)]
@@ -274,8 +313,30 @@ mod tests {
         assert_eq!(text(&line), " idle · pla…");
     }
 
-    /// The yolo segment renders like any other mode segment — plain
-    /// text, the bar's own style. Presence, not paint, is the signal.
+    /// A span segment keeps its paint, and its compact form swaps in
+    /// its own spans.
+    #[test]
+    fn span_segments_keep_their_styles_through_compaction() {
+        let bold = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+        let mut bar = StatusBar::new();
+        bar.push(Segment::new("idle", KEEP)).push(
+            Segment::spans(vec![Span::styled("[==  ] 30%", bold)], CONTEXT)
+                .with_compact_spans(vec![Span::styled("30%", bold)]),
+        );
+        let wide = bar.line(40, Style::default());
+        assert!(wide
+            .spans
+            .iter()
+            .any(|s| s.content == "[==  ] 30%" && s.style == bold));
+        let tight = bar.line(12, Style::default());
+        assert_eq!(text(&tight).trim_end(), " idle · 30%");
+        assert!(tight
+            .spans
+            .iter()
+            .any(|s| s.content == "30%" && s.style == bold));
+    }
+
+    /// A plain segment still renders in the bar's own style.
     #[test]
     fn yolo_segment_renders_like_any_other() {
         let mut bar = StatusBar::new();

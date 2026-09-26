@@ -196,7 +196,7 @@ fn the_panel_renders_the_graph_in_both_styles() {
         assert!(rendered.contains("0/4 done"), "{style:?}: {rendered}");
         for stage in ["discover", "count_src", "count_test", "summary"] {
             assert!(
-                rendered.contains(&format!("Stage · {stage}")),
+                crate::tui::text::has_row(&rendered, &["Stage", stage]),
                 "{style:?} is missing {stage}: {rendered}"
             );
         }
@@ -211,7 +211,7 @@ fn the_panel_renders_the_graph_in_both_styles() {
         // Nothing has run, so no row may carry a finished or failed mark.
         let body: String = rendered
             .lines()
-            .filter(|line| line.contains("Stage · "))
+            .filter(|line| line.contains("Stage  "))
             .collect();
         assert!(
             !body.contains(g.done) && !body.contains(g.failed),
@@ -253,15 +253,15 @@ fn finished_and_failed_stages_take_their_marks_from_the_table() {
         let rendered = workflow_panel(&mut app, style);
         let g = style.glyphs();
         assert!(
-            rendered.contains(&format!("{} Stage · discover", g.done)),
+            crate::tui::text::has_row(&rendered, &[&g.done.to_string(), "Stage", "discover"]),
             "{style:?}: {rendered}"
         );
         assert!(
-            rendered.contains(&format!("{} Stage · count_src", g.failed)),
+            crate::tui::text::has_row(&rendered, &[&g.failed.to_string(), "Stage", "count_src"]),
             "{style:?}: {rendered}"
         );
         assert!(
-            rendered.contains("- Stage · count_test"),
+            crate::tui::text::has_row(&rendered, &["-", "Stage", "count_test"]),
             "a stopped stage keeps the unstarted mark: {rendered}"
         );
         assert!(

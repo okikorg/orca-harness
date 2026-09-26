@@ -247,6 +247,10 @@ pub(crate) enum Overlay {
     TranscriptSpacing { picker: ListPicker },
     /// The mark vocabulary: minimal or glyph.
     Style { picker: ListPicker },
+    /// The state-mark shape: squares or circles.
+    Marks { picker: ListPicker },
+    /// The rail's last-branch corner: elbow or curve.
+    Branches { picker: ListPicker },
     /// Default split Tool Inspector rendering.
     Inspector { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
@@ -312,9 +316,17 @@ pub(crate) enum Overlay {
 
 pub(crate) use crate::subagent_settings::{SubagentSetting, SUBAGENT_ROWS};
 
-/// Rows in the settings overlay: provider, model, theme, transcript view,
-/// api key, approvals.
-pub(crate) const SETTINGS_ROWS: usize = 9;
+/// Rows in the settings overlay: provider, model, theme, view, inspector,
+/// api key, approvals, spacing, style, marks, branches.
+/// The split's right pane tabs; Tab switches them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SplitTab {
+    #[default]
+    Tools,
+    Agents,
+}
+
+pub(crate) const SETTINGS_ROWS: usize = 11;
 
 /// Row actions in the /sessions picker (space arms them).
 pub(crate) const SESSION_ACTIONS: &[PickerAction] = &[PickerAction {
@@ -499,6 +511,13 @@ pub(crate) struct App {
     pub(crate) run: RunState,
     pub(crate) next_run_id: u64,
     pub(crate) approval: Option<ApprovalRequest>,
+    /// The approval choice the arrows have moved to. `None` until the
+    /// person moves it, so an enter typed for the composer never answers
+    /// a prompt that appeared under it.
+    pub(crate) approval_choice: Option<usize>,
+    /// The newest recorded sessions, read once at startup for the welcome
+    /// card; never read from disk while drawing.
+    pub(crate) recent_sessions: Vec<crate::tui::components::welcome::RecentSession>,
     /// Active structured clarification form requested by the `ask` tool.
     pub(crate) ask: Option<AskForm>,
     pub(crate) composer: String,
@@ -554,6 +573,9 @@ pub(crate) struct App {
     pub(crate) activity_tools: Vec<ToolActivity>,
     pub(crate) view_mode: ViewMode,
     pub(crate) split_tool: Option<usize>,
+    /// Which tab the split's right pane shows: the Tool Inspector or the
+    /// subagents' status.
+    pub(crate) split_tab: SplitTab,
     /// Last inspected call retained across model phases so Split never
     /// collapses or flashes while the next call is being prepared.
     pub(crate) split_snapshot: Option<ToolActivity>,

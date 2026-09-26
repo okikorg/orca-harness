@@ -39,7 +39,30 @@ pub(crate) fn palette_selection(app: &App) -> Option<&'static CommandSpec> {
 /// without giving it the visual weight of transcript content.
 pub(crate) fn handle_approval_key(app: &mut App, key: KeyEvent) -> Option<ApprovalResponse> {
     let yes_no = app.approval.as_ref().is_some_and(|request| request.yes_no);
+    let choices = crate::tui::components::approval::choices(yes_no);
     let response = match key.code {
+        // ↑↓ move through the choices; the first press lands on the first
+        // choice (↓) or the last (↑).
+        KeyCode::Up | KeyCode::Down => {
+            let last = choices.len() - 1;
+            app.approval_choice = Some(match (app.approval_choice, key.code) {
+                (None, KeyCode::Down) => 0,
+                (None, _) => last,
+                (Some(index), KeyCode::Down) => (index + 1).min(last),
+                (Some(index), _) => index.saturating_sub(1),
+            });
+            None
+        }
+        // Enter confirms a choice the arrows picked, and nothing before.
+        KeyCode::Enter => app
+            .approval_choice
+            .and_then(|index| choices.get(index))
+            .map(|(key, _)| match *key {
+                "y" => ApprovalResponse::AllowOnce,
+                "a" => ApprovalResponse::AllowAlways,
+                "A" => ApprovalResponse::AllowAlwaysSave,
+                _ => ApprovalResponse::Deny,
+            }),
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalResponse::AllowOnce),
         // Yes/no prompts have no "always": the decision is one-off.
         KeyCode::Char('a') if !yes_no => Some(ApprovalResponse::AllowAlways),
@@ -53,6 +76,7 @@ pub(crate) fn handle_approval_key(app: &mut App, key: KeyEvent) -> Option<Approv
         _ => None,
     };
     if let Some(response) = response {
+        app.approval_choice = None;
         if let Some(request) = app.approval.take() {
             let verdict = match response {
                 ApprovalResponse::AllowOnce => "approved",

@@ -237,8 +237,8 @@ fn long_python_inspector_keeps_a_right_gutter_in_summary_and_debug() {
 
     let (summary_screen, summary_pane) = render(&mut app);
     let summary_text = summary_pane.join("\n");
-    assert!(summary_text.contains("code · python"));
-    assert!(summary_text.contains("result · ok"));
+    assert!(summary_text.contains("CODE · python"), "{summary_text}");
+    assert!(summary_text.contains("RESULT · ok"), "{summary_text}");
     assert!(summary_text.contains("summary"));
     assert!(
         summary_pane
@@ -266,8 +266,8 @@ fn long_python_inspector_keeps_a_right_gutter_in_summary_and_debug() {
     app.split_inspector_cache = None;
     let (debug_screen, debug_pane) = render(&mut app);
     let debug_text = debug_pane.join("\n");
-    assert!(debug_text.contains("input"));
-    assert!(debug_text.contains("output"));
+    assert!(debug_text.contains("INPUT"), "{debug_text}");
+    assert!(debug_text.contains("OUTPUT"), "{debug_text}");
     assert!(debug_text.contains("debug"));
     assert!(!debug_text.contains("d summary"));
     for (y, row) in debug_screen.iter().enumerate() {
@@ -314,7 +314,7 @@ fn long_python_inspector_keeps_a_right_gutter_in_summary_and_debug() {
     );
     let (file_screen, file_pane) = render(&mut file_app);
     let file_text = file_pane.join("\n");
-    assert!(file_text.contains("source · bash"));
+    assert!(file_text.contains("SOURCE · bash"), "{file_text}");
     assert!(
         file_pane
             .iter()
@@ -450,4 +450,72 @@ fn slash_theme_opens_a_picker_preselected_on_the_active_theme() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(notes.contains("theme set to"), "{notes}");
+}
+
+#[test]
+fn ctrl_t_toggles_split_and_tab_switches_its_pane() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut app = test_app();
+    app.view_mode = ViewMode::Split;
+    let key = |app: &mut App, code: KeyCode, modifiers: KeyModifiers| {
+        handle_terminal_event(app, CtEvent::Key(KeyEvent::new(code, modifiers)), &tx, 140)
+    };
+    let ctrl_t = |app: &mut App| key(app, KeyCode::Char('t'), KeyModifiers::CONTROL);
+    let tab = |app: &mut App| key(app, KeyCode::Tab, KeyModifiers::NONE);
+    for (id, status) in [
+        (1, crate::tui::state::SubagentTranscriptStatus::Running),
+        (2, crate::tui::state::SubagentTranscriptStatus::Completed),
+    ] {
+        let mut transcript = crate::tui::state::SubagentTranscript::new(
+            id,
+            None,
+            0,
+            format!("call-{id}"),
+            format!("survey {}/crates/c{id}\nwith detail", app.cfg.workspace_root),
+            None,
+        );
+        transcript.status = status;
+        app.subagent_transcripts.insert(id, transcript);
+    }
+
+    let tools = rendered_rows(&mut app, 140, 24).join("\n");
+    assert!(tools.contains("Tools   Agents 2"), "{tools}");
+    assert!(tools.contains("Tool Inspector"), "{tools}");
+    assert!(tools.contains("tab switch"), "{tools}");
+
+    tab(&mut app);
+    let agents = rendered_rows(&mut app, 140, 24).join("\n");
+    assert!(!agents.contains("Tool Inspector"), "{agents}");
+    let g = crate::view::glyphs::glyphs();
+    assert!(
+        crate::tui::text::has_row(&agents, &[&g.waiting.to_string(), "survey crates/c1"]),
+        "{agents}"
+    );
+    assert!(
+        crate::tui::text::has_row(&agents, &[&g.done.to_string(), "survey crates/c2"]),
+        "{agents}"
+    );
+    assert!(!agents.contains("running") && !agents.contains("with detail"), "{agents}");
+    // The composer keeps the key's plain meaning out of it.
+    assert!(app.composer.is_empty());
+
+    tab(&mut app);
+    assert!(rendered_rows(&mut app, 140, 24).join("\n").contains("Tool Inspector"));
+    tab(&mut app);
+
+    // Split → main: the pane goes away.
+    ctrl_t(&mut app);
+    assert!(app.view_mode == ViewMode::Classic);
+    let main = rendered_rows(&mut app, 140, 24).join("\n");
+    assert!(!main.contains("Tools   Agents"), "{main}");
+    assert!(main.contains("ctrl+t split"), "{main}");
+    // Tab in main view leaves the pane alone.
+    tab(&mut app);
+    assert!(app.view_mode == ViewMode::Classic);
+    // Main → split, back on the pane it left.
+    ctrl_t(&mut app);
+    let back = rendered_rows(&mut app, 140, 24).join("\n");
+    assert!(!back.contains("Tool Inspector"), "{back}");
+    assert!(app.view_mode == ViewMode::Split);
+    let _ = crate::config::save_view("classic");
 }

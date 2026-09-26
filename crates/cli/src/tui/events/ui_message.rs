@@ -89,7 +89,10 @@ pub(crate) fn handle_ui_msg(
                 handle_subagent_event(app, id, parent_id, depth, call_id, event);
             }
         }
-        UiMsg::Approval(request) => app.approval = Some(request),
+        UiMsg::Approval(request) => {
+            app.approval = Some(request);
+            app.approval_choice = None;
+        }
         UiMsg::Ask(request) => app.ask = Some(crate::tui::components::ask::AskForm::new(request)),
         UiMsg::Models { request_id, result } => {
             let Some((pending_id, target)) = app.picker_pending.take() else {
@@ -213,7 +216,11 @@ pub(crate) fn handle_ui_msg(
                     ));
                     let last = rows.len() - 1;
                     for (index, row) in rows.iter().enumerate() {
-                        let branch = if index == last { "└" } else { "├" };
+                        let branch = if index == last {
+                            crate::view::glyphs::branch_shape().corner()
+                        } else {
+                            "├"
+                        };
                         lines.push(Line::from(Span::styled(
                             crate::view::truncate_line(&format!("  {branch} {row}"), width),
                             t.dim,

@@ -655,7 +655,7 @@ fn selected_agent_uses_the_normal_thinking_and_work_rails() {
     let browser = rendered_rows(&mut app, 160, 36).join("\n");
     assert!(browser.contains("Thinking"), "{browser}");
     assert!(browser.contains("Work"), "{browser}");
-    assert!(browser.contains("Read · README.md"), "{browser}");
+    assert!(crate::tui::text::has_row(&browser, &["Read", "README.md"]), "{browser}");
     assert!(browser.contains("finished inspection"), "{browser}");
 }
 

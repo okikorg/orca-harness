@@ -142,7 +142,7 @@ fn agent_browser_tab_cycles_running_done_failed_and_all() {
 
     let rendered = rendered_rows(&mut app, 160, 36).join("\n");
     assert!(
-        rendered.contains("Running 1 · Done 1 · Failed 1 · All 3"),
+        rendered.contains("Running 1   Done 1   Failed 1   All 3"),
         "{rendered}"
     );
     assert!(!rendered.contains("Done / stalled / failed"), "{rendered}");
