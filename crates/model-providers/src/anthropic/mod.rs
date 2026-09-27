@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use orca_harness_core::{
     Context, DeltaSink, Message, Model, ModelError, ModelResponse, ToolSchema,
 };
@@ -24,6 +23,7 @@ use tokio::sync::Mutex;
 
 pub use catalog::{list_models, retrieve_model};
 pub use request::input_schema;
+pub(crate) use request::push_turn;
 
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 const API_VERSION: &str = "2023-06-01";
@@ -34,8 +34,8 @@ pub struct AnthropicModel {
     model: String,
     base_url: String,
     api_key: Option<String>,
-    bearer_token: Option<String>,
-    gateway_token: Option<String>,
+    /// A bearer credential sent instead of `x-api-key`.
+    token: Option<(TokenHeader, String)>,
     headers: Vec<(String, String)>,
     max_tokens: u64,
     temperature: Option<f64>,
@@ -47,14 +47,19 @@ pub struct AnthropicModel {
     thinking_by_call: Mutex<HashMap<String, Arc<[Value]>>>,
 }
 
+/// The header that carries a bearer `token`.
+enum TokenHeader {
+    Authorization,
+    CloudflareGateway,
+}
+
 impl AnthropicModel {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             model: model.into(),
             base_url: ANTHROPIC_BASE_URL.into(),
             api_key: None,
-            bearer_token: None,
-            gateway_token: None,
+            token: None,
             headers: Vec::new(),
             max_tokens: 8192,
             temperature: None,
@@ -77,13 +82,13 @@ impl AnthropicModel {
 
     /// Use bearer authentication for Messages-compatible gateways.
     pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
-        self.bearer_token = Some(token.into());
+        self.token = Some((TokenHeader::Authorization, token.into()));
         self
     }
 
     /// Authenticate Cloudflare AI Gateway using its stored upstream credentials.
     pub(crate) fn gateway_token(mut self, token: impl Into<String>) -> Self {
-        self.gateway_token = Some(token.into());
+        self.token = Some((TokenHeader::CloudflareGateway, token.into()));
         self
     }
 
@@ -130,26 +135,27 @@ impl AnthropicModel {
             self.request_body(context, tools, &thinking)?
         };
         let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
-        let mut request = if let Some(token) = &self.gateway_token {
-            if token.trim().is_empty() {
-                return Err(ModelError::Authentication("empty gateway token".into()));
-            }
-            crate::http::client()
-                .post(&url)
-                .header("cf-aig-authorization", format!("Bearer {token}"))
+        let mut request = match &self.token {
+            Some((header, token)) => {
+                if token.trim().is_empty() {
+                    return Err(ModelError::Authentication(
+                        match header {
+                            TokenHeader::Authorization => "empty Messages bearer token",
+                            TokenHeader::CloudflareGateway => "empty gateway token",
+                        }
+                        .into(),
+                    ));
+                }
+                let request = crate::http::client().post(&url);
+                match header {
+                    TokenHeader::Authorization => request.bearer_auth(token),
+                    TokenHeader::CloudflareGateway => {
+                        request.header("cf-aig-authorization", format!("Bearer {token}"))
+                    }
+                }
                 .header("anthropic-version", API_VERSION)
-        } else if let Some(token) = &self.bearer_token {
-            if token.trim().is_empty() {
-                return Err(ModelError::Authentication(
-                    "empty Messages bearer token".into(),
-                ));
             }
-            crate::http::client()
-                .post(&url)
-                .bearer_auth(token)
-                .header("anthropic-version", API_VERSION)
-        } else {
-            authenticated_request(&url, self.api_key.as_deref(), reqwest::Method::POST)?
+            None => authenticated_request(&url, self.api_key.as_deref(), reqwest::Method::POST)?,
         };
         for (name, value) in &self.headers {
             request = request.header(name.as_str(), value.as_str());
@@ -164,29 +170,14 @@ impl AnthropicModel {
         sink: Option<&dyn DeltaSink>,
     ) -> Result<ModelResponse, ModelError> {
         // Always stream, including when the host only wants the final result.
-        let response = self
-            .prepare_request(context, tools)
-            .await?
-            .send()
-            .await
-            .map_err(|error| crate::http_error::transport_error(&error))?;
-        let response = crate::http_error::check_response(response).await?;
-        let mut bytes = response.bytes_stream();
-        let mut frames = crate::sse::SseBuffer::default();
+        let response = crate::sse::send(self.prepare_request(context, tools).await?).await?;
         let mut accumulator = stream::Accumulator::default();
-        while let Some(chunk) = bytes.next().await {
-            let chunk = chunk.map_err(|error| crate::http_error::transport_error(&error))?;
-            for payload in frames.push(&chunk)? {
-                for delta in accumulator.apply(&payload)? {
-                    if let Some(sink) = sink {
-                        sink.emit(delta).await;
-                    }
-                }
-                if accumulator.stopped() {
-                    return self.remember(context, accumulator.finish()?).await;
-                }
-            }
-        }
+        // Stop reading at message_stop; a missing one is caught by finish.
+        crate::sse::pump(response, sink, |payload| {
+            let deltas = accumulator.apply(payload)?;
+            Ok((deltas, accumulator.stopped()))
+        })
+        .await?;
         let collected = accumulator.finish()?;
         self.remember(context, collected).await
     }

@@ -17,6 +17,7 @@ async-trait.workspace = true
 futures-util.workspace = true
 reqwest = { workspace = true, features = ["http2"] }
 base64 = "0.22"
+crc32fast = "1"
 prost = "0.13"
 prost-types = "0.13"
 sha2 = "0.10"

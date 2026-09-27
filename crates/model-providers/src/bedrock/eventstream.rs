@@ -5,16 +5,6 @@ use serde_json::Value;
 fn invalid(msg: impl Into<String>) -> ModelError {
     ModelError::InvalidResponse(format!("Bedrock eventstream: {}", msg.into()))
 }
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xEDB88320 & (0u32.wrapping_sub(crc & 1)));
-        }
-    }
-    !crc
-}
 fn word(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes.try_into().unwrap())
 }
@@ -35,14 +25,14 @@ impl Decoder {
             if !(16..=16 * 1024 * 1024).contains(&size) || headers_len > size - 16 {
                 return Err(invalid("invalid frame length"));
             }
-            if crc32(&self.buffer[..8]) != word(&self.buffer[8..12]) {
+            if crc32fast::hash(&self.buffer[..8]) != word(&self.buffer[8..12]) {
                 return Err(invalid("prelude CRC mismatch"));
             }
             if self.buffer.len() < size {
                 break;
             }
             let frame = &self.buffer[..size];
-            if crc32(&frame[..size - 4]) != word(&frame[size - 4..]) {
+            if crc32fast::hash(&frame[..size - 4]) != word(&frame[size - 4..]) {
                 return Err(invalid("frame CRC mismatch"));
             }
             let mut headers = &frame[12..12 + headers_len];
@@ -141,10 +131,10 @@ impl Decoder {
     }
 }
 
+/// Frame builders for tests of this decoder and of the Bedrock wire.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn header(name: &str, value: &str) -> Vec<u8> {
+pub(super) mod testing {
+    pub fn header(name: &str, value: &str) -> Vec<u8> {
         let mut out = vec![name.len() as u8];
         out.extend(name.as_bytes());
         out.push(7);
@@ -152,31 +142,40 @@ mod tests {
         out.extend(value.as_bytes());
         out
     }
-    fn frame(kind: &str, payload: &str) -> Vec<u8> {
+    pub fn frame(kind: &str, payload: &str) -> Vec<u8> {
         let mut h = header(":message-type", "event");
         h.extend(header(":event-type", kind));
         frame_with_headers(h, payload)
     }
-    fn frame_with_headers(h: Vec<u8>, payload: &str) -> Vec<u8> {
+    pub fn frame_with_headers(h: Vec<u8>, payload: &str) -> Vec<u8> {
         let size = 16 + h.len() + payload.len();
         let mut out = Vec::new();
         out.extend((size as u32).to_be_bytes());
         out.extend((h.len() as u32).to_be_bytes());
-        out.extend(crc32(&out).to_be_bytes());
+        out.extend(crc32fast::hash(&out).to_be_bytes());
         out.extend(h);
         out.extend(payload.as_bytes());
-        out.extend(crc32(&out).to_be_bytes());
+        out.extend(crc32fast::hash(&out).to_be_bytes());
         out
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
     #[test]
     fn exception_headers_preserve_retry_classification() {
         for (kind, status) in [
             ("throttlingException", 429),
             ("serviceUnavailableException", 503),
         ] {
-            for (message_type, code_header) in
-                [("exception", ":exception-type"), ("error", ":error-code")]
-            {
+            // The last row has no exception header and falls back to :event-type.
+            for (message_type, code_header) in [
+                ("exception", ":exception-type"),
+                ("error", ":error-code"),
+                ("error", ":event-type"),
+            ] {
                 let mut headers = header(":message-type", message_type);
                 headers.extend(header(code_header, kind));
                 let bytes = frame_with_headers(headers, r#"{"message":"retry later"}"#);
@@ -195,22 +194,11 @@ mod tests {
     }
     #[test]
     fn exception_and_invalid_lengths() {
-        let mut exception = frame("throttlingException", r#"{"message":"slow"}"#);
-        // Reframe as an AWS exception, with valid CRCs.
-        let old = header(":message-type", "event");
-        let new = header(":message-type", "error");
-        assert_eq!(old.len(), new.len());
-        exception[12..12 + old.len()].copy_from_slice(&new);
-        let end = exception.len() - 4;
-        let checksum = crc32(&exception[..end]);
-        exception[end..].copy_from_slice(&checksum.to_be_bytes());
-        assert!(Decoder::default().push(&exception).is_err());
         let mut bad = frame("messageStart", "{}");
         bad[..4].copy_from_slice(&15u32.to_be_bytes());
-        let checksum = crc32(&bad[..8]);
+        let checksum = crc32fast::hash(&bad[..8]);
         bad[8..12].copy_from_slice(&checksum.to_be_bytes());
         assert!(Decoder::default().push(&bad).is_err());
-        assert!(Decoder::default().push(&[1, 2, 3]).unwrap().is_empty());
         assert!(Decoder::default().push(&[1, 2, 3]).unwrap().is_empty());
     }
     #[test]

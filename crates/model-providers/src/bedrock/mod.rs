@@ -7,6 +7,7 @@
 
 mod eventstream;
 
+use crate::tool_images::Part;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use orca_harness_core::{
@@ -34,13 +35,7 @@ struct SavedReasoning {
 }
 impl SavedReasoning {
     fn matches(&self, content: &Option<String>, calls: &[ToolCall]) -> bool {
-        self.content == *content
-            && self.calls.len() == calls.len()
-            && self
-                .calls
-                .iter()
-                .zip(calls)
-                .all(|(a, b)| a.id == b.id && a.name == b.name && a.arguments == b.arguments)
+        self.content == *content && self.calls == calls
     }
 }
 
@@ -93,6 +88,7 @@ impl BedrockModel {
         // A different Context may belong to another conversation, not compaction.
         // Keep replay data for the lifetime of this model instance.
         let saved = self.reasoning_by_call.lock().unwrap();
+        let mut recent = crate::tool_images::Recent::new(context);
         let mut system = Vec::new();
         let mut messages: Vec<Value> = Vec::new();
         for message in context.messages() {
@@ -102,10 +98,7 @@ impl BedrockModel {
                     let mut blocks = Vec::new();
                     if !content.is_empty() { blocks.push(json!({"text":content})); }
                     for image in images {
-                        let format = image.media_type.strip_prefix("image/").unwrap_or("");
-                        if !matches!(format, "png"|"jpeg"|"gif"|"webp") { return Err(ModelError::Request(format!("unsupported Bedrock image: {}", image.media_type))); }
-                        // Bedrock JSON protocol expects base64 for blob fields.
-                        blocks.push(json!({"image":{"format":format,"source":{"bytes":image.data}}}));
+                        blocks.push(image_block(&image.media_type, &image.data)?);
                     }
                     ("user", blocks)
                 }
@@ -117,27 +110,25 @@ impl BedrockModel {
                 }
                 Message::Tool { results } => ("user", results.iter().map(|result| {
                     let (output, images) = crate::tool_images::split(&result.output);
-                    let mut content = vec![json!({"text": crate::tool_images::text_of(&output)})];
-                    for image in images {
-                        let format = image.media_type.strip_prefix("image/").unwrap_or("");
-                        if !matches!(format, "png"|"jpeg"|"gif"|"webp") { return Err(ModelError::Request(format!("unsupported Bedrock image: {}", image.media_type))); }
-                        content.push(json!({"image":{"format":format,"source":{"bytes":image.data}}}));
-                    }
+                    let images = recent.fresh(images);
+                    let text = crate::tool_images::text_of(&output);
+                    // Images sit after their `[image N]` markers, in the order
+                    // the tool returned text and images.
+                    let content = if images.is_empty() {
+                        vec![json!({"text": text})]
+                    } else {
+                        crate::tool_images::interleave(&text, images).into_iter().map(|part| match part {
+                            Part::Text(text) => Ok(json!({"text": text})),
+                            Part::Image(image) => image_block(image.media_type, image.data),
+                        }).collect::<Result<_, ModelError>>()?
+                    };
                     Ok(json!({"toolResult":{"toolUseId":result.call_id,"content":content,"status":if result.is_error {"error"} else {"success"}}}))
                 }).collect::<Result<Vec<_>, ModelError>>()?),
             };
-            if blocks.is_empty() {
-                continue;
-            }
             // A signed reasoning block must lead its own assistant turn.
-            let signed = blocks
-                .first()
-                .is_some_and(|b| b.get("reasoningContent").is_some());
-            if let Some(last) = messages.last_mut().filter(|m| m["role"] == role && !signed) {
-                last["content"].as_array_mut().unwrap().extend(blocks);
-            } else {
-                messages.push(json!({"role":role,"content":blocks}));
-            }
+            crate::anthropic::push_turn(&mut messages, role, blocks, |b| {
+                b.get("reasoningContent").is_some()
+            });
         }
         // ConverseStream inferenceConfig and maxTokens are optional; omission
         // delegates the default to the model, including inference profiles.
@@ -191,15 +182,14 @@ impl BedrockModel {
             "{}/model/{model}/converse-stream",
             self.base_url.trim_end_matches('/')
         );
-        let response = crate::http::client()
-            .post(url)
-            .header(reqwest::header::AUTHORIZATION, header)
-            .header("accept", "application/vnd.amazon.eventstream")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))?;
-        let response = crate::http_error::check_response(response).await?;
+        let response = crate::sse::send(
+            crate::http::client()
+                .post(url)
+                .header(reqwest::header::AUTHORIZATION, header)
+                .header("accept", "application/vnd.amazon.eventstream")
+                .json(&body),
+        )
+        .await?;
         let mut bytes = response.bytes_stream();
         let mut decoder = eventstream::Decoder::default();
         let mut result = Accumulator::default();
@@ -251,6 +241,17 @@ impl Model for BedrockModel {
     }
 }
 
+/// A Bedrock image block; the JSON protocol expects base64 for blob fields.
+fn image_block(media_type: &str, data: &str) -> Result<Value, ModelError> {
+    let format = media_type.strip_prefix("image/").unwrap_or("");
+    if !matches!(format, "png" | "jpeg" | "gif" | "webp") {
+        return Err(ModelError::Request(format!(
+            "unsupported Bedrock image: {media_type}"
+        )));
+    }
+    Ok(json!({"image":{"format":format,"source":{"bytes":data}}}))
+}
+
 fn invalid(s: impl Into<String>) -> ModelError {
     ModelError::InvalidResponse(format!("Bedrock: {}", s.into()))
 }
@@ -262,6 +263,7 @@ struct Accumulator {
     stop: Option<String>,
     usage: Option<Usage>,
 }
+#[derive(Default)]
 struct Block {
     kind: &'static str,
     id: String,
@@ -284,6 +286,11 @@ impl Accumulator {
         if self.stop.is_some() && !matches!(kind, "metadata") {
             return Err(invalid("event after messageStop"));
         }
+        let index = || {
+            data["contentBlockIndex"]
+                .as_u64()
+                .ok_or_else(|| invalid("block index missing"))
+        };
         match kind {
             "messageStart" => {
                 if self.started {
@@ -292,9 +299,7 @@ impl Accumulator {
                 self.started = true;
             }
             "contentBlockStart" => {
-                let index = data["contentBlockIndex"]
-                    .as_u64()
-                    .ok_or_else(|| invalid("block index missing"))?;
+                let index = index()?;
                 let tool = &data["start"]["toolUse"];
                 let block = Block {
                     kind: "tool",
@@ -306,31 +311,19 @@ impl Accumulator {
                         .as_str()
                         .ok_or_else(|| invalid("tool name missing"))?
                         .into(),
-                    args: String::new(),
-                    closed: false,
-                    reasoning: String::new(),
-                    signature: String::new(),
-                    redacted: None,
+                    ..Default::default()
                 };
                 if self.blocks.insert(index, block).is_some() {
                     return Err(invalid("duplicate block"));
                 }
             }
             "contentBlockDelta" => {
-                let index = data["contentBlockIndex"]
-                    .as_u64()
-                    .ok_or_else(|| invalid("block index missing"))?;
+                let index = index()?;
                 let delta = &data["delta"];
                 if let Some(text) = delta["text"].as_str() {
                     let block = self.blocks.entry(index).or_insert_with(|| Block {
                         kind: "text",
-                        id: String::new(),
-                        name: String::new(),
-                        args: String::new(),
-                        closed: false,
-                        reasoning: String::new(),
-                        signature: String::new(),
-                        redacted: None,
+                        ..Default::default()
                     });
                     if block.closed || block.kind != "text" {
                         return Err(invalid("text delta on invalid block"));
@@ -349,68 +342,38 @@ impl Accumulator {
                     block.args.push_str(args);
                     return Ok(Some(ModelDelta::ToolInput { text: args.into() }));
                 }
-                if let Some(text) = delta["reasoningContent"]["text"]
+                let reasoning = &delta["reasoningContent"];
+                if !reasoning.is_object() {
+                    return Err(invalid("unknown content delta"));
+                }
+                let block = self.blocks.entry(index).or_insert_with(|| Block {
+                    kind: "reasoning",
+                    ..Default::default()
+                });
+                if block.closed || block.kind != "reasoning" {
+                    return Err(invalid("reasoning delta on invalid block"));
+                }
+                if let Some(sig) = reasoning["signature"]
                     .as_str()
-                    .or_else(|| delta["reasoningContent"]["reasoningText"]["text"].as_str())
+                    .or_else(|| reasoning["reasoningText"]["signature"].as_str())
                 {
-                    let block = self.blocks.entry(index).or_insert_with(|| Block {
-                        kind: "reasoning",
-                        id: String::new(),
-                        name: String::new(),
-                        args: String::new(),
-                        closed: false,
-                        reasoning: String::new(),
-                        signature: String::new(),
-                        redacted: None,
-                    });
-                    if block.closed || block.kind != "reasoning" {
-                        return Err(invalid("reasoning delta on invalid block"));
-                    }
+                    block.signature.push_str(sig);
+                }
+                if let Some(text) = reasoning["text"]
+                    .as_str()
+                    .or_else(|| reasoning["reasoningText"]["text"].as_str())
+                {
                     block.reasoning.push_str(text);
-                    if let Some(sig) =
-                        delta["reasoningContent"]["signature"].as_str().or_else(|| {
-                            delta["reasoningContent"]["reasoningText"]["signature"].as_str()
-                        })
-                    {
-                        block.signature.push_str(sig);
-                    }
                     return Ok(Some(ModelDelta::Reasoning { text: text.into() }));
                 }
-                if delta["reasoningContent"].is_object() {
-                    let block = self.blocks.entry(index).or_insert_with(|| Block {
-                        kind: "reasoning",
-                        id: String::new(),
-                        name: String::new(),
-                        args: String::new(),
-                        closed: false,
-                        reasoning: String::new(),
-                        signature: String::new(),
-                        redacted: None,
-                    });
-                    if block.closed || block.kind != "reasoning" {
-                        return Err(invalid("reasoning delta on invalid block"));
-                    }
-                    if let Some(sig) =
-                        delta["reasoningContent"]["signature"].as_str().or_else(|| {
-                            delta["reasoningContent"]["reasoningText"]["signature"].as_str()
-                        })
-                    {
-                        block.signature.push_str(sig);
-                    }
-                    if let Some(redacted) = delta["reasoningContent"]["redactedContent"].as_str() {
-                        block.redacted = Some(redacted.into());
-                    }
-                } else {
-                    return Err(invalid("unknown content delta"));
+                if let Some(redacted) = reasoning["redactedContent"].as_str() {
+                    block.redacted = Some(redacted.into());
                 }
             }
             "contentBlockStop" => {
-                let index = data["contentBlockIndex"]
-                    .as_u64()
-                    .ok_or_else(|| invalid("block index missing"))?;
                 let block = self
                     .blocks
-                    .get_mut(&index)
+                    .get_mut(&index()?)
                     .ok_or_else(|| invalid("stop without block"))?;
                 if block.closed {
                     return Err(invalid("duplicate block stop"));
@@ -434,27 +397,22 @@ impl Accumulator {
             "metadata" => {
                 let u = &data["usage"];
                 if u.is_object() {
-                    for field in [
-                        "inputTokens",
-                        "outputTokens",
-                        "cacheReadInputTokens",
-                        "cacheWriteInputTokens",
-                    ] {
-                        if u.get(field).is_some_and(|v| v.as_u64().is_none()) {
-                            return Err(invalid(format!("invalid usage {field}")));
-                        }
-                    }
-                    let read = u["cacheReadInputTokens"].as_u64().unwrap_or(0);
-                    let write = u["cacheWriteInputTokens"].as_u64().unwrap_or(0);
                     // AWS prompt-caching docs: inputTokens excludes both cache reads and writes.
                     // https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
-                    self.usage = Some(Usage {
-                        input_tokens: u["inputTokens"].as_u64().unwrap_or(0),
-                        output_tokens: u["outputTokens"].as_u64().unwrap_or(0),
-                        cache_read_tokens: read,
-                        cache_create_tokens: write,
-                        ..Usage::default()
-                    });
+                    let mut usage = Usage::default();
+                    for (field, target) in [
+                        ("inputTokens", &mut usage.input_tokens),
+                        ("outputTokens", &mut usage.output_tokens),
+                        ("cacheReadInputTokens", &mut usage.cache_read_tokens),
+                        ("cacheWriteInputTokens", &mut usage.cache_create_tokens),
+                    ] {
+                        if let Some(value) = u.get(field) {
+                            *target = value
+                                .as_u64()
+                                .ok_or_else(|| invalid(format!("invalid usage {field}")))?;
+                        }
+                    }
+                    self.usage = Some(usage);
                 }
             }
             _ => return Err(invalid(format!("unexpected event {kind}"))),
@@ -502,19 +460,12 @@ impl Accumulator {
             if block.kind != "tool" {
                 continue;
             }
-            let arguments = if block.args.trim().is_empty() {
-                json!({})
-            } else {
-                serde_json::from_str(&block.args).map_err(|e| {
-                    ModelError::MalformedToolArguments {
-                        tool_name: block.name.clone(),
-                        argument_bytes: block.args.len(),
-                        finish_reason: self.stop.clone(),
-                        message: e.to_string(),
-                        usage: self.usage,
-                    }
-                })?
-            };
+            let arguments = crate::openai::parse_tool_arguments(
+                &block.name,
+                &block.args,
+                self.stop.as_deref(),
+                self.usage,
+            )?;
             if block.id.is_empty() || block.name.is_empty() || !arguments.is_object() {
                 return Err(invalid("invalid tool call"));
             }
@@ -527,24 +478,7 @@ impl Accumulator {
         if (self.stop.as_deref() == Some("tool_use")) != !calls.is_empty() {
             return Err(invalid("stop reason does not match tool calls"));
         }
-        if !calls.is_empty() {
-            Ok((
-                ModelResponse::ToolCalls {
-                    content: (!self.text.is_empty()).then_some(self.text),
-                    calls,
-                    usage: self.usage,
-                },
-                reasoning,
-            ))
-        } else {
-            Ok((
-                ModelResponse::Final {
-                    text: self.text,
-                    usage: self.usage,
-                },
-                reasoning,
-            ))
-        }
+        Ok((crate::response(self.text, calls, self.usage), reasoning))
     }
 }
 
@@ -584,33 +518,39 @@ mod tests {
         }
     }
 
+    /// Apply `events` in order and finish the stream.
+    fn collect(events: impl IntoIterator<Item = Value>) -> Result<ModelResponse, ModelError> {
+        let mut state = Accumulator::default();
+        for event in events {
+            state.apply(event).unwrap();
+        }
+        state.finish()
+    }
+
+    fn start() -> Value {
+        json!({"type":"messageStart","messageStart":{}})
+    }
+
+    fn stop(reason: &str) -> Value {
+        json!({"type":"messageStop","messageStop":{"stopReason":reason}})
+    }
+
     #[test]
     fn rejects_invalid_tool_arguments_and_stop_reason() {
-        for (args, stop) in [("[]", "tool_use"), ("{}", "end_turn")] {
-            let mut state = Accumulator::default();
-            for event in [
-                json!({"type":"messageStart","messageStart":{}}),
-                json!({"type":"contentBlockStart","contentBlockStart":{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}}),
-                json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":0,"delta":{"toolUse":{"input":args}}}}),
-                json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":0}}),
-                json!({"type":"messageStop","messageStop":{"stopReason":stop}}),
-            ] {
-                state.apply(event).unwrap();
-            }
+        for (args, reason) in [("[]", "tool_use"), ("{}", "end_turn")] {
             assert!(matches!(
-                state.finish(),
+                collect([
+                    start(),
+                    json!({"type":"contentBlockStart","contentBlockStart":{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}}),
+                    json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":0,"delta":{"toolUse":{"input":args}}}}),
+                    json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":0}}),
+                    stop(reason),
+                ]),
                 Err(ModelError::InvalidResponse(_))
             ));
         }
-        let mut state = Accumulator::default();
-        state
-            .apply(json!({"type":"messageStart","messageStart":{}}))
-            .unwrap();
-        state
-            .apply(json!({"type":"messageStop","messageStop":{"stopReason":"tool_use"}}))
-            .unwrap();
         assert!(matches!(
-            state.finish(),
+            collect([start(), stop("tool_use")]),
             Err(ModelError::InvalidResponse(_))
         ));
     }
@@ -726,22 +666,58 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_images_keep_the_newest_after_their_markers() {
+        let call = ToolCall {
+            id: "c".into(),
+            name: "shot".into(),
+            arguments: json!({}),
+        };
+        let mut ctx = Context::new();
+        for step in 0..crate::tool_images::MAX_TOOL_IMAGES + 2 {
+            ctx.append_tool_results(vec![ToolResult::ok(
+                &call,
+                json!({
+                    "content": "shot [image 1] done",
+                    "_images": [{"media_type": "image/png", "data": step.to_string()}]
+                }),
+            )]);
+        }
+        let body = BedrockModel::new("m").body(&ctx, &[]).unwrap();
+        let results: Vec<&Value> = body["messages"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|block| &block["toolResult"]["content"])
+            .collect();
+        let images = results
+            .iter()
+            .flat_map(|content| content.as_array().unwrap())
+            .filter(|block| block.get("image").is_some())
+            .count();
+        assert_eq!(images, crate::tool_images::MAX_TOOL_IMAGES);
+        assert_eq!(*results[0], json!([{"text": "shot [image 1] done"}]));
+        assert_eq!(
+            *results[21],
+            json!([
+                {"text": "shot [image 1]"},
+                {"image": {"format": "png", "source": {"bytes": "21"}}},
+                {"text": " done"}
+            ])
+        );
+    }
+
+    #[test]
     fn usage_input_tokens_are_already_cache_exclusive() {
         for (input, read, write) in [(12, 4, 3), (0, 100, 200), (12, 0, 0)] {
-            let mut state = Accumulator::default();
-            state
-                .apply(json!({"type":"messageStart","messageStart":{}}))
-                .unwrap();
-            state
-                .apply(json!({"type":"messageStop","messageStop":{"stopReason":"end_turn"}}))
-                .unwrap();
-            state
-                .apply(json!({"type":"metadata","metadata":{"usage":{
+            let response = collect([
+                start(),
+                stop("end_turn"),
+                json!({"type":"metadata","metadata":{"usage":{
                     "inputTokens":input,"outputTokens":3,
                     "cacheReadInputTokens":read,"cacheWriteInputTokens":write
-                }}}))
-                .unwrap();
-            let response = state.finish().unwrap();
+                }}}),
+            ])
+            .unwrap();
             let usage = response.usage().unwrap();
             assert_eq!(
                 (
@@ -757,35 +733,21 @@ mod tests {
 
     #[test]
     fn accumulates_interleaved_blocks_usage_and_rejects_partial_tool_json() {
-        let mut a = Accumulator::default();
-        for event in [
-            json!({"type":"messageStart","messageStart":{}}),
-            json!({"type":"contentBlockStart","contentBlockStart":{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}}),
-            json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":0,"delta":{"text":"hello"}}}),
-            json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"a\":"}}}}),
-            json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":0}}),
-            json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":1}}),
-            json!({"type":"messageStop","messageStop":{"stopReason":"tool_use"}}),
-            json!({"type":"metadata","metadata":{"usage":{"inputTokens":12,"outputTokens":3,"cacheReadInputTokens":4}}}),
-        ] {
-            a.apply(event).unwrap();
-        }
         assert!(matches!(
-            a.finish(),
+            collect([
+                start(),
+                json!({"type":"contentBlockStart","contentBlockStart":{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}}),
+                json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":0,"delta":{"text":"hello"}}}),
+                json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"a\":"}}}}),
+                json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":0}}),
+                json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":1}}),
+                stop("tool_use"),
+                json!({"type":"metadata","metadata":{"usage":{"inputTokens":12,"outputTokens":3,"cacheReadInputTokens":4}}}),
+            ]),
             Err(ModelError::MalformedToolArguments { .. })
         ));
-        let mut a = Accumulator::default();
-        a.apply(json!({"type":"messageStart","messageStart":{}}))
-            .unwrap();
-        a.apply(json!({"type":"messageStop","messageStop":{"stopReason":"end_turn"}}))
-            .unwrap();
-        a.apply(json!({"type":"metadata","metadata":{"usage":{"inputTokens":12,"outputTokens":3,"cacheReadInputTokens":4}}})).unwrap();
-        assert_eq!(a.finish().unwrap().usage().unwrap().input_tokens, 12);
-        let mut a = Accumulator::default();
-        a.apply(json!({"type":"messageStart","messageStart":{}}))
-            .unwrap();
         assert!(matches!(
-            a.finish(),
+            collect([start()]),
             Err(ModelError::IncompleteResponse { .. })
         ));
     }
@@ -793,123 +755,55 @@ mod tests {
 
 #[cfg(test)]
 mod wire_tests {
+    use super::eventstream::testing;
     use super::*;
+    use crate::test_server::{serve, Reply};
     use orca_harness_core::ToolResult;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
-    fn crc(data: &[u8]) -> u32 {
-        let mut crc = !0u32;
-        for byte in data {
-            crc ^= *byte as u32;
-            for _ in 0..8 {
-                crc = (crc >> 1) ^ (0xEDB88320 & (0u32.wrapping_sub(crc & 1)));
-            }
-        }
-        !crc
-    }
-    fn header(name: &str, value: &str) -> Vec<u8> {
-        let mut h = vec![name.len() as u8];
-        h.extend(name.as_bytes());
-        h.push(7);
-        h.extend((value.len() as u16).to_be_bytes());
-        h.extend(value.as_bytes());
-        h
-    }
     fn frame(kind: &str, data: Value) -> Vec<u8> {
-        let mut h = header(":message-type", "event");
-        h.extend(header(":event-type", kind));
-        let payload = json!({kind: data}).to_string();
-        let mut b = Vec::new();
-        b.extend(((16 + h.len() + payload.len()) as u32).to_be_bytes());
-        b.extend((h.len() as u32).to_be_bytes());
-        b.extend(crc(&b).to_be_bytes());
-        b.extend(h);
-        b.extend(payload.as_bytes());
-        b.extend(crc(&b).to_be_bytes());
-        b
+        testing::frame(kind, &json!({ kind: data }).to_string())
     }
+
+    /// One ConverseStream response: messageStart, `events`, then usage.
+    fn reply(events: Vec<(&str, Value)>) -> Reply {
+        let mut body = frame("messageStart", json!({"role":"assistant"}));
+        for (kind, data) in events {
+            body.extend(frame(kind, data));
+        }
+        body.extend(frame(
+            "metadata",
+            json!({"usage":{"inputTokens":12,"outputTokens":3,"cacheReadInputTokens":4}}),
+        ));
+        Reply::new("200 OK", "application/vnd.amazon.eventstream", body)
+    }
+
     #[tokio::test]
     async fn http_wire_stream_and_signed_tool_replay() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            for turn in 0..2 {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut buf = Vec::new();
-                loop {
-                    let mut chunk = [0; 4096];
-                    let n = socket.read(&mut chunk).await.unwrap();
-                    assert!(n > 0);
-                    buf.extend(&chunk[..n]);
-                    if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let headers = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
-                        let len: usize = headers
-                            .lines()
-                            .find_map(|l| l.strip_prefix("content-length: "))
-                            .unwrap()
-                            .parse()
-                            .unwrap();
-                        if buf.len() < end + 4 + len {
-                            continue;
-                        }
-                        assert!(headers.contains("authorization: bearer secret"));
-                        assert!(headers.contains("/model/arn%3aaws%2fabc/converse-stream"));
-                        let body: Value =
-                            serde_json::from_slice(&buf[end + 4..end + 4 + len]).unwrap();
-                        if turn == 1 {
-                            assert_eq!(
-                                body["messages"][1]["content"][0]["reasoningContent"]
-                                    ["reasoningText"],
-                                json!({"text":"think","signature":"sig"})
-                            );
-                            assert_eq!(
-                                body["messages"][2]["content"][0]["toolResult"]["toolUseId"],
-                                "id"
-                            );
-                        }
-                        break;
-                    }
-                }
-                let mut stream = frame("messageStart", json!({"role":"assistant"}));
-                if turn == 0 {
-                    for (kind, data) in [
-                        (
-                            "contentBlockDelta",
-                            json!({"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"think"}}}),
-                        ),
-                        (
-                            "contentBlockDelta",
-                            json!({"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"sig"}}}),
-                        ),
-                        ("contentBlockStop", json!({"contentBlockIndex":0})),
-                        (
-                            "contentBlockStart",
-                            json!({"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}),
-                        ),
-                        (
-                            "contentBlockDelta",
-                            json!({"contentBlockIndex":1,"delta":{"toolUse":{"input":"{}"}}}),
-                        ),
-                        ("contentBlockStop", json!({"contentBlockIndex":1})),
-                    ] {
-                        stream.extend(frame(kind, data));
-                    }
-                }
-                stream.extend(frame(
-                    "messageStop",
-                    json!({"stopReason":if turn == 0 {"tool_use"} else {"end_turn"}}),
-                ));
-                stream.extend(frame(
-                    "metadata",
-                    json!({"usage":{"inputTokens":12,"outputTokens":3,"cacheReadInputTokens":4}}),
-                ));
-                socket.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/vnd.amazon.eventstream\r\ncontent-length: {}\r\n\r\n", stream.len()).as_bytes()).await.unwrap();
-                for part in stream.chunks(7) {
-                    socket.write_all(part).await.unwrap();
-                }
-            }
-        });
+        let (url, server) = serve(vec![
+            reply(vec![
+                (
+                    "contentBlockDelta",
+                    json!({"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"think"}}}),
+                ),
+                (
+                    "contentBlockDelta",
+                    json!({"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"sig"}}}),
+                ),
+                ("contentBlockStop", json!({"contentBlockIndex":0})),
+                (
+                    "contentBlockStart",
+                    json!({"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}),
+                ),
+                (
+                    "contentBlockDelta",
+                    json!({"contentBlockIndex":1,"delta":{"toolUse":{"input":"{}"}}}),
+                ),
+                ("contentBlockStop", json!({"contentBlockIndex":1})),
+                ("messageStop", json!({"stopReason":"tool_use"})),
+            ]),
+            reply(vec![("messageStop", json!({"stopReason":"end_turn"}))]),
+        ])
+        .await;
         let model = BedrockModel::new("arn:aws/abc")
             .base_url(url)
             .api_key("secret");
@@ -931,6 +825,20 @@ mod wire_tests {
             model.generate(&ctx, &[]).await.unwrap(),
             ModelResponse::Final { .. }
         ));
-        server.await.unwrap();
+        let requests = server.await.unwrap();
+        for request in &requests {
+            let head = request.lower();
+            assert!(head.contains("authorization: bearer secret"));
+            assert!(head.contains("/model/arn%3aaws%2fabc/converse-stream"));
+        }
+        let body = requests[1].json();
+        assert_eq!(
+            body["messages"][1]["content"][0]["reasoningContent"]["reasoningText"],
+            json!({"text":"think","signature":"sig"})
+        );
+        assert_eq!(
+            body["messages"][2]["content"][0]["toolResult"]["toolUseId"],
+            "id"
+        );
     }
 }
