@@ -205,16 +205,14 @@ impl ProviderModel {
         })
     }
 
+    /// Copilot's API root comes from its token exchange unless overridden.
     fn copilot(&self, model: &str) -> crate::CopilotModel {
-        let mut copilot = crate::CopilotModel::new(model);
-        if let Some(key) = &self.api_key {
-            copilot = copilot.api_key(key);
-        }
-        // Copilot's API root comes from its token exchange unless overridden.
-        if let Some(url) = &self.base_url {
-            copilot = copilot.base_url(url);
-        }
-        copilot
+        let copilot = with(
+            crate::CopilotModel::new(model),
+            self.api_key.as_deref(),
+            |m, k| m.api_key(k),
+        );
+        with(copilot, self.base_url.as_deref(), |m, url| m.base_url(url))
     }
 
     async fn adapter(&self) -> Result<&Arc<dyn Model>, ModelError> {
@@ -249,49 +247,36 @@ impl ProviderModel {
             Credential::ApiKey { placement, .. } => placement,
             Credential::OAuth | Credential::None => KeyPlacement::Native,
         };
+        let native_key =
+            key.filter(|_| matches!(placement, KeyPlacement::Native | KeyPlacement::Bearer));
         let user_agent = quirks.user_agent.or(self.user_agent.as_deref());
+        let effort = self.reasoning_effort.as_deref();
+        // Headers for adapters that take them: a non-native key and the user agent.
+        let headers: Vec<(&str, String)> = match (key, placement) {
+            (Some(key), KeyPlacement::Header(name)) => Some((name, key.to_owned())),
+            (Some(key), KeyPlacement::CloudflareGateway) => {
+                Some(("cf-aig-authorization", format!("Bearer {key}")))
+            }
+            _ => None,
+        }
+        .into_iter()
+        .chain(user_agent.map(|agent| ("user-agent", agent.to_owned())))
+        .collect();
 
-        // Output and effort controls every adapter below shares.
-        macro_rules! tuned {
+        // Native key, output cap and effort, which every plain adapter shares.
+        macro_rules! plain {
             ($model:expr) => {{
-                let mut model = $model;
-                if let Some(count) = self.max_tokens {
-                    model = model.max_tokens(count);
-                }
-                if let Some(effort) = &self.reasoning_effort {
-                    model = model.reasoning_effort(effort);
-                }
-                model
+                let model = with($model, native_key, |m, k| m.api_key(k));
+                let model = with(model, self.max_tokens, |m, n| m.max_tokens(n));
+                with(model, effort, |m, e| m.reasoning_effort(e))
             }};
         }
-        // Key placement for Bearer-native adapters that accept custom headers.
-        macro_rules! keyed {
-            ($model:expr) => {{
-                let mut model = $model;
-                if let Some(key) = key {
-                    model = match placement {
-                        KeyPlacement::Native | KeyPlacement::Bearer => model.api_key(key),
-                        KeyPlacement::Header(name) => model.header(name, key),
-                        KeyPlacement::CloudflareGateway => {
-                            model.header("cf-aig-authorization", format!("Bearer {key}"))
-                        }
-                    };
-                }
-                if let Some(agent) = user_agent {
-                    model = model.header(reqwest::header::USER_AGENT.as_str(), agent);
-                }
-                model
-            }};
-        }
-        // Adapters with only their native key scheme.
-        macro_rules! native {
-            ($model:expr) => {{
-                let mut model = $model;
-                if let Some(key) = key {
-                    model = model.api_key(key);
-                }
-                model
-            }};
+        macro_rules! headed {
+            ($model:expr) => {
+                headers
+                    .iter()
+                    .fold($model, |m, (name, value)| m.header(*name, value))
+            };
         }
 
         // Wrapped adapters serve only the preset's own dialect; an explicit
@@ -299,34 +284,22 @@ impl ProviderModel {
         let native_route = self.protocol.is_none_or(|p| Some(p) == spec.protocol);
         match spec.adapter {
             _ if !native_route => {}
-            Adapter::Copilot => return Ok(Arc::new(tuned!(self.copilot(&self.model)))),
+            Adapter::Copilot => return Ok(Arc::new(plain!(self.copilot(&self.model)))),
             Adapter::OpenRouter => {
-                let mut model = tuned!(native!(
-                    crate::OpenRouterModel::new(&self.model).base_url(base_url)
-                ));
-                if let Some(agent) = user_agent {
-                    model = model.user_agent(agent);
-                }
-                let Attribution {
-                    referer,
-                    title,
-                    categories,
-                } = &self.attribution;
-                if let Some(referer) = referer {
-                    model = model.referer(referer);
-                }
-                if let Some(title) = title {
-                    model = model.title(title);
-                }
-                if let Some(categories) = categories {
-                    model = model.categories(categories);
-                }
-                if self.prompt_cache {
-                    model = model.prompt_cache(true);
-                    if let Some(session) = &self.session_id {
-                        model = model.session_id(session);
-                    }
-                }
+                let a = &self.attribution;
+                let model = plain!(crate::OpenRouterModel::new(&self.model).base_url(base_url));
+                let model = with(model, user_agent, |m, v| m.user_agent(v));
+                let model = with(model, a.referer.as_deref(), |m, v| m.referer(v));
+                let model = with(model, a.title.as_deref(), |m, v| m.title(v));
+                let model = with(model, a.categories.as_deref(), |m, v| m.categories(v));
+                let model = match self.prompt_cache {
+                    true => with(
+                        model.prompt_cache(true),
+                        self.session_id.as_deref(),
+                        |m, v| m.session_id(v),
+                    ),
+                    false => model,
+                };
                 return Ok(Arc::new(model));
             }
             Adapter::Protocol => {}
@@ -341,76 +314,71 @@ impl ProviderModel {
         }
         Ok(match protocol {
             Protocol::ChatCompletions => {
-                let mut model = keyed!(crate::OpenAiModel::new(&self.model)
+                let model = headed!(crate::OpenAiModel::new(&self.model)
                     .base_url(base_url)
                     .replay_reasoning_content(quirks.replay_reasoning_content));
-                if let Some(count) = self.max_tokens {
-                    model = model.max_tokens(count);
-                }
-                if let Some(effort) = &self.reasoning_effort {
-                    model = if quirks.nested_reasoning_effort {
-                        model.nested_reasoning_effort(effort)
-                    } else {
-                        model.reasoning_effort(effort)
-                    };
-                }
-                Arc::new(model)
+                let model = with(model, native_key, |m, k| m.api_key(k));
+                let model = with(model, self.max_tokens, |m, n| m.max_tokens(n));
+                Arc::new(with(model, effort, |m, e| {
+                    match quirks.nested_reasoning_effort {
+                        true => m.nested_reasoning_effort(e),
+                        false => m.reasoning_effort(e),
+                    }
+                }))
             }
             Protocol::Anthropic => {
-                let mut model = crate::AnthropicModel::new(&self.model)
+                // Messages gateways authenticate with a bearer or gateway token instead.
+                let model = plain!(crate::AnthropicModel::new(&self.model)
                     .base_url(base_url)
-                    .prompt_cache(self.prompt_cache);
-                if let Some(key) = key {
-                    model = match placement {
-                        KeyPlacement::Native => model.api_key(key),
-                        KeyPlacement::Bearer => model.bearer_token(key),
-                        KeyPlacement::Header(name) => model.header(name, key),
-                        KeyPlacement::CloudflareGateway => model.gateway_token(key),
-                    };
-                }
-                if let Some(agent) = user_agent {
-                    model = model.header(reqwest::header::USER_AGENT.as_str(), agent);
-                }
-                Arc::new(tuned!(model))
+                    .prompt_cache(self.prompt_cache));
+                let model = match (key, placement) {
+                    (Some(key), KeyPlacement::Bearer) => model.bearer_token(key),
+                    (Some(key), KeyPlacement::CloudflareGateway) => model.gateway_token(key),
+                    (Some(key), KeyPlacement::Header(name)) => model.header(name, key),
+                    _ => model,
+                };
+                Arc::new(with(model, user_agent, |m, v| m.header("user-agent", v)))
             }
             Protocol::Responses => {
-                Arc::new(tuned!(keyed!(crate::ResponsesModel::new(&self.model)
+                Arc::new(headed!(plain!(crate::ResponsesModel::new(&self.model)
                     .base_url(base_url)
                     .encrypted_reasoning(quirks.encrypted_reasoning))))
             }
-            Protocol::Google | Protocol::Vertex => Arc::new(tuned!(native!(
-                crate::GoogleModel::new(&self.model).base_url(base_url)
-            ))),
-            Protocol::Bedrock => Arc::new(tuned!(native!(
+            Protocol::Google | Protocol::Vertex => Arc::new(plain!(crate::GoogleModel::new(
+                &self.model
+            )
+            .base_url(base_url))),
+            Protocol::Bedrock => Arc::new(plain!(
                 crate::BedrockModel::new(&self.model).base_url(base_url)
-            ))),
-            Protocol::PiMessages => {
-                Arc::new(tuned!(native!(crate::PiMessagesModel::new(&self.model)
-                    .provider(spec.id)
-                    .base_url(base_url))))
-            }
+            )),
+            Protocol::PiMessages => Arc::new(plain!(crate::PiMessagesModel::new(&self.model)
+                .provider(spec.id)
+                .base_url(base_url))),
             Protocol::Cursor => {
-                if self.reasoning_effort.is_some() {
+                if effort.is_some() {
                     return Err(ModelError::Request(
                         "Cursor does not expose reasoning-effort controls".into(),
                     ));
                 }
-                Arc::new(native!(
-                    crate::CursorModel::new(&self.model).base_url(base_url)
-                ))
+                let model = crate::CursorModel::new(&self.model).base_url(base_url);
+                Arc::new(with(model, native_key, |m, k| m.api_key(k)))
             }
             Protocol::Codex => {
-                let mut model =
+                let model =
                     crate::OpenAiCodexModel::new(&self.model, self.codex()?).base_url(base_url);
-                if let Some(effort) = &self.reasoning_effort {
-                    model = model.reasoning_effort(effort);
-                }
-                if let (true, Some(session)) = (self.prompt_cache, &self.session_id) {
-                    model = model.prompt_cache_key(session);
-                }
-                Arc::new(model)
+                let model = with(model, effort, |m, e| m.reasoning_effort(e));
+                let session = self.session_id.as_deref().filter(|_| self.prompt_cache);
+                Arc::new(with(model, session, |m, s| m.prompt_cache_key(s)))
             }
         })
+    }
+}
+
+/// Apply an optional setting to a builder.
+fn with<M, V>(model: M, value: Option<V>, set: impl FnOnce(M, V) -> M) -> M {
+    match value {
+        Some(value) => set(model, value),
+        None => model,
     }
 }
 
