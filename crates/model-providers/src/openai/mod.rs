@@ -48,8 +48,6 @@ pub struct OpenAiModel {
     model: String,
     temperature: Option<f64>,
     max_tokens: Option<u64>,
-    max_completion_tokens: bool,
-    stream_usage: bool,
     replay_reasoning_content: bool,
     reasoning_by_call: Mutex<std::collections::HashMap<String, request::SavedReasoning>>,
     reasoning_effort: Option<String>,
@@ -70,8 +68,6 @@ impl OpenAiModel {
             model: model.into(),
             temperature: None,
             max_tokens: None,
-            max_completion_tokens: false,
-            stream_usage: true,
             replay_reasoning_content: false,
             reasoning_by_call: Mutex::new(Default::default()),
             reasoning_effort: None,
@@ -134,18 +130,6 @@ impl OpenAiModel {
         self
     }
 
-    /// Send the token limit as `max_completion_tokens` instead of `max_tokens`.
-    pub fn max_completion_tokens(mut self, enabled: bool) -> Self {
-        self.max_completion_tokens = enabled;
-        self
-    }
-
-    /// Request usage in streamed responses (enabled by default).
-    pub fn stream_usage(mut self, enabled: bool) -> Self {
-        self.stream_usage = enabled;
-        self
-    }
-
     /// Replay thinking on matching assistant tool turns for thinking providers.
     pub fn replay_reasoning_content(mut self, enabled: bool) -> Self {
         self.replay_reasoning_content = enabled;
@@ -198,23 +182,8 @@ impl OpenAiModel {
 
     fn prepare_request(&self, body: &Value) -> reqwest::RequestBuilder {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let mut request = crate::http::client().post(&url).json(body);
-        if let Some(api_key) = &self.api_key {
-            request = request.bearer_auth(api_key);
-        }
-        for (name, value) in &self.headers {
-            request = request.header(name.as_str(), value.as_str());
-        }
-        request
-    }
-
-    fn streaming_request_body(&self, context: &Context, tools: &[ToolSchema]) -> Value {
-        let mut body = self.request_body(context, tools);
-        body["stream"] = json!(true);
-        if self.stream_usage {
-            body["stream_options"] = json!({"include_usage": true});
-        }
-        body
+        let request = crate::http::client().post(&url).json(body);
+        authorize(request, self.api_key.as_deref(), &self.headers)
     }
 
     async fn post(&self, body: Value) -> Result<reqwest::Response, ModelError> {
@@ -222,12 +191,23 @@ impl OpenAiModel {
         // RequestBuilder owns the serialized bytes; release the JSON tree
         // before waiting for a potentially long provider response.
         drop(body);
-        let response = request
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))?;
-        crate::http_error::check_response(response).await
+        crate::sse::send(request).await
     }
+}
+
+/// Attach an optional bearer key and extra headers; shared with `ResponsesModel`.
+pub(crate) fn authorize(
+    mut request: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+    headers: &[(String, String)],
+) -> reqwest::RequestBuilder {
+    if let Some(api_key) = api_key {
+        request = request.bearer_auth(api_key);
+    }
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    request
 }
 
 #[derive(Deserialize)]
@@ -404,9 +384,10 @@ impl Model for OpenAiModel {
         tools: &[ToolSchema],
         sink: &dyn DeltaSink,
     ) -> Result<ModelResponse, ModelError> {
-        let response = self
-            .post(self.streaming_request_body(context, tools))
-            .await?;
+        let mut body = self.request_body(context, tools);
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({"include_usage": true});
+        let response = self.post(body).await?;
         let mut bytes = response.bytes_stream();
         let mut lines = SseLineBuffer::default();
         let mut accumulator = ChunkAccumulator::new();

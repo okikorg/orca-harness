@@ -246,31 +246,6 @@ fn completion_reasoning_tokens_preserve_absent_zero_and_nonzero() {
 use super::stream::ChunkAccumulator;
 
 #[test]
-fn compatibility_fields_default_and_opt_in() {
-    let base = OpenAiModel::new("m").max_tokens(42);
-    let body = base.request_body(&context(), &[]);
-    assert_eq!(body["max_tokens"], 42);
-    assert!(body.get("max_completion_tokens").is_none());
-    let body = OpenAiModel::new("m")
-        .max_tokens(42)
-        .max_completion_tokens(true)
-        .request_body(&context(), &[]);
-    assert_eq!(body["max_completion_tokens"], 42);
-    assert!(body.get("max_tokens").is_none());
-    let default_stream = base.streaming_request_body(&context(), &[]);
-    assert_eq!(default_stream["stream"], true);
-    assert_eq!(
-        default_stream["stream_options"],
-        json!({"include_usage": true})
-    );
-    let no_usage = OpenAiModel::new("m")
-        .stream_usage(false)
-        .streaming_request_body(&context(), &[]);
-    assert_eq!(no_usage["stream"], true);
-    assert!(no_usage.get("stream_options").is_none());
-}
-
-#[test]
 fn nonstreamed_reasoning_survives_a_b_a_and_rejects_altered_turns() {
     let model = OpenAiModel::new("m").replay_reasoning_content(true);
     let payload: ChatCompletion = serde_json::from_value(json!({

@@ -194,13 +194,6 @@ impl ChunkAccumulator {
             });
         }
 
-        if self.tool_calls.is_empty() {
-            return Ok(ModelResponse::Final {
-                text: self.text,
-                usage: self.usage,
-            });
-        }
-
         let calls = self
             .tool_calls
             .into_iter()
@@ -224,15 +217,7 @@ impl ChunkAccumulator {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(ModelResponse::ToolCalls {
-            content: if self.text.is_empty() {
-                None
-            } else {
-                Some(self.text)
-            },
-            calls,
-            usage: self.usage,
-        })
+        Ok(crate::response(self.text, calls, self.usage))
     }
 
     fn tool_diagnostic(&self) -> String {

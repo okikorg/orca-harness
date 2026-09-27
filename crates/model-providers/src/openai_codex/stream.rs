@@ -8,12 +8,22 @@ pub(crate) struct Accumulator {
     usage: Option<Usage>,
     completed: bool,
     reasoning: Vec<Value>,
+    skip_unencrypted_reasoning: bool,
 }
 
 impl Accumulator {
+    /// Some Responses implementations emit reasoning summaries without
+    /// encrypted content. There is nothing to replay in that case.
+    pub(crate) fn skipping_unencrypted_reasoning() -> Self {
+        Self {
+            skip_unencrypted_reasoning: true,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn apply(&mut self, payload: &str) -> Result<Vec<ModelDelta>, ModelError> {
         let event: Value = serde_json::from_str(payload)
-            .map_err(|e| ModelError::InvalidResponse(format!("bad Codex event: {e}")))?;
+            .map_err(|e| ModelError::InvalidResponse(format!("bad Responses event: {e}")))?;
         let kind = event["type"].as_str().unwrap_or_default();
         match kind {
             "response.output_text.delta" => {
@@ -36,11 +46,14 @@ impl Accumulator {
             "response.output_item.done" => {
                 if event["item"]["type"] == "reasoning" {
                     let item = &event["item"];
-                    let encrypted = item["encrypted_content"].as_str().ok_or_else(|| {
-                        ModelError::InvalidResponse(
+                    let Some(encrypted) = item["encrypted_content"].as_str() else {
+                        if self.skip_unencrypted_reasoning {
+                            return Ok(vec![]);
+                        }
+                        return Err(ModelError::InvalidResponse(
                             "reasoning item missing encrypted_content".into(),
-                        )
-                    })?;
+                        ));
+                    };
                     self.reasoning.push(serde_json::json!({
                         "type": "reasoning", "id": item["id"],
                         "summary": item["summary"], "encrypted_content": encrypted,
@@ -99,21 +112,10 @@ impl Accumulator {
     pub(crate) fn finish(self) -> Result<ModelResponse, ModelError> {
         if !self.completed {
             return Err(ModelError::InvalidResponse(
-                "Codex stream ended before response.completed".into(),
+                "Responses stream ended before response.completed".into(),
             ));
         }
-        if self.calls.is_empty() {
-            Ok(ModelResponse::Final {
-                text: self.text,
-                usage: self.usage,
-            })
-        } else {
-            Ok(ModelResponse::ToolCalls {
-                content: (!self.text.is_empty()).then_some(self.text),
-                calls: self.calls,
-                usage: self.usage,
-            })
-        }
+        Ok(crate::response(self.text, self.calls, self.usage))
     }
 
     pub(crate) fn take_reasoning(&mut self) -> Vec<Value> {

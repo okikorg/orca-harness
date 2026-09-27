@@ -31,9 +31,8 @@ fn request_preparation_benchmark() {
                 &context,
                 &tools,
                 true,
-                &[],
-                None,
-                Some("stable"),
+                request::Options::codex(None, Some("stable")),
+                |_| None,
             )
         };
         let encoded = body();
@@ -67,9 +66,8 @@ fn prepared_request_retains_codex_headers_and_body_without_sending() {
         &Context::new(),
         &[],
         true,
-        &[],
-        None,
-        Some("stable"),
+        request::Options::codex(None, Some("stable")),
+        |_| None,
     );
     for stream in [false, true] {
         let request = model

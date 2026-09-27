@@ -1,56 +1,29 @@
 use super::*;
+use crate::test_server::{serve, sse, Reply};
 use orca_harness_core::{Image, ToolCall, ToolResult};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn serve(events: Vec<String>) -> (String, tokio::task::JoinHandle<(String, Value)>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let task = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buffer = Vec::new();
-        let end = loop {
-            let mut chunk = [0; 4096];
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n > 0);
-            buffer.extend_from_slice(&chunk[..n]);
-            if let Some(end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
-                break end + 4;
-            }
-        };
-        let headers = String::from_utf8_lossy(&buffer[..end]).to_string();
-        let length: usize = headers
-            .lines()
-            .find_map(|line| {
-                line.to_ascii_lowercase()
-                    .strip_prefix("content-length: ")
-                    .and_then(|n| n.trim().parse().ok())
-            })
-            .unwrap();
-        while buffer.len() - end < length {
-            let mut chunk = [0; 4096];
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n > 0);
-            buffer.extend_from_slice(&chunk[..n]);
-        }
-        let body = serde_json::from_slice(&buffer[end..end + length]).unwrap();
-        let text = events
-            .into_iter()
-            .map(|e| format!("data: {e}\n\n"))
-            .collect::<String>();
-        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{text}", text.len());
-        socket.write_all(response.as_bytes()).await.unwrap();
-        (headers, body)
-    });
-    (url, task)
+/// One Responses SSE reply carrying `events`.
+fn events(events: &[Value]) -> Reply {
+    sse(events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>())
+}
+
+fn completed_text(text: &str) -> Reply {
+    events(&[
+        json!({"type":"response.output_text.delta","delta":text}),
+        json!({"type":"response.completed","response":{}}),
+    ])
 }
 
 #[tokio::test]
 async fn api_key_request_and_sse_usage() {
-    let (url, server) = serve(vec![
-        json!({"type":"response.output_text.delta","delta":"hello"}).to_string(),
-        json!({"type":"response.completed","response":{"usage":{"input_tokens":9,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}).to_string(),
-    ]).await;
+    let (url, server) = serve(vec![events(&[
+        json!({"type":"response.output_text.delta","delta":"hello"}),
+        json!({"type":"response.completed","response":{"usage":{"input_tokens":9,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}),
+    ])]).await;
     let model = ResponsesModel::new("gpt-test")
         .base_url(format!("{url}/openai/v1/?api-version=preview"))
         .api_key("secret")
@@ -68,14 +41,13 @@ async fn api_key_request_and_sse_usage() {
     );
     let response = model.generate(&context, &[]).await.unwrap();
     assert!(matches!(response, ModelResponse::Final { text, .. } if text == "hello"));
-    let (headers, body) = server.await.unwrap();
-    assert!(headers.starts_with("POST /openai/v1/responses?api-version=preview HTTP/1.1"));
-    assert!(headers
-        .to_ascii_lowercase()
-        .contains("authorization: bearer secret"));
-    assert!(headers
-        .to_ascii_lowercase()
-        .contains("api-key: azure-secret"));
+    let request = &server.await.unwrap()[0];
+    assert!(request
+        .head
+        .starts_with("POST /openai/v1/responses?api-version=preview HTTP/1.1"));
+    assert!(request.lower().contains("authorization: bearer secret"));
+    assert!(request.lower().contains("api-key: azure-secret"));
+    let body = request.json();
     assert_eq!(body["max_output_tokens"], 42);
     assert_eq!(body["reasoning"]["effort"], "low");
     assert_eq!(
@@ -92,10 +64,14 @@ async fn encrypted_reasoning_replayed_on_tool_continuation() {
         arguments: json!({"cmd":"pwd"}),
     };
     let (url, server) = serve(vec![
-        json!({"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[],"encrypted_content":"secret-reasoning"}}).to_string(),
-        json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"shell","arguments":"{\"cmd\":\"pwd\"}"}}).to_string(),
-        json!({"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":2}}}).to_string(),
-    ]).await;
+        events(&[
+            json!({"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[],"encrypted_content":"secret-reasoning"}}),
+            json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"shell","arguments":"{\"cmd\":\"pwd\"}"}}),
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":2}}}),
+        ]),
+        completed_text("done"),
+    ])
+    .await;
     let model = ResponsesModel::new("gpt-test").base_url(&url);
     let mut context = Context::new();
     context.push_user("run");
@@ -103,11 +79,10 @@ async fn encrypted_reasoning_replayed_on_tool_continuation() {
         model.generate(&context, &[]).await.unwrap(),
         ModelResponse::ToolCalls { .. }
     ));
-    server.await.unwrap();
     context.push_assistant_tool_calls(None, vec![call.clone()]);
     context.append_tool_results(vec![ToolResult::ok(&call, json!({"stdout":"/tmp"}))]);
-    let mut body = request::body("gpt-test", &context, &[], true, &[], None, None);
-    model.replay_reasoning(&context, &mut body).await;
+    model.generate(&context, &[]).await.unwrap();
+    let body = server.await.unwrap()[1].json();
     let items = body["input"].as_array().unwrap();
     assert_eq!(
         items.iter().find(|v| v["type"] == "reasoning").unwrap()["encrypted_content"],
@@ -118,7 +93,8 @@ async fn encrypted_reasoning_replayed_on_tool_continuation() {
 
 #[tokio::test]
 async fn full_context_replays_every_tool_turn_including_parallel_calls() {
-    let model = ResponsesModel::new("gpt-test");
+    let (url, server) = serve(vec![completed_text("done")]).await;
+    let model = ResponsesModel::new("gpt-test").base_url(url);
     let mut context = Context::new();
     context.push_user("start");
     for turn in 0..3 {
@@ -147,8 +123,8 @@ async fn full_context_replays_every_tool_turn_including_parallel_calls() {
                 .collect(),
         );
     }
-    let mut body = request::body("gpt-test", &context, &[], true, &[], None, None);
-    model.replay_reasoning(&context, &mut body).await;
+    model.generate(&context, &[]).await.unwrap();
+    let body = server.await.unwrap()[0].json();
     let input = body["input"].as_array().unwrap();
     assert_eq!(input.len(), 16);
     for turn in 0..3 {
@@ -163,9 +139,13 @@ async fn full_context_replays_every_tool_turn_including_parallel_calls() {
 #[tokio::test]
 async fn tool_sse_streams_input_and_truncated_stream_is_generic_error() {
     let (url, server) = serve(vec![
-        json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"}}).to_string(),
-        json!({"type":"response.completed","response":{}}).to_string(),
-    ]).await;
+        events(&[
+            json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"}}),
+            json!({"type":"response.completed","response":{}}),
+        ]),
+        events(&[json!({"type":"response.output_text.delta","delta":"partial"})]),
+    ])
+    .await;
     let model = ResponsesModel::new("gpt-4.1").base_url(url);
     let seen = std::sync::Mutex::new(Vec::new());
     let result = model
@@ -178,17 +158,8 @@ async fn tool_sse_streams_input_and_truncated_stream_is_generic_error() {
     assert!(
         matches!(seen.lock().unwrap().as_slice(), [orca_harness_core::ModelDelta::ToolInput { text }] if text == "{}")
     );
-    server.await.unwrap();
 
-    let (url, server) = serve(vec![
-        json!({"type":"response.output_text.delta","delta":"partial"}).to_string(),
-    ])
-    .await;
-    let error = ResponsesModel::new("gpt-4.1")
-        .base_url(url)
-        .generate(&Context::new(), &[])
-        .await
-        .unwrap_err();
+    let error = model.generate(&Context::new(), &[]).await.unwrap_err();
     assert!(error.to_string().contains("Responses stream ended"));
     assert!(!error.to_string().contains("Codex"));
     server.await.unwrap();
@@ -197,31 +168,31 @@ async fn tool_sse_streams_input_and_truncated_stream_is_generic_error() {
 #[tokio::test]
 async fn non_reasoning_and_non_openai_responses_omit_optional_reasoning_fields() {
     let (url, server) = serve(vec![
-        json!({"type":"response.output_text.delta","delta":"hello"}).to_string(),
-        json!({"type":"response.completed","response":{}}).to_string(),
+        completed_text("hello"),
+        events(&[
+            json!({"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[]}}),
+            json!({"type":"response.output_text.delta","delta":"ok"}),
+            json!({"type":"response.completed","response":{}}),
+        ]),
     ])
     .await;
     ResponsesModel::new("grok-test")
-        .base_url(url)
+        .base_url(&url)
         .encrypted_reasoning(false)
         .generate(&Context::new(), &[])
         .await
         .unwrap();
-    let (_, body) = server.await.unwrap();
-    assert!(body.get("reasoning").is_none());
-    assert!(body.get("include").is_none());
-
-    let (url, server) = serve(vec![
-        json!({"type":"response.output_item.done","item":{"type":"reasoning","id":"r1","summary":[]}}).to_string(),
-        json!({"type":"response.output_text.delta","delta":"ok"}).to_string(),
-        json!({"type":"response.completed","response":{}}).to_string(),
-    ]).await;
     let response = ResponsesModel::new("gpt-4.1")
         .base_url(url)
         .generate(&Context::new(), &[])
         .await
         .unwrap();
     assert!(matches!(response, ModelResponse::Final { text, .. } if text == "ok"));
-    let (_, body) = server.await.unwrap();
+    let captured = server.await.unwrap();
+    let body = captured[0].json();
     assert!(body.get("reasoning").is_none());
+    assert!(body.get("include").is_none());
+    let body = captured[1].json();
+    assert!(body.get("reasoning").is_none());
+    assert_eq!(body["include"][0], "reasoning.encrypted_content");
 }

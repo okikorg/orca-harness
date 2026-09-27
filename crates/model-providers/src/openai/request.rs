@@ -20,13 +20,7 @@ impl SavedReasoning {
     }
 
     fn matches(&self, content: &Option<String>, calls: &[ToolCall]) -> bool {
-        self.content == *content
-            && self.calls.len() == calls.len()
-            && self
-                .calls
-                .iter()
-                .zip(calls)
-                .all(|(a, b)| a.id == b.id && a.name == b.name && a.arguments == b.arguments)
+        self.content == *content && self.calls == calls
     }
 }
 
@@ -95,11 +89,7 @@ impl OpenAiModel {
             body["temperature"] = json!(temperature);
         }
         if let Some(max_tokens) = self.max_tokens {
-            body[if self.max_completion_tokens {
-                "max_completion_tokens"
-            } else {
-                "max_tokens"
-            }] = json!(max_tokens);
+            body["max_tokens"] = json!(max_tokens);
         }
         if let Some(effort) = &self.reasoning_effort {
             if self.nested_reasoning {

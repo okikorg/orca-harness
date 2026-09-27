@@ -3,17 +3,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
-use orca_harness_core::{
-    Context, DeltaSink, Message, Model, ModelError, ModelResponse, ToolSchema,
-};
+use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::{
-    openai_codex::{request, stream::Accumulator},
-    sse::SseBuffer,
-};
+use crate::openai_codex::{collect_stream, request, stream::Accumulator};
 
 /// Responses API model using API-key authentication, not Codex subscription credentials.
 pub struct ResponsesModel {
@@ -88,129 +82,55 @@ impl ResponsesModel {
         context: &Context,
         tools: &[ToolSchema],
     ) -> Result<reqwest::Response, ModelError> {
-        let mut body = request::body(
-            &self.model,
-            context,
-            tools,
-            true,
-            &[],
-            self.reasoning_effort.as_deref(),
-            None,
-        );
-        // Codex always reasons. Generic Responses also serves non-reasoning
-        // models, which reject a reasoning configuration.
-        if self.reasoning_effort.is_none() {
-            body.as_object_mut().unwrap().remove("reasoning");
-        }
-        if !self.encrypted_reasoning {
-            body.as_object_mut().unwrap().remove("include");
-        } else {
-            self.replay_reasoning(context, &mut body).await;
-        }
-        if let Some(tokens) = self.max_tokens {
-            body["max_output_tokens"] = tokens.into();
-        }
-        let mut request = crate::http::client()
-            .post(self.url())
-            .header("accept", "text/event-stream")
-            .json(&body);
-        if let Some(key) = &self.api_key {
-            request = request.bearer_auth(key);
-        }
-        for (name, value) in &self.headers {
-            request = request.header(name.as_str(), value.as_str());
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))?;
-        crate::http_error::check_response(response).await
-    }
-
-    // The Codex request builder inserts only one continuation. Generic Responses
-    // sends the entire context, so every earlier tool turn needs its own item.
-    async fn replay_reasoning(&self, context: &Context, body: &mut Value) {
-        let pending = self.reasoning_by_call.lock().await;
-        let input = body["input"].as_array_mut().unwrap();
-        let mut position = 0;
-        for message in context.messages() {
-            match message {
-                Message::User { .. } => position += 1,
-                Message::Assistant {
-                    content,
-                    tool_calls,
-                } => {
-                    if content.is_some() {
-                        position += 1;
-                    }
-                    // All calls from one response share the same reasoning item(s).
-                    if let Some(reasoning) =
-                        tool_calls.iter().find_map(|call| pending.get(&call.id))
-                    {
-                        let count = reasoning.len();
-                        input.splice(position..position, reasoning.iter().cloned());
-                        position += count;
-                    }
-                    position += tool_calls.len();
-                }
-                Message::Tool { results } => position += results.len(),
-                Message::System { .. } => {}
+        let request = {
+            let pending = self.reasoning_by_call.lock().await;
+            // Unlike Codex, the entire context is sent, so every earlier tool
+            // turn replays its own reasoning.
+            let mut body = request::body(
+                &self.model,
+                context,
+                tools,
+                true,
+                request::Options {
+                    reasoning_effort: self.reasoning_effort.as_deref(),
+                    prompt_cache_key: None,
+                    always_reason: false,
+                    encrypted_reasoning: self.encrypted_reasoning,
+                },
+                |call_id| pending.get(call_id).map(|reasoning| &reasoning[..]),
+            );
+            if let Some(tokens) = self.max_tokens {
+                body["max_output_tokens"] = tokens.into();
             }
-        }
+            let request = crate::http::client()
+                .post(self.url())
+                .header("accept", "text/event-stream")
+                .json(&body);
+            crate::openai::authorize(request, self.api_key.as_deref(), &self.headers)
+        };
+        crate::sse::send(request).await
     }
 
     async fn collect(
         &self,
-        _context: &Context,
         response: reqwest::Response,
         sink: Option<&dyn DeltaSink>,
     ) -> Result<ModelResponse, ModelError> {
-        let mut bytes = response.bytes_stream();
-        let mut frames = SseBuffer::default();
-        let mut accumulator = Accumulator::default();
-        while let Some(chunk) = bytes.next().await {
-            let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
-            for payload in frames.push(&chunk).map_err(generic_error)? {
-                if payload == "[DONE]" {
-                    continue;
-                }
-                // Some Responses implementations emit reasoning summaries without
-                // encrypted content. There is nothing to replay in that case.
-                if let Ok(event) = serde_json::from_str::<Value>(&payload) {
-                    if event["type"] == "response.output_item.done"
-                        && event["item"]["type"] == "reasoning"
-                        && event["item"]["encrypted_content"].as_str().is_none()
-                    {
-                        continue;
-                    }
-                }
-                for delta in accumulator.apply(&payload).map_err(generic_error)? {
-                    if let Some(sink) = sink {
-                        sink.emit(delta).await;
-                    }
-                }
-            }
-        }
-        let reasoning: Arc<[Value]> = accumulator.take_reasoning().into();
-        let result = accumulator.finish().map_err(generic_error)?;
-        let mut pending = self.reasoning_by_call.lock().await;
-        if let ModelResponse::ToolCalls { calls, .. } = &result {
-            if self.encrypted_reasoning && !reasoning.is_empty() {
+        let collected = collect_stream(
+            response,
+            sink,
+            Accumulator::skipping_unencrypted_reasoning(),
+        )
+        .await?;
+        if let ModelResponse::ToolCalls { calls, .. } = &collected.response {
+            if self.encrypted_reasoning && !collected.reasoning.is_empty() {
+                let mut pending = self.reasoning_by_call.lock().await;
                 for call in calls {
-                    pending.insert(call.id.clone(), reasoning.clone());
+                    pending.insert(call.id.clone(), collected.reasoning.clone());
                 }
             }
         }
-        Ok(result)
-    }
-}
-
-fn generic_error(error: ModelError) -> ModelError {
-    match error {
-        ModelError::InvalidResponse(message) => {
-            ModelError::InvalidResponse(message.replace("Codex", "Responses"))
-        }
-        other => other,
+        Ok(collected.response)
     }
 }
 
@@ -221,8 +141,7 @@ impl Model for ResponsesModel {
         context: &Context,
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
-        self.collect(context, self.send(context, tools).await?, None)
-            .await
+        self.collect(self.send(context, tools).await?, None).await
     }
 
     async fn generate_streaming(
@@ -231,7 +150,7 @@ impl Model for ResponsesModel {
         tools: &[ToolSchema],
         sink: &dyn DeltaSink,
     ) -> Result<ModelResponse, ModelError> {
-        self.collect(context, self.send(context, tools).await?, Some(sink))
+        self.collect(self.send(context, tools).await?, Some(sink))
             .await
     }
 }
