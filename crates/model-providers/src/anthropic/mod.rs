@@ -34,6 +34,9 @@ pub struct AnthropicModel {
     model: String,
     base_url: String,
     api_key: Option<String>,
+    bearer_token: Option<String>,
+    gateway_token: Option<String>,
+    headers: Vec<(String, String)>,
     max_tokens: u64,
     temperature: Option<f64>,
     prompt_cache: bool,
@@ -50,6 +53,9 @@ impl AnthropicModel {
             model: model.into(),
             base_url: ANTHROPIC_BASE_URL.into(),
             api_key: None,
+            bearer_token: None,
+            gateway_token: None,
+            headers: Vec::new(),
             max_tokens: 8192,
             temperature: None,
             prompt_cache: false,
@@ -66,6 +72,24 @@ impl AnthropicModel {
 
     pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Use bearer authentication for Messages-compatible gateways.
+    pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.bearer_token = Some(token.into());
+        self
+    }
+
+    /// Authenticate Cloudflare AI Gateway using its stored upstream credentials.
+    pub(crate) fn gateway_token(mut self, token: impl Into<String>) -> Self {
+        self.gateway_token = Some(token.into());
+        self
+    }
+
+    /// Attach gateway routing or protocol headers to generation requests.
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
         self
     }
 
@@ -105,13 +129,32 @@ impl AnthropicModel {
             let thinking = self.thinking_by_call.lock().await;
             self.request_body(context, tools, &thinking)?
         };
-        Ok(authenticated_request(
-            &format!("{}/messages", self.base_url.trim_end_matches('/')),
-            self.api_key.as_deref(),
-            reqwest::Method::POST,
-        )?
-        .header("accept", "text/event-stream")
-        .json(&body))
+        let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
+        let mut request = if let Some(token) = &self.gateway_token {
+            if token.trim().is_empty() {
+                return Err(ModelError::Authentication("empty gateway token".into()));
+            }
+            crate::http::client()
+                .post(&url)
+                .header("cf-aig-authorization", format!("Bearer {token}"))
+                .header("anthropic-version", API_VERSION)
+        } else if let Some(token) = &self.bearer_token {
+            if token.trim().is_empty() {
+                return Err(ModelError::Authentication(
+                    "empty Messages bearer token".into(),
+                ));
+            }
+            crate::http::client()
+                .post(&url)
+                .bearer_auth(token)
+                .header("anthropic-version", API_VERSION)
+        } else {
+            authenticated_request(&url, self.api_key.as_deref(), reqwest::Method::POST)?
+        };
+        for (name, value) in &self.headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        Ok(request.header("accept", "text/event-stream").json(&body))
     }
 
     async fn generate_with(

@@ -16,8 +16,10 @@ pub(crate) fn provider_endpoint(endpoint: &Endpoint, provider: Provider) -> Endp
         base_url: if same_provider {
             endpoint.base_url.clone()
         } else {
+            // Display default; each worker resolves its own automatic route.
             provider.base_url().into()
         },
+        automatic_base_url: !same_provider || endpoint.automatic_base_url,
         api_key: if same_provider {
             endpoint.api_key.clone()
         } else {
@@ -57,6 +59,7 @@ pub(crate) fn save_assignment(
             provider: provider.label().into(),
             model,
             base_url: candidate.base_url,
+            automatic_base_url: candidate.automatic_base_url,
         },
     )
     .map(|_| ())
@@ -84,6 +87,7 @@ fn build(
             let provider = Provider::from_label(&selection.provider)?;
             let mut worker = provider_endpoint(endpoint, provider);
             worker.base_url = selection.base_url;
+            worker.automatic_base_url = selection.automatic_base_url;
             worker.model = selection.model;
             let id = format!("{tier}/{}/{}", provider.label(), worker.model);
             let description = format!("user-selected {} / {}", provider.label(), worker.model);
@@ -150,6 +154,7 @@ mod tests {
         Endpoint {
             provider: Provider::Local,
             base_url: "http://localhost:12345/v1".into(),
+            automatic_base_url: false,
             api_key: None,
             model: "parent".into(),
             reasoning_effort: None,
@@ -177,6 +182,7 @@ mod tests {
                     provider: provider.into(),
                     model: model.into(),
                     base_url: Provider::from_label(provider).unwrap().base_url().into(),
+                    automatic_base_url: false,
                 },
             )
             .unwrap();
@@ -198,6 +204,60 @@ mod tests {
             Some("mid/vercel/vendor/my-model")
         );
         assert_eq!(crate::config::stored_subagent_models().len(), 4);
+    }
+
+    #[test]
+    fn preset_subagents_keep_runtime_routes_and_same_provider_overrides() {
+        let parent = endpoint();
+        for id in [
+            "google-vertex",
+            "cloudflare-ai-gateway",
+            "cloudflare-workers-ai",
+            "databricks-unity-gateway",
+        ] {
+            let provider = Provider::from_label(id).unwrap();
+            let mut worker = provider_endpoint(&parent, provider);
+            assert_eq!(worker.base_url, provider.base_url());
+            worker.model = "different-protocol-model".into();
+            assert_eq!(
+                provider_endpoint(&worker, provider).base_url,
+                provider.base_url()
+            );
+            worker.base_url = "http://localhost:8080/explicit".into();
+            worker.automatic_base_url = false;
+            assert_eq!(
+                provider_endpoint(&worker, provider).base_url,
+                worker.base_url
+            );
+            let manager = orca_harness_tools::SubagentManager::from_settings(
+                crate::subagent_settings::configured(1, None),
+            );
+            save_assignment(&parent, &manager, "flash", provider, "worker-model".into()).unwrap();
+            let saved = crate::config::stored_subagent_models();
+            assert_eq!(saved["flash"].provider, id);
+            assert!(saved["flash"].automatic_base_url);
+            assert_eq!(saved["flash"].base_url, provider.base_url());
+        }
+    }
+
+    #[test]
+    fn saved_explicit_default_and_legacy_urls_remain_fixed() {
+        let mut parent = endpoint();
+        parent.provider = Provider::from_label("minimax").unwrap();
+        parent.base_url = parent.provider.base_url().into();
+        parent.automatic_base_url = false;
+        let worker = provider_endpoint(&parent, parent.provider);
+        assert!(!worker.automatic_base_url);
+        let manager = orca_harness_tools::SubagentManager::from_settings(
+            crate::subagent_settings::configured(1, None));
+        save_assignment(&parent, &manager, "flash", parent.provider, "MiniMax-M2.7".into()).unwrap();
+        let saved = crate::config::stored_subagent_models();
+        assert!(!saved["flash"].automatic_base_url);
+        assert_eq!(saved["flash"].base_url, parent.base_url);
+        let legacy: crate::config::SubagentModelSelection = serde_json::from_value(json!({
+            "provider": "minimax", "model": "MiniMax-M2.7", "base_url": parent.base_url
+        })).unwrap();
+        assert!(!legacy.automatic_base_url);
     }
 
     #[test]
@@ -315,6 +375,7 @@ mod live_assignment_tests {
         let endpoint = Endpoint {
             provider: Provider::Local,
             base_url: Provider::Local.base_url().into(),
+            automatic_base_url: true,
             api_key: None,
             model: "parent".into(),
             reasoning_effort: None,

@@ -76,11 +76,12 @@ pub(crate) fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'sta
             key_note,
         ]
     });
-    picker.table_lines(
+    picker.windowed_table_lines(
         "Select provider · ↑↓ move · →/enter use · esc close",
         rows,
-        [(12, 12), (36, 36), (0, usize::MAX)],
+        [(12, 26), (0, 36), (0, usize::MAX)],
         width,
+        PICKER_ROWS,
     )
 }
 
@@ -528,4 +529,27 @@ pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static
         Span::raw("•".repeat(input.chars().count())),
     ]));
     tray.lines()
+}
+
+#[cfg(test)]
+mod provider_scroll_tests {
+    use super::*;
+
+    #[test]
+    fn every_provider_selection_is_visible_in_a_bounded_window() {
+        assert_eq!(Provider::ALL.len(), 46);
+        for (index, provider) in Provider::ALL.iter().enumerate() {
+            let picker = ListPicker::with_selected(Provider::ALL.len(), index);
+            let lines = provider_lines(&picker, 180);
+            assert!(lines.len() <= PICKER_ROWS + 2);
+            assert!(
+                lines
+                    .iter()
+                    .skip(2)
+                    .any(|line| line.to_string().contains(provider.label())),
+                "selected provider {} must be visible",
+                provider.label()
+            );
+        }
+    }
 }

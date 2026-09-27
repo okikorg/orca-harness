@@ -100,6 +100,7 @@ OPTIONS:
                      CHEAPERINFERENCE_API_KEY for CheaperInference)
   --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
                      web_search and web_crawl tools
+  --provider ID      select a provider preset (or ORCA_PROVIDER)
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
   --anthropic        use the native Anthropic Messages API
   --list-models      print the endpoint's model catalog and exit
@@ -165,6 +166,7 @@ pub struct Config {
     pub provider: Provider,
     pub model: String,
     pub base_url: String,
+    pub automatic_base_url: bool,
     pub api_key: Option<String>,
     pub firecrawl_key: Option<String>,
     pub openrouter: bool,
@@ -363,6 +365,7 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
 struct Endpoint {
     provider: Provider,
     base_url: String,
+    automatic_base_url: bool,
     api_key: Option<String>,
     model: String,
     reasoning_effort: Option<String>,
@@ -385,6 +388,7 @@ impl Endpoint {
         Self {
             provider: cfg.provider,
             base_url: cfg.base_url.clone(),
+            automatic_base_url: cfg.automatic_base_url,
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
             reasoning_effort: cfg.reasoning_effort.clone(),
@@ -399,10 +403,19 @@ impl Endpoint {
         }
     }
 
+    fn preset_model(&self, preset: orca_harness_model_providers::ProviderPreset) -> orca_harness_model_providers::ProviderModel {
+        let model = orca_harness_model_providers::ProviderModel::new(preset, &self.model);
+        if self.automatic_base_url { model } else { model.base_url(&self.base_url) }
+    }
+
     async fn list_models(
         &self,
     ) -> Result<Vec<openrouter::ModelInfo>, orca_harness_core::ModelError> {
         match self.provider {
+            Provider::Preset(preset) => {
+                self.preset_model(preset).models()
+                    .await
+            }
             Provider::Anthropic => {
                 orca_harness_model_providers::anthropic::list_models(
                     &self.base_url,
@@ -465,6 +478,20 @@ impl Endpoint {
         retry_label: Option<String>,
     ) -> Arc<dyn Model> {
         let model: Arc<dyn Model> = match self.provider {
+            Provider::Preset(preset) => {
+                let mut model =
+                    self.preset_model(preset);
+                if let Some(key) = &self.api_key {
+                    model = model.api_key(key.clone());
+                }
+                if let Some(n) = self.max_output_tokens {
+                    model = model.max_tokens(n);
+                }
+                if let Some(effort) = &self.reasoning_effort {
+                    model = model.reasoning_effort(effort.clone());
+                }
+                Arc::new(model)
+            }
             Provider::Anthropic => {
                 let mut model = orca_harness_model_providers::AnthropicModel::new(&self.model)
                     .base_url(&self.base_url)
@@ -588,6 +615,12 @@ fn spawn_window_probe(
     let endpoint = endpoint.clone();
     tokio::spawn(async move {
         let window = match endpoint.provider {
+            Provider::Preset(_) => endpoint
+                .list_models()
+                .await
+                .ok()
+                .and_then(|models| models.into_iter().find(|model| model.id == endpoint.model))
+                .and_then(|model| model.context_length),
             // `/models` lists dated ids, so a configured alias never matches
             // the catalog; resolve the one model instead of paging all of them.
             Provider::Anthropic => orca_harness_model_providers::anthropic::retrieve_model(

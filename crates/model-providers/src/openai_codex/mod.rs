@@ -1,7 +1,7 @@
 //! OpenAI Codex Responses adapter backed by a ChatGPT subscription.
 //! This is deliberately separate from OpenAI API-key billing.
 
-mod request;
+pub(crate) mod request;
 pub(crate) mod stream;
 
 pub use orca_harness_provider_auth::{

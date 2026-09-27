@@ -1,7 +1,34 @@
 //! Chat-completions request encoding, separate from transport and response handling.
 use super::OpenAiModel;
-use orca_harness_core::{Context, Message, ToolSchema};
+use orca_harness_core::{Context, Message, ToolCall, ToolSchema};
 use serde_json::{json, Value};
+
+#[derive(Clone)]
+pub(super) struct SavedReasoning {
+    calls: Vec<ToolCall>,
+    content: Option<String>,
+    text: String,
+}
+
+impl SavedReasoning {
+    pub(super) fn new(calls: &[ToolCall], content: &Option<String>, text: String) -> Self {
+        Self {
+            calls: calls.to_vec(),
+            content: content.clone(),
+            text,
+        }
+    }
+
+    fn matches(&self, content: &Option<String>, calls: &[ToolCall]) -> bool {
+        self.content == *content
+            && self.calls.len() == calls.len()
+            && self
+                .calls
+                .iter()
+                .zip(calls)
+                .all(|(a, b)| a.id == b.id && a.name == b.name && a.arguments == b.arguments)
+    }
+}
 
 impl OpenAiModel {
     pub(super) fn request_body(&self, context: &Context, tools: &[ToolSchema]) -> Value {
@@ -9,7 +36,45 @@ impl OpenAiModel {
             "model": self.model,
             "messages": [],
         });
-        body["messages"] = Value::Array(encode_messages(context));
+        let mut messages = encode_messages(context);
+        if self.replay_reasoning_content {
+            let mut cache = self.reasoning_by_call.lock().unwrap();
+            // Encoding expands tool-result batches and image messages. Match
+            // assistant turns separately rather than zipping unlike sequences.
+            let assistants = context
+                .messages()
+                .iter()
+                .filter(|message| matches!(message, Message::Assistant { .. }));
+            for (wire, message) in messages
+                .iter_mut()
+                .filter(|wire| wire["role"] == "assistant")
+                .zip(assistants)
+            {
+                if let Message::Assistant {
+                    content,
+                    tool_calls,
+                } = message
+                {
+                    // Some thinking endpoints require the field on every assistant turn.
+                    wire["reasoning_content"] = json!("");
+                    if !tool_calls.is_empty() {
+                        if let Some(saved) = cache.get(&tool_calls[0].id) {
+                            if saved.matches(content, tool_calls) {
+                                wire["reasoning_content"] = json!(saved.text);
+                            }
+                        }
+                    }
+                }
+            }
+            // Retire turns removed from the context, including all calls in a batch.
+            cache.retain(|_, saved| {
+                context.messages().iter().any(|message| {
+                    matches!(message, Message::Assistant { content, tool_calls }
+                    if saved.matches(content, tool_calls))
+                })
+            });
+        }
+        body["messages"] = Value::Array(messages);
         if !tools.is_empty() {
             body["tools"] = Value::Array(
                 tools
@@ -34,7 +99,11 @@ impl OpenAiModel {
             body["temperature"] = json!(temperature);
         }
         if let Some(max_tokens) = self.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
+            body[if self.max_completion_tokens {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            }] = json!(max_tokens);
         }
         if let Some(effort) = &self.reasoning_effort {
             if self.nested_reasoning {

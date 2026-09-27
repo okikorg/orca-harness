@@ -4,6 +4,7 @@
 use orca_harness_core::{CancellationToken, Image};
 use orca_harness_extensions::{CompactReport, HarnessEvent};
 use orca_harness_model_providers::openrouter::ModelInfo;
+use orca_harness_model_providers::registry;
 use orca_harness_tools::{AskRequest, ProcessNotification};
 use tokio::sync::oneshot;
 
@@ -17,6 +18,7 @@ pub enum Provider {
     OpenAiCodex,
     Anthropic,
     Local,
+    Preset(registry::ProviderPreset),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,15 +29,38 @@ pub enum ProviderAuth {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 7] = [
-        Provider::OpenRouter,
-        Provider::Vercel,
-        Provider::CheaperInference,
-        Provider::OpenAi,
-        Provider::OpenAiCodex,
-        Provider::Anthropic,
-        Provider::Local,
-    ];
+    // Keep legacy labels and ordering; registry aliases must not create rows.
+    pub const ALL: [Provider; 46] = {
+        let mut providers = [Provider::Local; 46];
+        providers[0] = Provider::OpenRouter;
+        providers[1] = Provider::Vercel;
+        providers[2] = Provider::CheaperInference;
+        providers[3] = Provider::OpenAi;
+        providers[4] = Provider::OpenAiCodex;
+        providers[5] = Provider::Anthropic;
+        let mut index = 0;
+        let mut next = 6;
+        while index < registry::ProviderPreset::ALL.len() {
+            let preset = registry::ProviderPreset::ALL[index];
+            if !matches!(
+                preset,
+                registry::ProviderPreset::Openrouter
+                    | registry::ProviderPreset::Vercel
+                    | registry::ProviderPreset::VercelAiGateway
+                    | registry::ProviderPreset::Cheaperinference
+                    | registry::ProviderPreset::OpenAi
+                    | registry::ProviderPreset::OpenAiCodex
+                    | registry::ProviderPreset::Anthropic
+                    | registry::ProviderPreset::Local
+            ) {
+                providers[next] = Provider::Preset(preset);
+                next += 1;
+            }
+            index += 1;
+        }
+        assert!(next == 45);
+        providers
+    };
 
     pub fn label(self) -> &'static str {
         match self {
@@ -46,11 +71,15 @@ impl Provider {
             Provider::OpenAiCodex => "openai-codex",
             Provider::Anthropic => "anthropic",
             Provider::Local => "local",
+            Provider::Preset(preset) => preset.id(),
         }
     }
 
     /// Parse a label as produced by [`Provider::label`].
     pub fn from_label(label: &str) -> Option<Provider> {
+        if label == "vercel-ai-gateway" {
+            return Some(Provider::Vercel);
+        }
         Provider::ALL.into_iter().find(|p| p.label() == label)
     }
 
@@ -65,6 +94,7 @@ impl Provider {
             Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL,
             Provider::Anthropic => orca_harness_model_providers::anthropic::ANTHROPIC_BASE_URL,
             Provider::Local => "http://localhost:11434/v1",
+            Provider::Preset(preset) => preset.base_url(),
         }
     }
 
@@ -87,6 +117,10 @@ impl Provider {
                 environment: "ANTHROPIC_API_KEY",
             },
             Provider::Local => ProviderAuth::None,
+            Provider::Preset(preset) => match preset.key_env() {
+                Some(environment) => ProviderAuth::ApiKey { environment },
+                None => ProviderAuth::None,
+            },
         }
     }
 
@@ -131,13 +165,15 @@ impl Provider {
             Provider::OpenAiCodex => "gpt-5.4",
             Provider::Anthropic => "claude-haiku-4-5",
             Provider::Local => "qwen3.5:9b",
+            Provider::Preset(preset) => preset.default_model(),
         }
     }
 
     pub fn supports_images(self) -> bool {
         matches!(
             self,
-            Provider::OpenRouter
+            Provider::Preset(_)
+                | Provider::OpenRouter
                 | Provider::Vercel
                 | Provider::CheaperInference
                 | Provider::OpenAi
@@ -450,4 +486,41 @@ pub enum WorkerCmd {
         source: String,
         here: bool,
     },
+}
+
+#[cfg(test)]
+mod provider_registry_tests {
+    use super::*;
+
+    #[test]
+    fn visible_providers_are_unique_and_preserve_legacy_order() {
+        assert_eq!(Provider::ALL.len(), 46);
+        let labels: std::collections::HashSet<_> =
+            Provider::ALL.iter().map(|p| p.label()).collect();
+        assert_eq!(labels.len(), 46);
+        assert_eq!(
+            &Provider::ALL[..6],
+            &[
+                Provider::OpenRouter,
+                Provider::Vercel,
+                Provider::CheaperInference,
+                Provider::OpenAi,
+                Provider::OpenAiCodex,
+                Provider::Anthropic,
+            ]
+        );
+        assert_eq!(Provider::ALL.last(), Some(&Provider::Local));
+        for provider in Provider::ALL {
+            assert_eq!(Provider::from_label(provider.label()), Some(provider));
+        }
+        for preset in registry::ProviderPreset::ALL {
+            let provider = Provider::from_label(preset.id()).unwrap();
+            assert!(Provider::ALL.contains(&provider));
+        }
+        assert_eq!(
+            Provider::from_label("vercel-ai-gateway"),
+            Some(Provider::Vercel)
+        );
+        assert_eq!(Provider::from_label("unknown"), None);
+    }
 }

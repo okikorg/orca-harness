@@ -513,6 +513,7 @@ mod main_tests {
         let base = Config {
             provider: Provider::Local,
             model: "m".into(),
+            automatic_base_url: false,
             base_url: "u".into(),
             api_key: None,
             firecrawl_key: None,

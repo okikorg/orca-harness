@@ -8,6 +8,9 @@ pub(crate) struct SubagentModelSelection {
     pub provider: String,
     pub model: String,
     pub base_url: String,
+    /// Older configurations stored fixed URLs; absence preserves that behavior.
+    #[serde(default)]
+    pub automatic_base_url: bool,
 }
 
 pub(crate) fn stored_subagent_models() -> BTreeMap<String, SubagentModelSelection> {

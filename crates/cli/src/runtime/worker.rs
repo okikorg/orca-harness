@@ -593,6 +593,7 @@ pub(crate) async fn worker<F>(
                         let mut candidate = endpoint.clone();
                         candidate.provider = provider;
                         candidate.base_url = provider.base_url().into();
+                        candidate.automatic_base_url = true;
                         candidate.api_key = None;
                         candidate.reasoning_effort = None;
                         let requested = config::stored_model(provider.label());
@@ -649,6 +650,7 @@ pub(crate) async fn worker<F>(
                 let mut candidate = endpoint.clone();
                 candidate.provider = provider;
                 candidate.base_url = provider.base_url().into();
+                candidate.automatic_base_url = true;
                 candidate.api_key = api_key.or_else(|| provider.resolve_key());
                 candidate.reasoning_effort = None;
                 let requested = config::stored_model(provider.label());

@@ -242,3 +242,135 @@ fn completion_reasoning_tokens_preserve_absent_zero_and_nonzero() {
         assert_eq!(usage.reasoning_tokens, expected);
     }
 }
+
+use super::stream::ChunkAccumulator;
+
+#[test]
+fn compatibility_fields_default_and_opt_in() {
+    let base = OpenAiModel::new("m").max_tokens(42);
+    let body = base.request_body(&context(), &[]);
+    assert_eq!(body["max_tokens"], 42);
+    assert!(body.get("max_completion_tokens").is_none());
+    let body = OpenAiModel::new("m")
+        .max_tokens(42)
+        .max_completion_tokens(true)
+        .request_body(&context(), &[]);
+    assert_eq!(body["max_completion_tokens"], 42);
+    assert!(body.get("max_tokens").is_none());
+    let default_stream = base.streaming_request_body(&context(), &[]);
+    assert_eq!(default_stream["stream"], true);
+    assert_eq!(
+        default_stream["stream_options"],
+        json!({"include_usage": true})
+    );
+    let no_usage = OpenAiModel::new("m")
+        .stream_usage(false)
+        .streaming_request_body(&context(), &[]);
+    assert_eq!(no_usage["stream"], true);
+    assert!(no_usage.get("stream_options").is_none());
+}
+
+#[test]
+fn nonstreamed_reasoning_replays_only_matching_tool_turn_and_retires() {
+    let model = OpenAiModel::new("m").replay_reasoning_content(true);
+    let payload: ChatCompletion = serde_json::from_value(json!({
+        "choices": [{"message": {"content": null, "reasoning_content": "think",
+            "tool_calls": [{"id": "a", "function": {"name": "grep", "arguments": "{}"}},
+                           {"id": "b", "function": {"name": "grep", "arguments": "{}"}}]},
+            "finish_reason": "tool_calls"}]
+    }))
+    .unwrap();
+    let choice = payload.choices.into_iter().next().unwrap();
+    let content = choice.message.content;
+    let calls: Vec<ToolCall> = choice
+        .message
+        .tool_calls
+        .into_iter()
+        .map(|call| ToolCall {
+            id: call.id,
+            name: call.function.name,
+            arguments: serde_json::from_str(&call.function.arguments).unwrap(),
+        })
+        .collect();
+    model.remember_reasoning(&calls, &content, choice.message.reasoning_content.unwrap());
+    let mut history = context();
+    history.push_assistant_tool_calls(content.clone(), calls.clone());
+    let body = model.request_body(&history, &[]);
+    assert_eq!(body["messages"][1]["reasoning_content"], "think");
+    assert_eq!(model.reasoning_by_call.lock().unwrap().len(), 2);
+
+    // An altered turn must not inherit cached reasoning even with the same id.
+    let mut altered = context();
+    let mut changed = calls.clone();
+    changed[0].arguments = json!({"different": true});
+    altered.push_assistant_tool_calls(content, changed);
+    assert_eq!(
+        model.request_body(&altered, &[])["messages"][1]["reasoning_content"],
+        ""
+    );
+    assert!(model.reasoning_by_call.lock().unwrap().is_empty());
+
+    let disabled = OpenAiModel::new("m");
+    disabled.remember_reasoning(&calls, &None, "think".into());
+    assert!(disabled.request_body(&history, &[])["messages"][1]
+        .get("reasoning_content")
+        .is_none());
+}
+
+#[test]
+fn streamed_reasoning_replays_and_retires_on_pruned_context() {
+    let model = OpenAiModel::new("m").replay_reasoning_content(true);
+    let mut acc = ChunkAccumulator::new();
+    for chunk in [
+        r#"{"choices":[{"delta":{"reasoning_content":"step "}}]}"#,
+        r#"{"choices":[{"delta":{"reasoning_content":"two","tool_calls":[{"index":0,"id":"a","function":{"name":"grep","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#,
+    ] {
+        acc.apply(chunk).unwrap();
+    }
+    let (result, reasoning) = acc.finish_with_reasoning(true);
+    let ModelResponse::ToolCalls { content, calls, .. } = result.unwrap() else {
+        panic!("tool calls")
+    };
+    model.remember_reasoning(&calls, &content, reasoning.unwrap());
+    let mut history = context();
+    history.push_assistant_tool_calls(content, calls);
+    assert_eq!(
+        model.request_body(&history, &[])["messages"][1]["reasoning_content"],
+        "step two"
+    );
+    model.request_body(&context(), &[]);
+    assert!(model.reasoning_by_call.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reasoning_replay_survives_expanded_tool_batches() {
+    let model = OpenAiModel::new("deepseek-reasoner").replay_reasoning_content(true);
+    let calls: Vec<ToolCall> = ["a", "b"]
+        .into_iter()
+        .map(|id| ToolCall {
+            id: id.into(),
+            name: "lookup".into(),
+            arguments: json!({}),
+        })
+        .collect();
+    let mut history = context();
+    history.push_assistant_tool_calls(None, calls.clone());
+    history.append_tool_results(
+        calls
+            .iter()
+            .map(|c| orca_harness_core::ToolResult::ok(c, json!("done")))
+            .collect(),
+    );
+    let later = vec![ToolCall {
+        id: "c".into(),
+        name: "lookup".into(),
+        arguments: json!({}),
+    }];
+    model.remember_reasoning(&later, &None, "later thought".into());
+    history.push_assistant_tool_calls(None, later);
+    let body = model.request_body(&history, &[]);
+    assert_eq!(
+        body["messages"].as_array().unwrap().last().unwrap()["reasoning_content"],
+        "later thought"
+    );
+}

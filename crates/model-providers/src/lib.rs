@@ -7,21 +7,37 @@
 mod sse;
 
 pub mod anthropic;
+pub mod bedrock;
 pub mod catalog;
 pub mod cheaperinference;
+pub mod copilot;
+pub mod cursor;
+pub mod google;
 pub mod http;
 pub mod http_error;
 pub mod openai;
 pub mod openai_codex;
 pub mod openrouter;
+pub mod pi_messages;
+mod provider;
+pub mod registry;
+pub mod responses;
 pub mod tool_images;
 pub mod vercel;
 
 pub use anthropic::AnthropicModel;
+pub use bedrock::BedrockModel;
 pub use catalog::{ModelInfo, Pricing, ReasoningCapabilities, SupportedEfforts};
+pub use copilot::CopilotModel;
+pub use cursor::CursorModel;
+pub use google::GoogleModel;
 pub use openai::OpenAiModel;
 pub use openai_codex::OpenAiCodexModel;
 pub use openrouter::OpenRouterModel;
+pub use pi_messages::PiMessagesModel;
+pub use provider::ProviderModel;
+pub use registry::ProviderPreset;
+pub use responses::ResponsesModel;
 
 fn image_data_url(image: &orca_harness_core::Image) -> String {
     format!("data:{};base64,{}", image.media_type, image.data)

@@ -509,3 +509,31 @@ fn replayed_thinking_leads_its_own_assistant_turn() {
         .unwrap();
     assert_eq!(body["messages"][1]["content"][0]["type"], "text");
 }
+
+#[tokio::test]
+async fn gateway_bearer_auth_does_not_send_anthropic_api_key() {
+    let request = AnthropicModel::new("claude-test")
+        .api_key("unused")
+        .bearer_token("gateway-token")
+        .header("x-gateway-route", "tenant")
+        .prepare_request(&Context::new(), &[])
+        .await
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(request.headers()["authorization"], "Bearer gateway-token");
+    assert!(!request.headers().contains_key("x-api-key"));
+    assert_eq!(request.headers()["anthropic-version"], "2023-06-01");
+    assert_eq!(request.headers()["x-gateway-route"], "tenant");
+}
+
+#[tokio::test]
+async fn empty_gateway_bearer_is_rejected_before_transport() {
+    assert!(matches!(
+        AnthropicModel::new("claude-test")
+            .bearer_token(" ")
+            .prepare_request(&Context::new(), &[])
+            .await,
+        Err(ModelError::Authentication(_))
+    ));
+}

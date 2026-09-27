@@ -14,6 +14,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut firecrawl_key: Option<String> = None;
     let mut openrouter = false;
     let mut anthropic = false;
+    let mut explicit_provider: Option<String> = None;
     let mut list_models = false;
     let mut workspace = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut prompt = None;
@@ -60,6 +61,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             "--firecrawl-key" => firecrawl_key = Some(value("--firecrawl-key")?),
             "--openrouter" => openrouter = true,
             "--anthropic" => anthropic = true,
+            "--provider" => explicit_provider = Some(value("--provider")?),
             "--list-models" => list_models = true,
             "--workspace" => workspace = PathBuf::from(value("--workspace")?),
             "--max-steps" => {
@@ -119,16 +121,22 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         }
     }
 
-    if openrouter && anthropic {
-        return Err("--anthropic and --openrouter cannot be combined".into());
-    }
-    let stored_provider = if openrouter || anthropic || base_url.is_some() {
-        None
-    } else {
-        config::stored_provider().and_then(|label| Provider::from_label(&label))
-    };
+    let explicit_provider = requested_provider(
+        explicit_provider.as_deref(),
+        std::env::var("ORCA_PROVIDER").ok().as_deref(),
+        openrouter,
+        anthropic,
+    )?;
+    let stored_provider =
+        if explicit_provider.is_some() || openrouter || anthropic || base_url.is_some() {
+            None
+        } else {
+            config::stored_provider().and_then(|label| Provider::from_label(&label))
+        };
     let openrouter = openrouter || stored_provider == Some(Provider::OpenRouter);
-    let provider = if anthropic {
+    let provider = if let Some(provider) = explicit_provider {
+        provider
+    } else if anthropic {
         Provider::Anthropic
     } else {
         select_provider(openrouter, base_url.is_some(), stored_provider)
@@ -140,15 +148,24 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
 
     let api_key = api_key.or_else(|| provider.resolve_key());
     let firecrawl_key = firecrawl_key.or_else(|| std::env::var("FIRECRAWL_API_KEY").ok());
-    let base_url = base_url.unwrap_or_else(|| match provider {
-        Provider::OpenRouter => openrouter::OPENROUTER_BASE_URL.into(),
-        Provider::Vercel => Provider::Vercel.base_url().into(),
-        Provider::CheaperInference => Provider::CheaperInference.base_url().into(),
-        Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL.into(),
-        Provider::Anthropic => Provider::Anthropic.base_url().into(),
-        Provider::OpenAi if api_key.is_some() => "https://api.openai.com/v1".into(),
-        Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),
-    });
+    let automatic_base_url = base_url.is_none();
+    let base_url = if let Provider::Preset(preset) = provider {
+        // Display default only; automatic routing is tracked independently.
+        base_url.unwrap_or_else(|| preset.base_url().into())
+    } else {
+        base_url.unwrap_or_else(|| match provider {
+            Provider::OpenRouter => openrouter::OPENROUTER_BASE_URL.into(),
+            Provider::Vercel => Provider::Vercel.base_url().into(),
+            Provider::CheaperInference => Provider::CheaperInference.base_url().into(),
+            Provider::OpenAiCodex => {
+                orca_harness_model_providers::openai_codex::CODEX_BASE_URL.into()
+            }
+            Provider::Anthropic => Provider::Anthropic.base_url().into(),
+            Provider::OpenAi if api_key.is_some() => "https://api.openai.com/v1".into(),
+            Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),
+            Provider::Preset(_) => unreachable!(),
+        })
+    };
     let model = model
         .or_else(|| config::stored_model(provider.label()))
         .unwrap_or_else(|| provider.default_model().into());
@@ -162,9 +179,10 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         provider,
         model,
         base_url,
+        automatic_base_url,
         api_key,
         firecrawl_key,
-        openrouter,
+        openrouter: provider == Provider::OpenRouter,
         list_models,
         workspace,
         prompt,
@@ -187,4 +205,124 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         auto,
         yolo,
     })
+}
+
+/// Command-line selectors beat the environment; conflicting CLI selectors are errors.
+fn requested_provider(
+    cli: Option<&str>,
+    environment: Option<&str>,
+    openrouter: bool,
+    anthropic: bool,
+) -> Result<Option<Provider>, String> {
+    if openrouter && anthropic {
+        return Err("--anthropic and --openrouter cannot be combined".into());
+    }
+    if cli.is_some() && (openrouter || anthropic) {
+        return Err("--provider cannot be combined with --openrouter or --anthropic".into());
+    }
+    let id = cli.or_else(|| {
+        if openrouter || anthropic {
+            None
+        } else {
+            environment
+        }
+    });
+    id.map(|id| {
+        Provider::from_label(id).ok_or_else(|| {
+            format!("unknown provider {id:?}; use --provider with a registered provider ID")
+        })
+    })
+    .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_selector_precedence_and_conflicts() {
+        let deepseek = Provider::from_label("deepseek").unwrap();
+        assert_eq!(
+            requested_provider(Some("deepseek"), Some("invalid"), false, false).unwrap(),
+            Some(deepseek)
+        );
+        assert_eq!(
+            requested_provider(None, Some("deepseek"), false, false).unwrap(),
+            Some(deepseek)
+        );
+        for (router, anthropic) in [(true, false), (false, true)] {
+            assert_eq!(
+                requested_provider(None, Some("invalid"), router, anthropic).unwrap(),
+                None
+            );
+            assert!(requested_provider(Some("deepseek"), None, router, anthropic).is_err());
+        }
+        assert!(requested_provider(None, None, true, true).is_err());
+        assert!(requested_provider(None, Some("invalid"), false, false).is_err());
+        assert!(requested_provider(Some("invalid"), None, false, false).is_err());
+    }
+
+    #[test]
+    fn provider_args_preserve_explicit_overrides() {
+        let cfg = parse_run_args(
+            [
+                "--provider",
+                "deepseek",
+                "--base-url",
+                "http://localhost:8080/custom",
+                "--model",
+                "custom-model",
+                "--api-key",
+                "explicit-key",
+                "--max-output-tokens",
+                "123",
+                "--effort",
+                "low",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        )
+        .unwrap();
+        assert_eq!(cfg.provider, Provider::from_label("deepseek").unwrap());
+        assert_eq!(cfg.base_url, "http://localhost:8080/custom");
+        assert_eq!(cfg.model, "custom-model");
+        assert_eq!(cfg.api_key.as_deref(), Some("explicit-key"));
+        assert_eq!(cfg.max_output_tokens, Some(123));
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("low"));
+        for args in [
+            vec!["--provider"],
+            vec!["--provider", "unknown"],
+            vec!["--provider", "openai-codex", "--max-output-tokens", "123"],
+        ] {
+            assert!(parse_run_args(args.into_iter().map(str::to_owned).collect()).is_err());
+        }
+    }
+
+    #[test]
+    fn explicit_preset_default_keeps_explicit_origin() {
+        let provider = Provider::from_label("minimax").unwrap();
+        let cfg = parse_run_args(vec!["--provider".into(), "minimax".into(),
+            "--base-url".into(), provider.base_url().into()]).unwrap();
+        assert_eq!(cfg.base_url, provider.base_url());
+        assert!(!cfg.automatic_base_url);
+    }
+
+    #[test]
+    fn default_preset_urls_keep_automatic_origin() {
+        // Do not mutate process-wide environment in parallel tests.
+        if std::env::var_os("ORCA_BASE_URL").is_some() {
+            return;
+        }
+        for id in [
+            "google-vertex",
+            "cloudflare-ai-gateway",
+            "cloudflare-workers-ai",
+            "databricks-unity-gateway",
+        ] {
+            let cfg = parse_run_args(vec!["--provider".into(), id.into()]).unwrap();
+            assert_eq!(cfg.base_url, cfg.provider.base_url());
+            assert!(cfg.automatic_base_url);
+        }
+    }
 }

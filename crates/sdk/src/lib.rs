@@ -42,7 +42,8 @@ pub use orca_harness_extensions::{
 };
 pub use orca_harness_model_providers::openai_codex::{CodexCredential, CodexCredentialSource};
 pub use orca_harness_model_providers::{
-    AnthropicModel, OpenAiCodexModel, OpenAiModel, OpenRouterModel,
+    AnthropicModel, BedrockModel, CopilotModel, CursorModel, GoogleModel, OpenAiCodexModel,
+    OpenAiModel, OpenRouterModel, PiMessagesModel, ProviderModel, ProviderPreset, ResponsesModel,
 };
 pub use orca_harness_provider_auth::{
     BearerCredential, CredentialError, CredentialSource, StaticCredential,
@@ -72,8 +73,9 @@ pub mod providers {
         CodexCredential, CodexCredentialSource, CODEX_BASE_URL,
     };
     pub use orca_harness_model_providers::{
-        AnthropicModel, ModelInfo, OpenAiCodexModel, OpenAiModel, OpenRouterModel, Pricing,
-        ReasoningCapabilities, SupportedEfforts,
+        AnthropicModel, BedrockModel, CopilotModel, CursorModel, GoogleModel, ModelInfo,
+        OpenAiCodexModel, OpenAiModel, OpenRouterModel, PiMessagesModel, Pricing, ProviderModel,
+        ProviderPreset, ReasoningCapabilities, ResponsesModel, SupportedEfforts,
     };
     pub use orca_harness_provider_auth::{
         BearerCredential, CredentialError, CredentialErrorKind, CredentialSource, StaticCredential,

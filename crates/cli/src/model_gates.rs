@@ -38,6 +38,7 @@ mod tests {
     fn endpoint_clones_and_models_share_quota_but_credentials_and_hosts_do_not() {
         let mut endpoint = Endpoint {
             provider: crate::Provider::OpenAi,
+            automatic_base_url: false,
             base_url: "https://example.test/v1/".into(),
             api_key: Some("first-key".into()),
             model: "first-model".into(),

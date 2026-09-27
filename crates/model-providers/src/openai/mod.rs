@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Mutex;
 
 use orca_harness_core::{
     Context, DeltaSink, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
@@ -46,6 +47,10 @@ pub struct OpenAiModel {
     model: String,
     temperature: Option<f64>,
     max_tokens: Option<u64>,
+    max_completion_tokens: bool,
+    stream_usage: bool,
+    replay_reasoning_content: bool,
+    reasoning_by_call: Mutex<std::collections::HashMap<String, request::SavedReasoning>>,
     reasoning_effort: Option<String>,
     nested_reasoning: bool,
     parallel_tool_calls: Option<bool>,
@@ -64,6 +69,10 @@ impl OpenAiModel {
             model: model.into(),
             temperature: None,
             max_tokens: None,
+            max_completion_tokens: false,
+            stream_usage: true,
+            replay_reasoning_content: false,
+            reasoning_by_call: Mutex::new(Default::default()),
             reasoning_effort: None,
             nested_reasoning: false,
             parallel_tool_calls: None,
@@ -124,6 +133,24 @@ impl OpenAiModel {
         self
     }
 
+    /// Send the token limit as `max_completion_tokens` instead of `max_tokens`.
+    pub fn max_completion_tokens(mut self, enabled: bool) -> Self {
+        self.max_completion_tokens = enabled;
+        self
+    }
+
+    /// Request usage in streamed responses (enabled by default).
+    pub fn stream_usage(mut self, enabled: bool) -> Self {
+        self.stream_usage = enabled;
+        self
+    }
+
+    /// Replay thinking on matching assistant tool turns for thinking providers.
+    pub fn replay_reasoning_content(mut self, enabled: bool) -> Self {
+        self.replay_reasoning_content = enabled;
+        self
+    }
+
     /// Set OpenAI Chat Completions' flat reasoning-effort parameter.
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
@@ -157,6 +184,17 @@ impl OpenAiModel {
         self.header(reqwest::header::USER_AGENT.as_str(), user_agent)
     }
 
+    fn remember_reasoning(&self, calls: &[ToolCall], content: &Option<String>, reasoning: String) {
+        if !self.replay_reasoning_content {
+            return;
+        }
+        let saved = request::SavedReasoning::new(calls, content, reasoning);
+        let mut cache = self.reasoning_by_call.lock().unwrap();
+        for call in calls {
+            cache.insert(call.id.clone(), saved.clone());
+        }
+    }
+
     fn prepare_request(&self, body: &Value) -> reqwest::RequestBuilder {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let mut request = crate::http::client().post(&url).json(body);
@@ -167,6 +205,15 @@ impl OpenAiModel {
             request = request.header(name.as_str(), value.as_str());
         }
         request
+    }
+
+    fn streaming_request_body(&self, context: &Context, tools: &[ToolSchema]) -> Value {
+        let mut body = self.request_body(context, tools);
+        body["stream"] = json!(true);
+        if self.stream_usage {
+            body["stream_options"] = json!({"include_usage": true});
+        }
+        body
     }
 
     async fn post(&self, body: Value) -> Result<reqwest::Response, ModelError> {
@@ -254,6 +301,7 @@ struct Choice {
 #[derive(Deserialize)]
 struct ChoiceMessage {
     content: Option<String>,
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<WireToolCall>,
 }
@@ -318,6 +366,8 @@ impl Model for OpenAiModel {
             });
         }
 
+        let reasoning = choice.message.reasoning_content.clone();
+        let content = choice.message.content.clone();
         let calls = choice
             .message
             .tool_calls
@@ -337,6 +387,9 @@ impl Model for OpenAiModel {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        if let Some(reasoning) = reasoning.filter(|s| !s.is_empty()) {
+            self.remember_reasoning(&calls, &content, reasoning);
+        }
         Ok(ModelResponse::ToolCalls {
             content: choice.message.content,
             calls,
@@ -350,11 +403,9 @@ impl Model for OpenAiModel {
         tools: &[ToolSchema],
         sink: &dyn DeltaSink,
     ) -> Result<ModelResponse, ModelError> {
-        let mut body = self.request_body(context, tools);
-        body["stream"] = json!(true);
-        body["stream_options"] = json!({"include_usage": true});
-
-        let response = self.post(body).await?;
+        let response = self
+            .post(self.streaming_request_body(context, tools))
+            .await?;
         let mut bytes = response.bytes_stream();
         let mut lines = SseLineBuffer::default();
         let mut accumulator = ChunkAccumulator::new();
@@ -385,7 +436,13 @@ impl Model for OpenAiModel {
             }
         }
 
-        accumulator.finish(done_observed)
+        let (result, reasoning) = accumulator.finish_with_reasoning(done_observed);
+        if let (Ok(ModelResponse::ToolCalls { content, calls, .. }), Some(reasoning)) =
+            (&result, reasoning)
+        {
+            self.remember_reasoning(calls, content, reasoning);
+        }
+        result
     }
 }
 
