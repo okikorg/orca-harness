@@ -1,4 +1,5 @@
 //! User-selected worker models; no provider-specific model shortlist.
+use crate::msg::ProviderExt as _;
 use crate::{Endpoint, Provider};
 use orca_harness_core::Model;
 use orca_harness_tools::SubagentModel;
@@ -8,11 +9,16 @@ pub(crate) fn provider_endpoint(endpoint: &Endpoint, provider: Provider) -> Endp
     // An explicit budget is safe to reuse for another model behind the same
     // provider adapter. Across providers, accepted effort names and request
     // semantics can differ, so retain the previous fail-safe of leaving them
-    // unset. Codex is the known exception within one adapter: its request API
-    // does not support an output-token cap (also enforced by CLI validation).
+    // unset. Some protocols (Codex, Cursor) accept no output-token cap at all;
+    // the registry says which, and CLI validation enforces the same rule.
     let same_provider = provider == endpoint.provider;
     Endpoint {
         provider,
+        model: if same_provider {
+            endpoint.model.clone()
+        } else {
+            String::new()
+        },
         base_url: if same_provider {
             endpoint.base_url.clone()
         } else {
@@ -20,6 +26,11 @@ pub(crate) fn provider_endpoint(endpoint: &Endpoint, provider: Provider) -> Endp
             provider.base_url().into()
         },
         automatic_base_url: !same_provider || endpoint.automatic_base_url,
+        protocol: if same_provider {
+            endpoint.protocol
+        } else {
+            None
+        },
         api_key: if same_provider {
             endpoint.api_key.clone()
         } else {
@@ -30,7 +41,12 @@ pub(crate) fn provider_endpoint(endpoint: &Endpoint, provider: Provider) -> Endp
         } else {
             None
         },
-        max_output_tokens: if same_provider && provider != Provider::OpenAiCodex {
+        max_output_tokens: if same_provider
+            && endpoint
+                .protocol
+                .or(provider.spec().protocol)
+                .is_none_or(|protocol| protocol.supports_max_tokens())
+        {
             endpoint.max_output_tokens
         } else {
             None
@@ -60,6 +76,7 @@ pub(crate) fn save_assignment(
             model,
             base_url: candidate.base_url,
             automatic_base_url: candidate.automatic_base_url,
+            protocol: candidate.protocol,
         },
     )
     .map(|_| ())
@@ -88,6 +105,7 @@ fn build(
             let mut worker = provider_endpoint(endpoint, provider);
             worker.base_url = selection.base_url;
             worker.automatic_base_url = selection.automatic_base_url;
+            worker.protocol = selection.protocol;
             worker.model = selection.model;
             let id = format!("{tier}/{}/{}", provider.label(), worker.model);
             let description = format!("user-selected {} / {}", provider.label(), worker.model);
@@ -155,6 +173,7 @@ mod tests {
             provider: Provider::Local,
             base_url: "http://localhost:12345/v1".into(),
             automatic_base_url: false,
+            protocol: None,
             api_key: None,
             model: "parent".into(),
             reasoning_effort: None,
@@ -183,6 +202,7 @@ mod tests {
                     model: model.into(),
                     base_url: Provider::from_label(provider).unwrap().base_url().into(),
                     automatic_base_url: false,
+                    protocol: None,
                 },
             )
             .unwrap();
@@ -246,17 +266,30 @@ mod tests {
         parent.provider = Provider::from_label("minimax").unwrap();
         parent.base_url = parent.provider.base_url().into();
         parent.automatic_base_url = false;
+        parent.protocol = Some(crate::Protocol::Anthropic);
         let worker = provider_endpoint(&parent, parent.provider);
         assert!(!worker.automatic_base_url);
+        assert_eq!(worker.protocol, parent.protocol);
+        assert_eq!(provider_endpoint(&parent, Provider::Local).protocol, None);
         let manager = orca_harness_tools::SubagentManager::from_settings(
-            crate::subagent_settings::configured(1, None));
-        save_assignment(&parent, &manager, "flash", parent.provider, "MiniMax-M2.7".into()).unwrap();
+            crate::subagent_settings::configured(1, None),
+        );
+        save_assignment(
+            &parent,
+            &manager,
+            "flash",
+            parent.provider,
+            "MiniMax-M2.7".into(),
+        )
+        .unwrap();
         let saved = crate::config::stored_subagent_models();
         assert!(!saved["flash"].automatic_base_url);
+        assert_eq!(saved["flash"].protocol, parent.protocol);
         assert_eq!(saved["flash"].base_url, parent.base_url);
         let legacy: crate::config::SubagentModelSelection = serde_json::from_value(json!({
             "provider": "minimax", "model": "MiniMax-M2.7", "base_url": parent.base_url
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(!legacy.automatic_base_url);
     }
 
@@ -278,6 +311,7 @@ mod tests {
         let mut parent = endpoint();
         parent.provider = Provider::OpenRouter;
         parent.base_url = base_url;
+        parent.api_key = Some("fixture-key".into());
         parent.model = "openrouter/auto".into();
         parent.reasoning_effort = Some("low".into());
         parent.max_output_tokens = Some(4096);
@@ -295,6 +329,33 @@ mod tests {
         assert_eq!(request["model"], "z-ai/glm-5");
         assert_eq!(request["reasoning"], json!({"effort": "low"}));
         assert_eq!(request["max_tokens"], 4096);
+    }
+
+    #[tokio::test]
+    async fn explicit_protocol_overrides_both_legacy_and_registry_transports() {
+        for provider in [
+            Provider::Anthropic,
+            Provider::from_label("minimax").unwrap(),
+        ] {
+            let (base_url, captured) = one_shot_completion().await;
+            let mut endpoint = endpoint();
+            endpoint.provider = provider;
+            endpoint.base_url = base_url;
+            endpoint.api_key = Some("fixture-key".into());
+            endpoint.protocol = Some(crate::Protocol::ChatCompletions);
+            endpoint.model = "unlisted-fixture-model".into();
+            let mut context = Context::new();
+            context.push_user("fixture");
+            let response = endpoint
+                .build_model()
+                .generate(&context, &[])
+                .await
+                .unwrap();
+            assert!(matches!(response, ModelResponse::Final { .. }));
+            let request = captured.await.unwrap();
+            assert_eq!(request["model"], "unlisted-fixture-model");
+            assert!(request["messages"].is_array());
+        }
     }
 
     #[test]
@@ -376,6 +437,7 @@ mod live_assignment_tests {
             provider: Provider::Local,
             base_url: Provider::Local.base_url().into(),
             automatic_base_url: true,
+            protocol: None,
             api_key: None,
             model: "parent".into(),
             reasoning_effort: None,

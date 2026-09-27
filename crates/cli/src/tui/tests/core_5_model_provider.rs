@@ -1,3 +1,4 @@
+use crate::msg::ProviderExt as _;
     #[test]
     fn stale_catalog_reply_is_ignored() {
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -251,9 +252,7 @@
     fn provider_without_key_requirement_switches_directly() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        app.overlay = Some(Overlay::Providers {
-            picker: ListPicker::new(Provider::ALL.len()),
-        });
+        app.overlay = Some(Overlay::Providers(ProviderPicker::new(None)));
         // Navigate to local (needs no key), independent of provider additions.
         for _ in 1..Provider::ALL.len() {
             press(&mut app, &tx, KeyCode::Down);
@@ -265,6 +264,37 @@
                 assert_eq!(provider, Provider::Local);
                 assert!(api_key.is_none());
             }
+            other => panic!("expected SetProvider, got {:?}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn typing_filters_providers_like_the_model_picker() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut app = test_app();
+        slash_command(&mut app, "provider", &tx, 80);
+        for c in "loca".chars() {
+            press(&mut app, &tx, KeyCode::Char(c));
+        }
+        match &app.overlay {
+            Some(Overlay::Providers(picker)) => {
+                assert_eq!(picker.filtered(), vec![Provider::Local]);
+                assert_eq!(picker.picker.index(), 0);
+            }
+            _ => panic!("expected the provider overlay"),
+        }
+        let lines = flat_lines(&live_lines(&app, 120));
+        assert!(lines.contains("filter: loca"), "{lines}");
+        press(&mut app, &tx, KeyCode::Char('z'));
+        let lines = flat_lines(&live_lines(&app, 120));
+        assert!(lines.contains("No providers match"), "{lines}");
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_some(), "enter on no match keeps the picker");
+        press(&mut app, &tx, KeyCode::Backspace);
+        press(&mut app, &tx, KeyCode::Enter);
+        assert!(app.overlay.is_none());
+        match rx.try_recv() {
+            Ok(WorkerCmd::SetProvider { provider, .. }) => assert_eq!(provider, Provider::Local),
             other => panic!("expected SetProvider, got {:?}", other.is_ok()),
         }
     }
@@ -313,7 +343,7 @@
         let mut app = test_app();
         slash_command(&mut app, "provider", &tx, 80);
         match &app.overlay {
-            Some(Overlay::Providers { picker }) => assert_eq!(picker.index(), 0),
+            Some(Overlay::Providers(picker)) => assert_eq!(picker.picker.index(), 0),
             _ => panic!("expected the provider overlay"),
         }
     }
@@ -332,8 +362,8 @@
         // active provider (local is the final built-in provider).
         press(&mut app, &tx, KeyCode::Enter);
         match &app.overlay {
-            Some(Overlay::Providers { picker }) => {
-                assert_eq!(picker.index(), Provider::ALL.len() - 1)
+            Some(Overlay::Providers(picker)) => {
+                assert_eq!(picker.picker.index(), Provider::ALL.len() - 1)
             }
             _ => panic!("expected the provider overlay"),
         }
@@ -524,7 +554,7 @@
             SubagentSetting::MidModel,
             SubagentSetting::FrontierModel,
         ] {
-            for provider in Provider::ALL {
+            for provider in Provider::ALL.iter().copied() {
                 let (tx, mut rx) = mpsc::unbounded_channel();
                 let mut app = test_app();
                 let parent = app.cfg.model_name.clone();

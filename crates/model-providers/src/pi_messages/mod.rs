@@ -8,22 +8,29 @@ use orca_harness_core::{
 };
 use serde_json::{json, Value};
 
+mod catalog;
+pub(crate) use catalog::list_models;
+
+pub const RADIUS_BASE_URL: &str = "https://radius.pi.dev/v1";
+
 pub struct PiMessagesModel {
     model: String,
+    provider: String,
     base_url: String,
     api_key: Option<String>,
-    max_tokens: u64,
-    reasoning_effort: String,
+    max_tokens: Option<u64>,
+    reasoning_effort: Option<String>,
 }
 
 impl PiMessagesModel {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             model: model.into(),
-            base_url: "https://radius.pi.dev/v1".into(),
+            provider: crate::ProviderPreset::Radius.id().into(),
+            base_url: RADIUS_BASE_URL.into(),
             api_key: None,
-            max_tokens: 8192,
-            reasoning_effort: "off".into(),
+            max_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -31,16 +38,21 @@ impl PiMessagesModel {
         self.base_url = url.into();
         self
     }
+    /// The provider named on replayed assistant messages.
+    pub fn provider(mut self, id: impl Into<String>) -> Self {
+        self.provider = id.into();
+        self
+    }
     pub fn api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(key.into());
         self
     }
     pub fn max_tokens(mut self, tokens: u64) -> Self {
-        self.max_tokens = tokens;
+        self.max_tokens = Some(tokens);
         self
     }
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
-        self.reasoning_effort = effort.into();
+        self.reasoning_effort = Some(effort.into());
         self
     }
 
@@ -70,7 +82,7 @@ impl PiMessagesModel {
                         blocks.push(json!({"type":"text","text":text}));
                     }
                     blocks.extend(tool_calls.iter().map(|call| json!({"type":"toolCall","id":call.id,"name":call.name,"arguments":call.arguments})));
-                    messages.push(json!({"role":"assistant","content":blocks,"api":"pi-messages","provider":"radius","model":self.model,"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":if tool_calls.is_empty() { "stop" } else { "toolUse" },"timestamp":0}));
+                    messages.push(json!({"role":"assistant","content":blocks,"api":"pi-messages","provider":self.provider,"model":self.model,"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":if tool_calls.is_empty() { "stop" } else { "toolUse" },"timestamp":0}));
                 }
                 Message::Tool { results } => {
                     for result in results {
@@ -84,7 +96,17 @@ impl PiMessagesModel {
                 }
             }
         }
-        json!({"model":self.model,"context":{"systemPrompt":if system.is_empty() { None } else { Some(system.join("\n\n")) },"messages":messages,"tools":tools},"options":{"temperature":null,"maxTokens":self.max_tokens,"reasoning":self.reasoning_effort,"sessionId":null}})
+        // PiMessagesOptions/StreamOptions are optional on the upstream wire:
+        // https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/api/pi-messages.ts
+        // Omit unset controls rather than imposing model defaults (or sending null).
+        let mut options = json!({});
+        if let Some(max) = self.max_tokens {
+            options["maxTokens"] = json!(max);
+        }
+        if let Some(effort) = &self.reasoning_effort {
+            options["reasoning"] = json!(effort);
+        }
+        json!({"model":self.model,"context":{"systemPrompt":if system.is_empty() { None } else { Some(system.join("\n\n")) },"messages":messages,"tools":tools},"options":options})
     }
 
     async fn generate_with(
@@ -309,6 +331,22 @@ fn usage(value: &Value) -> Option<Usage> {
 mod tests {
     use super::*;
     use orca_harness_core::{Image, ToolResult};
+
+    #[test]
+    fn optional_controls_delegate_defaults_and_preserve_explicit_values() {
+        let ctx = Context::new();
+        assert_eq!(
+            PiMessagesModel::new("unknown").payload(&ctx, &[])["options"],
+            json!({})
+        );
+        assert_eq!(
+            PiMessagesModel::new("unknown")
+                .max_tokens(12345)
+                .reasoning_effort("off")
+                .payload(&ctx, &[])["options"],
+            json!({"maxTokens":12345,"reasoning":"off"})
+        );
+    }
 
     #[test]
     fn maps_images_tools_and_history() {

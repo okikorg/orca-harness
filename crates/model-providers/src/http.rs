@@ -24,11 +24,17 @@ static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// The shared client, built on first use.
 ///
-/// Falls back to `Client::new()` if the builder fails, which keeps the
-/// signature infallible for constructors that cannot report an error.
+/// Provider credentials may use custom headers that reqwest does not strip
+/// across origins. Never follow redirects, including for discovery requests.
+/// Initialization fails closed instead of falling back to an unsafe client.
 pub fn client() -> reqwest::Client {
     CLIENT
-        .get_or_init(|| reqwest::Client::builder().build().unwrap_or_default())
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("initialize no-redirect provider HTTP client")
+        })
         .clone()
 }
 
@@ -40,4 +46,44 @@ pub fn warm() {
     std::thread::spawn(|| {
         let _ = client();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn custom_credentials_are_never_forwarded_on_redirect() {
+        for status in [301, 302, 303, 307, 308] {
+            let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin_url = format!("http://{}", origin.local_addr().unwrap());
+            let location = format!("http://{}/stolen", destination.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = origin.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let _ = socket.read(&mut request).await.unwrap();
+                socket.write_all(format!("HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            });
+            let response = client()
+                .get(origin_url)
+                .header("cf-aig-authorization", "Bearer gateway-secret")
+                .header("api-key", "azure-secret")
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            server.await.unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), destination.accept())
+                    .await
+                    .is_err()
+            );
+        }
+    }
 }

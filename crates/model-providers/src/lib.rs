@@ -12,6 +12,7 @@ pub mod catalog;
 pub mod cheaperinference;
 pub mod copilot;
 pub mod cursor;
+mod discovery;
 pub mod google;
 pub mod http;
 pub mod http_error;
@@ -35,8 +36,8 @@ pub use openai::OpenAiModel;
 pub use openai_codex::OpenAiCodexModel;
 pub use openrouter::OpenRouterModel;
 pub use pi_messages::PiMessagesModel;
-pub use provider::ProviderModel;
-pub use registry::ProviderPreset;
+pub use provider::{Attribution, ProviderModel};
+pub use registry::{Protocol, ProviderPreset};
 pub use responses::ResponsesModel;
 
 fn image_data_url(image: &orca_harness_core::Image) -> String {

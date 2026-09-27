@@ -126,28 +126,31 @@ impl GoogleModel {
         if let Some(tokens) = self.max_tokens {
             body["generationConfig"]["maxOutputTokens"] = json!(tokens);
         }
-        if let Some(effort) = &self.reasoning_effort {
-            if !["minimal", "low", "medium", "high"].contains(&effort.as_str()) {
-                return Err(ModelError::Request("invalid Gemini thinking level".into()));
-            }
-            let model = self.model.strip_prefix("models/").unwrap_or(&self.model);
-            body["generationConfig"]["thinkingConfig"] = if model.starts_with("gemini-2.5-") {
-                // Budgets valid for both 2.5 Pro (minimum 128) and Flash.
-                let budget = match effort.as_str() {
-                    "minimal" => 128,
-                    "low" => 1024,
-                    "medium" => 8192,
-                    "high" => 24576,
-                    _ => unreachable!(),
-                };
-                json!({"thinkingBudget":budget})
-            } else if model.starts_with("gemini-3-") || model.starts_with("gemini-3.") {
-                json!({"thinkingLevel":effort})
-            } else {
+        if self.reasoning_effort.is_some() {
+            return Err(ModelError::Request(
+                "Google reasoning_effort is unsupported: discovery provides no effort mapping; use explicit thinking_budget(...) or thinking_level(...) instead".into(),
+            ));
+        }
+        if self.thinking_budget.is_some() && self.thinking_level.is_some() {
+            return Err(ModelError::Request(
+                "set only one of thinking_budget or thinking_level".into(),
+            ));
+        }
+        if let Some(budget) = self.thinking_budget {
+            if budget < -1 {
                 return Err(ModelError::Request(
-                    "thinking effort requires Gemini 2.5 or 3".into(),
+                    "thinking_budget must be -1 or nonnegative".into(),
                 ));
-            };
+            }
+            body["generationConfig"]["thinkingConfig"] = json!({"thinkingBudget":budget});
+        }
+        if let Some(level) = &self.thinking_level {
+            if level.trim().is_empty() {
+                return Err(ModelError::Request(
+                    "thinking_level must not be empty".into(),
+                ));
+            }
+            body["generationConfig"]["thinkingConfig"] = json!({"thinkingLevel":level});
         }
         Ok(body)
     }

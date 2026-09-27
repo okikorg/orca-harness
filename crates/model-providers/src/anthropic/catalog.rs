@@ -57,20 +57,11 @@ pub async fn list_models(
             api_key,
             reqwest::Method::GET,
         )?
-        .timeout(crate::http::CATALOG_TIMEOUT)
         .query(&[("limit", "1000")]);
         if let Some(cursor) = &cursor {
             request = request.query(&[("after_id", cursor)]);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| crate::http_error::transport_error(&error))?;
-        let response = crate::http_error::check_response(response).await?;
-        let page: Page = response
-            .json()
-            .await
-            .map_err(|error| ModelError::InvalidResponse(error.to_string()))?;
+        let page: Page = decode(crate::discovery::fetch_json(request).await?)?;
         let next = next_cursor(&page, &mut seen)?;
         models.extend(page.data.into_iter().map(ModelInfo::from));
         match next {
@@ -99,21 +90,17 @@ pub async fn retrieve_model(
             "not a valid Anthropic model id: {model:?}"
         )));
     }
-    let response = super::authenticated_request(
+    let request = super::authenticated_request(
         &format!("{}/models/{}", base_url.trim_end_matches('/'), model),
         api_key,
         reqwest::Method::GET,
-    )?
-    .timeout(crate::http::CATALOG_TIMEOUT)
-    .send()
-    .await
-    .map_err(|error| crate::http_error::transport_error(&error))?;
-    let response = crate::http_error::check_response(response).await?;
-    let row: Row = response
-        .json()
-        .await
-        .map_err(|error| ModelError::InvalidResponse(error.to_string()))?;
+    )?;
+    let row: Row = decode(crate::discovery::fetch_json(request).await?)?;
     Ok(row.into())
+}
+
+fn decode<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<T, ModelError> {
+    serde_json::from_value(value).map_err(|error| ModelError::InvalidResponse(error.to_string()))
 }
 
 fn next_cursor(page: &Page, seen: &mut HashSet<String>) -> Result<Option<String>, ModelError> {

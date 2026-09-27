@@ -1,6 +1,7 @@
 use super::harness::{
     bind_workflow_stage, handle_harness_event, handle_subagent_event, start_subagent,
 };
+use crate::msg::ProviderExt as _;
 
 use ratatui::text::{Line, Span};
 use tokio::sync::mpsc;

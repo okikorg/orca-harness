@@ -38,7 +38,7 @@ impl OpenAiModel {
         });
         let mut messages = encode_messages(context);
         if self.replay_reasoning_content {
-            let mut cache = self.reasoning_by_call.lock().unwrap();
+            let cache = self.reasoning_by_call.lock().unwrap();
             // Encoding expands tool-result batches and image messages. Match
             // assistant turns separately rather than zipping unlike sequences.
             let assistants = context
@@ -66,13 +66,9 @@ impl OpenAiModel {
                     }
                 }
             }
-            // Retire turns removed from the context, including all calls in a batch.
-            cache.retain(|_, saved| {
-                context.messages().iter().any(|message| {
-                    matches!(message, Message::Assistant { content, tool_calls }
-                    if saved.matches(content, tool_calls))
-                })
-            });
+            // Contexts can be independent conversations, not just compactions.
+            // Retain replay state for this model's lifetime; matching above keeps
+            // altered assistant turns from inheriting unrelated reasoning.
         }
         body["messages"] = Value::Array(messages);
         if !tools.is_empty() {

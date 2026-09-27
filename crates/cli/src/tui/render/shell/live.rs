@@ -217,7 +217,7 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
             Overlay::Efforts(picker) => effort_picker_lines(picker, width),
             Overlay::Locations(picker) => location_picker_lines(picker, width),
             Overlay::SkillMentions(picker) => skill_mention_picker_lines(picker, width),
-            Overlay::Providers { picker } => provider_lines(picker, width),
+            Overlay::Providers(picker) => provider_lines(picker, width),
             Overlay::Themes { picker } => theme_picker_lines(picker, width),
             Overlay::Views { picker } => view_picker_lines(app.view_mode, picker, width),
             Overlay::Mode { picker } => mode_picker_lines(app.cfg.mode.get(), picker, width),

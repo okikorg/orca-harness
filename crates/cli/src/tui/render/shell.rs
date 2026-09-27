@@ -4,6 +4,7 @@
 // returns `Vec<Line>`; the terminal loop in the parent `run`/`draw`
 // drives the actual frames.
 
+use crate::msg::ProviderExt as _;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;

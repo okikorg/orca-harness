@@ -1,4 +1,5 @@
 mod runs;
+use crate::msg::ProviderExt as _;
 #[cfg(test)]
 use runs::run_interactive_context;
 use runs::{process_notification_prompt, rotate_for_clear, run_and_report};
@@ -591,12 +592,20 @@ pub(crate) async fn worker<F>(
                 match result {
                     Ok(()) => {
                         let mut candidate = endpoint.clone();
+                        if candidate.provider != provider {
+                            candidate.protocol = None;
+                            candidate.base_url = provider.base_url().into();
+                            candidate.automatic_base_url = true;
+                        }
                         candidate.provider = provider;
-                        candidate.base_url = provider.base_url().into();
-                        candidate.automatic_base_url = true;
-                        candidate.api_key = None;
+                        candidate.api_key = provider.resolve_key();
                         candidate.reasoning_effort = None;
-                        let requested = config::stored_model(provider.label());
+                        let requested =
+                            if endpoint.provider == provider && !endpoint.model.is_empty() {
+                                Some(endpoint.model.clone())
+                            } else {
+                                config::stored_model(provider.label())
+                            };
                         candidate.model = match candidate.catalog_model(requested.as_deref()).await
                         {
                             Ok(model) => model,
@@ -648,12 +657,19 @@ pub(crate) async fn worker<F>(
                 }
                 login_attempt = login_attempt.wrapping_add(1);
                 let mut candidate = endpoint.clone();
+                if candidate.provider != provider {
+                    candidate.protocol = None;
+                    candidate.base_url = provider.base_url().into();
+                    candidate.automatic_base_url = true;
+                }
                 candidate.provider = provider;
-                candidate.base_url = provider.base_url().into();
-                candidate.automatic_base_url = true;
                 candidate.api_key = api_key.or_else(|| provider.resolve_key());
                 candidate.reasoning_effort = None;
-                let requested = config::stored_model(provider.label());
+                let requested = if endpoint.provider == provider && !endpoint.model.is_empty() {
+                    Some(endpoint.model.clone())
+                } else {
+                    config::stored_model(provider.label())
+                };
                 candidate.model = match candidate.catalog_model(requested.as_deref()).await {
                     Ok(model) => model,
                     Err(error) => {

@@ -10,16 +10,8 @@ pub(crate) fn submit(app: &mut App, worker: &mpsc::UnboundedSender<WorkerCmd>, w
         return;
     }
 
-    if !prompt.starts_with('!')
-        && !app.cfg.provider.supports_images()
-        && !prompt_images(&app.pastes, &prompt).is_empty()
-    {
-        push_error(
-            app,
-            "this model does not support image input; select another model",
-        );
-        return;
-    }
+    // Image acceptance is model-specific and unknown here. Let the endpoint
+    // validate input rather than inferring capability from the provider name.
 
     // Queue management is intentionally available during a run. Other
     // slash commands retain the existing one-run-at-a-time behavior and

@@ -6,7 +6,7 @@ use serde_json::json;
 fn request_images_tools_and_signed_replay() {
     let model = GoogleModel::new("gemini-3-pro")
         .max_tokens(100)
-        .reasoning_effort("high");
+        .thinking_level("high");
     let mut context = Context::new();
     context.push_system("system");
     context.push_user_with_images(
@@ -238,7 +238,7 @@ async fn wire_auth_stream_and_catalog() {
                 socket.write_all(response.as_bytes()).await.unwrap();
             } else {
                 assert!(text.starts_with("get /v1beta/models "));
-                let payload = r#"{"models":[{"name":"models/gemini-test","displayName":"Gemini Test","inputTokenLimit":1000}]}"#;
+                let payload = r#"{"models":[{"name":"models/gemini-test","displayName":"Gemini Test","inputTokenLimit":1000,"supportedGenerationMethods":["generateContent"]}]}"#;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{payload}",
                     payload.len()
@@ -262,16 +262,16 @@ async fn wire_auth_stream_and_catalog() {
 }
 
 #[test]
-fn thinking_configuration_is_model_aware() {
-    for (effort, budget) in [
-        ("minimal", 128),
-        ("low", 1024),
-        ("medium", 8192),
-        ("high", 24576),
+fn thinking_configuration_does_not_infer_from_ids() {
+    for id in [
+        "arbitrary-id",
+        "models/custom",
+        "gemini-2.5-pro",
+        "gemini-3-pro",
     ] {
-        for model in ["gemini-2.5-pro", "models/gemini-2.5-flash"] {
-            let body = GoogleModel::new(model)
-                .reasoning_effort(effort)
+        for budget in [-1, 0, 1234] {
+            let body = GoogleModel::new(id)
+                .thinking_budget(budget)
                 .body(&Context::new(), &[], &HashMap::new())
                 .unwrap();
             assert_eq!(
@@ -279,27 +279,125 @@ fn thinking_configuration_is_model_aware() {
                 json!({"thinkingBudget":budget})
             );
         }
-        for model in ["gemini-3-pro-preview", "models/gemini-3.1-pro-preview"] {
-            let body = GoogleModel::new(model)
+        let body = GoogleModel::new(id)
+            .thinking_level("provider-level")
+            .body(&Context::new(), &[], &HashMap::new())
+            .unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingLevel":"provider-level"})
+        );
+        let body = GoogleModel::new(id)
+            .body(&Context::new(), &[], &HashMap::new())
+            .unwrap();
+        assert!(body.get("generationConfig").is_none());
+        for effort in ["high", "low", "unknown", ""] {
+            let error = GoogleModel::new(id)
                 .reasoning_effort(effort)
                 .body(&Context::new(), &[], &HashMap::new())
-                .unwrap();
-            assert_eq!(
-                body["generationConfig"]["thinkingConfig"],
-                json!({"thinkingLevel":effort})
-            );
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("unsupported"));
+            assert!(error.contains("thinking_budget"));
+            assert!(error.contains("thinking_level"));
         }
     }
-    for (model, effort) in [
-        ("gemini-2.5-pro", "invalid"),
-        ("gemini-3-pro", "invalid"),
-        ("gemini-2.0-flash", "high"),
+    for model in [
+        GoogleModel::new("x").thinking_budget(-2),
+        GoogleModel::new("x").thinking_level(" "),
+        GoogleModel::new("x")
+            .thinking_budget(10)
+            .thinking_level("high"),
+        GoogleModel::new("x")
+            .reasoning_effort("high")
+            .thinking_budget(10),
     ] {
-        assert!(GoogleModel::new(model)
-            .reasoning_effort(effort)
-            .body(&Context::new(), &[], &HashMap::new())
-            .is_err());
+        assert!(model.body(&Context::new(), &[], &HashMap::new()).is_err());
     }
+}
+
+#[test]
+fn discovery_validates_shape() {
+    for value in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!({"publisherModels":[]}),
+        json!({"models":null}),
+        json!({"models":{}}),
+        json!({"models":[],"nextPageToken":123}),
+        json!({"models":[{}]}),
+        json!({"models":[{"name":""}]}),
+        json!({"models":[{"name":"x","supportedGenerationMethods":[42]}]}),
+        json!({"models":[{"name":"x","inputTokenLimit":"100"}]}),
+    ] {
+        assert!(super::parse_models_page(value.clone()).is_err(), "{value}");
+    }
+    assert!(super::parse_models_page(json!({"models":[]}))
+        .unwrap()
+        .models
+        .is_empty());
+}
+
+#[tokio::test]
+async fn vertex_discovery_is_unavailable_without_network() {
+    for root in [
+        "http://127.0.0.1:1/v1/projects/p/locations/l/publishers/google",
+        "https://us-central1-aiplatform.googleapis.com/v1",
+    ] {
+        let error = GoogleModel::new("anything")
+            .base_url(root)
+            .models()
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("discovery unavailable"));
+    }
+}
+
+#[tokio::test]
+async fn discovery_pages_filter_remote_methods_not_names() {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let root = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for (path, payload) in [
+            (
+                "/models",
+                json!({"models":[
+                {"name":"models/unrelated-id","supportedGenerationMethods":["generateContent"],"displayName":"Remote","inputTokenLimit":123},
+                {"name":"models/gemini-3-pro","supportedGenerationMethods":["embedContent"]},
+                {"name":"models/no-methods"}],"nextPageToken":"page2"}),
+            ),
+            (
+                "/models?pageToken=page2",
+                json!({"models":[{"name":"models/another-id","supportedGenerationMethods":["generateContent"]}]}),
+            ),
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            let n = socket.read(&mut buf).await.unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n]).starts_with(&format!("GET {path} HTTP/1.1")));
+            let body = payload.to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+    });
+    let rows = GoogleModel::new("not-used")
+        .base_url(root)
+        .api_key("key")
+        .models()
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["unrelated-id", "another-id"]
+    );
+    assert_eq!(rows[0].name.as_deref(), Some("Remote"));
+    assert_eq!(rows[0].context_length, Some(123));
+    assert!(rows.iter().all(|r| r.reasoning.is_none()));
+    server.await.unwrap();
 }
 
 #[tokio::test]

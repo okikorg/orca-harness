@@ -5,6 +5,7 @@ mod openai_codex;
 mod store;
 
 use crate::msg::Provider;
+use crate::msg::ProviderExt as _;
 pub use openai_codex::CodexCliCredential;
 
 pub fn status(provider: Provider) -> Result<&'static str, String> {

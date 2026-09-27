@@ -74,6 +74,13 @@ pub(crate) struct ModelPicker {
     pub(crate) picker: ListPicker,
 }
 
+/// The provider selector: the registry presets and a live-typed filter,
+/// searched the same way as the model picker.
+pub(crate) struct ProviderPicker {
+    pub(crate) filter: String,
+    pub(crate) picker: ListPicker,
+}
+
 /// The picker to open when a model-catalog request completes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModelPickerTarget {
@@ -194,6 +201,36 @@ impl ModelPicker {
     }
 }
 
+impl ProviderPicker {
+    /// Open unfiltered, with the cursor on `current` when given.
+    pub(crate) fn new(current: Option<Provider>) -> Self {
+        let selected = current
+            .and_then(|current| Provider::ALL.iter().position(|p| *p == current))
+            .unwrap_or(0);
+        Self {
+            filter: String::new(),
+            picker: ListPicker::with_selected(Provider::ALL.len(), selected),
+        }
+    }
+
+    pub(crate) fn filtered(&self) -> Vec<Provider> {
+        let needle = self.filter.to_lowercase();
+        Provider::ALL
+            .iter()
+            .copied()
+            .filter(|p| needle.is_empty() || p.id().contains(&needle))
+            .collect()
+    }
+
+    pub(crate) fn selected(&self) -> Option<Provider> {
+        self.filtered().get(self.picker.index()).copied()
+    }
+
+    pub(crate) fn reset_filtered_selection(&mut self) {
+        self.picker = ListPicker::new(self.filtered().len());
+    }
+}
+
 impl EffortPicker {
     pub(crate) fn new(model: ModelInfo) -> Option<Self> {
         let reasoning = model.reasoning?;
@@ -234,9 +271,8 @@ pub(crate) enum Overlay {
     Locations(LocationPicker),
     /// Enabled skill selector opened by typing `$` in the composer.
     SkillMentions(SkillMentionPicker),
-    /// Provider selector (OpenRouter, Vercel AI Gateway, CheaperInference,
-    /// OpenAI, Codex, local).
-    Providers { picker: ListPicker },
+    /// Provider selector over the registry, filtered as you type.
+    Providers(ProviderPicker),
     /// Theme selector over `view::ThemeName::ALL`.
     Themes { picker: ListPicker },
     /// Transcript layout selector (classic or split inspector).

@@ -271,7 +271,7 @@ fn compatibility_fields_default_and_opt_in() {
 }
 
 #[test]
-fn nonstreamed_reasoning_replays_only_matching_tool_turn_and_retires() {
+fn nonstreamed_reasoning_survives_a_b_a_and_rejects_altered_turns() {
     let model = OpenAiModel::new("m").replay_reasoning_content(true);
     let payload: ChatCompletion = serde_json::from_value(json!({
         "choices": [{"message": {"content": null, "reasoning_content": "think",
@@ -308,7 +308,11 @@ fn nonstreamed_reasoning_replays_only_matching_tool_turn_and_retires() {
         model.request_body(&altered, &[])["messages"][1]["reasoning_content"],
         ""
     );
-    assert!(model.reasoning_by_call.lock().unwrap().is_empty());
+    model.request_body(&context(), &[]);
+    assert_eq!(
+        model.request_body(&history, &[])["messages"][1]["reasoning_content"],
+        "think"
+    );
 
     let disabled = OpenAiModel::new("m");
     disabled.remember_reasoning(&calls, &None, "think".into());
@@ -318,7 +322,7 @@ fn nonstreamed_reasoning_replays_only_matching_tool_turn_and_retires() {
 }
 
 #[test]
-fn streamed_reasoning_replays_and_retires_on_pruned_context() {
+fn streamed_reasoning_survives_a_b_a_contexts() {
     let model = OpenAiModel::new("m").replay_reasoning_content(true);
     let mut acc = ChunkAccumulator::new();
     for chunk in [
@@ -339,7 +343,10 @@ fn streamed_reasoning_replays_and_retires_on_pruned_context() {
         "step two"
     );
     model.request_body(&context(), &[]);
-    assert!(model.reasoning_by_call.lock().unwrap().is_empty());
+    assert_eq!(
+        model.request_body(&history, &[])["messages"][1]["reasoning_content"],
+        "step two"
+    );
 }
 
 #[test]

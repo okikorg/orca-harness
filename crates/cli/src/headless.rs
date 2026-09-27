@@ -2,6 +2,7 @@
 //! to stdout as it is generated; tool activity goes to stderr. With
 //! `--json`, every harness event is serialized to stdout as NDJSON.
 
+use crate::msg::ProviderExt as _;
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};

@@ -1,11 +1,20 @@
 //! Registry-backed model construction. The core continues to see only `Model`.
+//! Provider differences come from the preset's [`Spec`] row, never its ID.
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
 use tokio::sync::OnceCell;
 
-use crate::registry::{Protocol, ProviderPreset};
+use crate::registry::{Adapter, Credential, Discovery, KeyPlacement, Protocol, ProviderPreset};
+
+/// Host identification forwarded to gateways that attribute traffic.
+#[derive(Debug, Clone, Default)]
+pub struct Attribution {
+    pub referer: Option<String>,
+    pub title: Option<String>,
+    pub categories: Option<String>,
+}
 
 /// A named provider using the same model contract as the individual adapters.
 /// Credentials are explicit; environment lookup and persistence remain host concerns.
@@ -13,10 +22,15 @@ use crate::registry::{Protocol, ProviderPreset};
 pub struct ProviderModel {
     preset: ProviderPreset,
     model: String,
+    protocol: Option<Protocol>,
     base_url: Option<String>,
     api_key: Option<String>,
     max_tokens: Option<u64>,
     reasoning_effort: Option<String>,
+    user_agent: Option<String>,
+    prompt_cache: bool,
+    session_id: Option<String>,
+    attribution: Attribution,
     codex_credentials: Option<Arc<dyn crate::openai_codex::CodexCredentialSource>>,
     inner: OnceCell<Arc<dyn Model>>,
 }
@@ -26,35 +40,60 @@ impl ProviderModel {
         Self {
             preset,
             model: model.into(),
+            protocol: None,
             base_url: None,
             api_key: None,
             max_tokens: None,
             reasoning_effort: None,
+            user_agent: None,
+            prompt_cache: false,
+            session_id: None,
+            attribution: Attribution::default(),
             codex_credentials: None,
             inner: OnceCell::new(),
         }
     }
 
+    fn reset(mut self) -> Self {
+        self.inner = OnceCell::new();
+        self
+    }
+
     /// Explicit API root override, preserved even when equal to the preset default.
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = Some(url.into());
-        self.inner = OnceCell::new();
-        self
+        self.reset()
     }
     pub fn api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(key.into());
-        self.inner = OnceCell::new();
-        self
+        self.reset()
     }
     pub fn max_tokens(mut self, count: u64) -> Self {
         self.max_tokens = Some(count);
-        self.inner = OnceCell::new();
-        self
+        self.reset()
     }
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
-        self.inner = OnceCell::new();
-        self
+        self.reset()
+    }
+    /// Sent where the adapter supports custom headers.
+    pub fn user_agent(mut self, agent: impl Into<String>) -> Self {
+        self.user_agent = Some(agent.into());
+        self.reset()
+    }
+    /// Request provider-side prompt caching where the protocol offers it.
+    pub fn prompt_cache(mut self, enabled: bool) -> Self {
+        self.prompt_cache = enabled;
+        self.reset()
+    }
+    /// A stable per-session ID used as the cache key or session hint.
+    pub fn session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self.reset()
+    }
+    pub fn attribution(mut self, attribution: Attribution) -> Self {
+        self.attribution = attribution;
+        self.reset()
     }
 
     /// Subscription OAuth remains behind the existing credential boundary.
@@ -63,209 +102,320 @@ impl ProviderModel {
         source: Arc<dyn crate::openai_codex::CodexCredentialSource>,
     ) -> Self {
         self.codex_credentials = Some(source);
-        self.inner = OnceCell::new();
-        self
+        self.reset()
     }
 
-    /// Built-in provider catalog. Unlike a network catalog this also works for
-    /// services without a model discovery endpoint; account availability may differ.
+    /// Choose a transport explicitly for a mixed-protocol service.
+    /// Also set `base_url` to that interface's complete API root.
+    pub fn protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = Some(protocol);
+        self.reset()
+    }
+
+    /// Discover models visible to the current credential, without a fallback catalog.
     pub async fn models(&self) -> Result<Vec<crate::ModelInfo>, ModelError> {
-        self.endpoint()?;
-        Ok(self.preset.models())
+        tokio::time::timeout(crate::http::CATALOG_TIMEOUT, self.discover())
+            .await
+            .map_err(|_| ModelError::Request("model discovery timed out".into()))?
+    }
+
+    async fn discover(&self) -> Result<Vec<crate::ModelInfo>, ModelError> {
+        let discovery = self.preset.spec().discovery;
+        if discovery == Discovery::Unsupported {
+            return Err(ModelError::Request(format!(
+                "{}: model discovery unavailable; supply a model ID manually and configure its transport",
+                self.preset.id()
+            )));
+        }
+        let key = self.credential(true)?;
+        let root = self.endpoint()?.1;
+        match discovery {
+            Discovery::Unsupported => unreachable!("handled above"),
+            Discovery::OpenAiModels | Discovery::Ollama => {
+                crate::discovery::list_openai_models(&root, key).await
+            }
+            Discovery::OpenRouter => crate::openrouter::list_models(&root, key).await,
+            Discovery::Vercel => crate::vercel::list_models(&root, key).await,
+            Discovery::CheaperInference => crate::cheaperinference::list_models(&root).await,
+            Discovery::Radius => crate::pi_messages::list_models(&root, key).await,
+            Discovery::Anthropic => crate::anthropic::list_models(&root, key).await,
+            Discovery::Google => {
+                let mut model = crate::GoogleModel::new("").base_url(root);
+                if let Some(key) = key {
+                    model = model.api_key(key);
+                }
+                model.models().await
+            }
+            Discovery::Copilot => self.copilot("").models().await,
+            Discovery::Cursor => crate::cursor::list_models(&root, required(key)?).await,
+            Discovery::Codex => crate::openai_codex::list_models(&root, self.codex()?).await,
+        }
+    }
+
+    /// The active model's context window, best effort.
+    pub async fn context_window(&self) -> Option<u64> {
+        let key = self.credential(true).ok()?;
+        match self.preset.spec().discovery {
+            // `/models` lists dated IDs, so resolve an alias directly.
+            Discovery::Anthropic => {
+                let root = self.endpoint().ok()?.1;
+                crate::anthropic::retrieve_model(&root, key, &self.model)
+                    .await
+                    .ok()?
+                    .context_length
+            }
+            Discovery::Ollama => {
+                let root = self.endpoint().ok()?.1;
+                crate::discovery::ollama_context_window(&root, &self.model).await
+            }
+            _ => {
+                self.models()
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .find(|model| model.id == self.model)?
+                    .context_length
+            }
+        }
+    }
+
+    /// The API key, required unless the preset needs none or discovery is public.
+    fn credential(&self, discovery: bool) -> Result<Option<&str>, ModelError> {
+        let key = self.api_key.as_deref().filter(|key| !key.trim().is_empty());
+        let spec = self.preset.spec();
+        match spec.credential {
+            Credential::ApiKey { env, .. }
+                if key.is_none() && !(discovery && spec.public_catalog) =>
+            {
+                Err(ModelError::Authentication(format!(
+                    "{} requires a credential ({env})",
+                    spec.id
+                )))
+            }
+            _ => Ok(key),
+        }
+    }
+
+    fn codex(&self) -> Result<Arc<dyn crate::openai_codex::CodexCredentialSource>, ModelError> {
+        self.codex_credentials.clone().ok_or_else(|| {
+            ModelError::Authentication(format!(
+                "{} requires codex_credentials with a CodexCredentialSource",
+                self.preset.id()
+            ))
+        })
+    }
+
+    fn copilot(&self, model: &str) -> crate::CopilotModel {
+        let mut copilot = crate::CopilotModel::new(model);
+        if let Some(key) = &self.api_key {
+            copilot = copilot.api_key(key);
+        }
+        // Copilot's API root comes from its token exchange unless overridden.
+        if let Some(url) = &self.base_url {
+            copilot = copilot.base_url(url);
+        }
+        copilot
     }
 
     async fn adapter(&self) -> Result<&Arc<dyn Model>, ModelError> {
         self.inner.get_or_try_init(|| async { self.build() }).await
     }
 
+    /// The transport and resolved API root.
     fn endpoint(&self) -> Result<(Protocol, String), ModelError> {
-        // Preserve OpenRouter's normalized Chat Completions interface for
-        // every model, including catalog rows offering an alternate dialect.
-        if self.preset.id() == "openrouter" {
-            return Ok((
-                Protocol::ChatCompletions,
-                self.preset.resolve_base_url(self.base_url.as_deref())?,
-            ));
-        }
-        let route = self.preset.route(&self.model);
-        let mut base_url = route.resolve_base_url(self.preset, self.base_url.as_deref())?;
-        // Catalog roots follow upstream conventions; adapters take the API root.
-        if self.base_url.is_none() {
-            match route.protocol {
-                Protocol::Anthropic if !base_url.ends_with("/v1") => base_url.push_str("/v1"),
-                Protocol::ChatCompletions
-                    if self.preset.id() == "mistral" && !base_url.ends_with("/v1") =>
-                {
-                    base_url.push_str("/v1")
-                }
-                Protocol::Vertex => {
-                    let project = std::env::var("GOOGLE_CLOUD_PROJECT").ok().filter(|s| !s.trim().is_empty())
-                        .ok_or_else(|| ModelError::Request("google-vertex requires GOOGLE_CLOUD_PROJECT or an explicit base URL".into()))?;
-                    let location = std::env::var("GOOGLE_CLOUD_LOCATION")
-                        .unwrap_or_else(|_| "us-central1".into());
-                    crate::registry::validate_segment(
-                        "google-vertex",
-                        "GOOGLE_CLOUD_PROJECT",
-                        &project,
-                    )?;
-                    crate::registry::validate_segment(
-                        "google-vertex",
-                        "GOOGLE_CLOUD_LOCATION",
-                        &location,
-                    )?;
-                    base_url = format!(
-                        "{}/v1/projects/{project}/locations/{location}/publishers/google",
-                        base_url.trim_end_matches('/')
-                    );
-                }
-                Protocol::Responses
-                    if self.preset.id() == "azure-openai-responses"
-                        && !base_url.contains("/openai/") =>
-                {
-                    base_url = format!("{}/openai/v1", base_url.trim_end_matches('/'));
-                }
-                _ => {}
+        let default = self.preset.spec().protocol;
+        let protocol = match self.protocol {
+            // The preset's URL serves only its own dialect.
+            Some(explicit) if Some(explicit) != default && self.base_url.is_none() => {
+                return Err(ModelError::Request(format!(
+                    "{}: protocol {} requires an explicit base_url for that interface",
+                    self.preset.id(),
+                    explicit.name()
+                )))
             }
-        }
-        Ok((route.protocol, base_url))
+            Some(explicit) => explicit,
+            None => self.preset.protocol()?,
+        };
+        let base_url = self.preset.resolve_base_url(self.base_url.as_deref())?;
+        Ok((protocol, base_url))
     }
 
     fn build(&self) -> Result<Arc<dyn Model>, ModelError> {
+        let spec = self.preset.spec();
+        let quirks = spec.quirks;
         let (protocol, base_url) = self.endpoint()?;
-        let id = self.preset.id();
-        let key = self.api_key.as_deref().filter(|key| !key.trim().is_empty());
-        if self.preset.key_env().is_some() && key.is_none() {
-            return Err(ModelError::Authentication(format!(
-                "{id} requires a credential ({})",
-                self.preset.key_env().unwrap()
-            )));
-        }
-        // All adapters below expose the same optional output/effort controls.
-        macro_rules! configured {
+        let key = self.credential(false)?;
+        let placement = match spec.credential {
+            Credential::ApiKey { placement, .. } => placement,
+            Credential::OAuth | Credential::None => KeyPlacement::Native,
+        };
+        let user_agent = quirks.user_agent.or(self.user_agent.as_deref());
+
+        // Output and effort controls every adapter below shares.
+        macro_rules! tuned {
             ($model:expr) => {{
                 let mut model = $model;
-                if let Some(key) = key.filter(|_| id != "cloudflare-ai-gateway") {
-                    model = model.api_key(key);
-                }
                 if let Some(count) = self.max_tokens {
                     model = model.max_tokens(count);
                 }
                 if let Some(effort) = &self.reasoning_effort {
                     model = model.reasoning_effort(effort);
                 }
-                Arc::new(model) as Arc<dyn Model>
+                model
             }};
         }
-        if id == "github-copilot" {
-            let mut model = crate::copilot::CopilotModel::new(&self.model);
-            if let Some(url) = &self.base_url {
-                model = model.base_url(url);
-            }
-            return Ok(configured!(model));
+        // Key placement for Bearer-native adapters that accept custom headers.
+        macro_rules! keyed {
+            ($model:expr) => {{
+                let mut model = $model;
+                if let Some(key) = key {
+                    model = match placement {
+                        KeyPlacement::Native | KeyPlacement::Bearer => model.api_key(key),
+                        KeyPlacement::Header(name) => model.header(name, key),
+                        KeyPlacement::CloudflareGateway => {
+                            model.header("cf-aig-authorization", format!("Bearer {key}"))
+                        }
+                    };
+                }
+                if let Some(agent) = user_agent {
+                    model = model.header(reqwest::header::USER_AGENT.as_str(), agent);
+                }
+                model
+            }};
         }
-        if id == "openrouter" {
-            return Ok(configured!(
-                crate::OpenRouterModel::new(&self.model).base_url(base_url)
-            ));
-        }
-        Ok(match protocol {
-            Protocol::ChatCompletions => {
-                let mut model = crate::OpenAiModel::new(&self.model)
-                    .base_url(base_url)
-                    .replay_reasoning_content(matches!(
-                        id,
-                        "deepseek" | "moonshotai" | "moonshotai-cn" | "zai" | "zai-coding-cn"
-                    ));
-                if id == "vercel" {
-                    if let Some(effort) = &self.reasoning_effort {
-                        model = model.nested_reasoning_effort(effort);
-                    }
-                    if let Some(key) = key {
-                        model = model.api_key(key);
-                    }
-                    if let Some(count) = self.max_tokens {
-                        model = model.max_tokens(count);
-                    }
-                    return Ok(Arc::new(model));
-                }
-                configured!(model)
-            }
-            Protocol::Anthropic => {
-                let mut model = crate::AnthropicModel::new(&self.model).base_url(base_url);
-                if matches!(id, "databricks-unity-gateway" | "snowflake-cortex") {
-                    if let Some(key) = key {
-                        model = model.bearer_token(key);
-                    }
-                }
-                if id == "cloudflare-ai-gateway" {
-                    model = model.gateway_token(key.expect("credential validated above"));
-                }
-                if id == "kimi-coding" {
-                    model = model.header("user-agent", "orcacode");
-                }
-                configured!(model)
-            }
-            Protocol::Responses => {
-                let mut model = crate::ResponsesModel::new(&self.model)
-                    .base_url(base_url)
-                    .encrypted_reasoning(!matches!(id, "xai" | "meta"));
-                if id == "azure-openai-responses" {
-                    if let Some(key) = key {
-                        model = model.header("api-key", key);
-                    }
-                }
-                configured!(model)
-            }
-            Protocol::Google => {
-                configured!(crate::google::GoogleModel::new(&self.model).base_url(base_url))
-            }
-            Protocol::Vertex => {
-                configured!(crate::google::GoogleModel::new(&self.model).base_url(base_url))
-            }
-            Protocol::Bedrock => {
-                configured!(crate::bedrock::BedrockModel::new(&self.model).base_url(base_url))
-            }
-            Protocol::PiMessages => {
-                configured!(crate::pi_messages::PiMessagesModel::new(&self.model).base_url(base_url))
-            }
-            Protocol::Cursor => {
-                if self.max_tokens.is_some() || self.reasoning_effort.is_some() {
-                    return Err(ModelError::Request(
-                        "Cursor does not expose output-token or reasoning-effort controls".into(),
-                    ));
-                }
-                let mut model = crate::cursor::CursorModel::new(&self.model).base_url(base_url);
+        // Adapters with only their native key scheme.
+        macro_rules! native {
+            ($model:expr) => {{
+                let mut model = $model;
                 if let Some(key) = key {
                     model = model.api_key(key);
                 }
+                model
+            }};
+        }
+
+        // Wrapped adapters serve only the preset's own dialect; an explicit
+        // foreign protocol goes straight to that protocol's adapter.
+        let native_route = self.protocol.is_none_or(|p| Some(p) == spec.protocol);
+        match spec.adapter {
+            _ if !native_route => {}
+            Adapter::Copilot => return Ok(Arc::new(tuned!(self.copilot(&self.model)))),
+            Adapter::OpenRouter => {
+                let mut model = tuned!(native!(
+                    crate::OpenRouterModel::new(&self.model).base_url(base_url)
+                ));
+                if let Some(agent) = user_agent {
+                    model = model.user_agent(agent);
+                }
+                let Attribution {
+                    referer,
+                    title,
+                    categories,
+                } = &self.attribution;
+                if let Some(referer) = referer {
+                    model = model.referer(referer);
+                }
+                if let Some(title) = title {
+                    model = model.title(title);
+                }
+                if let Some(categories) = categories {
+                    model = model.categories(categories);
+                }
+                if self.prompt_cache {
+                    model = model.prompt_cache(true);
+                    if let Some(session) = &self.session_id {
+                        model = model.session_id(session);
+                    }
+                }
+                return Ok(Arc::new(model));
+            }
+            Adapter::Protocol => {}
+        }
+
+        if self.max_tokens.is_some() && !protocol.supports_max_tokens() {
+            return Err(ModelError::Request(format!(
+                "{} ({}) does not support max_tokens",
+                spec.id,
+                protocol.name()
+            )));
+        }
+        Ok(match protocol {
+            Protocol::ChatCompletions => {
+                let mut model = keyed!(crate::OpenAiModel::new(&self.model)
+                    .base_url(base_url)
+                    .replay_reasoning_content(quirks.replay_reasoning_content));
+                if let Some(count) = self.max_tokens {
+                    model = model.max_tokens(count);
+                }
+                if let Some(effort) = &self.reasoning_effort {
+                    model = if quirks.nested_reasoning_effort {
+                        model.nested_reasoning_effort(effort)
+                    } else {
+                        model.reasoning_effort(effort)
+                    };
+                }
                 Arc::new(model)
             }
-            Protocol::Codex => {
-                let credentials = self.codex_credentials.clone().ok_or_else(|| {
-                    ModelError::Authentication(
-                        "openai-codex requires codex_credentials with a CodexCredentialSource"
-                            .into(),
-                    )
-                })?;
-                if self.max_tokens.is_some() {
+            Protocol::Anthropic => {
+                let mut model = crate::AnthropicModel::new(&self.model)
+                    .base_url(base_url)
+                    .prompt_cache(self.prompt_cache);
+                if let Some(key) = key {
+                    model = match placement {
+                        KeyPlacement::Native => model.api_key(key),
+                        KeyPlacement::Bearer => model.bearer_token(key),
+                        KeyPlacement::Header(name) => model.header(name, key),
+                        KeyPlacement::CloudflareGateway => model.gateway_token(key),
+                    };
+                }
+                if let Some(agent) = user_agent {
+                    model = model.header(reqwest::header::USER_AGENT.as_str(), agent);
+                }
+                Arc::new(tuned!(model))
+            }
+            Protocol::Responses => {
+                Arc::new(tuned!(keyed!(crate::ResponsesModel::new(&self.model)
+                    .base_url(base_url)
+                    .encrypted_reasoning(quirks.encrypted_reasoning))))
+            }
+            Protocol::Google | Protocol::Vertex => Arc::new(tuned!(native!(
+                crate::GoogleModel::new(&self.model).base_url(base_url)
+            ))),
+            Protocol::Bedrock => Arc::new(tuned!(native!(
+                crate::BedrockModel::new(&self.model).base_url(base_url)
+            ))),
+            Protocol::PiMessages => {
+                Arc::new(tuned!(native!(crate::PiMessagesModel::new(&self.model)
+                    .provider(spec.id)
+                    .base_url(base_url))))
+            }
+            Protocol::Cursor => {
+                if self.reasoning_effort.is_some() {
                     return Err(ModelError::Request(
-                        "openai-codex does not support max_tokens".into(),
+                        "Cursor does not expose reasoning-effort controls".into(),
                     ));
                 }
-                let base_url = if self.base_url.is_none() {
-                    crate::openai_codex::CODEX_BASE_URL.to_owned()
-                } else {
-                    base_url
-                };
+                Arc::new(native!(
+                    crate::CursorModel::new(&self.model).base_url(base_url)
+                ))
+            }
+            Protocol::Codex => {
                 let mut model =
-                    crate::OpenAiCodexModel::new(&self.model, credentials).base_url(base_url);
+                    crate::OpenAiCodexModel::new(&self.model, self.codex()?).base_url(base_url);
                 if let Some(effort) = &self.reasoning_effort {
                     model = model.reasoning_effort(effort);
+                }
+                if let (true, Some(session)) = (self.prompt_cache, &self.session_id) {
+                    model = model.prompt_cache_key(session);
                 }
                 Arc::new(model)
             }
         })
     }
+}
+
+fn required(key: Option<&str>) -> Result<&str, ModelError> {
+    key.ok_or_else(|| ModelError::Authentication("discovery requires a credential".into()))
 }
 
 #[async_trait]
@@ -294,7 +444,7 @@ impl Model for ProviderModel {
 mod tests {
     use super::*;
     #[test]
-    fn endpoints_follow_model_protocol_not_provider_default() {
+    fn endpoints_are_provider_only() {
         for (id, model, expected) in [
             (
                 "minimax",
@@ -322,14 +472,15 @@ mod tests {
         );
     }
     #[test]
-    fn explicit_preset_default_survives_mixed_model_routing() {
-        let preset = ProviderPreset::Minimax;
-        let automatic = ProviderModel::new(preset, "MiniMax-M2.7");
-        assert_ne!(automatic.endpoint().unwrap().1, preset.base_url());
-        let explicit = automatic.base_url(preset.base_url());
-        assert_eq!(explicit.endpoint().unwrap().1, preset.base_url());
+    fn foreign_protocol_needs_its_own_root() {
+        let model = ProviderModel::new(ProviderPreset::Deepseek, "m").protocol(Protocol::Anthropic);
+        assert!(model.endpoint().is_err());
+        let model = model.base_url("http://localhost:8080/anthropic");
+        assert_eq!(model.endpoint().unwrap().0, Protocol::Anthropic);
+        let same =
+            ProviderModel::new(ProviderPreset::Deepseek, "m").protocol(Protocol::ChatCompletions);
+        assert!(same.endpoint().is_ok());
     }
-
     #[tokio::test]
     async fn adapter_is_reused_for_multi_turn_state() {
         let model = ProviderModel::new(ProviderPreset::Deepseek, "deepseek-chat").api_key("test");

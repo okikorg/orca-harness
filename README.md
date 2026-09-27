@@ -131,7 +131,9 @@ Use `--model` to choose a model and `--base-url` (or `ORCA_BASE_URL`) for an
 explicit API root override. Without an override, routing follows the selected
 provider and model. The [provider guide](crates/model-providers/PROVIDERS.md)
 lists every provider ID, credential variable, and cloud endpoint requirement.
-Catalogs are static snapshots, not guarantees of account access. Bedrock uses
+Model lists come from provider APIs where discovery is supported; missing
+metadata is left unknown. When discovery is unavailable, supply an explicit
+model ID rather than relying on a built-in model list. Bedrock uses
 bearer-token authentication, Vertex does not acquire ADC credentials, and
 Copilot/Cursor require supplied tokens rather than built-in login flows.
 

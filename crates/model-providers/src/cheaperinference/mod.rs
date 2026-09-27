@@ -7,38 +7,19 @@ use orca_harness_core::ModelError;
 
 pub const CHEAPERINFERENCE_BASE_URL: &str = "https://api.cheaperinference.com/v1";
 
-/// The catalog lives outside the OpenAI-compatible `/v1` surface and needs
-/// no credentials, so browsing works before a key is configured.
-const CHEAPERINFERENCE_MODELS_URL: &str = "https://api.cheaperinference.com/public/models";
-
 /// Fetch CheaperInference's advertised catalog and map its per-million
-/// prices into the provider-neutral per-token metadata.
-pub async fn list_models() -> Result<Vec<ModelInfo>, ModelError> {
-    let client = crate::http::client();
-    let response = client
-        .get(CHEAPERINFERENCE_MODELS_URL)
-        .timeout(crate::http::CATALOG_TIMEOUT)
-        .send()
-        .await
-        .map_err(|error| crate::http_error::transport_error(&error))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| crate::http_error::transport_error(&error))?;
-    if !status.is_success() {
-        return Err(ModelError::Request(format!("HTTP {status}: {body}")));
-    }
-    parse_models(&body)
+/// prices into the provider-neutral per-token metadata. The catalog lives at
+/// `/public/models` on the API host, outside the OpenAI-compatible `/v1`
+/// surface, and needs no credentials.
+pub async fn list_models(base_url: &str) -> Result<Vec<ModelInfo>, ModelError> {
+    let url = reqwest::Url::parse(base_url)
+        .and_then(|root| root.join("/public/models"))
+        .map_err(|e| ModelError::Request(format!("invalid CheaperInference base URL: {e}")))?;
+    parse(&crate::discovery::fetch_json(crate::http::client().get(url)).await?)
 }
 
-fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
-    let listing: Value = serde_json::from_str(body)
-        .map_err(|error| ModelError::InvalidResponse(format!("{error}: {body}")))?;
-    let entries = listing["models"]
-        .as_array()
-        .ok_or_else(|| ModelError::InvalidResponse("model catalog has no models array".into()))?;
-    let models = entries
+fn parse(listing: &Value) -> Result<Vec<ModelInfo>, ModelError> {
+    let models = crate::discovery::rows(listing, "models")?
         .iter()
         .filter(|entry| {
             entry["model_type"] == "text" && entry["is_visible"].as_bool().unwrap_or(true)
@@ -68,6 +49,10 @@ fn per_token(per_million: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
+        parse(&serde_json::from_str(body).unwrap())
+    }
 
     const CATALOG: &str = r#"{"models":[
         {"id":"claude-opus-5","context_length":1000000,"model_type":"text","is_visible":true,

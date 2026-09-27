@@ -1,24 +1,46 @@
 # Provider presets and endpoints
 
-`registry::ProviderPreset::ALL` contains **47 IDs**, including legacy presets and aliases. The CLI shows **46 distinct entries** because `vercel-ai-gateway` aliases `vercel`. Use the exact lowercase, hyphenated IDs below with `ProviderPreset::from_id` or CLI `--provider ID` / `ORCA_PROVIDER=ID`:
+`registry::ProviderPreset::ALL` contains **46 presets**. `vercel-ai-gateway` is an alias of `vercel`. Use the exact lowercase, hyphenated IDs below with `ProviderPreset::from_id` or CLI `--provider ID` / `ORCA_PROVIDER=ID`:
 
 | Provider ID | Provider ID | Provider ID | Provider ID |
 | --- | --- | --- | --- |
-| `amazon-bedrock` | `ant-ling` | `anthropic` | `azure-openai-responses` |
-| `baseten` | `cerebras` | `cloudflare-ai-gateway` | `cloudflare-workers-ai` |
-| `cursor` | `databricks-unity-gateway` | `deepseek` | `fireworks` |
-| `github-copilot` | `google` | `google-vertex` | `groq` |
-| `huggingface` | `kimi-coding` | `meta` | `minimax` |
-| `minimax-cn` | `mistral` | `moonshotai` | `moonshotai-cn` |
-| `nvidia` | `openai` | `openai-codex` | `opencode` |
-| `opencode-go` | `openrouter` | `qwen-token-plan` | `qwen-token-plan-cn` |
-| `qwen-token-plan-individual` | `radius` | `snowflake-cortex` | `together` |
-| `vercel-ai-gateway` | `xai` | `xiaomi` | `xiaomi-token-plan-ams` |
-| `xiaomi-token-plan-cn` | `xiaomi-token-plan-sgp` | `zai` | `zai-coding-cn` |
+| `openrouter` | `vercel` | `cheaperinference` | `openai` |
+| `openai-codex` | `anthropic` | `amazon-bedrock` | `ant-ling` |
+| `azure-openai-responses` | `baseten` | `cerebras` | `cloudflare-ai-gateway` |
+| `cloudflare-workers-ai` | `cursor` | `databricks-unity-gateway` | `deepseek` |
+| `fireworks` | `github-copilot` | `google` | `google-vertex` |
+| `groq` | `huggingface` | `kimi-coding` | `meta` |
+| `minimax` | `minimax-cn` | `mistral` | `moonshotai` |
+| `moonshotai-cn` | `nvidia` | `opencode` | `opencode-go` |
+| `qwen-token-plan` | `qwen-token-plan-cn` | `qwen-token-plan-individual` | `radius` |
+| `snowflake-cortex` | `together` | `xai` | `xiaomi` |
+| `xiaomi-token-plan-ams` | `xiaomi-token-plan-cn` | `xiaomi-token-plan-sgp` | `zai` |
+| `zai-coding-cn` | `local` | | |
 
-Legacy extras: `vercel`, `cheaperinference`, `local`.
+The registry contains provider connection configuration, not model knowledge. It does not embed model IDs, context windows, or model-name-to-protocol tables.
 
-The registry exposes `id()`, `from_id()`, `default_model()`, `key_env()`, `base_url()`, `protocol()`, `route(model)`, `resolve_base_url(override_url)` and `models()`. Routes select among OpenAI-compatible Chat Completions, Anthropic Messages, API-key Responses, Codex, native Google/Vertex, Bedrock ConverseStream, Cursor and Pi Messages; **protocol can vary by model within a provider**. Unknown model IDs fall back to the provider's default route. `models()` (including `ProviderModel::models()`) uses an embedded static catalog snapshot; it is not a live list of models available to your account. Catalog entries/defaults do not guarantee access, support for every capability, or successful calls. Use an adapter's live discovery where available if you need current account-specific results.
+## One row per provider
+
+Everything the crate knows about a provider lives in its `Spec` row in `src/registry/mod.rs`: ID and aliases, API root template and its environment variables, credential and key placement, protocol, adapter, discovery interface, whether the catalog is public, and protocol quirks (reasoning replay, encrypted reasoning, nested effort, a required user agent). `ProviderModel` and the CLI read those fields; no code branches on a provider ID. Adding a provider is one row in the `presets!` table; the enum variant, `ALL` and lookup are generated from it.
+
+Discovery support per preset:
+
+| Discovery | Presets |
+| --- | --- |
+| OpenAI Models (`GET /models`) | `openai`, `deepseek`, `groq`, `mistral`, `cerebras`, `local` (plus Ollama `/api/show` for context windows) |
+| Provider-specific catalog | `openrouter`, `vercel`, `cheaperinference`, `radius`, `anthropic`, `google`, `github-copilot`, `cursor`, `openai-codex` |
+| Public (no key needed to browse) | `openrouter`, `vercel`, `cheaperinference`, `radius`, `local` |
+| Unavailable | every other preset; supply `--model` |
+
+## Dynamic discovery and routing
+
+`ProviderModel::models().await` fetches the configured provider's catalog using the configured credentials. Results reflect what that API reports: missing context windows, pricing, or reasoning capabilities stay unknown. A successful empty catalog, an authentication error, and unavailable discovery are distinct outcomes; none substitutes a built-in list.
+
+An explicit or saved model ID remains authoritative, even if discovery is unavailable or the listing omits an alias. Without a selected model, the CLI must obtain one from discovery or ask for an explicit `--model`.
+
+Model enumeration does not necessarily advertise the inference protocol. Use provider-advertised endpoint metadata where available, a documented model-independent transport where applicable, or an explicit protocol and API root. Mixed-interface services must not infer a protocol from a model name. An explicit `base_url(...)` always replaces the complete root; it is never treated as a request for automatic routing merely because it equals a preset URL. Selecting a protocol other than the preset's own requires an explicit `base_url`, because the preset root serves only its own dialect.
+
+Provider integration does not imply universal discovery support. Bedrock's bearer-only runtime adapter cannot substitute for AWS control-plane model/profile discovery with IAM credentials. Vertex and some gateways do not expose a discovery contract compatible with the implemented catalog readers. Those cases report discovery unavailable and require explicit configuration rather than fabricating model availability.
 
 ## Credentials and URL configuration
 
@@ -26,7 +48,7 @@ The host must pass credentials explicitly to `ProviderModel::api_key(...)` (or t
 
 | Preset | Required configuration without explicit URL override | Authentication caveat |
 | --- | --- | --- |
-| `azure-openai-responses` | `AZURE_OPENAI_ENDPOINT` (Azure Responses root; deployment/API-version configuration must match your endpoint) | `AZURE_OPENAI_API_KEY` passed as key; Azure uses `api-key` header. |
+| `azure-openai-responses` | `AZURE_OPENAI_ENDPOINT` (Azure Responses root; deployment/API-version configuration must match your endpoint) | `AZURE_OPENAI_API_KEY` is sent only as the `api-key` header. A bare endpoint gains `/openai/v1`; a single `api-version` query is allowed. |
 | `cloudflare-ai-gateway` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_GATEWAY_ID` | `CLOUDFLARE_AI_GATEWAY_API_KEY` authenticates the gateway via `cf-aig-authorization: Bearer …`, not the upstream provider. Configure upstream credentials in the gateway; the preset does not accept a separate upstream key. |
 | `cloudflare-workers-ai` | `CLOUDFLARE_ACCOUNT_ID` | `CLOUDFLARE_API_TOKEN`. |
 | `databricks-unity-gateway` | `DATABRICKS_HOST` (complete HTTP(S) host) | `DATABRICKS_TOKEN`; Anthropic route uses bearer auth. |

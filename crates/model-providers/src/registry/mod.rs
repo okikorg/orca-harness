@@ -1,10 +1,9 @@
-//! Built-in provider identifiers and factual per-model protocol routes.
-//!
-//! The embedded catalog is a snapshot, not a live discovery service. Custom
-//! model IDs fall back to the provider default route; callers can override URLs.
-use crate::ModelInfo;
+//! Provider presets as data. Each provider is one row in `presets!` below;
+//! routing, credentials, discovery and adapter construction read that row
+//! instead of branching on provider IDs. Model availability is discovered live.
 use orca_harness_core::ModelError;
 
+/// A wire dialect. Several providers share each one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
     ChatCompletions,
@@ -18,538 +17,550 @@ pub enum Protocol {
     PiMessages,
 }
 
+impl Protocol {
+    pub const ALL: &'static [Self] = &[
+        Self::ChatCompletions,
+        Self::Anthropic,
+        Self::Responses,
+        Self::Codex,
+        Self::Google,
+        Self::Vertex,
+        Self::Bedrock,
+        Self::Cursor,
+        Self::PiMessages,
+    ];
+
+    /// The stable spelling used on command lines and in saved routes.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat-completions",
+            Self::Anthropic => "anthropic",
+            Self::Responses => "responses",
+            Self::Codex => "codex",
+            Self::Google => "google",
+            Self::Vertex => "vertex",
+            Self::Bedrock => "bedrock",
+            Self::Cursor => "cursor",
+            Self::PiMessages => "pi-messages",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|p| p.name() == name)
+    }
+
+    /// Whether requests can cap output tokens.
+    pub const fn supports_max_tokens(self) -> bool {
+        !matches!(self, Self::Codex | Self::Cursor)
+    }
+}
+
+/// How a preset obtains its credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// No credential (a local server).
+    None,
+    /// Subscription OAuth supplied by the host through a credential source.
+    OAuth,
+    /// An API key, conventionally read by the host from `env`.
+    ApiKey {
+        env: &'static str,
+        placement: KeyPlacement,
+    },
+}
+
+/// Where the API key goes on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPlacement {
+    /// The adapter's native scheme (Bearer, `x-api-key`, `x-goog-api-key`, ...).
+    Native,
+    /// `Authorization: Bearer` on a Messages-compatible gateway.
+    Bearer,
+    /// A named header instead of the adapter's native scheme.
+    Header(&'static str),
+    /// Cloudflare AI Gateway's `cf-aig-authorization`, with upstream keys stored in the gateway.
+    CloudflareGateway,
+}
+
+/// Which adapter wraps the protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adapter {
+    /// The protocol's generic adapter.
+    Protocol,
+    /// OpenRouter's Chat Completions extensions (attribution, sessions, cache).
+    OpenRouter,
+    /// GitHub Copilot's token exchange in front of Chat Completions.
+    Copilot,
+}
+
+/// The model-listing interface a provider documents. Transport compatibility
+/// alone is not evidence of discovery support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Discovery {
+    Unsupported,
+    /// `GET {root}/models` returning `{"data": [...]}`.
+    OpenAiModels,
+    /// OpenAI Models plus Ollama's native `/api/show` context window.
+    Ollama,
+    OpenRouter,
+    Vercel,
+    CheaperInference,
+    Radius,
+    Anthropic,
+    Google,
+    Copilot,
+    Cursor,
+    Codex,
+}
+
+/// One environment-derived URL component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Var {
+    /// The placeholder is `{env[0]}`; later names are fallbacks.
+    pub env: &'static [&'static str],
+    pub default: Option<&'static str>,
+    pub kind: VarKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VarKind {
+    /// A single identifier such as an account, project or region.
+    Segment,
+    /// A complete URL prefix such as a workspace host.
+    Url,
+}
+
+/// Provider behavior that differs from the protocol's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Quirks {
+    /// Chat Completions: echo `reasoning_content` back on tool-call turns.
+    pub replay_reasoning_content: bool,
+    /// Responses: request and replay encrypted reasoning items.
+    pub encrypted_reasoning: bool,
+    /// Chat Completions: send effort as `reasoning.effort`.
+    pub nested_reasoning_effort: bool,
+    /// A user agent the service requires; it takes precedence over the host's.
+    pub user_agent: Option<&'static str>,
+}
+
+const QUIRKS: Quirks = Quirks {
+    replay_reasoning_content: false,
+    encrypted_reasoning: true,
+    nested_reasoning_effort: false,
+    user_agent: None,
+};
+const REPLAY: Quirks = Quirks {
+    replay_reasoning_content: true,
+    ..QUIRKS
+};
+
+/// Everything the crate knows about one provider.
+#[derive(Debug, Clone, Copy)]
+pub struct Spec {
+    pub id: &'static str,
+    /// Older IDs that still resolve to this preset.
+    pub aliases: &'static [&'static str],
+    /// The API root, with `{VAR}` placeholders filled from `vars`.
+    pub base_url: &'static str,
+    pub vars: &'static [Var],
+    /// Appended to a root that came from a `Url` variable with no path.
+    pub root_path: Option<&'static str>,
+    /// The single query parameter a base URL may carry.
+    pub query: Option<&'static str>,
+    /// Post-processing for URL rules a template cannot express.
+    pub url_hook: Option<fn(String) -> String>,
+    pub credential: Credential,
+    /// `None`: the service serves several dialects; callers must choose one.
+    pub protocol: Option<Protocol>,
+    pub adapter: Adapter,
+    pub discovery: Discovery,
+    /// Whether discovery works without a credential.
+    pub public_catalog: bool,
+    pub quirks: Quirks,
+}
+
+const SPEC: Spec = Spec {
+    id: "",
+    aliases: &[],
+    base_url: "",
+    vars: &[],
+    root_path: None,
+    query: None,
+    url_hook: None,
+    credential: Credential::None,
+    protocol: Some(Protocol::ChatCompletions),
+    adapter: Adapter::Protocol,
+    discovery: Discovery::Unsupported,
+    public_catalog: false,
+    quirks: QUIRKS,
+};
+
+const fn key(env: &'static str) -> Credential {
+    Credential::ApiKey {
+        env,
+        placement: KeyPlacement::Native,
+    }
+}
+
+/// A Chat Completions provider with a native key and no discovery.
+const fn chat(id: &'static str, base_url: &'static str, env: &'static str) -> Spec {
+    Spec {
+        id,
+        base_url,
+        credential: key(env),
+        ..SPEC
+    }
+}
+
+const fn segment(env: &'static [&'static str]) -> Var {
+    Var {
+        env,
+        default: None,
+        kind: VarKind::Segment,
+    }
+}
+
+const fn url_var(env: &'static [&'static str]) -> Var {
+    Var {
+        env,
+        default: None,
+        kind: VarKind::Url,
+    }
+}
+
+/// Vertex's `global` location uses the unprefixed host.
+fn vertex_global_host(url: String) -> String {
+    url.replacen("://global-aiplatform.", "://aiplatform.", 1)
+}
+
+macro_rules! presets {
+    ($($variant:ident => $spec:expr,)*) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum ProviderPreset { $($variant,)* }
+
+        const SPECS: &[Spec] = &[$($spec,)*];
+
+        /// Every preset, in display order.
+        pub const ALL: &[ProviderPreset] = &[$(ProviderPreset::$variant,)*];
+    };
+}
+
+presets! {
+    OpenRouter => Spec {
+        base_url: crate::openrouter::OPENROUTER_BASE_URL,
+        adapter: Adapter::OpenRouter,
+        discovery: Discovery::OpenRouter,
+        public_catalog: true,
+        ..chat("openrouter", "", "OPENROUTER_API_KEY")
+    },
+    Vercel => Spec {
+        aliases: &["vercel-ai-gateway"],
+        base_url: crate::vercel::VERCEL_GATEWAY_BASE_URL,
+        discovery: Discovery::Vercel,
+        public_catalog: true,
+        quirks: Quirks { nested_reasoning_effort: true, ..QUIRKS },
+        ..chat("vercel", "", "AI_GATEWAY_API_KEY")
+    },
+    CheaperInference => Spec {
+        base_url: crate::cheaperinference::CHEAPERINFERENCE_BASE_URL,
+        discovery: Discovery::CheaperInference,
+        public_catalog: true,
+        ..chat("cheaperinference", "", "CHEAPERINFERENCE_API_KEY")
+    },
+    OpenAi => Spec {
+        protocol: Some(Protocol::Responses),
+        discovery: Discovery::OpenAiModels,
+        ..chat("openai", "https://api.openai.com/v1", "OPENAI_API_KEY")
+    },
+    OpenAiCodex => Spec {
+        id: "openai-codex",
+        base_url: crate::openai_codex::CODEX_BASE_URL,
+        credential: Credential::OAuth,
+        protocol: Some(Protocol::Codex),
+        discovery: Discovery::Codex,
+        ..SPEC
+    },
+    Anthropic => Spec {
+        base_url: crate::anthropic::ANTHROPIC_BASE_URL,
+        protocol: Some(Protocol::Anthropic),
+        discovery: Discovery::Anthropic,
+        ..chat("anthropic", "", "ANTHROPIC_API_KEY")
+    },
+    AmazonBedrock => Spec {
+        base_url: "https://bedrock-runtime.{AWS_REGION}.amazonaws.com",
+        vars: &[Var { default: Some("us-east-1"), ..segment(&["AWS_REGION", "AWS_DEFAULT_REGION"]) }],
+        protocol: Some(Protocol::Bedrock),
+        ..chat("amazon-bedrock", "", "AWS_BEARER_TOKEN_BEDROCK")
+    },
+    AntLing => chat("ant-ling", "https://api.ant-ling.com/v1", "ANT_LING_API_KEY"),
+    AzureOpenAiResponses => Spec {
+        base_url: "{AZURE_OPENAI_ENDPOINT}",
+        vars: &[url_var(&["AZURE_OPENAI_ENDPOINT"])],
+        root_path: Some("/openai/v1"),
+        query: Some("api-version"),
+        credential: Credential::ApiKey { env: "AZURE_OPENAI_API_KEY", placement: KeyPlacement::Header("api-key") },
+        protocol: Some(Protocol::Responses),
+        ..chat("azure-openai-responses", "", "")
+    },
+    Baseten => chat("baseten", "https://inference.baseten.co/v1", "BASETEN_API_KEY"),
+    Cerebras => Spec {
+        discovery: Discovery::OpenAiModels,
+        ..chat("cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY")
+    },
+    CloudflareAiGateway => Spec {
+        base_url: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic/v1",
+        vars: &[segment(&["CLOUDFLARE_ACCOUNT_ID"]), segment(&["CLOUDFLARE_GATEWAY_ID"])],
+        credential: Credential::ApiKey { env: "CLOUDFLARE_AI_GATEWAY_API_KEY", placement: KeyPlacement::CloudflareGateway },
+        protocol: Some(Protocol::Anthropic),
+        ..chat("cloudflare-ai-gateway", "", "")
+    },
+    CloudflareWorkersAi => Spec {
+        vars: &[segment(&["CLOUDFLARE_ACCOUNT_ID"])],
+        ..chat("cloudflare-workers-ai", "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1", "CLOUDFLARE_API_TOKEN")
+    },
+    Cursor => Spec {
+        base_url: crate::cursor::CURSOR_BASE_URL,
+        protocol: Some(Protocol::Cursor),
+        discovery: Discovery::Cursor,
+        ..chat("cursor", "", "CURSOR_ACCESS_TOKEN")
+    },
+    DatabricksUnityGateway => Spec {
+        base_url: "{DATABRICKS_HOST}/ai-gateway/anthropic/v1",
+        vars: &[url_var(&["DATABRICKS_HOST"])],
+        credential: Credential::ApiKey { env: "DATABRICKS_TOKEN", placement: KeyPlacement::Bearer },
+        protocol: None,
+        ..chat("databricks-unity-gateway", "", "")
+    },
+    Deepseek => Spec {
+        discovery: Discovery::OpenAiModels,
+        quirks: REPLAY,
+        ..chat("deepseek", "https://api.deepseek.com", "DEEPSEEK_API_KEY")
+    },
+    Fireworks => chat("fireworks", "https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY"),
+    GithubCopilot => Spec {
+        adapter: Adapter::Copilot,
+        discovery: Discovery::Copilot,
+        ..chat("github-copilot", "https://api.individual.githubcopilot.com", "COPILOT_GITHUB_TOKEN")
+    },
+    Google => Spec {
+        base_url: crate::google::GOOGLE_BASE_URL,
+        protocol: Some(Protocol::Google),
+        discovery: Discovery::Google,
+        ..chat("google", "", "GEMINI_API_KEY")
+    },
+    GoogleVertex => Spec {
+        base_url: "https://{GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/{GOOGLE_CLOUD_PROJECT}/locations/{GOOGLE_CLOUD_LOCATION}/publishers/google",
+        vars: &[
+            segment(&["GOOGLE_CLOUD_PROJECT"]),
+            Var { default: Some("us-central1"), ..segment(&["GOOGLE_CLOUD_LOCATION"]) },
+        ],
+        url_hook: Some(vertex_global_host),
+        protocol: Some(Protocol::Vertex),
+        ..chat("google-vertex", "", "GOOGLE_CLOUD_API_KEY")
+    },
+    Groq => Spec {
+        discovery: Discovery::OpenAiModels,
+        ..chat("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY")
+    },
+    Huggingface => chat("huggingface", "https://router.huggingface.co/v1", "HF_TOKEN"),
+    KimiCoding => Spec {
+        protocol: Some(Protocol::Anthropic),
+        quirks: Quirks { user_agent: Some("orcacode"), ..QUIRKS },
+        ..chat("kimi-coding", "https://api.kimi.com/coding/v1", "KIMI_API_KEY")
+    },
+    Meta => Spec {
+        protocol: Some(Protocol::Responses),
+        quirks: Quirks { encrypted_reasoning: false, ..QUIRKS },
+        ..chat("meta", "https://api.meta.ai/v1", "META_API_KEY")
+    },
+    Minimax => Spec {
+        protocol: Some(Protocol::Anthropic),
+        ..chat("minimax", "https://api.minimax.io/anthropic/v1", "MINIMAX_API_KEY")
+    },
+    MinimaxCn => Spec {
+        protocol: Some(Protocol::Anthropic),
+        ..chat("minimax-cn", "https://api.minimaxi.com/anthropic/v1", "MINIMAX_CN_API_KEY")
+    },
+    Mistral => Spec {
+        discovery: Discovery::OpenAiModels,
+        ..chat("mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY")
+    },
+    Moonshotai => Spec {
+        quirks: REPLAY,
+        ..chat("moonshotai", "https://api.moonshot.ai/v1", "MOONSHOT_API_KEY")
+    },
+    MoonshotaiCn => Spec {
+        quirks: REPLAY,
+        ..chat("moonshotai-cn", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY")
+    },
+    Nvidia => chat("nvidia", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+    Opencode => Spec {
+        protocol: None,
+        ..chat("opencode", "https://opencode.ai/zen", "OPENCODE_API_KEY")
+    },
+    OpencodeGo => Spec {
+        protocol: None,
+        ..chat("opencode-go", "https://opencode.ai/zen/go", "OPENCODE_API_KEY")
+    },
+    QwenTokenPlan => chat("qwen-token-plan", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", "QWEN_TOKEN_PLAN_API_KEY"),
+    QwenTokenPlanCn => chat("qwen-token-plan-cn", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "QWEN_TOKEN_PLAN_CN_API_KEY"),
+    QwenTokenPlanIndividual => chat("qwen-token-plan-individual", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", "QWEN_TOKEN_PLAN_API_KEY"),
+    Radius => Spec {
+        base_url: crate::pi_messages::RADIUS_BASE_URL,
+        protocol: Some(Protocol::PiMessages),
+        discovery: Discovery::Radius,
+        public_catalog: true,
+        ..chat("radius", "", "RADIUS_API_KEY")
+    },
+    SnowflakeCortex => Spec {
+        base_url: "{SNOWFLAKE_CORTEX_BASE_URL}",
+        vars: &[url_var(&["SNOWFLAKE_CORTEX_BASE_URL"])],
+        credential: Credential::ApiKey { env: "SNOWFLAKE_PAT", placement: KeyPlacement::Bearer },
+        protocol: None,
+        ..chat("snowflake-cortex", "", "")
+    },
+    Together => chat("together", "https://api.together.ai/v1", "TOGETHER_API_KEY"),
+    Xai => Spec {
+        protocol: Some(Protocol::Responses),
+        quirks: Quirks { encrypted_reasoning: false, ..QUIRKS },
+        ..chat("xai", "https://api.x.ai/v1", "XAI_API_KEY")
+    },
+    Xiaomi => chat("xiaomi", "https://api.xiaomimimo.com/v1", "XIAOMI_API_KEY"),
+    XiaomiTokenPlanAms => chat("xiaomi-token-plan-ams", "https://token-plan-ams.xiaomimimo.com/v1", "XIAOMI_TOKEN_PLAN_AMS_API_KEY"),
+    XiaomiTokenPlanCn => chat("xiaomi-token-plan-cn", "https://token-plan-cn.xiaomimimo.com/v1", "XIAOMI_TOKEN_PLAN_CN_API_KEY"),
+    XiaomiTokenPlanSgp => chat("xiaomi-token-plan-sgp", "https://token-plan-sgp.xiaomimimo.com/v1", "XIAOMI_TOKEN_PLAN_SGP_API_KEY"),
+    Zai => Spec {
+        quirks: REPLAY,
+        ..chat("zai", "https://api.z.ai/api/coding/paas/v4", "ZAI_API_KEY")
+    },
+    ZaiCodingCn => Spec {
+        quirks: REPLAY,
+        ..chat("zai-coding-cn", "https://open.bigmodel.cn/api/coding/paas/v4", "ZAI_CODING_CN_API_KEY")
+    },
+    Local => Spec {
+        id: "local",
+        base_url: "http://localhost:11434/v1",
+        discovery: Discovery::Ollama,
+        public_catalog: true,
+        ..SPEC
+    },
+}
+
+/// A resolved transport: dialect plus API root template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Route {
     pub protocol: Protocol,
     pub base_url: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProviderPreset {
-    AmazonBedrock,
-    AntLing,
-    Anthropic,
-    AzureOpenAiResponses,
-    Baseten,
-    Cerebras,
-    CloudflareAiGateway,
-    CloudflareWorkersAi,
-    Cursor,
-    DatabricksUnityGateway,
-    Deepseek,
-    Fireworks,
-    GithubCopilot,
-    Google,
-    GoogleVertex,
-    Groq,
-    Huggingface,
-    KimiCoding,
-    Meta,
-    Minimax,
-    MinimaxCn,
-    Mistral,
-    Moonshotai,
-    MoonshotaiCn,
-    Nvidia,
-    OpenAi,
-    OpenAiCodex,
-    Opencode,
-    OpencodeGo,
-    Openrouter,
-    QwenTokenPlan,
-    QwenTokenPlanCn,
-    QwenTokenPlanIndividual,
-    Radius,
-    SnowflakeCortex,
-    Together,
-    VercelAiGateway,
-    Xai,
-    Xiaomi,
-    XiaomiTokenPlanAms,
-    XiaomiTokenPlanCn,
-    XiaomiTokenPlanSgp,
-    Zai,
-    ZaiCodingCn,
-    Vercel,
-    Cheaperinference,
-    Local,
-}
-
-pub const ALL: &[ProviderPreset] = &[
-    ProviderPreset::AmazonBedrock,
-    ProviderPreset::AntLing,
-    ProviderPreset::Anthropic,
-    ProviderPreset::AzureOpenAiResponses,
-    ProviderPreset::Baseten,
-    ProviderPreset::Cerebras,
-    ProviderPreset::CloudflareAiGateway,
-    ProviderPreset::CloudflareWorkersAi,
-    ProviderPreset::Cursor,
-    ProviderPreset::DatabricksUnityGateway,
-    ProviderPreset::Deepseek,
-    ProviderPreset::Fireworks,
-    ProviderPreset::GithubCopilot,
-    ProviderPreset::Google,
-    ProviderPreset::GoogleVertex,
-    ProviderPreset::Groq,
-    ProviderPreset::Huggingface,
-    ProviderPreset::KimiCoding,
-    ProviderPreset::Meta,
-    ProviderPreset::Minimax,
-    ProviderPreset::MinimaxCn,
-    ProviderPreset::Mistral,
-    ProviderPreset::Moonshotai,
-    ProviderPreset::MoonshotaiCn,
-    ProviderPreset::Nvidia,
-    ProviderPreset::OpenAi,
-    ProviderPreset::OpenAiCodex,
-    ProviderPreset::Opencode,
-    ProviderPreset::OpencodeGo,
-    ProviderPreset::Openrouter,
-    ProviderPreset::QwenTokenPlan,
-    ProviderPreset::QwenTokenPlanCn,
-    ProviderPreset::QwenTokenPlanIndividual,
-    ProviderPreset::Radius,
-    ProviderPreset::SnowflakeCortex,
-    ProviderPreset::Together,
-    ProviderPreset::VercelAiGateway,
-    ProviderPreset::Xai,
-    ProviderPreset::Xiaomi,
-    ProviderPreset::XiaomiTokenPlanAms,
-    ProviderPreset::XiaomiTokenPlanCn,
-    ProviderPreset::XiaomiTokenPlanSgp,
-    ProviderPreset::Zai,
-    ProviderPreset::ZaiCodingCn,
-    ProviderPreset::Vercel,
-    ProviderPreset::Cheaperinference,
-    ProviderPreset::Local,
-];
-
 impl ProviderPreset {
     pub const ALL: &'static [Self] = ALL;
+
+    pub const fn spec(self) -> &'static Spec {
+        &SPECS[self as usize]
+    }
+
+    /// Resolve a preset ID or one of its aliases.
     pub fn from_id(id: &str) -> Option<Self> {
-        ALL.iter().copied().find(|p| p.id() == id)
+        ALL.iter()
+            .copied()
+            .find(|p| p.id() == id || p.spec().aliases.contains(&id))
     }
+
     pub const fn id(self) -> &'static str {
-        match self {
-            Self::AmazonBedrock => "amazon-bedrock",
-            Self::AntLing => "ant-ling",
-            Self::Anthropic => "anthropic",
-            Self::AzureOpenAiResponses => "azure-openai-responses",
-            Self::Baseten => "baseten",
-            Self::Cerebras => "cerebras",
-            Self::CloudflareAiGateway => "cloudflare-ai-gateway",
-            Self::CloudflareWorkersAi => "cloudflare-workers-ai",
-            Self::Cursor => "cursor",
-            Self::DatabricksUnityGateway => "databricks-unity-gateway",
-            Self::Deepseek => "deepseek",
-            Self::Fireworks => "fireworks",
-            Self::GithubCopilot => "github-copilot",
-            Self::Google => "google",
-            Self::GoogleVertex => "google-vertex",
-            Self::Groq => "groq",
-            Self::Huggingface => "huggingface",
-            Self::KimiCoding => "kimi-coding",
-            Self::Meta => "meta",
-            Self::Minimax => "minimax",
-            Self::MinimaxCn => "minimax-cn",
-            Self::Mistral => "mistral",
-            Self::Moonshotai => "moonshotai",
-            Self::MoonshotaiCn => "moonshotai-cn",
-            Self::Nvidia => "nvidia",
-            Self::OpenAi => "openai",
-            Self::OpenAiCodex => "openai-codex",
-            Self::Opencode => "opencode",
-            Self::OpencodeGo => "opencode-go",
-            Self::Openrouter => "openrouter",
-            Self::QwenTokenPlan => "qwen-token-plan",
-            Self::QwenTokenPlanCn => "qwen-token-plan-cn",
-            Self::QwenTokenPlanIndividual => "qwen-token-plan-individual",
-            Self::Radius => "radius",
-            Self::SnowflakeCortex => "snowflake-cortex",
-            Self::Together => "together",
-            Self::VercelAiGateway => "vercel-ai-gateway",
-            Self::Xai => "xai",
-            Self::Xiaomi => "xiaomi",
-            Self::XiaomiTokenPlanAms => "xiaomi-token-plan-ams",
-            Self::XiaomiTokenPlanCn => "xiaomi-token-plan-cn",
-            Self::XiaomiTokenPlanSgp => "xiaomi-token-plan-sgp",
-            Self::Zai => "zai",
-            Self::ZaiCodingCn => "zai-coding-cn",
-            Self::Vercel => "vercel",
-            Self::Cheaperinference => "cheaperinference",
-            Self::Local => "local",
-        }
+        self.spec().id
     }
+
+    /// The API root template. Placeholders are resolved by [`Self::resolve_base_url`].
     pub const fn base_url(self) -> &'static str {
-        match self {
-            Self::AmazonBedrock => "https://bedrock-runtime.us-east-1.amazonaws.com",
-            Self::AntLing => "https://api.ant-ling.com/v1",
-            Self::Anthropic => "https://api.anthropic.com",
-            Self::AzureOpenAiResponses => "",
-            Self::Baseten => "https://inference.baseten.co/v1",
-            Self::Cerebras => "https://api.cerebras.ai/v1",
-            Self::CloudflareAiGateway => "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
-            Self::CloudflareWorkersAi => "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
-            Self::Cursor => "https://agentn.us.api5.cursor.sh",
-            Self::DatabricksUnityGateway => "{DATABRICKS_HOST}/ai-gateway/anthropic",
-            Self::Deepseek => "https://api.deepseek.com",
-            Self::Fireworks => "https://api.fireworks.ai/inference",
-            Self::GithubCopilot => "https://api.individual.githubcopilot.com",
-            Self::Google => "https://generativelanguage.googleapis.com/v1beta",
-            Self::GoogleVertex => "https://{location}-aiplatform.googleapis.com",
-            Self::Groq => "https://api.groq.com/openai/v1",
-            Self::Huggingface => "https://router.huggingface.co/v1",
-            Self::KimiCoding => "https://api.kimi.com/coding",
-            Self::Meta => "https://api.meta.ai/v1",
-            Self::Minimax => "https://api.minimax.io/anthropic",
-            Self::MinimaxCn => "https://api.minimaxi.com/anthropic",
-            Self::Mistral => "https://api.mistral.ai",
-            Self::Moonshotai => "https://api.moonshot.ai/v1",
-            Self::MoonshotaiCn => "https://api.moonshot.cn/v1",
-            Self::Nvidia => "https://integrate.api.nvidia.com/v1",
-            Self::OpenAi => "https://api.openai.com/v1",
-            Self::OpenAiCodex => "https://chatgpt.com/backend-api",
-            Self::Opencode => "https://opencode.ai/zen",
-            Self::OpencodeGo => "https://opencode.ai/zen/go",
-            Self::Openrouter => "https://openrouter.ai/api/v1",
-            Self::QwenTokenPlan => "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-            Self::QwenTokenPlanCn => "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-            Self::QwenTokenPlanIndividual => "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-            Self::Radius => "https://radius.pi.dev/v1",
-            Self::SnowflakeCortex => "{SNOWFLAKE_CORTEX_BASE_URL}",
-            Self::Together => "https://api.together.ai/v1",
-            Self::VercelAiGateway => "https://ai-gateway.vercel.sh",
-            Self::Xai => "https://api.x.ai/v1",
-            Self::Xiaomi => "https://api.xiaomimimo.com/v1",
-            Self::XiaomiTokenPlanAms => "https://token-plan-ams.xiaomimimo.com/v1",
-            Self::XiaomiTokenPlanCn => "https://token-plan-cn.xiaomimimo.com/v1",
-            Self::XiaomiTokenPlanSgp => "https://token-plan-sgp.xiaomimimo.com/v1",
-            Self::Zai => "https://api.z.ai/api/coding/paas/v4",
-            Self::ZaiCodingCn => "https://open.bigmodel.cn/api/coding/paas/v4",
-            Self::Vercel => "https://ai-gateway.vercel.sh/v1",
-            Self::Cheaperinference => "https://api.cheaperinference.com/v1",
-            Self::Local => "http://localhost:11434/v1",
-        }
+        self.spec().base_url
     }
+
     /// Credential lookup is the host's responsibility; OAuth/ambient credentials return None.
     pub const fn key_env(self) -> Option<&'static str> {
-        match self {
-            Self::AmazonBedrock => Some("AWS_BEARER_TOKEN_BEDROCK"),
-            Self::AntLing => Some("ANT_LING_API_KEY"),
-            Self::Anthropic => Some("ANTHROPIC_API_KEY"),
-            Self::AzureOpenAiResponses => Some("AZURE_OPENAI_API_KEY"),
-            Self::Baseten => Some("BASETEN_API_KEY"),
-            Self::Cerebras => Some("CEREBRAS_API_KEY"),
-            Self::CloudflareAiGateway => Some("CLOUDFLARE_AI_GATEWAY_API_KEY"),
-            Self::CloudflareWorkersAi => Some("CLOUDFLARE_API_TOKEN"),
-            Self::Cursor => Some("CURSOR_ACCESS_TOKEN"),
-            Self::DatabricksUnityGateway => Some("DATABRICKS_TOKEN"),
-            Self::Deepseek => Some("DEEPSEEK_API_KEY"),
-            Self::Fireworks => Some("FIREWORKS_API_KEY"),
-            Self::GithubCopilot => Some("COPILOT_GITHUB_TOKEN"),
-            Self::Google => Some("GEMINI_API_KEY"),
-            Self::GoogleVertex => Some("GOOGLE_CLOUD_API_KEY"),
-            Self::Groq => Some("GROQ_API_KEY"),
-            Self::Huggingface => Some("HF_TOKEN"),
-            Self::KimiCoding => Some("KIMI_API_KEY"),
-            Self::Meta => Some("META_API_KEY"),
-            Self::Minimax => Some("MINIMAX_API_KEY"),
-            Self::MinimaxCn => Some("MINIMAX_CN_API_KEY"),
-            Self::Mistral => Some("MISTRAL_API_KEY"),
-            Self::Moonshotai => Some("MOONSHOT_API_KEY"),
-            Self::MoonshotaiCn => Some("MOONSHOT_API_KEY"),
-            Self::Nvidia => Some("NVIDIA_API_KEY"),
-            Self::OpenAi => Some("OPENAI_API_KEY"),
-            Self::OpenAiCodex => None,
-            Self::Opencode => Some("OPENCODE_API_KEY"),
-            Self::OpencodeGo => Some("OPENCODE_API_KEY"),
-            Self::Openrouter => Some("OPENROUTER_API_KEY"),
-            Self::QwenTokenPlan => Some("QWEN_TOKEN_PLAN_API_KEY"),
-            Self::QwenTokenPlanCn => Some("QWEN_TOKEN_PLAN_CN_API_KEY"),
-            Self::QwenTokenPlanIndividual => Some("QWEN_TOKEN_PLAN_API_KEY"),
-            Self::Radius => Some("RADIUS_API_KEY"),
-            Self::SnowflakeCortex => Some("SNOWFLAKE_PAT"),
-            Self::Together => Some("TOGETHER_API_KEY"),
-            Self::VercelAiGateway => Some("AI_GATEWAY_API_KEY"),
-            Self::Xai => Some("XAI_API_KEY"),
-            Self::Xiaomi => Some("XIAOMI_API_KEY"),
-            Self::XiaomiTokenPlanAms => Some("XIAOMI_TOKEN_PLAN_AMS_API_KEY"),
-            Self::XiaomiTokenPlanCn => Some("XIAOMI_TOKEN_PLAN_CN_API_KEY"),
-            Self::XiaomiTokenPlanSgp => Some("XIAOMI_TOKEN_PLAN_SGP_API_KEY"),
-            Self::Zai => Some("ZAI_API_KEY"),
-            Self::ZaiCodingCn => Some("ZAI_CODING_CN_API_KEY"),
-            Self::Vercel => Some("AI_GATEWAY_API_KEY"),
-            Self::Cheaperinference => Some("CHEAPERINFERENCE_API_KEY"),
-            Self::Local => None,
+        match self.spec().credential {
+            Credential::ApiKey { env, .. } => Some(env),
+            Credential::OAuth | Credential::None => None,
         }
-    }
-    pub const fn default_model(self) -> &'static str {
-        match self {
-            Self::AmazonBedrock => "amazon.nova-2-lite-v1:0",
-            Self::AntLing => "Ling-2.6-1T",
-            Self::Anthropic => "claude-haiku-4-5",
-            Self::AzureOpenAiResponses => "gpt-4o-mini",
-            Self::Baseten => "deepseek-ai/DeepSeek-V4-Flash-0731",
-            Self::Cerebras => "gpt-oss-120b",
-            Self::CloudflareAiGateway => "claude-haiku-4.5",
-            Self::CloudflareWorkersAi => "@cf/deepseek-ai/deepseek-v4-flash-0731",
-            Self::Cursor => "auto",
-            Self::DatabricksUnityGateway => "system.ai.claude-sonnet-4-6",
-            Self::Deepseek => "deepseek-flash",
-            Self::Fireworks => "accounts/fireworks/models/deepseek-v4-flash-0731",
-            Self::GithubCopilot => "claude-sonnet-4.6",
-            Self::Google => "gemini-2.5-flash",
-            Self::GoogleVertex => "gemini-2.5-flash",
-            Self::Groq => "llama-3.1-8b-instant",
-            Self::Huggingface => "MiniMaxAI/MiniMax-M2",
-            Self::KimiCoding => "k3",
-            Self::Meta => "muse-spark-1.1",
-            Self::Minimax => "MiniMax-M2.7",
-            Self::MinimaxCn => "MiniMax-M2.7",
-            Self::Mistral => "mistral-small-latest",
-            Self::Moonshotai => "kimi-k2.6",
-            Self::MoonshotaiCn => "kimi-k2.6",
-            Self::Nvidia => "google/gemma-3-12b-it",
-            Self::OpenAi => "gpt-4o-mini",
-            Self::OpenAiCodex => "gpt-5.4",
-            Self::Opencode => "claude-haiku-4-5",
-            Self::OpencodeGo => "minimax-m3",
-            Self::Openrouter => "openrouter/auto",
-            Self::QwenTokenPlan => "MiniMax-M2.5",
-            Self::QwenTokenPlanCn => "MiniMax-M2.5",
-            Self::QwenTokenPlanIndividual => "deepseek-v4-flash-0731",
-            Self::Radius => "balanced",
-            Self::SnowflakeCortex => "claude-sonnet-4-5",
-            Self::Together => "MiniMaxAI/MiniMax-M2.7",
-            Self::VercelAiGateway => "alibaba/qwen-3-14b",
-            Self::Xai => "grok-4.3",
-            Self::Xiaomi => "mimo-v2.5",
-            Self::XiaomiTokenPlanAms => "mimo-v2.5",
-            Self::XiaomiTokenPlanCn => "mimo-v2.5",
-            Self::XiaomiTokenPlanSgp => "mimo-v2.5",
-            Self::Zai => "glm-4.7",
-            Self::ZaiCodingCn => "glm-5.3-flash",
-            Self::Vercel => "anthropic/claude-haiku-4.5",
-            Self::Cheaperinference => "anthropic/claude-haiku-4.5",
-            Self::Local => "qwen3.5:9b",
-        }
-    }
-    pub fn protocol(self) -> Protocol {
-        self.route(self.default_model()).protocol
     }
 
-    /// Exact catalog match; unknown/custom IDs inherit the provider default route.
-    pub fn route(self, model: &str) -> Route {
-        for line in include_str!("models.tsv").lines() {
-            let mut parts = line.split('\t');
-            if parts.next() != Some(self.id()) || parts.next() != Some(model) {
+    /// A provider-only route. Mixed dialect services require explicit selection.
+    pub fn route(self) -> Result<Route, ModelError> {
+        Ok(Route {
+            protocol: self.protocol()?,
+            base_url: self.base_url(),
+        })
+    }
+
+    pub fn protocol(self) -> Result<Protocol, ModelError> {
+        self.spec().protocol.ok_or_else(|| {
+            ModelError::Request(format!(
+                "{} has multiple transports; set ProviderModel::protocol(...) and an explicit base_url for that interface",
+                self.id()
+            ))
+        })
+    }
+
+    /// Resolve the URL template from the environment. An override replaces the complete root.
+    pub fn resolve_base_url(self, override_url: Option<&str>) -> Result<String, ModelError> {
+        let spec = self.spec();
+        if let Some(url) = override_url {
+            return validate_url(spec, url);
+        }
+        let mut url = spec.base_url.to_owned();
+        let mut from_url_var = false;
+        for var in spec.vars {
+            let placeholder = format!("{{{}}}", var.env[0]);
+            if !url.contains(&placeholder) {
                 continue;
             }
-            let _name = parts.next();
-            let api = parts.next().unwrap_or("");
-            let base_url = parts.next().unwrap_or("");
-            return Route {
-                protocol: protocol_for(api),
-                base_url,
-            };
-        }
-        Route {
-            protocol: match self {
-                Self::AmazonBedrock => Protocol::Bedrock,
-                Self::AntLing => Protocol::ChatCompletions,
-                Self::Anthropic => Protocol::Anthropic,
-                Self::AzureOpenAiResponses => Protocol::Responses,
-                Self::Baseten => Protocol::ChatCompletions,
-                Self::Cerebras => Protocol::ChatCompletions,
-                Self::CloudflareAiGateway => Protocol::Anthropic,
-                Self::CloudflareWorkersAi => Protocol::ChatCompletions,
-                Self::Cursor => Protocol::Cursor,
-                Self::DatabricksUnityGateway => Protocol::Anthropic,
-                Self::Deepseek => Protocol::ChatCompletions,
-                Self::Fireworks => Protocol::Anthropic,
-                Self::GithubCopilot => Protocol::Anthropic,
-                Self::Google => Protocol::Google,
-                Self::GoogleVertex => Protocol::Vertex,
-                Self::Groq => Protocol::ChatCompletions,
-                Self::Huggingface => Protocol::ChatCompletions,
-                Self::KimiCoding => Protocol::Anthropic,
-                Self::Meta => Protocol::Responses,
-                Self::Minimax => Protocol::Anthropic,
-                Self::MinimaxCn => Protocol::Anthropic,
-                Self::Mistral => Protocol::ChatCompletions,
-                Self::Moonshotai => Protocol::ChatCompletions,
-                Self::MoonshotaiCn => Protocol::ChatCompletions,
-                Self::Nvidia => Protocol::ChatCompletions,
-                Self::OpenAi => Protocol::Responses,
-                Self::OpenAiCodex => Protocol::Codex,
-                Self::Opencode => Protocol::Anthropic,
-                Self::OpencodeGo => Protocol::Anthropic,
-                Self::Openrouter => Protocol::ChatCompletions,
-                Self::QwenTokenPlan => Protocol::ChatCompletions,
-                Self::QwenTokenPlanCn => Protocol::ChatCompletions,
-                Self::QwenTokenPlanIndividual => Protocol::ChatCompletions,
-                Self::Radius => Protocol::PiMessages,
-                Self::SnowflakeCortex => Protocol::Anthropic,
-                Self::Together => Protocol::ChatCompletions,
-                Self::VercelAiGateway => Protocol::Anthropic,
-                Self::Xai => Protocol::Responses,
-                Self::Xiaomi => Protocol::ChatCompletions,
-                Self::XiaomiTokenPlanAms => Protocol::ChatCompletions,
-                Self::XiaomiTokenPlanCn => Protocol::ChatCompletions,
-                Self::XiaomiTokenPlanSgp => Protocol::ChatCompletions,
-                Self::Zai => Protocol::ChatCompletions,
-                Self::ZaiCodingCn => Protocol::ChatCompletions,
-                Self::Vercel => Protocol::ChatCompletions,
-                Self::Cheaperinference => Protocol::ChatCompletions,
-                Self::Local => Protocol::ChatCompletions,
-            },
-            base_url: self.base_url(),
-        }
-    }
-
-    /// Resolve provider URL templates. Overrides replace the complete base URL.
-    /// For model-specific URLs, use `route(model).resolve_base_url(override_url)`.
-    pub fn resolve_base_url(self, override_url: Option<&str>) -> Result<String, ModelError> {
-        resolve_url(self.id(), self.base_url(), override_url)
-    }
-
-    pub fn models(self) -> Vec<ModelInfo> {
-        let mut models: Vec<ModelInfo> = include_str!("models.tsv")
-            .lines()
-            .filter_map(|line| {
-                let mut p = line.split('\t');
-                if p.next()? != self.id() {
-                    return None;
-                }
-                let id = p.next()?.to_owned();
-                let name = p.next()?.to_owned();
-                let _api = p.next()?;
-                let _url = p.next()?;
-                let context_length = p
-                    .next()
-                    .and_then(|n| n.parse::<u64>().ok())
-                    .filter(|n| *n > 0);
-                Some(ModelInfo {
-                    id,
-                    name: Some(name),
-                    context_length,
-                    pricing: None,
-                    reasoning: None,
-                })
-            })
-            .collect();
-        // Provider switching uses the first catalog entry when no model is
-        // saved. Keep that aligned with the intentional startup default.
-        if let Some(index) = models
-            .iter()
-            .position(|model| model.id == self.default_model())
-        {
-            let default = models.remove(index);
-            models.insert(0, default);
-        } else {
-            models.insert(
-                0,
-                ModelInfo {
-                    id: self.default_model().into(),
-                    name: None,
-                    context_length: None,
-                    pricing: None,
-                    reasoning: None,
-                },
-            );
-        }
-        models
-    }
-}
-
-impl Route {
-    pub fn resolve_base_url(
-        self,
-        provider: ProviderPreset,
-        override_url: Option<&str>,
-    ) -> Result<String, ModelError> {
-        resolve_url(provider.id(), self.base_url, override_url)
-    }
-}
-
-fn protocol_for(api: &str) -> Protocol {
-    match api {
-        "anthropic-messages" => Protocol::Anthropic,
-        "openai-responses" | "azure-openai-responses" => Protocol::Responses,
-        "openai-codex-responses" => Protocol::Codex,
-        "google-generative-ai" => Protocol::Google,
-        "google-vertex" => Protocol::Vertex,
-        "bedrock-converse-stream" => Protocol::Bedrock,
-        "cursor-agent" => Protocol::Cursor,
-        "pi-messages" => Protocol::PiMessages,
-        _ => Protocol::ChatCompletions,
-    }
-}
-
-fn resolve_url(
-    provider: &str,
-    template: &str,
-    override_url: Option<&str>,
-) -> Result<String, ModelError> {
-    if let Some(url) = override_url {
-        return validate_url(provider, url);
-    }
-    let mut url = template.to_owned();
-    if provider == "amazon-bedrock" {
-        // An explicit region wins over the catalog's model-specific region.
-        let region = ["AWS_REGION", "AWS_DEFAULT_REGION"]
-            .iter()
-            .filter_map(|name| std::env::var(name).ok())
-            .find(|region| !region.trim().is_empty());
-        if let Some(region) = region {
-            validate_segment(provider, "AWS region", region.trim())?;
-            url = format!("https://bedrock-runtime.{}.amazonaws.com", region.trim());
-        }
-    }
-    if provider == "google-vertex" {
-        // Vertex needs a project even though it does not appear in the API root.
-        required_env(provider, "GOOGLE_CLOUD_PROJECT")?;
-    }
-    if url.is_empty() && provider == "azure-openai-responses" {
-        url = required_env(provider, "AZURE_OPENAI_ENDPOINT")?;
-        // ProviderModel adds /openai/v1 for a bare endpoint, but a query
-        // must remain after the path (ResponsesModel preserves it there).
-        if let Some((root, query)) = url.split_once('?') {
-            if !root.contains("/openai/") {
-                url = format!("{}/openai/v1?{query}", root.trim_end_matches('/'));
+            let value = var_value(spec.id, var)?;
+            match var.kind {
+                VarKind::Segment => validate_segment(spec.id, var.env[0], &value)?,
+                VarKind::Url => from_url_var |= url.starts_with(&placeholder),
             }
+            url = url.replace(&placeholder, value.trim_end_matches('/'));
         }
-    }
-    if provider == "google-vertex" && url.contains("{location}") {
-        let location = std::env::var("GOOGLE_CLOUD_LOCATION")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            // Match ProviderModel's default project path; global is also a
-            // valid Vertex location and uses the unprefixed hostname.
-            .unwrap_or_else(|| "us-central1".to_owned());
-        validate_segment(provider, "GOOGLE_CLOUD_LOCATION", &location)?;
-        url = if location == "global" {
-            url.replace("{location}-", "")
-        } else {
-            url.replace("{location}", &location)
-        };
-    }
-    for (placeholder, env) in [
-        ("{CLOUDFLARE_ACCOUNT_ID}", "CLOUDFLARE_ACCOUNT_ID"),
-        ("{CLOUDFLARE_GATEWAY_ID}", "CLOUDFLARE_GATEWAY_ID"),
-        ("{DATABRICKS_HOST}", "DATABRICKS_HOST"),
-        ("{SNOWFLAKE_CORTEX_BASE_URL}", "SNOWFLAKE_CORTEX_BASE_URL"),
-    ] {
-        if url.contains(placeholder) {
-            let value = required_env(provider, env)?;
-            if matches!(env, "CLOUDFLARE_ACCOUNT_ID" | "CLOUDFLARE_GATEWAY_ID") {
-                validate_segment(provider, env, &value)?;
-            }
-            url = url.replace(placeholder, value.trim_end_matches('/'));
+        if let (true, Some(path)) = (from_url_var, spec.root_path) {
+            url = with_root_path(&url, path);
         }
+        if let Some(hook) = spec.url_hook {
+            url = hook(url);
+        }
+        validate_url(spec, &url)
     }
-    validate_url(provider, &url)
+}
+
+fn var_value(provider: &str, var: &Var) -> Result<String, ModelError> {
+    var.env
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+        .or_else(|| var.default.map(str::to_owned))
+        .ok_or_else(|| {
+            let name = var.env[0];
+            ModelError::Request(format!(
+                "{provider} requires {name}; set {name} or supply an explicit base URL"
+            ))
+        })
+}
+
+/// Add `path` to a bare endpoint, keeping any query after it.
+fn with_root_path(url: &str, path: &str) -> String {
+    let (root, query) = match url.split_once('?') {
+        Some((root, query)) => (root, Some(query)),
+        None => (url, None),
+    };
+    let bare = reqwest::Url::parse(root).is_ok_and(|u| matches!(u.path(), "" | "/"));
+    if !bare {
+        return url.to_owned();
+    }
+    let root = format!("{}{path}", root.trim_end_matches('/'));
+    match query {
+        Some(query) => format!("{root}?{query}"),
+        None => root,
+    }
 }
 
 pub(crate) fn validate_segment(provider: &str, name: &str, value: &str) -> Result<(), ModelError> {
@@ -565,18 +576,8 @@ pub(crate) fn validate_segment(provider: &str, name: &str, value: &str) -> Resul
     Ok(())
 }
 
-fn required_env(provider: &str, name: &str) -> Result<String, ModelError> {
-    std::env::var(name)
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            ModelError::Request(format!(
-                "{provider} requires {name}; set {name} or supply an explicit base URL"
-            ))
-        })
-}
-
-fn validate_url(provider: &str, url: &str) -> Result<String, ModelError> {
+fn validate_url(spec: &Spec, url: &str) -> Result<String, ModelError> {
+    let provider = spec.id;
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://"))
         || url.contains('{')
@@ -591,16 +592,21 @@ fn validate_url(provider: &str, url: &str) -> Result<String, ModelError> {
             "invalid {provider} base URL: expected a complete HTTP(S) URL"
         ))
     })?;
+    let query_ok = match (parsed.query(), spec.query) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(_), Some(allowed)) => {
+            parsed.query_pairs().count() == 1
+                && parsed
+                    .query_pairs()
+                    .all(|(key, value)| key == allowed && !value.is_empty())
+        }
+    };
     if parsed.host_str().is_none()
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.fragment().is_some()
-        || (parsed.query().is_some()
-            && (provider != "azure-openai-responses"
-                || parsed.query_pairs().count() != 1
-                || !parsed
-                    .query_pairs()
-                    .all(|(key, value)| key == "api-version" && !value.is_empty())))
+        || !query_ok
     {
         return Err(ModelError::Request(format!(
             "invalid {provider} base URL: remove credentials, fragment or unsupported query"
@@ -612,137 +618,56 @@ fn validate_url(provider: &str, url: &str) -> Result<String, ModelError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     #[test]
-    fn ids_defaults_and_catalog_routes() {
-        assert_eq!(ALL.len(), 47);
-        let mut seen = HashSet::new();
-        for &preset in ALL {
-            assert!(seen.insert(preset.id()));
-            assert_eq!(ProviderPreset::from_id(preset.id()), Some(preset));
-            assert!(!preset.default_model().is_empty());
-            if !matches!(
-                preset,
-                ProviderPreset::Vercel
-                    | ProviderPreset::Cheaperinference
-                    | ProviderPreset::Local
-                    | ProviderPreset::Openrouter
-                    | ProviderPreset::OpenAiCodex
-            ) {
-                assert!(
-                    preset
-                        .models()
-                        .iter()
-                        .any(|m| m.id == preset.default_model()),
-                    "{}",
-                    preset.id()
-                );
-            }
+    fn table_rows_match_their_variants() {
+        for (index, preset) in ALL.iter().enumerate() {
+            assert_eq!(*preset as usize, index);
+            assert!(!preset.id().is_empty());
+            assert_eq!(ProviderPreset::from_id(preset.id()), Some(*preset));
         }
-        assert_eq!(ProviderPreset::from_id("nonexistent"), None);
-        assert_eq!(ProviderPreset::OpenAi.default_model(), "gpt-4o-mini");
-        assert_eq!(ProviderPreset::Local.default_model(), "qwen3.5:9b");
+        let mut ids: Vec<_> = ALL
+            .iter()
+            .flat_map(|p| std::iter::once(p.id()).chain(p.spec().aliases.iter().copied()))
+            .collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "preset IDs and aliases must be unique");
     }
 
     #[test]
-    fn mixed_routes_and_config() {
-        let db = ProviderPreset::DatabricksUnityGateway;
-        assert_eq!(
-            db.route("system.ai.claude-sonnet-4-6").protocol,
-            Protocol::Anthropic
-        );
-        assert_eq!(db.route("system.ai.glm-5-2").protocol, Protocol::Responses);
-        assert_eq!(
-            db.route("system.ai.glm-5-2")
-                .resolve_base_url(db, Some("https://example.com/v1"))
-                .unwrap(),
-            "https://example.com/v1"
-        );
-        let snow = ProviderPreset::SnowflakeCortex;
-        assert_eq!(
-            snow.route("claude-sonnet-4-5").protocol,
-            Protocol::Anthropic
-        );
-        assert_eq!(
-            snow.route("openai-gpt-5").protocol,
-            Protocol::ChatCompletions
-        );
-        assert_eq!(
-            ProviderPreset::GithubCopilot
-                .route("claude-fable-5")
-                .protocol,
-            Protocol::Anthropic
-        );
-        assert_eq!(
-            ProviderPreset::GithubCopilot.route("gpt-6-sol").protocol,
-            Protocol::Responses
-        );
-        assert!(validate_url("test", "{PLACEHOLDER}/v1").is_err());
-        assert!(validate_url("test", "https://example.com/?secret=x").is_err());
-        assert!(required_env("test", "THIS_VARIABLE_SHOULD_NOT_EXIST_4839").is_err());
-    }
-
-    #[test]
-    fn conversational_defaults_and_fallback_roots() {
-        assert_eq!(ProviderPreset::Google.default_model(), "gemini-2.5-flash");
-        assert_eq!(
-            ProviderPreset::AzureOpenAiResponses.default_model(),
-            "gpt-4o-mini"
-        );
-        assert_eq!(
-            ProviderPreset::GoogleVertex.route("custom").protocol,
-            Protocol::Vertex
-        );
-        assert_eq!(
-            ProviderPreset::Anthropic.route("custom").base_url,
-            "https://api.anthropic.com"
-        );
-        assert_eq!(
-            ProviderPreset::Mistral.route("custom").base_url,
-            "https://api.mistral.ai"
-        );
-        assert_eq!(
-            ProviderPreset::Openrouter.route("custom").base_url,
-            "https://openrouter.ai/api/v1"
-        );
-        assert_eq!(
-            ProviderPreset::OpenAi.route("custom").protocol,
-            Protocol::Responses
-        );
-        assert_eq!(
-            ProviderPreset::OpenAiCodex.route("custom").protocol,
-            Protocol::Codex
-        );
-        for provider in [
-            ProviderPreset::Google,
-            ProviderPreset::OpenAi,
-            ProviderPreset::Openrouter,
-        ] {
-            for model in provider.models() {
-                assert!(!model.id.contains("deep-research"));
-                assert!(!model.id.contains("realtime"));
+    fn every_template_placeholder_has_a_variable() {
+        for preset in ALL {
+            let spec = preset.spec();
+            let mut url = spec.base_url.to_owned();
+            for var in spec.vars {
+                url = url.replace(&format!("{{{}}}", var.env[0]), "x");
+            }
+            assert!(!url.contains('{'), "{} has an unbound placeholder", spec.id);
+            if let Credential::ApiKey { env, .. } = spec.credential {
+                assert!(!env.is_empty(), "{} has an empty key variable", spec.id);
             }
         }
     }
 
     #[test]
-    fn azure_query_is_the_only_accepted_query() {
-        assert_eq!(
-            validate_url(
-                "azure-openai-responses",
-                "https://example.com/openai/v1/?api-version=preview"
-            )
-            .unwrap(),
-            "https://example.com/openai/v1/?api-version=preview"
-        );
-        for url in [
-            "https://example.com/?api-version=",
-            "https://example.com/?api-version=x&other=y",
-            "https://example.com/?other=x",
-        ] {
-            assert!(validate_url("azure-openai-responses", url).is_err());
+    fn protocol_names_roundtrip() {
+        for protocol in Protocol::ALL {
+            assert_eq!(Protocol::from_name(protocol.name()), Some(*protocol));
         }
-        assert!(validate_url("openai", "https://example.com/?api-version=preview").is_err());
+        assert_eq!(Protocol::from_name("openai"), None);
+    }
+
+    #[test]
+    fn bare_endpoint_gains_root_path_before_query() {
+        assert_eq!(
+            with_root_path("https://x.example?api-version=1", "/openai/v1"),
+            "https://x.example/openai/v1?api-version=1"
+        );
+        assert_eq!(
+            with_root_path("https://x.example/openai/v1", "/openai/v1"),
+            "https://x.example/openai/v1"
+        );
     }
 }

@@ -21,7 +21,7 @@ pub struct BedrockModel {
     model: String,
     base_url: String,
     api_key: Option<String>,
-    max_tokens: u64,
+    max_tokens: Option<u64>,
     reasoning_effort: Option<String>,
     reasoning_by_call: Mutex<HashMap<String, SavedReasoning>>,
 }
@@ -50,7 +50,7 @@ impl BedrockModel {
             model: model.into(),
             base_url: "https://bedrock-runtime.us-east-1.amazonaws.com".into(),
             api_key: None,
-            max_tokens: 8192,
+            max_tokens: None,
             reasoning_effort: None,
             reasoning_by_call: Mutex::new(HashMap::new()),
         }
@@ -65,20 +65,29 @@ impl BedrockModel {
         self
     }
     pub fn max_tokens(mut self, max: u64) -> Self {
-        self.max_tokens = max;
+        self.max_tokens = Some(max);
         self
     }
-    /// Opt-in model-specific output effort; sent in additionalModelRequestFields.
-    /// Only use with models that document `output_config.effort` support.
+    /// Request reasoning effort. Currently rejected because this adapter has no
+    /// model metadata describing a supported Bedrock effort wire format.
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
         self
     }
 
     fn body(&self, context: &Context, tools: &[ToolSchema]) -> Result<Value, ModelError> {
-        if self.max_tokens == 0 || self.max_tokens > i32::MAX as u64 {
+        // Smithy integer range, not a guessed model output limit.
+        if self
+            .max_tokens
+            .is_some_and(|max| max == 0 || max > i32::MAX as u64)
+        {
             return Err(ModelError::Request(
                 "Bedrock max_tokens out of range".into(),
+            ));
+        }
+        if self.reasoning_effort.is_some() {
+            return Err(ModelError::Request(
+                "Bedrock reasoning effort unsupported without model capability metadata".into(),
             ));
         }
         // A different Context may belong to another conversation, not compaction.
@@ -130,15 +139,18 @@ impl BedrockModel {
                 messages.push(json!({"role":role,"content":blocks}));
             }
         }
-        let mut body = json!({"messages":messages,"inferenceConfig":{"maxTokens":self.max_tokens}});
+        // ConverseStream inferenceConfig and maxTokens are optional; omission
+        // delegates the default to the model, including inference profiles.
+        // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InferenceConfiguration.html
+        let mut body = json!({"messages":messages});
+        if let Some(max) = self.max_tokens {
+            body["inferenceConfig"] = json!({"maxTokens":max});
+        }
         if !system.is_empty() {
             body["system"] = json!(system);
         }
         if !tools.is_empty() {
             body["toolConfig"] = json!({"tools":tools.iter().map(|t| json!({"toolSpec":{"name":t.name,"description":t.description,"inputSchema":{"json":t.parameters}}})).collect::<Vec<_>>()});
-        }
-        if let Some(effort) = &self.reasoning_effort {
-            body["additionalModelRequestFields"] = json!({"output_config":{"effort":effort}});
         }
         Ok(body)
     }
@@ -503,11 +515,17 @@ impl Accumulator {
                     }
                 })?
             };
+            if block.id.is_empty() || block.name.is_empty() || !arguments.is_object() {
+                return Err(invalid("invalid tool call"));
+            }
             calls.push(ToolCall {
                 id: block.id,
                 name: block.name,
                 arguments,
             });
+        }
+        if (self.stop.as_deref() == Some("tool_use")) != !calls.is_empty() {
+            return Err(invalid("stop reason does not match tool calls"));
         }
         if !calls.is_empty() {
             Ok((
@@ -534,6 +552,68 @@ impl Accumulator {
 mod tests {
     use super::*;
     use orca_harness_core::{Image, ToolResult};
+
+    #[test]
+    fn token_limit_is_unset_unless_explicit_and_effort_needs_metadata() {
+        let ctx = Context::new();
+        for id in [
+            "unknown",
+            "arn:aws:bedrock:us-east-1:123:inference-profile/foo",
+        ] {
+            assert!(BedrockModel::new(id)
+                .body(&ctx, &[])
+                .unwrap()
+                .get("inferenceConfig")
+                .is_none());
+            assert_eq!(
+                BedrockModel::new(id)
+                    .max_tokens(12345)
+                    .body(&ctx, &[])
+                    .unwrap()["inferenceConfig"]["maxTokens"],
+                12345
+            );
+            assert!(
+                matches!(BedrockModel::new(id).reasoning_effort("high").body(&ctx, &[]), Err(ModelError::Request(message)) if message.contains("metadata"))
+            );
+        }
+        for max in [0, i32::MAX as u64 + 1] {
+            assert!(BedrockModel::new("m")
+                .max_tokens(max)
+                .body(&ctx, &[])
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_tool_arguments_and_stop_reason() {
+        for (args, stop) in [("[]", "tool_use"), ("{}", "end_turn")] {
+            let mut state = Accumulator::default();
+            for event in [
+                json!({"type":"messageStart","messageStart":{}}),
+                json!({"type":"contentBlockStart","contentBlockStart":{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"id","name":"read"}}}}),
+                json!({"type":"contentBlockDelta","contentBlockDelta":{"contentBlockIndex":0,"delta":{"toolUse":{"input":args}}}}),
+                json!({"type":"contentBlockStop","contentBlockStop":{"contentBlockIndex":0}}),
+                json!({"type":"messageStop","messageStop":{"stopReason":stop}}),
+            ] {
+                state.apply(event).unwrap();
+            }
+            assert!(matches!(
+                state.finish(),
+                Err(ModelError::InvalidResponse(_))
+            ));
+        }
+        let mut state = Accumulator::default();
+        state
+            .apply(json!({"type":"messageStart","messageStart":{}}))
+            .unwrap();
+        state
+            .apply(json!({"type":"messageStop","messageStop":{"stopReason":"tool_use"}}))
+            .unwrap();
+        assert!(matches!(
+            state.finish(),
+            Err(ModelError::InvalidResponse(_))
+        ));
+    }
 
     #[test]
     fn request_preserves_tools_images_results_and_arn() {

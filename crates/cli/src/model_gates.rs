@@ -1,4 +1,5 @@
 //! Session-local sharing for endpoints that draw on the same provider quota.
+use crate::msg::ProviderExt as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -39,6 +40,7 @@ mod tests {
         let mut endpoint = Endpoint {
             provider: crate::Provider::OpenAi,
             automatic_base_url: false,
+            protocol: None,
             base_url: "https://example.test/v1/".into(),
             api_key: Some("first-key".into()),
             model: "first-model".into(),

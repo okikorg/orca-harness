@@ -3,6 +3,7 @@ use super::completions::{delivery, PublishCompletion};
 use super::local_tools::{LocalTools, LocalToolsCache};
 use super::session::open_session;
 use super::worker::worker;
+use crate::msg::ProviderExt as _;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;

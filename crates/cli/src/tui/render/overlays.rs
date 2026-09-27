@@ -1,3 +1,4 @@
+use crate::msg::ProviderExt as _;
 use ratatui::text::{Line, Span};
 
 use orca_harness_core::Message;
@@ -223,11 +224,7 @@ pub(crate) fn model_picker_lines(
         t.dim,
     ));
 
-    let filter_note = if picker.filter.is_empty() {
-        "type to filter".to_string()
-    } else {
-        format!("filter: {}", picker.filter)
-    };
+    let filter_note = super::pickers::filter_note(&picker.filter);
     let title = picker
         .subagent
         .as_ref()

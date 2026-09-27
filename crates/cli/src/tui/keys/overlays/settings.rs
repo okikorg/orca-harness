@@ -2,6 +2,7 @@
 
 use super::super::effects::After;
 use super::super::*;
+use crate::msg::ProviderExt as _;
 
 /// The values the rows open on, read before the overlay is borrowed.
 pub(super) struct Current {
@@ -15,15 +16,7 @@ pub(super) struct Current {
 
 pub(super) fn open_row(row: usize, now: &Current) -> After {
     match row {
-        0 => {
-            let selected = Provider::ALL
-                .iter()
-                .position(|p| *p == now.provider)
-                .unwrap_or(0);
-            After::Push(Overlay::Providers {
-                picker: ListPicker::with_selected(Provider::ALL.len(), selected),
-            })
-        }
+        0 => After::Push(Overlay::Providers(ProviderPicker::new(Some(now.provider)))),
         1 => After::FetchModels,
         2 => {
             let current = view::theme_name();

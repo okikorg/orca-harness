@@ -47,7 +47,7 @@ pub(crate) use self::state::{
 };
 #[cfg(test)]
 pub(crate) use self::state::{
-    LocationEntry, ModelPickerTarget, ToolRecord, SESSION_ACTIONS, SETTINGS_ROWS,
+    LocationEntry, ModelPickerTarget, ProviderPicker, ToolRecord, SESSION_ACTIONS, SETTINGS_ROWS,
 };
 
 use std::io;

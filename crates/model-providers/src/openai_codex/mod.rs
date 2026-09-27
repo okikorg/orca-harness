@@ -85,28 +85,30 @@ impl From<CodexModelInfo> for ModelInfo {
 
 /// Fetch the subscription-backed Codex catalog with OAuth and account headers.
 pub async fn list_models(
+    base_url: &str,
     credentials: Arc<dyn CodexCredentialSource>,
 ) -> Result<Vec<ModelInfo>, ModelError> {
     let credential = credentials.codex_credential().await.map_err(auth_error)?;
     let rejected = credential.bearer.access_token.clone();
     let client = client();
-    let mut response = send_catalog_request(&client, credential).await?;
+    let mut response = send_catalog_request(&client, base_url, credential).await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let renewed = credentials
             .refresh_codex(&rejected)
             .await
             .map_err(auth_error)?;
-        response = send_catalog_request(&client, renewed).await?;
+        response = send_catalog_request(&client, base_url, renewed).await?;
     }
     parse_catalog_response(response).await
 }
 
 async fn send_catalog_request(
     client: &reqwest::Client,
+    base_url: &str,
     credential: CodexCredential,
 ) -> Result<reqwest::Response, ModelError> {
     client
-        .get(catalog_url(CODEX_BASE_URL))
+        .get(catalog_url(base_url))
         .header(reqwest::header::USER_AGENT, ORCACODE_USER_AGENT)
         .bearer_auth(credential.bearer.access_token)
         .header("chatgpt-account-id", credential.account_id)
