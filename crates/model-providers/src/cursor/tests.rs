@@ -103,12 +103,9 @@ fn json_values_round_trip() {
     assert_eq!(request::from_proto(request::to_proto(&value)), value);
 }
 
-fn session(
-    frames: Vec<Vec<u8>>,
-) -> (
-    Session,
-    mpsc::UnboundedReceiver<std::result::Result<Vec<u8>, std::io::Error>>,
-) {
+type Sent = mpsc::UnboundedReceiver<BodyChunk>;
+
+fn session(frames: Vec<Vec<u8>>) -> (Session, Sent) {
     let (tx, rx) = mpsc::unbounded_channel();
     (
         Session {
@@ -123,6 +120,12 @@ fn session(
         },
         rx,
     )
+}
+/// The payload of the next frame the session sent upstream.
+async fn sent(rx: &mut Sent) -> Vec<u8> {
+    let mut decoder = wire::Decoder::default();
+    decoder.push(&rx.recv().await.unwrap().unwrap());
+    decoder.next().unwrap().unwrap().1
 }
 #[tokio::test]
 async fn continuation_streams_text_and_usage_without_new_request() {
@@ -154,10 +157,7 @@ async fn continuation_streams_text_and_usage_without_new_request() {
         }
         _ => panic!("expected final"),
     }
-    let packet = rx.recv().await.unwrap().unwrap();
-    let mut decoder = wire::Decoder::default();
-    decoder.push(&packet);
-    let (_, payload) = decoder.next().unwrap().unwrap();
+    let payload = sent(&mut rx).await;
     let outer = Fields::parse(&payload).unwrap();
     let exec = Fields::parse(outer.bytes(2)).unwrap();
     assert_eq!(exec.number(1), 7);
@@ -188,10 +188,7 @@ async fn kv_get_and_set_are_native_replies() {
             .bytes(2, P::default().bytes(1, "id").0)
             .0)
         .unwrap();
-    let packet = rx.recv().await.unwrap().unwrap();
-    let mut decoder = wire::Decoder::default();
-    decoder.push(&packet);
-    let payload = decoder.next().unwrap().unwrap().1;
+    let payload = sent(&mut rx).await;
     let outer = Fields::parse(&payload).unwrap();
     let reply = Fields::parse(outer.bytes(3)).unwrap();
     assert_eq!(reply.number(1), 10);

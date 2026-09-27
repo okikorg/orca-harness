@@ -15,6 +15,8 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex};
 use wire::{Fields, Message as P};
 type Result<T> = std::result::Result<T, ModelError>;
+/// One framed packet on the streaming request body.
+type BodyChunk = std::result::Result<Vec<u8>, std::io::Error>;
 fn invalid(message: impl Into<String>) -> ModelError {
     ModelError::InvalidResponse(format!("Cursor: {}", message.into()))
 }
@@ -22,6 +24,8 @@ fn invalid(message: impl Into<String>) -> ModelError {
 pub const CURSOR_BASE_URL: &str = "https://agentn.us.api5.cursor.sh";
 const CLIENT_VERSION: &str = "cli-2026.07.23-e383d2b";
 const SERVICE: &str = "/agent.v1.AgentService/";
+/// How long one Run lives: its heartbeat, its stream, and a parked continuation.
+const SESSION_TTL: Duration = Duration::from_secs(3600);
 
 /// Clones share pending tool continuations. Keep the same model instance for
 /// successive steps; a continuation is matched by its generated core call ID.
@@ -120,22 +124,11 @@ impl CursorModel {
             if outer.has(2) {
                 let exec = Fields::parse(outer.bytes(2))?;
                 if !exec.has(11) {
-                    session.send(
-                        P::default()
-                            .bytes(
-                                5,
-                                P::default()
-                                    .bytes(
-                                        2,
-                                        P::default()
-                                            .number(1, exec.number(1))
-                                            .bytes(2, "Orca does not execute Cursor-native tools")
-                                            .0,
-                                    )
-                                    .0,
-                            )
-                            .0,
-                    )?;
+                    let refusal = P::default()
+                        .number(1, exec.number(1))
+                        .bytes(2, "Orca does not execute Cursor-native tools");
+                    let reply = P::default().bytes(2, refusal.0);
+                    session.send(P::default().bytes(5, reply.0).0)?;
                     continue;
                 }
                 let args = Fields::parse(exec.bytes(11))?;
@@ -171,24 +164,20 @@ impl CursorModel {
                 })
                 .await;
                 let mut pending = self.pending.lock().await;
-                pending.retain(|_, s| s.created.elapsed() < Duration::from_secs(3600));
+                pending.retain(|_, s| s.created.elapsed() < SESSION_TTL);
                 if pending.len() >= 32 {
                     return Err(ModelError::Request(
                         "Cursor pending continuation limit reached".into(),
                     ));
                 }
                 pending.insert(id, session);
-                return Ok(ModelResponse::ToolCalls {
-                    content: (!text.is_empty()).then_some(text),
-                    calls: vec![call],
-                    usage,
-                });
+                return Ok(crate::response(text, vec![call], usage));
             }
         }
     }
     async fn start(&self, context: &Context, tools: &[ToolSchema]) -> Result<Session> {
         let (payload, blobs) = request::build(&self.model, context, tools)?;
-        let (tx, rx) = mpsc::unbounded_channel::<std::result::Result<Vec<u8>, std::io::Error>>();
+        let (tx, rx) = mpsc::unbounded_channel::<BodyChunk>();
         tx.send(Ok(wire::frame(&payload)?))
             .map_err(|_| invalid("request channel closed"))?;
         let body =
@@ -201,7 +190,7 @@ impl CursorModel {
         let response = check_status(response).await?;
         let heartbeat_tx = tx.clone();
         let heartbeat = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(3600);
+            let deadline = tokio::time::Instant::now() + SESSION_TTL;
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 if tokio::time::Instant::now() >= deadline {
@@ -245,7 +234,7 @@ impl Model for CursorModel {
 }
 
 struct Session {
-    tx: mpsc::UnboundedSender<std::result::Result<Vec<u8>, std::io::Error>>,
+    tx: mpsc::UnboundedSender<BodyChunk>,
     stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send>>,
     decoder: wire::Decoder,
     blobs: request::Blobs,
@@ -267,7 +256,7 @@ impl Session {
     }
     async fn next(&mut self) -> Result<(u8, Vec<u8>)> {
         loop {
-            if self.created.elapsed() >= Duration::from_secs(3600) {
+            if self.created.elapsed() >= SESSION_TTL {
                 return Err(ModelError::Request("Cursor session expired".into()));
             }
             if let Some(frame) = self.decoder.next()? {
@@ -321,11 +310,9 @@ impl Session {
             .bytes(1, content.0)
             .number(2, u64::from(result.is_error));
         for img in images {
-            let data = request::image(&orca_harness_core::Image {
-                media_type: img.media_type.into(),
-                data: img.data.into(),
-            })?;
-            let image = P::default().bytes(1, data).bytes(2, img.media_type);
+            let image = P::default()
+                .bytes(1, request::image(img.data)?)
+                .bytes(2, img.media_type);
             success = success.bytes(1, P::default().bytes(2, image.0).0);
         }
         let reply = P::default()
@@ -341,20 +328,18 @@ fn rpc(base: &str, key: &str, method: &str, streaming: bool) -> Result<reqwest::
             "Cursor access token is required".into(),
         ));
     }
-    // A separate client is necessary: the shared provider client does not enable h2 prior knowledge.
+    // A separate client is necessary: the shared provider client does not
+    // enable h2 prior knowledge. Like it, never follow redirects, so the
+    // access token never leaves the origin.
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = match CLIENT.get() {
-        Some(client) => client.clone(),
-        None => {
-            let client = reqwest::Client::builder()
-                .http2_prior_knowledge()
-                .connect_timeout(Duration::from_secs(30))
-                .build()
-                .map_err(|e| crate::http_error::transport_error(&e))?;
-            let _ = CLIENT.set(client.clone());
-            client
-        }
-    };
+    let client = CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .connect_timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("initialize no-redirect Cursor HTTP client")
+    });
     Ok(client
         .post(format!("{}{SERVICE}{method}", base.trim_end_matches('/')))
         .version(reqwest::Version::HTTP_2)
@@ -408,7 +393,7 @@ fn end_stream(payload: &[u8]) -> Result<()> {
 /// Native unary GetUsableModels; no invented pricing or context-window defaults.
 pub async fn list_models(base_url: &str, key: &str) -> Result<Vec<crate::catalog::ModelInfo>> {
     let response = rpc(base_url, key, "GetUsableModels", false)?
-        .timeout(Duration::from_secs(60))
+        .timeout(crate::http::CATALOG_TIMEOUT)
         .body(Vec::new())
         .send()
         .await

@@ -11,9 +11,9 @@ fn store(blobs: &mut Blobs, data: Vec<u8>) -> Vec<u8> {
     blobs.insert(id.clone(), data);
     id
 }
-pub(super) fn image(image: &orca_harness_core::Image) -> Result<Vec<u8>> {
+pub(super) fn image(data: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
-        .decode(&image.data)
+        .decode(data)
         .map_err(|_| ModelError::Request("Cursor image is not valid base64".into()))
 }
 pub(super) fn build(
@@ -82,7 +82,7 @@ pub(super) fn build(
             P::default()
                 .bytes(2, uuid::Uuid::new_v4().to_string())
                 .bytes(7, &img.media_type)
-                .bytes(8, image(img)?)
+                .bytes(8, image(&img.data)?)
                 .0,
         );
     }
