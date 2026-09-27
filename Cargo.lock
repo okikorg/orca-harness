@@ -1270,6 +1270,7 @@ version = "0.7.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "crc32fast",
  "futures-util",
  "httpdate",
  "orca-harness-core",
