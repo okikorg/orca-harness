@@ -31,7 +31,8 @@ encrypted reasoning replay caches. Failed calls are not automatically replayed.
 ## Security boundary and limitations
 
 - Token exchange and catalog discovery use the shared no-redirect client, a 15-second timeout, and
-  redacted diagnostics (discovery errors never echo the response body). The GitHub token is never passed to discovery or generation adapters.
+  redacted diagnostics (errors never echo the response body). Rejected credentials (HTTP 401/403)
+  are authentication errors. The GitHub token is never passed to discovery or generation adapters.
 - Generation uses the provider adapters' shared no-redirect HTTP client. Token
   exchange, discovery, and generation all reject redirects rather than relying
   on sensitive-header stripping.
@@ -40,7 +41,7 @@ encrypted reasoning replay caches. Failed calls are not automatically replayed.
 - Tests mock token exchange and discovery through private test-only URL fields;
   production callers cannot bypass endpoint validation. Arbitrary IDs exercise
   all three adapter selections, metadata absence, unknown IDs/capabilities,
-  refresh, redaction, and discovery redirects. There is no live Copilot smoke
+  refresh, exchange and discovery redaction, and redirects. There is no live Copilot smoke
   test or end-to-end generation/reasoning-replay test in this directory.
 
 Run `cargo test -p orca-harness-model-providers copilot:: --lib` once the host

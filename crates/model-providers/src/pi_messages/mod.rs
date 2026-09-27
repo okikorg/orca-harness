@@ -1,7 +1,6 @@
 //! Radius Pi Messages gateway adapter with explicit host-supplied credentials.
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use orca_harness_core::{
     Context, DeltaSink, Message, Model, ModelDelta, ModelError, ModelResponse, ToolCall,
     ToolSchema, Usage,
@@ -68,7 +67,11 @@ impl PiMessagesModel {
                         json!(content)
                     } else {
                         let mut blocks = vec![json!({"type":"text","text":content})];
-                        blocks.extend(images.iter().map(|image| json!({"type":"image","data":image.data,"mimeType":image.media_type})));
+                        blocks.extend(
+                            images
+                                .iter()
+                                .map(|image| image_block(&image.media_type, &image.data)),
+                        );
                         json!(blocks)
                     };
                     messages.push(json!({"role":"user","content":content,"timestamp":0}));
@@ -87,10 +90,25 @@ impl PiMessagesModel {
                 Message::Tool { results } => {
                     for result in results {
                         let (output, images) = crate::tool_images::split(&result.output);
-                        let mut content = vec![
-                            json!({"type":"text","text":crate::tool_images::text_of(&output)}),
-                        ];
-                        content.extend(recent.fresh(images).into_iter().map(|(_, image)| json!({"type":"image","data":image.data,"mimeType":image.media_type})));
+                        let images = recent.fresh(images);
+                        let text = crate::tool_images::text_of(&output);
+                        // Each image follows its `[image N]` marker, so text and
+                        // images keep the order the tool returned them in.
+                        let content: Vec<Value> = if images.is_empty() {
+                            vec![json!({"type":"text","text":text})]
+                        } else {
+                            crate::tool_images::interleave(&text, images)
+                                .into_iter()
+                                .map(|part| match part {
+                                    crate::tool_images::Part::Text(text) => {
+                                        json!({"type":"text","text":text})
+                                    }
+                                    crate::tool_images::Part::Image(image) => {
+                                        image_block(image.media_type, image.data)
+                                    }
+                                })
+                                .collect()
+                        };
                         messages.push(json!({"role":"toolResult","toolCallId":result.call_id,"toolName":result.tool_name,"content":content,"isError":result.is_error,"timestamp":0}));
                     }
                 }
@@ -120,37 +138,22 @@ impl PiMessagesModel {
             .as_deref()
             .filter(|key| !key.trim().is_empty())
             .ok_or_else(|| ModelError::Authentication("Radius requires an API key".into()))?;
-        let response = crate::http::client()
+        let request = crate::http::client()
             .post(format!("{}/messages", self.base_url.trim_end_matches('/')))
             .bearer_auth(key)
             .header("accept", "text/event-stream")
-            .json(&self.payload(context, tools))
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))?;
-        let response = crate::http_error::check_response(response).await?;
-        let mut bytes = response.bytes_stream();
-        let mut frames = crate::sse::SseBuffer::default();
+            .json(&self.payload(context, tools));
+        let response = crate::sse::send(request).await?;
         let mut state = State::default();
-        while let Some(chunk) = bytes.next().await {
-            let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
-            for frame in frames.push(&chunk)? {
-                let event: Value = serde_json::from_str(&frame)
-                    .map_err(|e| ModelError::InvalidResponse(e.to_string()))?;
-                if let Some(delta) = state.apply(&event)? {
-                    if let Some(sink) = sink {
-                        sink.emit(delta).await;
-                    }
-                }
-                if state.terminal {
-                    return state.finish();
-                }
-            }
-        }
-        Err(ModelError::IncompleteResponse {
-            message: "Pi Messages stream ended without done".into(),
-            usage: state.usage,
+        crate::sse::pump(response, sink, |frame| {
+            let event: Value = serde_json::from_str(frame)
+                .map_err(|e| ModelError::InvalidResponse(e.to_string()))?;
+            let delta = state.apply(&event)?;
+            Ok((delta.into_iter().collect(), state.terminal))
         })
+        .await?;
+        // A stream that ends without `done` is incomplete; `finish` says so.
+        state.finish()
     }
 }
 
@@ -297,24 +300,17 @@ impl State {
                 Block::Thinking => {}
             }
         }
-        if calls.is_empty() {
-            if self.reason == "toolUse" {
-                return Err(ModelError::InvalidResponse(
-                    "toolUse without tool calls".into(),
-                ));
-            }
-            Ok(ModelResponse::Final {
-                text,
-                usage: self.usage,
-            })
-        } else {
-            Ok(ModelResponse::ToolCalls {
-                content: if text.is_empty() { None } else { Some(text) },
-                calls,
-                usage: self.usage,
-            })
+        if calls.is_empty() && self.reason == "toolUse" {
+            return Err(ModelError::InvalidResponse(
+                "toolUse without tool calls".into(),
+            ));
         }
+        Ok(crate::response(text, calls, self.usage))
     }
+}
+
+fn image_block(media_type: &str, data: &str) -> Value {
+    json!({"type":"image","data":data,"mimeType":media_type})
 }
 
 fn usage(value: &Value) -> Option<Usage> {
@@ -389,6 +385,37 @@ mod tests {
         assert_eq!(payload["context"]["messages"][2]["toolCallId"], "c");
         assert_eq!(payload["context"]["tools"][0]["name"], "run");
         assert_eq!(payload["options"]["reasoning"], "high");
+    }
+
+    #[test]
+    fn tool_images_follow_their_markers() {
+        let call = ToolCall {
+            id: "c".into(),
+            name: "shot".into(),
+            arguments: json!({}),
+        };
+        let mut ctx = Context::new();
+        ctx.append_tool_results(vec![ToolResult::ok(
+            &call,
+            json!({
+                "content": "before [image 1] between [image 2] after",
+                "_images": [
+                    {"media_type": "image/png", "data": "QQ=="},
+                    {"media_type": "image/jpeg", "data": "Qg=="}
+                ]
+            }),
+        )]);
+        let payload = PiMessagesModel::new("m").payload(&ctx, &[]);
+        assert_eq!(
+            payload["context"]["messages"][0]["content"],
+            json!([
+                {"type":"text","text":"before [image 1]"},
+                {"type":"image","mimeType":"image/png","data":"QQ=="},
+                {"type":"text","text":" between [image 2]"},
+                {"type":"image","mimeType":"image/jpeg","data":"Qg=="},
+                {"type":"text","text":" after"}
+            ])
+        );
     }
 
     #[test]

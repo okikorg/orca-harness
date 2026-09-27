@@ -4,9 +4,9 @@
 //! the host. Calls on one instance are serialized to retain adapter replay state.
 use async_trait::async_trait;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::catalog::{ModelInfo, ReasoningCapabilities, SupportedEfforts};
 use crate::registry::ProviderPreset;
@@ -48,11 +48,11 @@ enum Adapter {
 
 // Builder calls consume but do not recreate the adapter (and its replay caches).
 macro_rules! map_adapter {
-    ($adapter:expr, $method:ident, $value:expr) => {
+    ($adapter:expr, $method:ident $(, $value:expr)*) => {
         match $adapter {
-            Adapter::Anthropic(m) => Adapter::Anthropic(m.$method($value)),
-            Adapter::Responses(m) => Adapter::Responses(m.$method($value)),
-            Adapter::Chat(m) => Adapter::Chat(m.$method($value)),
+            Adapter::Anthropic(m) => Adapter::Anthropic(m.$method($($value),*)),
+            Adapter::Responses(m) => Adapter::Responses(m.$method($($value),*)),
+            Adapter::Chat(m) => Adapter::Chat(m.$method($($value),*)),
         }
     };
 }
@@ -104,16 +104,20 @@ impl CopilotModel {
     /// subdomain of githubcopilot.com; validation happens before exchange.
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = Some(url.into());
-        self.state.get_mut().expires_at = 0;
-        self.state.get_mut().catalog = None;
-        self
+        self.invalidate()
     }
 
     /// The GitHub token, not the short-lived Copilot access token.
     pub fn api_key(mut self, token: impl Into<String>) -> Self {
         self.github_token = Some(token.into());
-        self.state.get_mut().expires_at = 0;
-        self.state.get_mut().catalog = None;
+        self.invalidate()
+    }
+
+    /// Force a fresh exchange and catalog on the next call.
+    fn invalidate(mut self) -> Self {
+        let state = self.state.get_mut();
+        state.expires_at = 0;
+        state.catalog = None;
         self
     }
 
@@ -154,29 +158,13 @@ impl CopilotModel {
         #[cfg(test)]
         let url = self.token_url.as_deref().unwrap_or(url);
         // The shared client never follows redirects, so the GitHub token stays on this origin.
-        let mut request = crate::http::client()
-            .get(url)
-            .bearer_auth(token)
-            .header("accept", "application/json")
-            .timeout(crate::http::CATALOG_TIMEOUT);
-        for &(name, value) in HEADERS {
-            request = request.header(name, value);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| ModelError::Request("Copilot token exchange transport failed".into()))?;
-        if !response.status().is_success() {
-            return Err(ModelError::Request(format!(
-                "Copilot token exchange failed (HTTP {})",
-                response.status()
-            )));
-        }
-        // Do not include the response body or token in diagnostics.
-        let credential: Credential = response
-            .json()
-            .await
-            .map_err(|_| ModelError::InvalidResponse("Invalid Copilot token response".into()))?;
+        let request = crate::http::client().get(url).bearer_auth(token);
+        let credential: Credential = fetch(
+            request,
+            "Copilot token exchange",
+            "Invalid Copilot token response",
+        )
+        .await?;
         if credential.token.trim().is_empty()
             || reqwest::header::HeaderValue::from_str(&format!("Bearer {}", credential.token))
                 .is_err()
@@ -229,19 +217,9 @@ impl CopilotModel {
             return Ok(());
         }
         let (token, base) = state.credential.as_ref().expect("credential loaded");
-        let mut request = crate::discovery::get(base, "/models", Some(token))
-            .header("accept", "application/json");
-        for &(name, value) in HEADERS {
-            request = request.header(name, value);
-        }
-        let invalid = || ModelError::InvalidResponse("Invalid Copilot model catalog".into());
-        let value = crate::discovery::fetch_json_redacted(request)
-            .await
-            .map_err(|e| match e {
-                ModelError::InvalidResponse(_) => invalid(),
-                e => e,
-            })?;
-        let catalog: Catalog = serde_json::from_value(value).map_err(|_| invalid())?;
+        let request = crate::discovery::get(base, "/models", Some(token));
+        let catalog: Catalog =
+            fetch(request, "model discovery", "Invalid Copilot model catalog").await?;
         state.catalog = Some(catalog.data);
         Ok(())
     }
@@ -269,11 +247,7 @@ impl CopilotModel {
                 "Copilot model has no supported HTTP endpoint capabilities; choose a model advertising /v1/messages, /responses, or /chat/completions".into()));
         };
         for &(name, value) in HEADERS {
-            adapter = match adapter {
-                Adapter::Anthropic(m) => Adapter::Anthropic(m.header(name, value)),
-                Adapter::Responses(m) => Adapter::Responses(m.header(name, value)),
-                Adapter::Chat(m) => Adapter::Chat(m.header(name, value)),
-            };
+            adapter = map_adapter!(adapter, header, name, value);
         }
         if let Some(tokens) = self.max_tokens {
             adapter = map_adapter!(adapter, max_tokens, tokens);
@@ -285,6 +259,41 @@ impl CopilotModel {
         state.adapter = Some(adapter.credential(token, base));
         Ok(())
     }
+
+    /// Lock the instance and prepare its adapter for one generation.
+    async fn ready(&self) -> Result<MutexGuard<'_, State>, ModelError> {
+        let mut state = self.state.lock().await;
+        self.prepare(&mut state).await?;
+        Ok(state)
+    }
+}
+
+impl State {
+    fn model(&self) -> &dyn Model {
+        self.adapter.as_ref().expect("adapter retained").model()
+    }
+}
+
+/// Fetch a Copilot JSON document with the editor headers. Failures are
+/// redacted and a malformed body becomes `invalid`, so neither the response
+/// nor any token reaches diagnostics.
+async fn fetch<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    label: &str,
+    invalid: &str,
+) -> Result<T, ModelError> {
+    let request = HEADERS.iter().fold(
+        request.header("accept", "application/json"),
+        |r, &(name, value)| r.header(name, value),
+    );
+    let invalid = || ModelError::InvalidResponse(invalid.into());
+    let value = crate::discovery::fetch(request, label, true)
+        .await
+        .map_err(|e| match e {
+            ModelError::InvalidResponse(_) => invalid(),
+            e => e,
+        })?;
+    serde_json::from_value(value).map_err(|_| invalid())
 }
 
 // Wire schema: microsoft/vscode-copilot-chat,
@@ -385,15 +394,8 @@ impl Model for CopilotModel {
         context: &Context,
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
-        let mut state = self.state.lock().await;
-        self.prepare(&mut state).await?;
-        state
-            .adapter
-            .as_ref()
-            .expect("adapter retained")
-            .model()
-            .generate(context, tools)
-            .await
+        let state = self.ready().await?;
+        state.model().generate(context, tools).await
     }
 
     async fn generate_streaming(
@@ -402,15 +404,8 @@ impl Model for CopilotModel {
         tools: &[ToolSchema],
         sink: &dyn DeltaSink,
     ) -> Result<ModelResponse, ModelError> {
-        let mut state = self.state.lock().await;
-        self.prepare(&mut state).await?;
-        state
-            .adapter
-            .as_ref()
-            .expect("adapter retained")
-            .model()
-            .generate_streaming(context, tools, sink)
-            .await
+        let state = self.ready().await?;
+        state.model().generate_streaming(context, tools, sink).await
     }
 }
 

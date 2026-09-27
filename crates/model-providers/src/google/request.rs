@@ -31,7 +31,11 @@ impl GoogleModel {
                     if !content.is_empty() {
                         parts.push(json!({"text":content}));
                     }
-                    parts.extend(images.iter().map(|image| json!({"inlineData":{"mimeType":image.media_type,"data":image.data}})));
+                    parts.extend(
+                        images
+                            .iter()
+                            .map(|image| inline_data(&image.media_type, &image.data)),
+                    );
                     ("user", parts)
                 }
                 Message::Assistant {
@@ -96,8 +100,12 @@ impl GoogleModel {
                             let text = crate::tool_images::text_of(&output);
                             for part in crate::tool_images::interleave(&text, fresh) {
                                 match part {
-                                    crate::tool_images::Part::Text(text) => parts.push(json!({"text":text})),
-                                    crate::tool_images::Part::Image(image) => parts.push(json!({"inlineData":{"mimeType":image.media_type,"data":image.data}})),
+                                    crate::tool_images::Part::Text(text) => {
+                                        parts.push(json!({"text":text}))
+                                    }
+                                    crate::tool_images::Part::Image(image) => {
+                                        parts.push(inline_data(image.media_type, image.data))
+                                    }
                                 }
                             }
                         }
@@ -154,4 +162,8 @@ impl GoogleModel {
         }
         Ok(body)
     }
+}
+
+fn inline_data(media_type: &str, data: &str) -> Value {
+    json!({"inlineData":{"mimeType":media_type,"data":data}})
 }

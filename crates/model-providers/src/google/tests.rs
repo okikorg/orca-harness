@@ -208,45 +208,12 @@ fn sparse_cumulative_usage_and_blocked_prompt() {
 
 #[tokio::test]
 async fn wire_auth_stream_and_catalog() {
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        for _ in 0..2 {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut buf = [0u8; 4096];
-            loop {
-                let n = socket.read(&mut buf).await.unwrap();
-                if n == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buf[..n]);
-                if request.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let text = String::from_utf8_lossy(&request).to_lowercase();
-            assert!(text.contains("authorization: bearer token"));
-            if text.contains("streamgeneratecontent") {
-                assert!(text.contains("alt=sse"));
-                let payload = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n";
-                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{payload}", payload.len());
-                socket.write_all(response.as_bytes()).await.unwrap();
-            } else {
-                assert!(text.starts_with("get /v1beta/models "));
-                let payload = r#"{"models":[{"name":"models/gemini-test","displayName":"Gemini Test","inputTokenLimit":1000,"supportedGenerationMethods":["generateContent"]}]}"#;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{payload}",
-                    payload.len()
-                );
-                socket.write_all(response.as_bytes()).await.unwrap();
-            }
-        }
-    });
+    use crate::test_server::{json, serve, sse};
+    let (url, server) = serve(vec![
+        sse("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\ndata: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"),
+        json(r#"{"models":[{"name":"models/gemini-test","displayName":"Gemini Test","inputTokenLimit":1000,"supportedGenerationMethods":["generateContent"]}]}"#),
+    ])
+    .await;
     let model = GoogleModel::new("gemini-test")
         .base_url(format!("{url}/v1beta"))
         .bearer_token("token");
@@ -258,7 +225,14 @@ async fn wire_auth_stream_and_catalog() {
     let models = model.models().await.unwrap();
     assert_eq!(models[0].id, "gemini-test");
     assert_eq!(models[0].context_length, Some(1000));
-    server.await.unwrap();
+    let captured = server.await.unwrap();
+    assert!(captured
+        .iter()
+        .all(|c| c.lower().contains("authorization: bearer token")));
+    assert!(captured[0]
+        .lower()
+        .contains("streamgeneratecontent?alt=sse"));
+    assert!(captured[1].lower().starts_with("get /v1beta/models "));
 }
 
 #[test]
@@ -356,34 +330,21 @@ async fn vertex_discovery_is_unavailable_without_network() {
 
 #[tokio::test]
 async fn discovery_pages_filter_remote_methods_not_names() {
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let root = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        for (path, payload) in [
-            (
-                "/models",
-                json!({"models":[
-                {"name":"models/unrelated-id","supportedGenerationMethods":["generateContent"],"displayName":"Remote","inputTokenLimit":123},
-                {"name":"models/gemini-3-pro","supportedGenerationMethods":["embedContent"]},
-                {"name":"models/no-methods"}],"nextPageToken":"page2"}),
-            ),
-            (
-                "/models?pageToken=page2",
-                json!({"models":[{"name":"models/another-id","supportedGenerationMethods":["generateContent"]}]}),
-            ),
-        ] {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = [0; 4096];
-            let n = socket.read(&mut buf).await.unwrap();
-            assert!(String::from_utf8_lossy(&buf[..n]).starts_with(&format!("GET {path} HTTP/1.1")));
-            let body = payload.to_string();
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-        }
-    });
+    use crate::test_server::{json, serve};
+    let (root, server) = serve(vec![
+        json(
+            json!({"models":[
+            {"name":"models/unrelated-id","supportedGenerationMethods":["generateContent"],"displayName":"Remote","inputTokenLimit":123},
+            {"name":"models/gemini-3-pro","supportedGenerationMethods":["embedContent"]},
+            {"name":"models/no-methods"}],"nextPageToken":"page2"})
+            .to_string(),
+        ),
+        json(
+            json!({"models":[{"name":"models/another-id","supportedGenerationMethods":["generateContent"]}]})
+                .to_string(),
+        ),
+    ])
+    .await;
     let rows = GoogleModel::new("not-used")
         .base_url(root)
         .api_key("key")
@@ -397,58 +358,40 @@ async fn discovery_pages_filter_remote_methods_not_names() {
     assert_eq!(rows[0].name.as_deref(), Some("Remote"));
     assert_eq!(rows[0].context_length, Some(123));
     assert!(rows.iter().all(|r| r.reasoning.is_none()));
-    server.await.unwrap();
+    let captured = server.await.unwrap();
+    for (request, path) in captured.iter().zip(["/models", "/models?pageToken=page2"]) {
+        assert!(request.head.starts_with(&format!("GET {path} HTTP/1.1")));
+    }
 }
 
+// The shared client's no-redirect policy is covered in `crate::http`; this
+// checks that each credential-bearing path sends its credential header and
+// treats a redirect as a failure.
 #[tokio::test]
 async fn credential_bearing_calls_never_follow_redirects() {
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
+    use crate::test_server::{serve, Reply};
     for bearer in [false, true] {
         for catalog in [false, true] {
-            for status in [301, 302, 303, 307, 308] {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let url = format!("http://{}", listener.local_addr().unwrap());
-                let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let location = format!("http://{}/leaked", destination.local_addr().unwrap());
-                let server = tokio::spawn(async move {
-                    let (mut socket, _) = listener.accept().await.unwrap();
-                    let mut request = Vec::new();
-                    let mut buf = [0; 4096];
-                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                        let n = socket.read(&mut buf).await.unwrap();
-                        assert_ne!(n, 0);
-                        request.extend_from_slice(&buf[..n]);
-                    }
-                    let request = String::from_utf8_lossy(&request).to_lowercase();
-                    assert!(request.contains(if bearer {
-                        "authorization: bearer secret"
-                    } else {
-                        "x-goog-api-key: secret"
-                    }));
-                    socket.write_all(format!("HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-                });
-                let model = GoogleModel::new("gemini-3-pro").base_url(url);
-                let model = if bearer {
-                    model.bearer_token("secret")
-                } else {
-                    model.api_key("secret")
-                };
-                if catalog {
-                    assert!(model.models().await.is_err());
-                } else {
-                    assert!(model.generate(&Context::new(), &[]).await.is_err());
-                }
-                server.await.unwrap();
-                assert!(tokio::time::timeout(
-                    std::time::Duration::from_millis(20),
-                    destination.accept()
-                )
-                .await
-                .is_err());
+            let (url, server) = serve(vec![Reply::new("302 Found", "text/plain", "")
+                .header("Location", "http://127.0.0.1:1/leaked")])
+            .await;
+            let model = GoogleModel::new("gemini-3-pro").base_url(url);
+            let model = if bearer {
+                model.bearer_token("secret")
+            } else {
+                model.api_key("secret")
+            };
+            if catalog {
+                assert!(model.models().await.is_err());
+            } else {
+                assert!(model.generate(&Context::new(), &[]).await.is_err());
             }
+            let captured = server.await.unwrap();
+            assert!(captured[0].lower().contains(if bearer {
+                "authorization: bearer secret"
+            } else {
+                "x-goog-api-key: secret"
+            }));
         }
     }
 }

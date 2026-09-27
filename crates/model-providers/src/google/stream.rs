@@ -140,18 +140,7 @@ impl Accumulator {
                 usage: self.usage,
             });
         }
-        let response = if self.calls.is_empty() {
-            ModelResponse::Final {
-                text: self.text,
-                usage: self.usage,
-            }
-        } else {
-            ModelResponse::ToolCalls {
-                content: (!self.text.is_empty()).then_some(self.text),
-                calls: self.calls,
-                usage: self.usage,
-            }
-        };
+        let response = crate::response(self.text, self.calls, self.usage);
         Ok(Collected {
             response,
             parts: self.parts.into(),

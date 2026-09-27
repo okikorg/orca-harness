@@ -1,31 +1,11 @@
 use super::*;
+use crate::test_server::{json as ok, serve, status, Captured, Reply};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::task::JoinHandle;
 
-async fn exchange(
-    status: &str,
-    body: String,
-    extra: &str,
-) -> (String, tokio::task::JoinHandle<String>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let response = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n{extra}\r\n{body}", body.len());
-    let task = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut request = Vec::new();
-        loop {
-            let mut buf = [0; 1024];
-            let n = stream.read(&mut buf).await.unwrap();
-            assert!(n > 0);
-            request.extend_from_slice(&buf[..n]);
-            if request.windows(4).any(|w| w == b"\r\n\r\n") {
-                break;
-            }
-        }
-        stream.write_all(response.as_bytes()).await.unwrap();
-        String::from_utf8(request).unwrap()
-    });
-    (url, task)
+/// Serve one reply.
+async fn exchange(reply: Reply) -> (String, JoinHandle<Vec<Captured>>) {
+    serve(vec![reply]).await
 }
 
 fn credential(expires_at: u64, endpoint: &str) -> String {
@@ -60,29 +40,27 @@ fn endpoints_are_strictly_validated() {
 
 #[tokio::test]
 async fn exchanges_caches_and_refreshes() {
-    let (url, task) = exchange(
-        "200 OK",
-        credential(now() + 3600, ProviderPreset::GithubCopilot.base_url()),
-        "",
-    )
+    let (url, task) = exchange(ok(credential(
+        now() + 3600,
+        ProviderPreset::GithubCopilot.base_url(),
+    )))
     .await;
     let mut wrapper = CopilotModel::new("gpt-4o").api_key("github-secret");
     wrapper.token_url = Some(url);
     {
         let mut state = wrapper.state.lock().await;
         wrapper.refresh(&mut state).await.unwrap();
-        let request = task.await.unwrap().to_lowercase();
+        let request = task.await.unwrap()[0].lower();
         assert!(request.contains("authorization: bearer github-secret"));
         assert!(request.contains("copilot-integration-id: vscode-chat"));
         // The listener is gone: another exchange would fail.
         wrapper.refresh(&mut state).await.unwrap();
         state.expires_at = 0;
     }
-    let (url, task) = exchange(
-        "200 OK",
-        credential(now() + 7200, ProviderPreset::GithubCopilot.base_url()),
-        "",
-    )
+    let (url, task) = exchange(ok(credential(
+        now() + 7200,
+        ProviderPreset::GithubCopilot.base_url(),
+    )))
     .await;
     wrapper.token_url = Some(url);
     let mut state = wrapper.state.lock().await;
@@ -100,7 +78,7 @@ async fn invalid_responses_leave_state_intact_and_do_not_disclose_secrets() {
         json!({"token":"copilot-secret"}).to_string(),
         "copilot-secret invalid json".into(),
     ] {
-        let (url, task) = exchange("200 OK", body, "").await;
+        let (url, task) = exchange(ok(body)).await;
         let mut wrapper = CopilotModel::new("gpt-4o").api_key("github-secret");
         wrapper.token_url = Some(url);
         let mut state = wrapper.state.lock().await;
@@ -113,17 +91,34 @@ async fn invalid_responses_leave_state_intact_and_do_not_disclose_secrets() {
 }
 
 #[tokio::test]
-async fn exchange_does_not_follow_even_same_origin_redirect() {
-    // Redirecting to the now-closed same-origin listener would be a transport
-    // failure if followed. Instead the exchange must report the 302 itself.
-    let (url, task) = exchange("302 Found", "github-secret".into(), "Location: /steal\r\n").await;
-    let mut wrapper = CopilotModel::new("gpt-4o").api_key("github-secret");
-    wrapper.token_url = Some(url);
-    let mut state = wrapper.state.lock().await;
-    let err = wrapper.refresh(&mut state).await.unwrap_err().to_string();
-    assert!(err.contains("302"));
-    assert!(!err.contains("github-secret"));
-    task.await.unwrap();
+async fn exchange_failures_are_redacted() {
+    // Redirects are not followed (the shared client's policy); the exchange
+    // reports each failing status without echoing the body.
+    for (reply, expected) in [
+        (
+            status("302 Found", "github-secret").header("Location", "/steal"),
+            "302",
+        ),
+        (status("401 Unauthorized", "github-secret"), "rejected"),
+        (status("500 Error", "github-secret"), "500"),
+    ] {
+        let (url, task) = exchange(reply).await;
+        let mut wrapper = CopilotModel::new("gpt-4o").api_key("github-secret");
+        wrapper.token_url = Some(url);
+        let mut state = wrapper.state.lock().await;
+        let err = wrapper.refresh(&mut state).await.unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("Copilot token exchange") && text.contains(expected),
+            "{text}"
+        );
+        assert!(!text.contains("github-secret"));
+        assert_eq!(
+            matches!(err, ModelError::Authentication(_)),
+            expected == "rejected"
+        );
+        task.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -135,16 +130,12 @@ async fn missing_token_fails_locally() {
         .is_err());
 }
 
-async fn with_catalog(
-    model: &str,
-    body: String,
-) -> (CopilotModel, tokio::task::JoinHandle<String>) {
-    let (api, catalog_task) = exchange("200 OK", body, "").await;
-    let (token_url, token_task) = exchange(
-        "200 OK",
-        credential(now() + 3600, ProviderPreset::GithubCopilot.base_url()),
-        "",
-    )
+async fn with_catalog(model: &str, body: String) -> (CopilotModel, JoinHandle<Vec<Captured>>) {
+    let (api, catalog_task) = exchange(ok(body)).await;
+    let (token_url, token_task) = exchange(ok(credential(
+        now() + 3600,
+        ProviderPreset::GithubCopilot.base_url(),
+    )))
     .await;
     let mut wrapper = CopilotModel::new(model)
         .api_key("github-secret")
@@ -156,7 +147,7 @@ async fn with_catalog(
         .refresh(&mut *wrapper.state.lock().await)
         .await
         .unwrap();
-    let request = token_task.await.unwrap();
+    let request = token_task.await.unwrap()[0].head.clone();
     assert!(request.contains("github-secret"));
     assert!(!request.contains("copilot-secret"));
     (wrapper, catalog_task)
@@ -193,15 +184,14 @@ async fn arbitrary_ids_select_advertised_protocols_and_survive_refresh() {
             wrapper.prepare(&mut state).await.unwrap();
             state.expires_at = 0;
         }
-        let request = task.await.unwrap().to_lowercase();
+        let request = task.await.unwrap()[0].lower();
         assert!(request.starts_with("get /models "));
         assert!(request.contains("authorization: bearer copilot-secret"));
         assert!(!request.contains("github-secret"));
-        let (url, task) = exchange(
-            "200 OK",
-            credential(now() + 7200, ProviderPreset::GithubCopilot.base_url()),
-            "",
-        )
+        let (url, task) = exchange(ok(credential(
+            now() + 7200,
+            ProviderPreset::GithubCopilot.base_url(),
+        )))
         .await;
         wrapper.token_url = Some(url);
         let mut state = wrapper.state.lock().await;
@@ -271,31 +261,27 @@ async fn unknown_model_and_missing_or_unknown_capabilities_fail_actionably() {
 
 #[tokio::test]
 async fn discovery_errors_are_redacted_and_redirects_not_followed() {
-    for (status, body, extra, expected) in [
+    for (reply, expected) in [
         (
-            "302 Found",
-            "copilot-secret github-secret",
-            "Location: /steal\r\n",
+            status("302 Found", "copilot-secret github-secret").header("Location", "/steal"),
             "302",
         ),
-        ("500 Error", "copilot-secret github-secret", "", "500"),
+        (status("500 Error", "copilot-secret github-secret"), "500"),
         (
-            "200 OK",
-            "copilot-secret github-secret",
-            "",
+            ok("copilot-secret github-secret"),
             "Invalid Copilot model catalog",
         ),
     ] {
         let (mut wrapper, initial) = with_catalog("opaque", "{\"data\":[]}".into()).await;
         // Replace fixture without ever sending a request to the initial catalog.
         initial.abort();
-        let (api, task) = exchange(status, body.into(), extra).await;
+        let (api, task) = exchange(reply).await;
         wrapper.state.get_mut().credential.as_mut().unwrap().1 = api;
         let err = wrapper.models().await.unwrap_err().to_string();
         assert!(err.contains(expected), "{err}");
         assert!(!err.contains("copilot-secret") && !err.contains("github-secret"));
         assert!(wrapper.state.get_mut().catalog.is_none());
-        let request = task.await.unwrap();
+        let request = task.await.unwrap()[0].head.clone();
         assert!(!request.contains("github-secret"));
     }
 }

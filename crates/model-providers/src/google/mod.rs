@@ -6,13 +6,9 @@ mod stream;
 mod tests;
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
 pub const GOOGLE_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -90,17 +86,8 @@ impl GoogleModel {
         url: String,
         method: reqwest::Method,
     ) -> Result<reqwest::RequestBuilder, ModelError> {
-        // Never forward credentials through redirects, including same-origin redirects.
-        static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
-        let client = CLIENT
-            .get_or_init(|| {
-                reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-            })
-            .as_ref()
-            .map_err(|e| crate::http_error::transport_error(e))?;
-        let mut request = client.request(method, url);
+        // The shared client never follows redirects, so credentials stay put.
+        let mut request = crate::http::client().request(method, url);
         if let Some(token) = &self.bearer_token {
             let token = token.trim();
             if token.is_empty() {
@@ -207,30 +194,16 @@ impl GoogleModel {
             let signatures = self.signatures.lock().await;
             self.body(context, tools, &signatures)?
         };
-        let response = self
+        let request = self
             .request(
                 self.url(":streamGenerateContent?alt=sse")?,
                 reqwest::Method::POST,
             )?
             .header("accept", "text/event-stream")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))?;
-        let response = crate::http_error::check_response(response).await?;
-        let mut bytes = response.bytes_stream();
-        let mut frames = crate::sse::SseBuffer::default();
+            .json(&body);
+        let response = crate::sse::send(request).await?;
         let mut state = stream::Accumulator::default();
-        while let Some(chunk) = bytes.next().await {
-            let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
-            for payload in frames.push(&chunk)? {
-                for delta in state.apply(&payload)? {
-                    if let Some(sink) = sink {
-                        sink.emit(delta).await;
-                    }
-                }
-            }
-        }
+        crate::sse::pump(response, sink, |payload| Ok((state.apply(payload)?, false))).await?;
         let collected = state.finish()?;
         self.update_signatures(&collected).await;
         Ok(collected.response)

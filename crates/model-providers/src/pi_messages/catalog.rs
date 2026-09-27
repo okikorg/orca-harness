@@ -54,10 +54,6 @@ fn parse_models(value: &Value) -> Result<Vec<ModelInfo>, ModelError> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
 
     #[test]
     fn maps_only_advertised_metadata_without_id_heuristics() {
@@ -112,36 +108,19 @@ mod tests {
     #[tokio::test]
     async fn public_and_bearer_requests_use_config_under_the_given_root() {
         for key in [None, Some("org-secret")] {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let base = format!("http://{}/gateway/v1/", listener.local_addr().unwrap());
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                loop {
-                    let mut buf = [0; 1024];
-                    let n = socket.read(&mut buf).await.unwrap();
-                    assert_ne!(n, 0);
-                    request.extend_from_slice(&buf[..n]);
-                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
-                assert!(request.starts_with("get /gateway/v1/config http/1.1\r\n"));
-                match key {
-                    Some(_) => {
-                        assert!(request.contains("\r\nauthorization: bearer org-secret\r\n"))
-                    }
-                    None => assert!(!request.contains("authorization:")),
-                }
-                let body = r#"{"models":[{"id":"organization/custom"}]}"#;
-                socket.write_all(format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
-                ).as_bytes()).await.unwrap();
-            });
+            let (url, server) = crate::test_server::serve(vec![crate::test_server::json(
+                r#"{"models":[{"id":"organization/custom"}]}"#,
+            )])
+            .await;
+            let base = format!("{url}/gateway/v1/");
             let models = list_models(&base, key).await.unwrap();
             assert_eq!(models[0].id, "organization/custom");
-            server.await.unwrap();
+            let request = server.await.unwrap().remove(0).lower();
+            assert!(request.starts_with("get /gateway/v1/config http/1.1\r\n"));
+            match key {
+                Some(_) => assert!(request.contains("\r\nauthorization: bearer org-secret\r\n")),
+                None => assert!(!request.contains("authorization:")),
+            }
         }
     }
 }

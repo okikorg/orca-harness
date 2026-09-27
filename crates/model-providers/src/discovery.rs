@@ -15,25 +15,24 @@ pub(crate) fn get(root: &str, path: &str, key: Option<&str>) -> reqwest::Request
 /// Send a catalog request and decode its JSON body. Rejected credentials are
 /// `Authentication`; other failures keep the provider's status and body.
 pub(crate) async fn fetch_json(request: reqwest::RequestBuilder) -> Result<Value, ModelError> {
-    fetch(request, false).await
+    fetch(request, "model discovery", false).await
 }
 
-/// As [`fetch_json`], but failures never echo the response body, for
-/// services whose error bodies may reflect exchanged credentials.
-pub(crate) async fn fetch_json_redacted(
+/// Send a JSON request, naming the operation `label` in failures. With
+/// `redact`, failures never echo the response body, for services whose error
+/// bodies may reflect exchanged credentials.
+pub(crate) async fn fetch(
     request: reqwest::RequestBuilder,
+    label: &str,
+    redact: bool,
 ) -> Result<Value, ModelError> {
-    fetch(request, true).await
-}
-
-async fn fetch(request: reqwest::RequestBuilder, redact: bool) -> Result<Value, ModelError> {
     let response = request
         .timeout(crate::http::CATALOG_TIMEOUT)
         .send()
         .await
         .map_err(|e| {
             if redact {
-                ModelError::Request("model discovery transport failed".into())
+                ModelError::Request(format!("{label} transport failed"))
             } else {
                 crate::http_error::transport_error(&e)
             }
@@ -41,17 +40,16 @@ async fn fetch(request: reqwest::RequestBuilder, redact: bool) -> Result<Value, 
     let status = response.status();
     if matches!(status.as_u16(), 401 | 403) {
         return Err(ModelError::Authentication(format!(
-            "model discovery rejected credentials (HTTP {status})"
+            "{label} rejected credentials (HTTP {status})"
         )));
     }
-    let response = if redact && !status.is_success() {
+    if redact && !status.is_success() {
         return Err(ModelError::Request(format!(
-            "model discovery failed (HTTP {status})"
+            "{label} failed (HTTP {status})"
         )));
-    } else {
-        crate::http_error::check_response(response).await?
-    };
-    response
+    }
+    crate::http_error::check_response(response)
+        .await?
         .json()
         .await
         .map_err(|e| ModelError::InvalidResponse(e.to_string()))
