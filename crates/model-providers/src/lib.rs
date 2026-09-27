@@ -40,12 +40,34 @@ pub use provider::{Attribution, ProviderModel};
 pub use registry::{Protocol, ProviderPreset};
 pub use responses::ResponsesModel;
 
+/// The response every adapter builds at stream end: no calls is a final
+/// answer, otherwise the calls with any non-empty accompanying text.
+fn response(
+    text: String,
+    calls: Vec<orca_harness_core::ToolCall>,
+    usage: Option<orca_harness_core::Usage>,
+) -> orca_harness_core::ModelResponse {
+    use orca_harness_core::ModelResponse;
+    if calls.is_empty() {
+        ModelResponse::Final { text, usage }
+    } else {
+        ModelResponse::ToolCalls {
+            content: (!text.is_empty()).then_some(text),
+            calls,
+            usage,
+        }
+    }
+}
+
 fn image_data_url(image: &orca_harness_core::Image) -> String {
     format!("data:{};base64,{}", image.media_type, image.data)
 }
 
 #[cfg(test)]
 mod request_bench;
+
+#[cfg(test)]
+mod test_server;
 
 #[cfg(test)]
 mod usage_reconciliation;

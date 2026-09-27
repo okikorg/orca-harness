@@ -23,7 +23,8 @@ use crate::sse::SseLineBuffer;
 #[cfg(test)]
 use request::encode_messages;
 
-fn parse_tool_arguments(
+/// Decode streamed tool arguments; an empty string is an empty object.
+pub(crate) fn parse_tool_arguments(
     tool_name: &str,
     arguments: &str,
     finish_reason: Option<&str>,

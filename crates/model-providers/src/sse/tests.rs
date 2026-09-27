@@ -43,7 +43,7 @@ fn invalid_utf8_is_lossy_for_chat_and_consumed_error_for_responses() {
     let mut responses = SseBuffer::default();
     assert!(
         matches!(responses.push(bytes), Err(ModelError::InvalidResponse(message))
-        if message == "Codex SSE frame is not valid UTF-8")
+        if message == "SSE frame is not valid UTF-8")
     );
     assert_eq!(responses.push(b"").unwrap(), ["after"]);
 }

@@ -75,7 +75,7 @@ impl SseBuffer {
                     self.buf.drain(..end);
                     self.scanned = 0;
                     return Err(ModelError::InvalidResponse(
-                        "Codex SSE frame is not valid UTF-8".into(),
+                        "SSE frame is not valid UTF-8".into(),
                     ));
                 }
             };
@@ -100,6 +100,45 @@ impl SseBuffer {
         self.scanned = self.buf.len().saturating_sub(3);
         Ok(out)
     }
+}
+
+/// Send a streaming request; transport and HTTP failures become `ModelError`.
+pub(crate) async fn send(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ModelError> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| crate::http_error::transport_error(&e))?;
+    crate::http_error::check_response(response).await
+}
+
+/// Feed each SSE payload of `response` to `apply`, forwarding the deltas it
+/// returns to `sink`. `apply` reports `true` once the stream is complete;
+/// the result says whether that happened before the body ended.
+pub(crate) async fn pump(
+    response: reqwest::Response,
+    sink: Option<&dyn orca_harness_core::DeltaSink>,
+    mut apply: impl FnMut(&str) -> Result<(Vec<orca_harness_core::ModelDelta>, bool), ModelError>,
+) -> Result<bool, ModelError> {
+    use futures_util::StreamExt;
+    let mut bytes = response.bytes_stream();
+    let mut frames = SseBuffer::default();
+    while let Some(chunk) = bytes.next().await {
+        let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
+        for payload in frames.push(&chunk)? {
+            let (deltas, done) = apply(&payload)?;
+            if let Some(sink) = sink {
+                for delta in deltas {
+                    sink.emit(delta).await;
+                }
+            }
+            if done {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
