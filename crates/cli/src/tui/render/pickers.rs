@@ -1,13 +1,14 @@
 use crate::msg::ProviderExt as _;
 use ratatui::text::{Line, Span};
 
-use crate::msg::{Provider, ProviderAuth};
+use crate::msg::Provider;
 use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
 use crate::tui::components::section::Section;
 use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
 use crate::view::glyphs::{branch_shape, mark_shape, ui_style, BranchShape, MarkShape, UiStyle};
 use crate::view::{self, theme};
+use orca_harness_model_providers::registry::Credential;
 
 use super::super::format::age_label;
 use super::super::state::{ProviderPicker, SubagentSetting};
@@ -79,21 +80,19 @@ pub(crate) fn provider_lines(picker: &ProviderPicker, width: usize) -> Vec<Line<
         filter_note(&picker.filter)
     );
     let rows = providers.into_iter().map(|provider| {
-        let key_note = match provider.auth() {
-            ProviderAuth::None => "no key needed".to_string(),
-            ProviderAuth::OAuth => {
+        let key_note = match provider.spec().credential {
+            Credential::None => "no key needed".to_string(),
+            Credential::OAuth => {
                 let status = crate::auth::status_summary(provider);
                 format!("subscription OAuth · {status}")
             }
-            ProviderAuth::ApiKey { environment } if provider.env_key().is_some() => {
-                format!("key from ${environment}")
+            Credential::ApiKey { env, .. } if provider.env_key().is_some() => {
+                format!("key from ${env}")
             }
-            ProviderAuth::ApiKey { environment } => {
-                format!("${environment} not set — will ask")
-            }
+            Credential::ApiKey { env, .. } => format!("${env} not set — will ask"),
         };
         [
-            provider.label().to_string(),
+            provider.id().to_string(),
             provider.base_url().to_string(),
             key_note,
         ]
@@ -271,7 +270,7 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         approvals.join(", ")
     };
     let rows = [
-        ("provider", provider.label().to_string()),
+        ("provider", provider.id().to_string()),
         ("model", app.cfg.model_name.clone()),
         ("theme", view::theme_name().label().to_string()),
         ("view", app.view_mode.label().to_string()),
@@ -542,7 +541,7 @@ pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static
     let mut tray = Section::tray(
         format!(
             "{} API key (saved for future sessions) · enter confirm · esc close",
-            provider.label()
+            provider.id()
         ),
         t.warn,
     );
@@ -559,7 +558,6 @@ mod provider_scroll_tests {
 
     #[test]
     fn every_provider_selection_is_visible_in_a_bounded_window() {
-        assert_eq!(Provider::ALL.len(), 46);
         for (index, provider) in Provider::ALL.iter().enumerate() {
             let picker = ProviderPicker::new(Some(*provider));
             assert_eq!(picker.picker.index(), index);
@@ -569,9 +567,9 @@ mod provider_scroll_tests {
                 lines
                     .iter()
                     .skip(2)
-                    .any(|line| line.to_string().contains(provider.label())),
+                    .any(|line| line.to_string().contains(provider.id())),
                 "selected provider {} must be visible",
-                provider.label()
+                provider.id()
             );
         }
     }

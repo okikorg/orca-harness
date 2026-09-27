@@ -1,5 +1,4 @@
 //! Session-local sharing for endpoints that draw on the same provider quota.
-use crate::msg::ProviderExt as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +15,7 @@ impl ModelGates {
     pub(crate) fn for_endpoint(&self, endpoint: &Endpoint) -> ModelGate {
         // Deliberately share across model IDs: many providers pool their quota.
         let key = (
-            endpoint.provider.label().to_owned(),
+            endpoint.provider.id().to_owned(),
             endpoint.base_url.trim_end_matches('/').to_owned(),
             endpoint.api_key.clone(),
         );
@@ -38,19 +37,9 @@ mod tests {
     #[test]
     fn endpoint_clones_and_models_share_quota_but_credentials_and_hosts_do_not() {
         let mut endpoint = Endpoint {
-            provider: crate::Provider::OpenAi,
-            automatic_base_url: false,
-            protocol: None,
-            base_url: "https://example.test/v1/".into(),
             api_key: Some("first-key".into()),
             model: "first-model".into(),
-            reasoning_effort: None,
-            max_output_tokens: None,
-            prompt_cache: false,
-            request_session_id: None,
-            model_retries: Arc::default(),
-            model_gates: ModelGates::default(),
-            subagent_settings: Default::default(),
+            ..Endpoint::fixture(crate::Provider::OpenAi, "https://example.test/v1/")
         };
         let registry = endpoint.model_gates.clone();
         let _first = registry.for_endpoint(&endpoint);

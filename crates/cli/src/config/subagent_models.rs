@@ -1,6 +1,5 @@
 //! Persist tier assignments separately from live routing/governance settings.
 use super::storage::{load_root, mutate_section};
-use crate::msg::ProviderExt as _;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -12,7 +11,7 @@ pub(crate) struct SubagentModelSelection {
     /// Older configurations stored fixed URLs; absence preserves that behavior.
     #[serde(default)]
     pub automatic_base_url: bool,
-    #[serde(default, with = "crate::protocol::optional")]
+    #[serde(default)]
     pub protocol: Option<orca_harness_model_providers::registry::Protocol>,
 }
 
@@ -29,7 +28,7 @@ pub(crate) fn stored_subagent_models() -> BTreeMap<String, SubagentModelSelectio
                 return None;
             }
             let selection: SubagentModelSelection = serde_json::from_value(value.clone()).ok()?;
-            if crate::Provider::from_label(&selection.provider).is_none()
+            if crate::Provider::from_id(&selection.provider).is_none()
                 || selection.model.trim().is_empty()
             {
                 return None;

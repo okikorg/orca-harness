@@ -1,5 +1,4 @@
 use super::state::SubagentSetting;
-use crate::msg::ProviderExt as _;
 use orca_harness_tools::SubagentDepth;
 
 pub(crate) const CUSTOM_VALUE: &str = "custom…";
@@ -61,7 +60,7 @@ pub(crate) fn subagent_values(settings: &SubagentDepth, setting: SubagentSetting
     if tier(setting).is_some() {
         return crate::Provider::ALL
             .iter()
-            .map(|provider| provider.label().to_string())
+            .map(|provider| provider.id().to_string())
             .collect();
     }
     let field = setting.numeric().expect("numeric setting");

@@ -1,6 +1,7 @@
 use super::effects::After;
 use super::*;
-use crate::msg::{ProviderAuth, ProviderExt as _};
+use crate::msg::ProviderExt as _;
+use orca_harness_model_providers::registry::Credential;
 
 /// What a key did to a searchable picker.
 enum Search {
@@ -86,14 +87,14 @@ pub(super) fn handle_model_key(picker: &mut ModelPicker, code: KeyCode) -> After
 pub(super) fn handle_provider_key(picker: &mut ProviderPicker, code: KeyCode) -> After {
     match search_key(&mut picker.picker, &mut picker.filter, code) {
         Search::Activated(_) => match picker.selected() {
-            Some(provider) => match provider.auth() {
-                ProviderAuth::ApiKey { .. } if provider.resolve_key().is_none() => {
+            Some(provider) => match provider.spec().credential {
+                Credential::ApiKey { .. } if provider.resolve_key().is_none() => {
                     After::Push(Overlay::ApiKey {
                         provider,
                         input: String::new(),
                     })
                 }
-                ProviderAuth::OAuth => match crate::auth::status(provider) {
+                Credential::OAuth => match crate::auth::status(provider) {
                     Ok(_) => After::CloseAndSend(WorkerCmd::SetProvider {
                         provider,
                         api_key: None,

@@ -132,9 +132,8 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         if explicit_provider.is_some() || openrouter || anthropic || base_url.is_some() {
             None
         } else {
-            config::stored_provider().and_then(|label| Provider::from_label(&label))
+            config::stored_provider().and_then(|label| Provider::from_id(&label))
         };
-    let openrouter = openrouter || stored_provider == Some(Provider::OpenRouter);
     let provider = if let Some(provider) = explicit_provider {
         provider
     } else if anthropic {
@@ -148,11 +147,11 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         )
     };
 
-    if let Some(route) = protocol.or(provider.spec().protocol) {
+    if let Some(route) = crate::protocol::route(provider, protocol) {
         if max_output_tokens.is_some() && !route.supports_max_tokens() {
             return Err(format!(
                 "--max-output-tokens is not supported by {} ({})",
-                provider.label(),
+                provider.id(),
                 route.name()
             ));
         }
@@ -169,7 +168,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             .unwrap_or_else(|_| provider.base_url().into())
     });
     let model = model
-        .or_else(|| config::stored_model(provider.label()))
+        .or_else(|| config::stored_model(provider.id()))
         .unwrap_or_default();
     let theme = resolve_theme(theme);
 
@@ -185,7 +184,6 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         automatic_base_url,
         api_key,
         firecrawl_key,
-        openrouter: provider == Provider::OpenRouter,
         list_models,
         workspace,
         prompt,
@@ -229,7 +227,7 @@ fn requested_provider(
         environment
     });
     id.map(|id| {
-        Provider::from_label(id).ok_or_else(|| {
+        Provider::from_id(id).ok_or_else(|| {
             format!("unknown provider {id:?}; use --provider with a registered provider ID")
         })
     })
@@ -242,7 +240,7 @@ mod tests {
 
     #[test]
     fn provider_selector_precedence_and_conflicts() {
-        let deepseek = Provider::from_label("deepseek").unwrap();
+        let deepseek = Provider::from_id("deepseek").unwrap();
         assert_eq!(
             requested_provider(Some("deepseek"), Some("invalid"), false, false).unwrap(),
             Some(deepseek)
@@ -287,7 +285,7 @@ mod tests {
             .collect(),
         )
         .unwrap();
-        assert_eq!(cfg.provider, Provider::from_label("deepseek").unwrap());
+        assert_eq!(cfg.provider, Provider::from_id("deepseek").unwrap());
         assert_eq!(cfg.base_url, "http://localhost:8080/custom");
         assert_eq!(cfg.model, "custom-model");
         assert_eq!(
@@ -315,17 +313,17 @@ mod tests {
             return;
         }
         for provider in Provider::ALL.iter().copied() {
-            let cfg = parse_run_args(vec!["--provider".into(), provider.label().into()]).unwrap();
+            let cfg = parse_run_args(vec!["--provider".into(), provider.id().into()]).unwrap();
             assert_eq!(
                 cfg.model,
-                config::stored_model(provider.label()).unwrap_or_default()
+                config::stored_model(provider.id()).unwrap_or_default()
             );
         }
     }
 
     #[test]
     fn explicit_preset_default_keeps_explicit_origin() {
-        let provider = Provider::from_label("minimax").unwrap();
+        let provider = Provider::from_id("minimax").unwrap();
         let cfg = parse_run_args(vec![
             "--provider".into(),
             "minimax".into(),

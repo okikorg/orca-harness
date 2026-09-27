@@ -4,7 +4,6 @@
 // returns `Vec<Line>`; the terminal loop in the parent `run`/`draw`
 // drives the actual frames.
 
-use crate::msg::ProviderExt as _;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
@@ -400,7 +399,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     };
     status
         .push(Segment::new(
-            format!("{}:{}", app.cfg.provider.label(), app.cfg.model_name),
+            format!("{}:{}", app.cfg.provider.id(), app.cfg.model_name),
             status_bar::MODEL,
         ))
         .push(Segment::new(

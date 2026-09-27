@@ -1,4 +1,3 @@
-use crate::msg::ProviderExt as _;
 use ratatui::text::{Line, Span};
 
 use orca_harness_core::Message;
@@ -234,7 +233,7 @@ pub(crate) fn model_picker_lines(
             } else {
                 tier.as_str()
             };
-            format!("Subagent {tier} / {}", provider.label())
+            format!("Subagent {tier} / {}", provider.id())
         })
         .unwrap_or_else(|| "Models".into());
     let action = if picker.subagent.is_some() {

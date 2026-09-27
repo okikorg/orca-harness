@@ -2,7 +2,6 @@
 //! to stdout as it is generated; tool activity goes to stderr. With
 //! `--json`, every harness event is serialized to stdout as NDJSON.
 
-use crate::msg::ProviderExt as _;
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -250,7 +249,7 @@ pub async fn run<M: Model + Clone + 'static>(
             let subagent = crate::runtime::subagents::tool(
                 model_for_subagents,
                 ws,
-                (cfg.provider.label(), &cfg.model),
+                (cfg.provider.id(), &cfg.model),
                 &subagent_settings,
                 subagent_models,
                 mcp.catalog(),
@@ -329,7 +328,7 @@ pub async fn run<M: Model + Clone + 'static>(
             "{}",
             serde_json::json!({
                 "type": "metadata",
-                "provider": cfg.provider.label(),
+                "provider": cfg.provider.id(),
                 "model": cfg.model,
                 "effort": cfg.reasoning_effort,
                 "promptCache": cfg.prompt_cache,
@@ -355,7 +354,7 @@ pub async fn run<M: Model + Clone + 'static>(
             serde_json::json!({
                 "type": "summary",
                 "status": status,
-                "provider": cfg.provider.label(),
+                "provider": cfg.provider.id(),
                 "model": cfg.model,
                 "effort": cfg.reasoning_effort,
                 "durationMs": started.elapsed().as_millis(),

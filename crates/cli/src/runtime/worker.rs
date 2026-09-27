@@ -48,6 +48,32 @@ where
     built
 }
 
+/// The endpoint after switching to `provider`: a new provider starts on its
+/// automatic route, effort is cleared, and the model is the current one,
+/// the saved one, or the first the catalog lists.
+async fn switch_provider(
+    endpoint: &Endpoint,
+    provider: crate::Provider,
+    api_key: Option<String>,
+) -> Result<Endpoint, String> {
+    let mut candidate = endpoint.clone();
+    if candidate.provider != provider {
+        candidate.protocol = None;
+        candidate.base_url = provider.base_url().into();
+        candidate.automatic_base_url = true;
+    }
+    candidate.provider = provider;
+    candidate.api_key = api_key.or_else(|| provider.resolve_key());
+    candidate.reasoning_effort = None;
+    let requested = if endpoint.provider == provider && !endpoint.model.is_empty() {
+        Some(endpoint.model.clone())
+    } else {
+        config::stored_model(provider.id())
+    };
+    candidate.model = candidate.catalog_model(requested.as_deref()).await?;
+    Ok(candidate)
+}
+
 /// A path shown to the user: relative to the working directory when it
 /// is inside it, absolute otherwise. Transcript notices stay short.
 fn workspace_relative(path: &std::path::Path) -> String {
@@ -591,24 +617,8 @@ pub(crate) async fn worker<F>(
                 login_task = None;
                 match result {
                     Ok(()) => {
-                        let mut candidate = endpoint.clone();
-                        if candidate.provider != provider {
-                            candidate.protocol = None;
-                            candidate.base_url = provider.base_url().into();
-                            candidate.automatic_base_url = true;
-                        }
-                        candidate.provider = provider;
-                        candidate.api_key = provider.resolve_key();
-                        candidate.reasoning_effort = None;
-                        let requested =
-                            if endpoint.provider == provider && !endpoint.model.is_empty() {
-                                Some(endpoint.model.clone())
-                            } else {
-                                config::stored_model(provider.label())
-                            };
-                        candidate.model = match candidate.catalog_model(requested.as_deref()).await
-                        {
-                            Ok(model) => model,
+                        endpoint = match switch_provider(&endpoint, provider, None).await {
+                            Ok(candidate) => candidate,
                             Err(error) => {
                                 let _ = ui.send(UiMsg::Notice(format!(
                                     "login succeeded, but model catalog failed: {error}"
@@ -616,8 +626,7 @@ pub(crate) async fn worker<F>(
                                 continue;
                             }
                         };
-                        endpoint = candidate;
-                        let _ = config::save_provider(provider.label());
+                        let _ = config::save_provider(provider.id());
                         (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                         spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                         let _ = ui.send(UiMsg::ProviderChanged {
@@ -638,7 +647,7 @@ pub(crate) async fn worker<F>(
                 endpoint.reasoning_effort = reasoning_effort;
                 // Best-effort preference cache; a failed write only means
                 // the next session starts on the provider default.
-                let _ = config::save_model(endpoint.provider.label(), &endpoint.model);
+                let _ = config::save_model(endpoint.provider.id(), &endpoint.model);
                 (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 if ui
@@ -656,22 +665,8 @@ pub(crate) async fn worker<F>(
                     task.abort();
                 }
                 login_attempt = login_attempt.wrapping_add(1);
-                let mut candidate = endpoint.clone();
-                if candidate.provider != provider {
-                    candidate.protocol = None;
-                    candidate.base_url = provider.base_url().into();
-                    candidate.automatic_base_url = true;
-                }
-                candidate.provider = provider;
-                candidate.api_key = api_key.or_else(|| provider.resolve_key());
-                candidate.reasoning_effort = None;
-                let requested = if endpoint.provider == provider && !endpoint.model.is_empty() {
-                    Some(endpoint.model.clone())
-                } else {
-                    config::stored_model(provider.label())
-                };
-                candidate.model = match candidate.catalog_model(requested.as_deref()).await {
-                    Ok(model) => model,
+                endpoint = match switch_provider(&endpoint, provider, api_key).await {
+                    Ok(candidate) => candidate,
                     Err(error) => {
                         let _ = ui.send(UiMsg::Notice(format!(
                             "provider model catalog failed: {error}"
@@ -679,8 +674,7 @@ pub(crate) async fn worker<F>(
                         continue;
                     }
                 };
-                endpoint = candidate;
-                let _ = config::save_provider(provider.label());
+                let _ = config::save_provider(provider.id());
                 (agent, subagent) = rebuild(&mut build, &endpoint, false, &subagent);
                 spawn_window_probe(&endpoint, ui.clone(), context_capacity.clone());
                 let changed = UiMsg::ProviderChanged {

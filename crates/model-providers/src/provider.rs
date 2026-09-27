@@ -54,62 +54,54 @@ impl ProviderModel {
         }
     }
 
-    fn reset(mut self) -> Self {
+    /// Apply one setting and drop any adapter built from the previous ones.
+    fn set(mut self, apply: impl FnOnce(&mut Self)) -> Self {
+        apply(&mut self);
         self.inner = OnceCell::new();
         self
     }
 
     /// Explicit API root override, preserved even when equal to the preset default.
-    pub fn base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = Some(url.into());
-        self.reset()
+    pub fn base_url(self, url: impl Into<String>) -> Self {
+        self.set(|m| m.base_url = Some(url.into()))
     }
-    pub fn api_key(mut self, key: impl Into<String>) -> Self {
-        self.api_key = Some(key.into());
-        self.reset()
+    pub fn api_key(self, key: impl Into<String>) -> Self {
+        self.set(|m| m.api_key = Some(key.into()))
     }
-    pub fn max_tokens(mut self, count: u64) -> Self {
-        self.max_tokens = Some(count);
-        self.reset()
+    pub fn max_tokens(self, count: u64) -> Self {
+        self.set(|m| m.max_tokens = Some(count))
     }
-    pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
-        self.reasoning_effort = Some(effort.into());
-        self.reset()
+    pub fn reasoning_effort(self, effort: impl Into<String>) -> Self {
+        self.set(|m| m.reasoning_effort = Some(effort.into()))
     }
     /// Sent where the adapter supports custom headers.
-    pub fn user_agent(mut self, agent: impl Into<String>) -> Self {
-        self.user_agent = Some(agent.into());
-        self.reset()
+    pub fn user_agent(self, agent: impl Into<String>) -> Self {
+        self.set(|m| m.user_agent = Some(agent.into()))
     }
     /// Request provider-side prompt caching where the protocol offers it.
-    pub fn prompt_cache(mut self, enabled: bool) -> Self {
-        self.prompt_cache = enabled;
-        self.reset()
+    pub fn prompt_cache(self, enabled: bool) -> Self {
+        self.set(|m| m.prompt_cache = enabled)
     }
     /// A stable per-session ID used as the cache key or session hint.
-    pub fn session_id(mut self, id: impl Into<String>) -> Self {
-        self.session_id = Some(id.into());
-        self.reset()
+    pub fn session_id(self, id: impl Into<String>) -> Self {
+        self.set(|m| m.session_id = Some(id.into()))
     }
-    pub fn attribution(mut self, attribution: Attribution) -> Self {
-        self.attribution = attribution;
-        self.reset()
+    pub fn attribution(self, attribution: Attribution) -> Self {
+        self.set(|m| m.attribution = attribution)
     }
 
     /// Subscription OAuth remains behind the existing credential boundary.
     pub fn codex_credentials(
-        mut self,
+        self,
         source: Arc<dyn crate::openai_codex::CodexCredentialSource>,
     ) -> Self {
-        self.codex_credentials = Some(source);
-        self.reset()
+        self.set(|m| m.codex_credentials = Some(source))
     }
 
     /// Choose a transport explicitly for a mixed-protocol service.
     /// Also set `base_url` to that interface's complete API root.
-    pub fn protocol(mut self, protocol: Protocol) -> Self {
-        self.protocol = Some(protocol);
-        self.reset()
+    pub fn protocol(self, protocol: Protocol) -> Self {
+        self.set(|m| m.protocol = Some(protocol))
     }
 
     /// Discover models visible to the current credential, without a fallback catalog.
@@ -120,35 +112,43 @@ impl ProviderModel {
     }
 
     async fn discover(&self) -> Result<Vec<crate::ModelInfo>, ModelError> {
-        let discovery = self.preset.spec().discovery;
-        if discovery == Discovery::Unsupported {
-            return Err(ModelError::Request(format!(
+        // The credential and root only matter once discovery is known to exist.
+        let ready = self
+            .credential(true)
+            .and_then(|key| Ok((key, self.endpoint()?.1)));
+        match (self.preset.spec().discovery, ready) {
+            (Discovery::Unsupported, _) => Err(ModelError::Request(format!(
                 "{}: model discovery unavailable; supply a model ID manually and configure its transport",
                 self.preset.id()
-            )));
-        }
-        let key = self.credential(true)?;
-        let root = self.endpoint()?.1;
-        match discovery {
-            Discovery::Unsupported => unreachable!("handled above"),
-            Discovery::OpenAiModels | Discovery::Ollama => {
+            ))),
+            (_, Err(error)) => Err(error),
+            (Discovery::OpenAiModels | Discovery::Ollama, Ok((key, root))) => {
                 crate::discovery::list_openai_models(&root, key).await
             }
-            Discovery::OpenRouter => crate::openrouter::list_models(&root, key).await,
-            Discovery::Vercel => crate::vercel::list_models(&root, key).await,
-            Discovery::CheaperInference => crate::cheaperinference::list_models(&root).await,
-            Discovery::Radius => crate::pi_messages::list_models(&root, key).await,
-            Discovery::Anthropic => crate::anthropic::list_models(&root, key).await,
-            Discovery::Google => {
-                let mut model = crate::GoogleModel::new("").base_url(root);
-                if let Some(key) = key {
-                    model = model.api_key(key);
-                }
-                model.models().await
+            (Discovery::OpenRouter, Ok((key, root))) => {
+                crate::openrouter::list_models(&root, key).await
             }
-            Discovery::Copilot => self.copilot("").models().await,
-            Discovery::Cursor => crate::cursor::list_models(&root, required(key)?).await,
-            Discovery::Codex => crate::openai_codex::list_models(&root, self.codex()?).await,
+            (Discovery::Vercel, Ok((key, root))) => crate::vercel::list_models(&root, key).await,
+            (Discovery::CheaperInference, Ok((_, root))) => {
+                crate::cheaperinference::list_models(&root).await
+            }
+            (Discovery::Radius, Ok((key, root))) => {
+                crate::pi_messages::list_models(&root, key).await
+            }
+            (Discovery::Anthropic, Ok((key, root))) => {
+                crate::anthropic::list_models(&root, key).await
+            }
+            (Discovery::Google, Ok((key, root))) => {
+                let model = crate::GoogleModel::new("").base_url(root);
+                with(model, key, |m, k| m.api_key(k)).models().await
+            }
+            (Discovery::Copilot, Ok(_)) => self.copilot("").models().await,
+            (Discovery::Cursor, Ok((key, root))) => {
+                crate::cursor::list_models(&root, required(key)?).await
+            }
+            (Discovery::Codex, Ok((_, root))) => {
+                crate::openai_codex::list_models(&root, self.codex()?).await
+            }
         }
     }
 
@@ -252,9 +252,10 @@ impl ProviderModel {
         let user_agent = quirks.user_agent.or(self.user_agent.as_deref());
         let effort = self.reasoning_effort.as_deref();
         // Headers for adapters that take them: a non-native key and the user agent.
+        // The Messages adapter sends the gateway token itself.
         let headers: Vec<(&str, String)> = match (key, placement) {
             (Some(key), KeyPlacement::Header(name)) => Some((name, key.to_owned())),
-            (Some(key), KeyPlacement::CloudflareGateway) => {
+            (Some(key), KeyPlacement::CloudflareGateway) if protocol != Protocol::Anthropic => {
                 Some(("cf-aig-authorization", format!("Bearer {key}")))
             }
             _ => None,
@@ -265,10 +266,13 @@ impl ProviderModel {
 
         // Native key, output cap and effort, which every plain adapter shares.
         macro_rules! plain {
-            ($model:expr) => {{
+            ($model:expr) => {
+                plain!($model, reasoning_effort)
+            };
+            ($model:expr, $effort:ident) => {{
                 let model = with($model, native_key, |m, k| m.api_key(k));
                 let model = with(model, self.max_tokens, |m, n| m.max_tokens(n));
-                with(model, effort, |m, e| m.reasoning_effort(e))
+                with(model, effort, |m, e| m.$effort(e))
             }};
         }
         macro_rules! headed {
@@ -317,14 +321,10 @@ impl ProviderModel {
                 let model = headed!(crate::OpenAiModel::new(&self.model)
                     .base_url(base_url)
                     .replay_reasoning_content(quirks.replay_reasoning_content));
-                let model = with(model, native_key, |m, k| m.api_key(k));
-                let model = with(model, self.max_tokens, |m, n| m.max_tokens(n));
-                Arc::new(with(model, effort, |m, e| {
-                    match quirks.nested_reasoning_effort {
-                        true => m.nested_reasoning_effort(e),
-                        false => m.reasoning_effort(e),
-                    }
-                }))
+                Arc::new(match quirks.nested_reasoning_effort {
+                    true => plain!(model, nested_reasoning_effort),
+                    false => plain!(model),
+                })
             }
             Protocol::Anthropic => {
                 // Messages gateways authenticate with a bearer or gateway token instead.
@@ -334,10 +334,9 @@ impl ProviderModel {
                 let model = match (key, placement) {
                     (Some(key), KeyPlacement::Bearer) => model.bearer_token(key),
                     (Some(key), KeyPlacement::CloudflareGateway) => model.gateway_token(key),
-                    (Some(key), KeyPlacement::Header(name)) => model.header(name, key),
                     _ => model,
                 };
-                Arc::new(with(model, user_agent, |m, v| m.header("user-agent", v)))
+                Arc::new(headed!(model))
             }
             Protocol::Responses => {
                 Arc::new(headed!(plain!(crate::ResponsesModel::new(&self.model)

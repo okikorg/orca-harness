@@ -1,6 +1,5 @@
 use super::effects::After;
 use super::*;
-use crate::msg::ProviderExt as _;
 mod apply;
 mod settings;
 use apply::apply_after;
@@ -115,7 +114,7 @@ pub(crate) fn handle_overlay_key(
                     After::Nothing
                 } else {
                     let provider = *provider;
-                    let note = match crate::config::save_key(provider.label(), &key) {
+                    let note = match crate::config::save_key(provider.id(), &key) {
                         Ok(path) => format!("api key saved to {}", path.display()),
                         Err(err) => {
                             format!("api key kept for this session only (save failed: {err})")
@@ -177,7 +176,7 @@ pub(crate) fn handle_overlay_key(
                     );
                 }
                 if let Some(tier) = crate::tui::subagents::tier(*setting) {
-                    if let Some(provider) = crate::Provider::from_label(&value) {
+                    if let Some(provider) = crate::Provider::from_id(&value) {
                         let after = After::FetchSubagentModels {
                             tier: tier.into(),
                             provider,

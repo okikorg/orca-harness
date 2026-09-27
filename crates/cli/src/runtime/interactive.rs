@@ -3,7 +3,6 @@ use super::completions::{delivery, PublishCompletion};
 use super::local_tools::{LocalTools, LocalToolsCache};
 use super::session::open_session;
 use super::worker::worker;
-use crate::msg::ProviderExt as _;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -261,7 +260,7 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
             );
             build_agent(
                 endpoint.build_model_for_ui(Some(ui_tx.clone())),
-                endpoint.provider.label(),
+                endpoint.provider.id(),
                 &endpoint.model,
                 subagent_models::choices_with_ui(endpoint, ui_tx.clone()),
                 &cfg,

@@ -2,7 +2,6 @@
 
 use super::super::effects::After;
 use super::super::*;
-use crate::msg::ProviderExt as _;
 
 /// The values the rows open on, read before the overlay is borrowed.
 pub(super) struct Current {
@@ -50,7 +49,7 @@ pub(super) fn open_row(row: usize, now: &Current) -> After {
             if now.provider.key_env().is_none() {
                 After::CloseWithNote(format!(
                     "the {} endpoint needs no api key",
-                    now.provider.label()
+                    now.provider.id()
                 ))
             } else {
                 After::Push(Overlay::ApiKey {

@@ -1,4 +1,3 @@
-use crate::msg::ProviderExt as _;
     #[test]
     fn stale_catalog_reply_is_ignored() {
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -560,7 +559,7 @@ use crate::msg::ProviderExt as _;
                 let parent = app.cfg.model_name.clone();
                 let parent_window = app.context_window;
                 let values = crate::tui::subagents::subagent_values(&app.cfg.subagent_depth, setting);
-                let index = values.iter().position(|p| p == provider.label()).unwrap();
+                let index = values.iter().position(|p| p == provider.id()).unwrap();
                 app.overlay = Some(Overlay::SubagentValues {
                     setting,
                     picker: ListPicker::with_selected(values.len(), index),
@@ -597,7 +596,7 @@ use crate::msg::ProviderExt as _;
                 let rendered = (0..12).map(|y| (0..100)
                     .map(|x| buffer[(x, y)].symbol()).collect::<String>())
                     .collect::<Vec<_>>().join("\n");
-                assert!(rendered.contains(provider.label()), "{rendered}");
+                assert!(rendered.contains(provider.id()), "{rendered}");
                 handle_overlay_key(
                     &mut app,
                     KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),

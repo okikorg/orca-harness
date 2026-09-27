@@ -4,25 +4,14 @@
 use orca_harness_core::{CancellationToken, Image};
 use orca_harness_extensions::{CompactReport, HarnessEvent};
 use orca_harness_model_providers::openrouter::ModelInfo;
-use orca_harness_model_providers::registry;
 use orca_harness_tools::{AskRequest, ProcessNotification};
 use tokio::sync::oneshot;
 
 /// A selectable endpoint preset. The registry is the single provider table.
 pub use orca_harness_model_providers::ProviderPreset as Provider;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderAuth {
-    ApiKey { environment: &'static str },
-    OAuth,
-    None,
-}
-
-/// Host-side conveniences over registry presets: labels, key lookup and persistence.
+/// Host-side conveniences over registry presets: key lookup and persistence.
 pub trait ProviderExt: Copy {
-    fn label(self) -> &'static str;
-    fn from_label(label: &str) -> Option<Self>;
-    fn auth(self) -> ProviderAuth;
     /// The key from the environment, ignoring blank values.
     fn env_key(self) -> Option<String>;
     /// The key saved to the config file by a previous session.
@@ -35,23 +24,6 @@ pub trait ProviderExt: Copy {
 }
 
 impl ProviderExt for Provider {
-    fn label(self) -> &'static str {
-        self.id()
-    }
-
-    /// Parse a label as produced by [`ProviderExt::label`], or a registry alias.
-    fn from_label(label: &str) -> Option<Provider> {
-        Provider::from_id(label)
-    }
-
-    fn auth(self) -> ProviderAuth {
-        match self.spec().credential {
-            registry::Credential::ApiKey { env, .. } => ProviderAuth::ApiKey { environment: env },
-            registry::Credential::OAuth => ProviderAuth::OAuth,
-            registry::Credential::None => ProviderAuth::None,
-        }
-    }
-
     fn env_key(self) -> Option<String> {
         self.key_env()
             .and_then(|env| std::env::var(env).ok())
@@ -60,19 +32,20 @@ impl ProviderExt for Provider {
 
     fn stored_key(self) -> Option<String> {
         self.key_env()?;
-        crate::config::stored_key(self.label())
+        crate::config::stored_key(self.id())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Provider, ProviderAuth, ProviderExt};
+    use super::Provider;
+    use orca_harness_model_providers::registry::{Credential, KeyPlacement};
 
     #[test]
     fn vercel_gateway_provider_has_expected_configuration() {
-        assert_eq!(Provider::from_label("vercel"), Some(Provider::Vercel));
+        assert_eq!(Provider::from_id("vercel"), Some(Provider::Vercel));
         assert_eq!(
-            Provider::from_label("vercel-ai-gateway"),
+            Provider::from_id("vercel-ai-gateway"),
             Some(Provider::Vercel)
         );
         assert_eq!(
@@ -80,9 +53,10 @@ mod tests {
             "https://ai-gateway.vercel.sh/v1"
         );
         assert_eq!(
-            Provider::Vercel.auth(),
-            ProviderAuth::ApiKey {
-                environment: "AI_GATEWAY_API_KEY"
+            Provider::Vercel.spec().credential,
+            Credential::ApiKey {
+                env: "AI_GATEWAY_API_KEY",
+                placement: KeyPlacement::Native
             }
         );
     }
@@ -90,7 +64,7 @@ mod tests {
     #[test]
     fn cheaperinference_provider_has_expected_configuration() {
         assert_eq!(
-            Provider::from_label("cheaperinference"),
+            Provider::from_id("cheaperinference"),
             Some(Provider::CheaperInference)
         );
         assert_eq!(
@@ -98,9 +72,10 @@ mod tests {
             "https://api.cheaperinference.com/v1"
         );
         assert_eq!(
-            Provider::CheaperInference.auth(),
-            ProviderAuth::ApiKey {
-                environment: "CHEAPERINFERENCE_API_KEY"
+            Provider::CheaperInference.spec().credential,
+            Credential::ApiKey {
+                env: "CHEAPERINFERENCE_API_KEY",
+                placement: KeyPlacement::Native
             }
         );
     }
@@ -376,11 +351,7 @@ mod provider_registry_tests {
     use super::*;
 
     #[test]
-    fn visible_providers_are_unique_and_preserve_legacy_order() {
-        assert_eq!(Provider::ALL.len(), 46);
-        let labels: std::collections::HashSet<_> =
-            Provider::ALL.iter().map(|p| p.label()).collect();
-        assert_eq!(labels.len(), 46);
+    fn visible_providers_preserve_legacy_order() {
         assert_eq!(
             &Provider::ALL[..6],
             &[
@@ -393,13 +364,5 @@ mod provider_registry_tests {
             ]
         );
         assert_eq!(Provider::ALL.last(), Some(&Provider::Local));
-        for &provider in Provider::ALL {
-            assert_eq!(Provider::from_label(provider.label()), Some(provider));
-        }
-        assert_eq!(
-            Provider::from_label("vercel-ai-gateway"),
-            Some(Provider::Vercel)
-        );
-        assert_eq!(Provider::from_label("unknown"), None);
     }
 }

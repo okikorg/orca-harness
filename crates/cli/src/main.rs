@@ -20,7 +20,6 @@ mod plugin;
 mod presentation;
 mod prompt;
 mod protocol;
-use crate::msg::ProviderExt as _;
 use orca_harness_model_providers::registry::Protocol;
 mod refine;
 mod run_args;
@@ -40,7 +39,7 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Context, Limits, Model};
 use orca_harness_extensions::{RetryModel, MEMORY_GUIDANCE};
-use orca_harness_model_providers::openrouter;
+use orca_harness_model_providers::{openrouter, ProviderModel};
 use orca_harness_tools::Workspace;
 
 use crate::mode::{Mode, ModeHandle};
@@ -173,7 +172,6 @@ pub struct Config {
     pub protocol: Option<Protocol>,
     pub api_key: Option<String>,
     pub firecrawl_key: Option<String>,
-    pub openrouter: bool,
     pub list_models: bool,
     pub workspace: PathBuf,
     pub prompt: Option<String>,
@@ -415,10 +413,30 @@ impl Endpoint {
         }
     }
 
+    /// A fixed-route endpoint with no key, model or output controls.
+    #[cfg(test)]
+    fn fixture(provider: Provider, base_url: impl Into<String>) -> Self {
+        Self {
+            provider,
+            base_url: base_url.into(),
+            automatic_base_url: false,
+            protocol: None,
+            api_key: None,
+            model: String::new(),
+            reasoning_effort: None,
+            max_output_tokens: None,
+            prompt_cache: false,
+            request_session_id: None,
+            model_retries: Default::default(),
+            model_gates: Default::default(),
+            subagent_settings: Default::default(),
+        }
+    }
+
     /// The registry-backed model for this endpoint, before output controls.
-    fn provider_model(&self) -> orca_harness_model_providers::ProviderModel {
-        use orca_harness_model_providers::{registry::Credential, Attribution, ProviderModel};
-        let mut model = ProviderModel::new(self.provider, &self.model)
+    fn provider_model(&self) -> ProviderModel {
+        use orca_harness_model_providers::{registry::Credential, Attribution};
+        let model = ProviderModel::new(self.provider, &self.model)
             .user_agent(ORCACODE_USER_AGENT)
             .attribution(Attribution {
                 referer: Some(ORCACODE_REFERER.into()),
@@ -426,22 +444,16 @@ impl Endpoint {
                 categories: Some("cli-agent".into()),
             })
             .prompt_cache(self.prompt_cache);
-        if let Some(protocol) = self.protocol {
-            model = model.protocol(protocol);
+        let base_url = (!self.automatic_base_url).then_some(self.base_url.as_str());
+        let session = self.request_session_id.as_deref();
+        let model = with(model, self.protocol, ProviderModel::protocol);
+        let model = with(model, self.api_key.as_deref(), ProviderModel::api_key);
+        let model = with(model, base_url, ProviderModel::base_url);
+        let model = with(model, session, ProviderModel::session_id);
+        if self.provider.spec().credential != Credential::OAuth {
+            return model;
         }
-        if let Some(key) = &self.api_key {
-            model = model.api_key(key.clone());
-        }
-        if !self.automatic_base_url {
-            model = model.base_url(&self.base_url);
-        }
-        if let Some(session_id) = &self.request_session_id {
-            model = model.session_id(session_id.clone());
-        }
-        if self.provider.spec().credential == Credential::OAuth {
-            model = model.codex_credentials(Arc::new(auth::CodexCliCredential::discover()));
-        }
-        model
+        model.codex_credentials(Arc::new(auth::CodexCliCredential::discover()))
     }
 
     async fn list_models(
@@ -457,12 +469,9 @@ impl Endpoint {
         }
         let help = format!(
             "specify an explicit model ID with --provider {} --model <ID>",
-            self.provider.label()
+            self.provider.id()
         );
-        // A provider switch must not discover through the previous model's route.
-        let mut discovery = self.clone();
-        discovery.model.clear();
-        let models = discovery
+        let models = self
             .list_models()
             .await
             .map_err(|error| format!("{error}; {help}"))?;
@@ -473,7 +482,7 @@ impl Endpoint {
             .ok_or_else(|| {
                 format!(
                     "{} returned an empty model catalog; {help}",
-                    self.provider.label()
+                    self.provider.id()
                 )
             })
     }
@@ -495,13 +504,13 @@ impl Endpoint {
         ui: Option<mpsc::UnboundedSender<UiMsg>>,
         retry_label: Option<String>,
     ) -> Arc<dyn Model> {
-        let mut model = self.provider_model();
-        if let Some(n) = self.max_output_tokens {
-            model = model.max_tokens(n);
-        }
-        if let Some(effort) = &self.reasoning_effort {
-            model = model.reasoning_effort(effort.clone());
-        }
+        let model = self.provider_model();
+        let model = with(model, self.max_output_tokens, ProviderModel::max_tokens);
+        let model = with(
+            model,
+            self.reasoning_effort.as_deref(),
+            ProviderModel::reasoning_effort,
+        );
         let model: Arc<dyn Model> = Arc::new(model);
 
         // A long-running turn should survive transient provider routing,
@@ -528,6 +537,14 @@ impl Endpoint {
                 }
             });
         Arc::new(model)
+    }
+}
+
+/// Apply an optional setting to a builder.
+fn with<M, V>(model: M, value: Option<V>, set: impl FnOnce(M, V) -> M) -> M {
+    match value {
+        Some(value) => set(model, value),
+        None => model,
     }
 }
 

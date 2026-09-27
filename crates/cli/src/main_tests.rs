@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod main_tests {
-    use crate::msg::ProviderExt as _;
     use std::path::PathBuf;
 
     use tokio::sync::mpsc;
@@ -18,19 +17,8 @@ mod main_tests {
 
     fn discovery_endpoint(provider: Provider, base_url: String) -> crate::Endpoint {
         crate::Endpoint {
-            provider,
-            base_url,
-            automatic_base_url: false,
-            protocol: None,
             api_key: Some("fixture-key".into()),
-            model: String::new(),
-            reasoning_effort: None,
-            max_output_tokens: None,
-            prompt_cache: false,
-            request_session_id: None,
-            model_retries: Default::default(),
-            model_gates: Default::default(),
-            subagent_settings: Default::default(),
+            ..crate::Endpoint::fixture(provider, base_url)
         }
     }
 
@@ -67,7 +55,7 @@ mod main_tests {
 
     #[tokio::test]
     async fn preset_discovery_uses_live_catalog_and_explicit_key() {
-        let provider = Provider::from_label("deepseek").unwrap();
+        let provider = Provider::from_id("deepseek").unwrap();
         let (url, request) = catalog_fixture(r#"{"data":[{"id":"fixture-only-model"}]}"#).await;
         let endpoint = discovery_endpoint(provider, url);
         assert_eq!(
@@ -82,7 +70,7 @@ mod main_tests {
     #[tokio::test]
     async fn discovery_empty_or_unavailable_requires_explicit_id() {
         let (url, request) = catalog_fixture(r#"{"data":[]}"#).await;
-        let endpoint = discovery_endpoint(Provider::from_label("deepseek").unwrap(), url);
+        let endpoint = discovery_endpoint(Provider::from_id("deepseek").unwrap(), url);
         let error = endpoint.catalog_model(None).await.unwrap_err();
         assert!(error.contains("--model <ID>"), "{error}");
         request.await.unwrap();
@@ -594,7 +582,6 @@ mod main_tests {
             base_url: "u".into(),
             api_key: None,
             firecrawl_key: None,
-            openrouter: false,
             list_models: false,
             workspace: PathBuf::from("."),
             prompt: None,

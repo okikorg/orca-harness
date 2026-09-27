@@ -5,9 +5,9 @@ use orca_harness_core::ModelError;
 
 macro_rules! protocols {
     ($($variant:ident => $name:literal,)*) => {
-        /// A wire dialect. Several providers share each one.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum Protocol { $($variant,)* }
+        /// A wire dialect. Several providers share each one. Serializes as its name.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        pub enum Protocol { $(#[serde(rename = $name)] $variant,)* }
 
         impl Protocol {
             pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
@@ -238,19 +238,11 @@ impl Spec {
     }
 }
 
-const fn segment(env: &'static [&'static str]) -> Var {
+const fn var(kind: VarKind, env: &'static [&'static str]) -> Var {
     Var {
         env,
         default: None,
-        kind: VarKind::Segment,
-    }
-}
-
-const fn url_var(env: &'static [&'static str]) -> Var {
-    Var {
-        env,
-        default: None,
-        kind: VarKind::Url,
+        kind,
     }
 }
 
@@ -284,6 +276,7 @@ macro_rules! presets {
 
 use Discovery as D;
 use Protocol as P;
+use VarKind::{Segment, Url};
 
 const NESTED_EFFORT: Quirks = Quirks {
     nested_reasoning_effort: true,
@@ -307,28 +300,28 @@ presets! {
     Anthropic => chat("anthropic", crate::anthropic::ANTHROPIC_BASE_URL, "ANTHROPIC_API_KEY")
         .speaks(P::Anthropic).lists(D::Anthropic),
     AmazonBedrock => chat("amazon-bedrock", "https://bedrock-runtime.{AWS_REGION}.amazonaws.com", "AWS_BEARER_TOKEN_BEDROCK")
-        .speaks(P::Bedrock).vars(&[segment(&["AWS_REGION", "AWS_DEFAULT_REGION"]).or("us-east-1")]),
+        .speaks(P::Bedrock).vars(&[var(Segment, &["AWS_REGION", "AWS_DEFAULT_REGION"]).or("us-east-1")]),
     AntLing => chat("ant-ling", "https://api.ant-ling.com/v1", "ANT_LING_API_KEY"),
     AzureOpenAiResponses => Spec { root_path: Some("/openai/v1"), query: Some("api-version"), ..chat("azure-openai-responses", "{AZURE_OPENAI_ENDPOINT}", "") }
-        .speaks(P::Responses).vars(&[url_var(&["AZURE_OPENAI_ENDPOINT"])])
+        .speaks(P::Responses).vars(&[var(Url, &["AZURE_OPENAI_ENDPOINT"])])
         .auth(placed("AZURE_OPENAI_API_KEY", KeyPlacement::Header("api-key"))),
     Baseten => chat("baseten", "https://inference.baseten.co/v1", "BASETEN_API_KEY"),
     Cerebras => chat("cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY").lists(D::OpenAiModels),
     CloudflareAiGateway => chat("cloudflare-ai-gateway", "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic/v1", "")
-        .speaks(P::Anthropic).vars(&[segment(&["CLOUDFLARE_ACCOUNT_ID"]), segment(&["CLOUDFLARE_GATEWAY_ID"])])
+        .speaks(P::Anthropic).vars(&[var(Segment, &["CLOUDFLARE_ACCOUNT_ID"]), var(Segment, &["CLOUDFLARE_GATEWAY_ID"])])
         .auth(placed("CLOUDFLARE_AI_GATEWAY_API_KEY", KeyPlacement::CloudflareGateway)),
     CloudflareWorkersAi => chat("cloudflare-workers-ai", "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1", "CLOUDFLARE_API_TOKEN")
-        .vars(&[segment(&["CLOUDFLARE_ACCOUNT_ID"])]),
+        .vars(&[var(Segment, &["CLOUDFLARE_ACCOUNT_ID"])]),
     Cursor => chat("cursor", crate::cursor::CURSOR_BASE_URL, "CURSOR_ACCESS_TOKEN").speaks(P::Cursor).lists(D::Cursor),
     DatabricksUnityGateway => chat("databricks-unity-gateway", "{DATABRICKS_HOST}/ai-gateway/anthropic/v1", "")
-        .mixed().vars(&[url_var(&["DATABRICKS_HOST"])]).auth(placed("DATABRICKS_TOKEN", KeyPlacement::Bearer)),
+        .mixed().vars(&[var(Url, &["DATABRICKS_HOST"])]).auth(placed("DATABRICKS_TOKEN", KeyPlacement::Bearer)),
     Deepseek => chat("deepseek", "https://api.deepseek.com", "DEEPSEEK_API_KEY").lists(D::OpenAiModels).quirks(REPLAY),
     Fireworks => chat("fireworks", "https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY"),
     GithubCopilot => chat("github-copilot", "https://api.individual.githubcopilot.com", "COPILOT_GITHUB_TOKEN")
         .via(Adapter::Copilot).lists(D::Copilot),
     Google => chat("google", crate::google::GOOGLE_BASE_URL, "GEMINI_API_KEY").speaks(P::Google).lists(D::Google),
     GoogleVertex => Spec { url_hook: Some(vertex_global_host), ..chat("google-vertex", "https://{GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/{GOOGLE_CLOUD_PROJECT}/locations/{GOOGLE_CLOUD_LOCATION}/publishers/google", "GOOGLE_CLOUD_API_KEY") }
-        .speaks(P::Vertex).vars(&[segment(&["GOOGLE_CLOUD_PROJECT"]), segment(&["GOOGLE_CLOUD_LOCATION"]).or("us-central1")]),
+        .speaks(P::Vertex).vars(&[var(Segment, &["GOOGLE_CLOUD_PROJECT"]), var(Segment, &["GOOGLE_CLOUD_LOCATION"]).or("us-central1")]),
     Groq => chat("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY").lists(D::OpenAiModels),
     Huggingface => chat("huggingface", "https://router.huggingface.co/v1", "HF_TOKEN"),
     KimiCoding => chat("kimi-coding", "https://api.kimi.com/coding/v1", "KIMI_API_KEY")
@@ -348,7 +341,7 @@ presets! {
     Radius => chat("radius", crate::pi_messages::RADIUS_BASE_URL, "RADIUS_API_KEY")
         .speaks(P::PiMessages).lists(D::Radius).public(),
     SnowflakeCortex => chat("snowflake-cortex", "{SNOWFLAKE_CORTEX_BASE_URL}", "")
-        .mixed().vars(&[url_var(&["SNOWFLAKE_CORTEX_BASE_URL"])]).auth(placed("SNOWFLAKE_PAT", KeyPlacement::Bearer)),
+        .mixed().vars(&[var(Url, &["SNOWFLAKE_CORTEX_BASE_URL"])]).auth(placed("SNOWFLAKE_PAT", KeyPlacement::Bearer)),
     Together => chat("together", "https://api.together.ai/v1", "TOGETHER_API_KEY"),
     Xai => chat("xai", "https://api.x.ai/v1", "XAI_API_KEY").speaks(P::Responses).quirks(PLAIN_RESPONSES),
     Xiaomi => chat("xiaomi", "https://api.xiaomimimo.com/v1", "XIAOMI_API_KEY"),
