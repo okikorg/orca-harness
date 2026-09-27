@@ -51,26 +51,19 @@ pub fn warm() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
+    use crate::test_server::{serve, Reply};
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn custom_credentials_are_never_forwarded_on_redirect() {
         for status in [301, 302, 303, 307, 308] {
-            let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let origin_url = format!("http://{}", origin.local_addr().unwrap());
             let location = format!("http://{}/stolen", destination.local_addr().unwrap());
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = origin.accept().await.unwrap();
-                let mut request = [0; 8192];
-                let _ = socket.read(&mut request).await.unwrap();
-                socket.write_all(format!("HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-            });
+            let redirect = Reply::new(&format!("{status} Redirect"), "text/plain", "")
+                .header("Location", &location);
+            let (url, server) = serve(vec![redirect]).await;
             let response = client()
-                .get(origin_url)
+                .get(url)
                 .header("cf-aig-authorization", "Bearer gateway-secret")
                 .header("api-key", "azure-secret")
                 .timeout(Duration::from_secs(2))

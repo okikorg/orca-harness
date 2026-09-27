@@ -1,35 +1,30 @@
 //! Live registry discovery against local credential-sensitive servers.
 use orca_harness_core::{Context, Model, ModelError};
-use orca_harness_model_providers::{Protocol, ProviderModel, ProviderPreset};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use orca_harness_model_providers::{ModelInfo, Protocol, ProviderModel, ProviderPreset};
 
+#[path = "../src/test_server.rs"]
+mod test_server;
+use test_server::{json, serve, status, Captured};
+use tokio::task::JoinHandle;
+
+/// Serve `(status, body)` JSON replies in order.
 async fn server(
     responses: Vec<(&'static str, &'static str)>,
-) -> (String, tokio::task::JoinHandle<Vec<String>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let task = tokio::spawn(async move {
-        let mut requests = vec![];
-        for (status, body) in responses {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = vec![];
-            loop {
-                let mut buf = [0; 8192];
-                let count = socket.read(&mut buf).await.unwrap();
-                bytes.extend_from_slice(&buf[..count]);
-                if count == 0 || bytes.windows(4).any(|b| b == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            requests.push(String::from_utf8(bytes).unwrap());
-            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-        }
-        requests
-    });
-    (url, task)
+) -> (String, JoinHandle<Vec<Captured>>) {
+    serve(responses.into_iter().map(|(s, b)| status(s, b)).collect()).await
+}
+
+#[allow(clippy::result_large_err)] // mirrors `ProviderModel::models`
+async fn discover(
+    preset: ProviderPreset,
+    url: String,
+    key: &str,
+) -> Result<Vec<ModelInfo>, ModelError> {
+    ProviderModel::new(preset, "manual")
+        .base_url(url)
+        .api_key(key)
+        .models()
+        .await
 }
 
 #[tokio::test]
@@ -61,9 +56,9 @@ async fn credentials_change_live_results_without_synthetic_metadata() {
     assert_eq!(models[0].context_length, Some(123));
     assert!(model.models().await.unwrap().is_empty());
     let requests = task.await.unwrap();
-    assert!(requests[0].contains("authorization: Bearer first"));
-    assert!(requests[1].contains("authorization: Bearer second"));
-    assert!(requests.iter().all(|r| r.starts_with("GET /models ")));
+    assert!(requests[0].head.contains("authorization: Bearer first"));
+    assert!(requests[1].head.contains("authorization: Bearer second"));
+    assert!(requests.iter().all(|r| r.head.starts_with("GET /models ")));
 }
 
 #[tokio::test]
@@ -75,11 +70,7 @@ async fn auth_and_invalid_responses_are_not_catalogs() {
         ("200 OK", r#"{"data":[{}]}"#),
     ] {
         let (url, task) = server(vec![(status, body)]).await;
-        let result = ProviderModel::new(ProviderPreset::OpenAi, "manual")
-            .base_url(url)
-            .api_key("bad")
-            .models()
-            .await;
+        let result = discover(ProviderPreset::OpenAi, url, "bad").await;
         assert!(result.is_err());
         if status.starts_with("401") || status.starts_with("403") {
             assert!(matches!(result, Err(ModelError::Authentication(_))));
@@ -109,15 +100,10 @@ async fn native_anthropic_and_google_metadata() {
         ),
     ] {
         let (url, task) = server(vec![("200 OK", body)]).await;
-        let models = ProviderModel::new(preset, "manual")
-            .base_url(url)
-            .api_key("secret")
-            .models()
-            .await
-            .unwrap();
+        let models = discover(preset, url, "secret").await.unwrap();
         assert_eq!(models[0].id, "remote");
         assert_eq!(models[0].context_length, Some(2048));
-        assert!(task.await.unwrap()[0].contains(header));
+        assert!(task.await.unwrap()[0].head.contains(header));
     }
 }
 
@@ -149,16 +135,14 @@ async fn manual_model_generates_without_discovery_even_on_mixed_provider() {
         .await
         .unwrap();
     let requests = task.await.unwrap();
-    assert!(requests[0].starts_with("POST /chat/completions "));
+    assert!(requests[0].head.starts_with("POST /chat/completions "));
 }
 
 #[tokio::test]
 async fn discovery_does_not_follow_redirects() {
-    let (url, task) = server(vec![("302 Found\r\nLocation: /models", "")]).await;
-    assert!(ProviderModel::new(ProviderPreset::OpenAi, "manual")
-        .base_url(url)
-        .api_key("secret")
-        .models()
+    let redirect = status("302 Found", "").header("Location", "/models");
+    let (url, task) = serve(vec![redirect]).await;
+    assert!(discover(ProviderPreset::OpenAi, url, "secret")
         .await
         .is_err());
     assert_eq!(task.await.unwrap().len(), 1);
@@ -171,10 +155,7 @@ async fn openrouter_expands_gateway_efforts_and_vercel_remote_fields() {
         r#"{"data":[{"id":"remote","reasoning":{"supported_efforts":null}}]}"#,
     )])
     .await;
-    let models = ProviderModel::new(ProviderPreset::OpenRouter, "manual")
-        .base_url(url)
-        .api_key("key")
-        .models()
+    let models = discover(ProviderPreset::OpenRouter, url, "key")
         .await
         .unwrap();
     assert_eq!(
@@ -187,22 +168,15 @@ async fn openrouter_expands_gateway_efforts_and_vercel_remote_fields() {
     );
     task.await.unwrap();
     let (url, task) = server(vec![("200 OK", r#"{"data":[{"id":"remote","context_window":456,"reasoning_options":[{"type":"effort","values":["remote-effort"]}]}]}"#)]).await;
-    let models = ProviderModel::new(
-        ProviderPreset::from_id("vercel-ai-gateway").unwrap(),
-        "manual",
-    )
-    .base_url(url)
-    .api_key("key")
-    .models()
-    .await
-    .unwrap();
+    let vercel = ProviderPreset::from_id("vercel-ai-gateway").unwrap();
+    let models = discover(vercel, url, "key").await.unwrap();
     assert_eq!(models[0].context_length, Some(456));
     task.await.unwrap();
 }
 
 #[tokio::test]
 async fn key_placement_and_quirks_come_from_the_registry_row() {
-    let sse = "data: [DONE]\n\n";
+    let body = "data: [DONE]\n\n";
     // (configure, preset, required request text, forbidden request text)
     type Case = (
         fn(ProviderModel) -> ProviderModel,
@@ -243,12 +217,12 @@ async fn key_placement_and_quirks_come_from_the_registry_row() {
         ),
     ];
     for (configure, preset, present, absent) in cases {
-        let (url, task) = server(vec![("200 OK", sse)]).await;
+        let (url, task) = serve(vec![json(body)]).await;
         let model = configure(ProviderModel::new(preset, "m").base_url(url).api_key("k"));
         // The fixture is not a valid stream; only the request is under test.
         let _ = model.generate(&Context::default(), &[]).await;
-        let request = task.await.unwrap().remove(0);
-        let lower = request.to_ascii_lowercase();
+        let captured = task.await.unwrap().remove(0);
+        let (request, lower) = (&captured.head, captured.lower());
         for header in present {
             assert!(
                 request.contains(header) || lower.contains(&header.to_ascii_lowercase()),

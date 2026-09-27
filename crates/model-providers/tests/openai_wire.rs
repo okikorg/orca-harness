@@ -2,69 +2,14 @@
 //! chat-completions server, capture what went over the network, and check
 //! what the adapter makes of the reply.
 
-use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use serde_json::json;
 
 use orca_harness_core::{Context, Model, ModelError, ModelResponse, ToolSchema};
 use orca_harness_model_providers::openai::OpenAiModel;
 
-struct Captured {
-    head: String,
-    body: String,
-}
-
-/// Serve exactly one request: capture it, then reply with `response_json`.
-async fn one_shot_server(response_json: String) -> (String, oneshot::Receiver<Captured>) {
-    response_server("200 OK", "", response_json).await
-}
-
-async fn response_server(
-    status: &'static str,
-    headers: &'static str,
-    response_json: String,
-) -> (String, oneshot::Receiver<Captured>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (tx, rx) = oneshot::channel();
-
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut raw = Vec::new();
-        let mut buf = [0u8; 4096];
-        let captured = loop {
-            let n = stream.read(&mut buf).await.unwrap();
-            assert!(n > 0, "connection closed before full request arrived");
-            raw.extend_from_slice(&buf[..n]);
-            let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
-                continue;
-            };
-            let head = String::from_utf8_lossy(&raw[..split]).to_lowercase();
-            let length: usize = head
-                .lines()
-                .find_map(|l| l.strip_prefix("content-length:"))
-                .expect("request has content-length")
-                .trim()
-                .parse()
-                .unwrap();
-            if raw.len() >= split + 4 + length {
-                let body = String::from_utf8(raw[split + 4..split + 4 + length].to_vec()).unwrap();
-                break Captured { head, body };
-            }
-        };
-        let _ = tx.send(captured);
-        let reply = format!(
-            "HTTP/1.1 {status}\r\n{headers}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            response_json.len(),
-            response_json
-        );
-        stream.write_all(reply.as_bytes()).await.unwrap();
-        stream.shutdown().await.unwrap();
-    });
-
-    (format!("http://{addr}/v1"), rx)
-}
+#[path = "../src/test_server.rs"]
+mod test_server;
+use test_server::{json, serve, status};
 
 fn schemas() -> Vec<ToolSchema> {
     vec![
@@ -92,10 +37,10 @@ async fn parallel_tool_calls_goes_over_the_wire_and_multi_call_batches_parse() {
         ]}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 2}
     });
-    let (base_url, captured) = one_shot_server(completion.to_string()).await;
+    let (url, server) = serve(vec![json(completion.to_string())]).await;
 
     let model = OpenAiModel::new("test-model")
-        .base_url(base_url)
+        .base_url(format!("{url}/v1"))
         .user_agent("orcacode/1.2.3")
         .parallel_tool_calls(true);
     let mut context = Context::new();
@@ -103,9 +48,9 @@ async fn parallel_tool_calls_goes_over_the_wire_and_multi_call_batches_parse() {
 
     let response = model.generate(&context, &schemas()).await.unwrap();
 
-    let captured = captured.await.unwrap();
-    assert!(captured.head.contains("user-agent: orcacode/1.2.3"));
-    let sent: Value = serde_json::from_str(&captured.body).unwrap();
+    let captured = server.await.unwrap().remove(0);
+    assert!(captured.lower().contains("user-agent: orcacode/1.2.3"));
+    let sent = captured.json();
     assert_eq!(sent["parallel_tool_calls"], json!(true));
     assert_eq!(sent["tools"].as_array().unwrap().len(), 2);
 
@@ -122,15 +67,15 @@ async fn unset_knob_sends_no_parallel_tool_calls_field() {
     let completion = json!({
         "choices": [{"message": {"content": "done", "tool_calls": []}}]
     });
-    let (base_url, captured) = one_shot_server(completion.to_string()).await;
+    let (url, server) = serve(vec![json(completion.to_string())]).await;
 
-    let model = OpenAiModel::new("test-model").base_url(base_url);
+    let model = OpenAiModel::new("test-model").base_url(format!("{url}/v1"));
     let mut context = Context::new();
     context.push_user("hi");
 
     let response = model.generate(&context, &schemas()).await.unwrap();
 
-    let sent: Value = serde_json::from_str(&captured.await.unwrap().body).unwrap();
+    let sent = server.await.unwrap()[0].json();
     assert!(sent.get("parallel_tool_calls").is_none());
     assert!(matches!(response, ModelResponse::Final { .. }));
 }
@@ -147,8 +92,8 @@ async fn non_streaming_length_finish_reason_is_typed_and_retains_usage() {
         }],
         "usage": {"prompt_tokens": 7, "completion_tokens": 11}
     });
-    let (base_url, _) = one_shot_server(completion.to_string()).await;
-    let model = OpenAiModel::new("test-model").base_url(base_url);
+    let (url, _) = serve(vec![json(completion.to_string())]).await;
+    let model = OpenAiModel::new("test-model").base_url(format!("{url}/v1"));
 
     let error = model
         .generate(&Context::new(), &schemas())
@@ -168,7 +113,7 @@ async fn non_streaming_length_finish_reason_is_typed_and_retains_usage() {
 async fn http_failures_preserve_retry_timing_and_permanent_classification() {
     use orca_harness_model_providers::http_error::retry_delay;
     for streaming in [false, true] {
-        for (status, body, delay) in [
+        for (code, body, delay) in [
             (
                 "429 Too Many Requests",
                 r#"{"error":{"code":"rate_limit_exceeded"}}"#,
@@ -182,8 +127,8 @@ async fn http_failures_preserve_retry_timing_and_permanent_classification() {
             ("400 Bad Request", "invalid", None),
             ("401 Unauthorized", "bad key", None),
         ] {
-            let (url, captured) = response_server(status, "Retry-After: 7\r\n", body.into()).await;
-            let model = OpenAiModel::new("test").base_url(url);
+            let (url, server) = serve(vec![status(code, body).header("Retry-After", "7")]).await;
+            let model = OpenAiModel::new("test").base_url(format!("{url}/v1"));
             let context = Context::new();
             let result = if streaming {
                 model.generate_streaming(&context, &[], &|_| {}).await
@@ -191,7 +136,7 @@ async fn http_failures_preserve_retry_timing_and_permanent_classification() {
                 model.generate(&context, &[]).await
             };
             assert_eq!(retry_delay(&result.unwrap_err()), delay);
-            captured.await.unwrap();
+            server.await.unwrap();
         }
     }
 }
