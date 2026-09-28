@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--harness",
-        choices=("all", "both", "orca-kiss", "orca", "pi", "omp", "claude", "kiss"),
+        choices=("all", "both", "orca-kiss", "orca-pig", "orca", "pi", "pig", "omp", "claude", "kiss"),
         default="all",
         help="'both' retains the Orcacode/Pi-only profile; 'orca-kiss' pairs Orcacode with KISS",
     )
@@ -86,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.set_defaults(prompt_cache=True)
     parser.add_argument("--orca-bin", default="target/release/orcacode")
     parser.add_argument("--pi-bin", default="pi")
+    parser.add_argument("--pig-bin", default="pig")
     parser.add_argument("--omp-bin", default="omp")
     parser.add_argument("--claude-bin", default="claude")
     parser.add_argument("--kiss-bin", default="kiss")
@@ -170,6 +171,8 @@ def harnesses(choice: str) -> list[str]:
         return ["orca", "pi", "omp", "claude", "kiss"]
     if choice == "both":
         return ["orca", "pi"]
+    if choice == "orca-pig":
+        return ["orca", "pig"]
     if choice == "orca-kiss":
         return ["orca", "kiss"]
     return [choice]
@@ -232,7 +235,7 @@ def build_command(
             command.append("--auto-approve")
         return [*command, "-p", prompt]
 
-    if name == "pi":
+    if name in {"pi", "pig"}:
         tools = ["read", "grep", "find", "ls"]
         if task["mode"] == "edit":
             tools.extend(("edit", "write"))
@@ -358,10 +361,21 @@ def prepare_environment(
     environment = os.environ.copy()
     state_name = "omp-state" if name == "omp" else "pi-state"
     environment["PI_CODING_AGENT_DIR"] = str(temp_root / state_name)
-    if name in {"pi", "omp"}:
+    if name in {"pi", "pig", "omp"}:
         environment["PI_CACHE_RETENTION"] = (
             "short" if args.prompt_cache else "none"
         )
+    if name == "pig":
+        environment["HOME"] = str(temp_root / "pig-home")
+        environment["PIG_HOME"] = str(temp_root / "pig-state")
+        environment["PIG_CODING_AGENT_DIR"] = str(temp_root / "pig-state" / "agent")
+        environment["PIG_CODING_AGENT_SESSION_DIR"] = str(temp_root / "pig-sessions")
+        environment["PIG_OFFLINE"] = "1"
+        environment["PI_OFFLINE"] = "1"
+        environment["PI_TELEMETRY"] = "0"
+        Path(environment["HOME"]).mkdir(parents=True, exist_ok=True)
+        Path(environment["PIG_CODING_AGENT_DIR"]).mkdir(parents=True, exist_ok=True)
+        return environment
     if name == "orca":
         # The user's config.json can add startup work even under --bare (for
         # example subagent_models entries), so give every attempt a fresh one.
@@ -653,6 +667,7 @@ def main() -> int:
     binary_args = {
         "orca": args.orca_bin,
         "pi": args.pi_bin,
+        "pig": args.pig_bin,
         "omp": args.omp_bin,
         "claude": args.claude_bin,
         "kiss": args.kiss_bin,

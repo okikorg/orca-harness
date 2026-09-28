@@ -94,6 +94,18 @@ python3 benchmarks/harness-comparison/run.py --dry-run --harness orca-kiss
 
 ## Run and analyze
 
+Quick Orcacode/PiG smoke comparison (four attempts, not a statistical ranking):
+
+```bash
+python3 benchmarks/harness-comparison/run.py --harness orca-pig \
+  --orca-bin "$(command -v orcacode)" --pig-bin "$(command -v pig)" \
+  --task timeout-delta --task fix-retry-boundary --repetitions 1
+```
+
+PiG shares the Pi CLI/event adapter but is recorded separately. Its HOME,
+configuration, agent state, and sessions are isolated; startup network refresh
+and telemetry are disabled. Pi's step/output ceiling caveat also applies to PiG.
+
 Build Orcacode separately, make `pi`, `omp`, and `claude` available, export the
 OpenRouter key through the environment, then start the benchmark from the
 repository root:
