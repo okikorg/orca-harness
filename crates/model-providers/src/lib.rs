@@ -67,6 +67,9 @@ fn image_data_url(image: &orca_harness_core::Image) -> String {
 mod request_bench;
 
 #[cfg(test)]
+mod sse_bench;
+
+#[cfg(test)]
 mod test_server;
 
 #[cfg(test)]

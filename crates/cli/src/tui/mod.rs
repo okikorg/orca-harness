@@ -24,6 +24,8 @@ mod inspector;
 mod keys;
 mod mcp_picker;
 mod skills_picker;
+#[cfg(test)]
+mod search_bench;
 
 pub(crate) use self::commands::{plugin_picker_action, remove_skill, slash_command};
 
