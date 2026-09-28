@@ -44,7 +44,8 @@ mod tests;
 pub enum Mode {
     #[default]
     Normal,
-    /// Read-only: only the tools in [`READ_ONLY_TOOLS`] run.
+    /// Read-only: only the tools in [`READ_ONLY_TOOLS`] run, plus `shell`
+    /// behind a human approval prompt where one exists.
     Plan,
     /// Delegation-first: read-only tools, delegation, and native file edits
     /// are allowed. Significant implementation and testing belong to workers.
@@ -133,19 +134,16 @@ impl Mode {
 pub const DELEGATION_TOOLS: &[&str] = &["subagent", "workflow"];
 
 /// The tools that only observe: they read files, search, or fetch, and
-/// leave the machine exactly as they found it. Everything else — `shell`,
-/// `process`, `pykernel`, `bun_repl`, `write_file`, `edit_file`, `apply_patch`,
-/// `multi_edit`, `subagent`, the `fs_admin` bundle, every MCP tool — is denied
-/// in plan mode.
+/// leave the machine exactly as they found it. Everything else — `process`,
+/// `pykernel`, `bun_repl`, `write_file`, `edit_file`, `subagent`, the
+/// `fs_admin` bundle, every MCP tool — is denied in plan mode.
 ///
-/// `shell` is absent on purpose. Most of what an agent wants it for in
-/// plan mode (`git log`, `cargo check`) is read-only, but deciding that
-/// from a command string is guesswork, and a safety mode that guesses is
-/// not a safety mode. `read_file`, `grep`, `glob`, and `list_dir` cover
-/// investigation without it.
+/// `shell` is absent on purpose: whether a command string is read-only is
+/// guesswork, and [`AutoApproval`](crate::auto_approval::AutoApproval)
+/// treats this list as known safe. Plan mode still lets `shell` through
+/// where a human reviews every command; see [`PlanGate::reviewed_shell`].
 pub const READ_ONLY_TOOLS: &[&str] = &[
     "read_file",
-    "list_dir",
     "grep",
     "glob",
     "file_info",
@@ -153,7 +151,6 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "memory_search",
     "web_fetch",
     "web_search",
-    "web_crawl",
     "skill",
     "todo_write",
     "ask",
@@ -205,15 +202,16 @@ impl ModeHandle {
 ///
 /// The one exception is the plan area. A plan mode that cannot write its
 /// plan down leaves the plan in prose the next turn has to re-derive, so
-/// `write_file`, `edit_file`, `multi_edit`, and non-deleting `apply_patch`
-/// calls are allowed against markdown files in `docs/plan/` — and nowhere
-/// else. Which file, and whether to write one at all, is the agent's decision;
+/// `write_file` and `edit_file` calls are allowed against markdown files in
+/// `docs/plan/` — and nowhere else. Which file, and whether to write one at all, is the agent's decision;
 /// the gate only holds the fence.
 /// Because it runs before approval, an "always allow write_file" grant
 /// cannot widen past that directory.
 pub struct PlanGate {
     mode: ModeHandle,
     plan: PlanArea,
+    /// Plan mode lets `shell` through to the approval prompt.
+    shell: bool,
     /// Workers read the session mode through [`Mode::child_mode`], so an
     /// orchestrate restriction does not strangle the workers it spawned.
     worker: bool,
@@ -224,8 +222,18 @@ impl PlanGate {
         Self {
             mode,
             plan,
+            shell: false,
             worker: false,
         }
+    }
+
+    /// Let `shell` through in plan mode, for a host whose approval prompt
+    /// shows the user every command (and never auto-allows one there).
+    /// Headless runs and workers have no such prompt, so they keep `shell`
+    /// denied.
+    pub fn reviewed_shell(mut self) -> Self {
+        self.shell = true;
+        self
     }
 
     /// The gate a spawned worker carries. Orchestrate's restriction exists
@@ -239,6 +247,7 @@ impl PlanGate {
         Self {
             mode,
             plan,
+            shell: false,
             worker: true,
         }
     }
@@ -268,17 +277,16 @@ impl Extension for PlanGate {
         match self.stance() {
             Mode::Normal | Mode::Auto | Mode::Yolo => return Ok(ToolDecision::Continue),
             Mode::Plan => {
-                if READ_ONLY_TOOLS.contains(&call.name.as_str()) {
+                if READ_ONLY_TOOLS.contains(&call.name.as_str())
+                    || (self.shell && call.name == "shell")
+                {
                     return Ok(ToolDecision::Continue);
                 }
             }
             Mode::Orchestrate => {
                 if READ_ONLY_TOOLS.contains(&call.name.as_str())
                     || DELEGATION_TOOLS.contains(&call.name.as_str())
-                    || matches!(
-                        call.name.as_str(),
-                        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
-                    )
+                    || matches!(call.name.as_str(), "write_file" | "edit_file")
                 {
                     return Ok(ToolDecision::Continue);
                 }
@@ -301,7 +309,7 @@ impl Extension for PlanGate {
                 format!(
                     "Plan mode is on, so `{}` was not run — nothing may change the machine, \
                      and `{}/` is the only writable directory. Investigate with read_file, \
-                     list_dir, grep, and glob, and answer with what you found. If the work \
+                     grep, and glob, and answer with what you found. If the work \
                      warrants a plan, write it to a markdown file in `{}/`. Do not retry \
                      this call; the user leaves plan mode with /mode.",
                     call.name,

@@ -127,25 +127,6 @@ async fn edit_requires_unique_match_unless_replace_all() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-#[tokio::test]
-async fn multi_edit_ambiguity_names_the_occurrence_lines() {
-    let (ws, dir) = temp_ws();
-    std::fs::write(dir.join("f.rs"), "fn a() {\n    x\n}\nfn b() {\n    x\n}\n").unwrap();
-    let err = MultiEditTool::new(ws)
-        .call(
-            json!({"edits": [{"path": "f.rs", "old": "    x\n", "new": "    y\n"}]}),
-            &ctx(),
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("`old` occurs 2 times (lines 2, 5)"),
-        "{err}"
-    );
-    std::fs::remove_dir_all(&dir).ok();
-}
-
 #[path = "file_guard.rs"]
 mod file_guard;
 
@@ -162,7 +143,7 @@ async fn path_escape_is_rejected() {
 }
 
 #[tokio::test]
-async fn grep_finds_matches_and_lists_dir() {
+async fn grep_finds_matches() {
     let (ws, dir) = temp_ws();
     let write = WriteFileTool::new(ws.clone());
     write
@@ -183,16 +164,6 @@ async fn grep_finds_matches_and_lists_dir() {
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0]["line"], json!(2));
     assert_eq!(matches[0]["path"], json!("a.txt"));
-
-    let list = ListDirTool::new(ws.clone());
-    let entries = list.call(json!({"path": "."}), &ctx()).await.unwrap();
-    let names: Vec<_> = entries["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["name"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(names, vec!["a.txt", "b.txt"]);
     std::fs::remove_dir_all(&dir).ok();
 }
 

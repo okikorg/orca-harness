@@ -84,7 +84,7 @@ mod tests {
     use orca_harness_core::Agent;
     use orca_harness_extensions::{EventStream, HarnessEvent};
     use orca_harness_tools::{
-        FileGuard, MultiEditTool, MutationPreflight, Workspace, WriteFileTool,
+        EditFileTool, FileGuard, MutationPreflight, Workspace, WriteFileTool,
     };
 
     #[test]
@@ -110,9 +110,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_multi_edit_match_error_executes_once() {
-        let root =
-            std::env::temp_dir().join(format!("orca-multi-edit-no-retry-{}", std::process::id()));
+    async fn real_edit_match_error_executes_once() {
+        let root = std::env::temp_dir().join(format!("orca-edit-no-retry-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("demo.txt");
         std::fs::write(&path, "same\nsame\nsame\nsame\n").unwrap();
@@ -128,7 +127,7 @@ mod tests {
         let model = ScriptedModel::tool_round(
             vec![call(
                 "ambiguous",
-                "multi_edit",
+                "edit_file",
                 serde_json::json!({
                     "edits": [{"path": "demo.txt", "old": "same", "new": "changed"}]
                 }),
@@ -137,7 +136,7 @@ mod tests {
         );
 
         Agent::new(model)
-            .tool(MultiEditTool::new(Workspace::new(root.clone())))
+            .tool(EditFileTool::new(Workspace::new(root.clone())))
             .extension(events)
             .extension(MutationPreflight)
             .extension(tool_retry())

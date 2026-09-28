@@ -125,14 +125,14 @@ mod nested_rail_tests {
             "c1".into(),
             HarnessEvent::ToolCall {
                 tool_call_id: "i1".into(),
-                tool_name: "list_dir".into(),
+                tool_name: "read_file".into(),
                 input: json!({"path": "."}),
             },
         );
         let text = rail_text(&app);
         assert!(text.contains("Subagent"), "rail: {text}");
-        assert!(text.contains("List directory · "), "rail: {text}");
-        let inner_line = text.lines().find(|l| l.contains("List directory · ")).unwrap();
+        assert!(text.contains("Read · "), "rail: {text}");
+        let inner_line = text.lines().find(|l| l.contains("Read · ")).unwrap();
         assert!(
             inner_line.starts_with("      "),
             "inner line must be indented: {inner_line:?}"
@@ -156,13 +156,13 @@ mod nested_rail_tests {
             "c1".into(),
             HarnessEvent::ToolResult {
                 tool_call_id: "i1".into(),
-                tool_name: "list_dir".into(),
-                output: json!({"entries": []}),
+                tool_name: "read_file".into(),
+                output: json!({"bytes": 0}),
                 is_error: false,
             },
         );
         let text = rail_text(&app);
-        let inner_line = text.lines().find(|l| l.contains("List directory · ")).unwrap();
+        let inner_line = text.lines().find(|l| l.contains("Read · ")).unwrap();
         assert!(
             inner_line.contains(crate::view::glyphs::glyphs().done),
             "completed glyph: {inner_line:?}"
@@ -337,7 +337,7 @@ mod nested_rail_tests {
             "c1".into(),
             HarnessEvent::ToolCall {
                 tool_call_id: "i1".into(),
-                tool_name: "list_dir".into(),
+                tool_name: "read_file".into(),
                 input: json!({"path": "."}),
             },
         );
@@ -349,8 +349,8 @@ mod nested_rail_tests {
             "c1".into(),
             HarnessEvent::ToolResult {
                 tool_call_id: "i1".into(),
-                tool_name: "list_dir".into(),
-                output: json!({"entries": []}),
+                tool_name: "read_file".into(),
+                output: json!({"bytes": 0}),
                 is_error: false,
             },
         );
@@ -370,7 +370,7 @@ mod nested_rail_tests {
             "spawn state must fold away"
         );
         let record = app.tool_log.last().unwrap();
-        assert!(record.inner.iter().any(|l| l.contains("list_dir")));
+        assert!(record.inner.iter().any(|l| l.contains("read_file")));
 
         expand_tool(&mut app, 1, 120);
         let expanded: String = app
@@ -380,6 +380,6 @@ mod nested_rail_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(expanded.contains("inner activity"), "{expanded}");
-        assert!(expanded.contains("list_dir"), "{expanded}");
+        assert!(expanded.contains("read_file"), "{expanded}");
     }
 }

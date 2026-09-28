@@ -144,7 +144,6 @@ async fn heterogeneous_burst_100_all_tools() {
     let (ws, dir) = temp_ws();
     write_pool(&dir);
     write_marked_files(&dir, "edit", 8);
-    write_wide_dir(&dir, 1000);
     write_grep_tree(&dir);
     write_glob_tree(&dir);
     write_large_files(&dir, "mv", "m_", 4);
@@ -220,10 +219,6 @@ async fn heterogeneous_burst_100_all_tools() {
             }),
         ));
     }
-    // 6 list_dir
-    for _ in 0..6 {
-        batch.push(call(&id(), "list_dir", json!({"path": "wide"})));
-    }
     // 5 grep
     for _ in 0..5 {
         batch.push(call(
@@ -232,8 +227,8 @@ async fn heterogeneous_burst_100_all_tools() {
             json!({"query": "needle", "path": "grep_tree"}),
         ));
     }
-    // 6 glob
-    for _ in 0..6 {
+    // 12 glob
+    for _ in 0..12 {
         batch.push(call(
             &id(),
             "glob",
@@ -365,7 +360,7 @@ async fn heterogeneous_burst_100_all_tools() {
 
     let rate = BURST as f64 / wall.as_secs_f64().max(f64::EPSILON);
     eprintln!(
-        "[bench] heterogeneous 16-tool mix          burst{BURST}={wall:>10.2?}  rate={rate:>7.0}/s"
+        "[bench] heterogeneous 15-tool mix          burst{BURST}={wall:>10.2?}  rate={rate:>7.0}/s"
     );
     cleanup(dir);
 }

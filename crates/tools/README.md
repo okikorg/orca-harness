@@ -4,13 +4,13 @@
 
 ## Tool groups
 
-- Workspace-safe file operations: `read_file`, `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `list_dir`, `glob`, and `grep`.
+- Workspace-safe file operations: `read_file`, `write_file`, `edit_file`, `glob`, and `grep`.
 - Execution: `shell`, `process`, and persistent process-group support through an `Executor` (including local, SSH, and Docker execution).
 - Compute: persistent `PyKernelTool` and `BunReplTool` sessions.
 - Workflow: `AskTool`, `TodoWriteTool`, and `SubagentTool` for user questions, structured plans, and bounded in-process delegation.
 - Restricted filesystem administration: `fs_admin_tools` supplies copy, rename, delete, create-folder, and file-info tools for shell-less hosts.
 
-`Workspace` establishes the filesystem boundary. `core_tools`, `core_tools_with_executor`, and `core_tools_with_guard` assemble the common bundles. `multi_edit` validates every ordered replacement or append before the first write, and `MutationPreflight` can reject malformed mutations before approval.
+`Workspace` establishes the filesystem boundary. `core_tools`, `core_tools_with_executor`, and `core_tools_with_guard` assemble the common bundles. `edit_file` takes one exact replacement or an ordered `edits` batch and validates every edit before the first write, and `MutationPreflight` can reject malformed mutations before approval.
 
 ```bash
 cargo test -p orca-harness-tools

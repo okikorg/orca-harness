@@ -38,23 +38,13 @@ fn routine_local_work_skips_review_but_egress_and_deletion_do_not() {
         &json!({}),
         &workspace_root
     ));
-    for name in ["write_file", "edit_file", "multi_edit"] {
+    for name in ["write_file", "edit_file"] {
         assert!(AutoApproval::known_safe(
             &call(name),
             &json!({}),
             &workspace_root
         ));
     }
-    assert!(AutoApproval::known_safe(
-        &call("apply_patch"),
-        &json!({"patch": "*** Begin Patch\n*** Update File: a.rs\n@@\n-old\n+new\n*** End Patch"}),
-        &workspace_root
-    ));
-    assert!(!AutoApproval::known_safe(
-        &call("apply_patch"),
-        &json!({"patch": "*** Begin Patch\n*** Delete File: a.rs\n*** End Patch"}),
-        &workspace_root
-    ));
 }
 
 #[test]

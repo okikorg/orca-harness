@@ -5,11 +5,11 @@
 //! - homogeneous: one tool per test, a burst of 100 calls in a single
 //!   batch, each call a real action against ~1 MiB fixture files. Every
 //!   concurrency class is covered: Parallel fan-out (shell, process,
-//!   read_file, list_dir, grep, glob, create_folder, file_info,
+//!   read_file, grep, glob, create_folder, file_info,
 //!   subagent), Keyed-by-path (write_file, edit_file, copy_file,
 //!   delete_file), multi-key (rename_file), and the independent Keyed
 //!   pykernel and bun_repl chains.
-//! - heterogeneous: one 100-call batch mixing all 16 shipped tools,
+//! - heterogeneous: one 100-call batch mixing all 15 shipped tools,
 //!   with ordered (Keyed and multi-key) members embedded in the Parallel
 //!   majority, plus a same-path Keyed write chain whose final content
 //!   proves call-order serialization.
@@ -35,9 +35,8 @@ use orca_harness_core::{
     ToolResult,
 };
 use orca_harness_tools::{
-    fs_admin_tools, ApplyPatchTool, BunReplTool, EditFileTool, GlobTool, GrepTool, ListDirTool,
-    MultiEditTool, ProcessTool, PyKernelTool, ReadFileTool, ShellTool, SubagentTool, Workspace,
-    WriteFileTool,
+    fs_admin_tools, BunReplTool, EditFileTool, GlobTool, GrepTool, ProcessTool, PyKernelTool,
+    ReadFileTool, ShellTool, SubagentTool, Workspace, WriteFileTool,
 };
 
 const BURST: usize = 100;
@@ -100,15 +99,6 @@ fn write_marked_files(dir: &Path, sub: &str, count: usize) {
     }
 }
 
-/// A flat directory with `count` entries for list_dir.
-fn write_wide_dir(dir: &Path, count: usize) {
-    let d = dir.join("wide");
-    std::fs::create_dir_all(&d).unwrap();
-    for i in 0..count {
-        std::fs::write(d.join(format!("f_{i}.txt")), "x").unwrap();
-    }
-}
-
 /// 8 large files, each with 5 "needle" lines appended (40 matches total).
 fn write_grep_tree(dir: &Path) {
     let noise = large_noise();
@@ -151,9 +141,6 @@ fn registry(ws: &Workspace) -> ToolRegistry {
     ));
     tools.register(Arc::new(WriteFileTool::new(ws.clone())));
     tools.register(Arc::new(EditFileTool::new(ws.clone())));
-    tools.register(Arc::new(ApplyPatchTool::new(ws.clone())));
-    tools.register(Arc::new(MultiEditTool::new(ws.clone())));
-    tools.register(Arc::new(ListDirTool::new(ws.clone())));
     tools.register(Arc::new(GrepTool::new(ws.clone())));
     tools.register(Arc::new(GlobTool::new(ws.clone()).max_results(5000)));
     for tool in fs_admin_tools(ws) {

@@ -56,7 +56,7 @@ through the Rust SDK.
 - **Tiny and native.** A single static binary with no Node, Python or Bun
   runtime to install. It idles at about 26 MB. See the
   [comparison](#footprint).
-- **You approve what runs.** Gated tools ask first. Plan mode is read-only.
+- **You approve what runs.** Gated tools ask first. Plan mode is read-only; any shell command there asks every time.
   Orchestrate mode delegates. Auto mode reviews only the risky calls. Yolo
   mode is loud about being yolo.
 - **Parallel by design.** Subagents run in the background on their own

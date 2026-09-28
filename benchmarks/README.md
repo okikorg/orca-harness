@@ -11,7 +11,7 @@ informational or deterministic evaluation suites:
 | MCP search | `benchmarks/mcp/`          | metadata-search cutoff distribution and labeled query accuracy  |
 | subagent   | `benchmarks/subagent/`     | fake-model in-flight concurrency, latency, and failure observations |
 | workflow   | `benchmarks/workflow/`     | fake-model graph scale, dispatch latency, and deterministic engine-correctness defects |
-| core tool mutations | `./benchmarks/core-tools/run.sh` | real-file latency, throughput, accuracy, and distinct-path concurrency for `apply_patch` and `multi_edit` |
+| core tool mutations | `./benchmarks/core-tools/run.sh` | real-file latency, throughput, accuracy, and distinct-path concurrency for `edit_file` |
 | harness comparison | [`benchmarks/harness-comparison/`](harness-comparison/README.md) | informational live-model cost, cache, tool, turn, correctness, and wall-time comparison |
 
 Plus `./benchmarks/compare/run.sh`, which puts orcacode next to `fx` on the

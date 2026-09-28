@@ -61,8 +61,6 @@ async fn plan_mode_allows_only_the_read_only_set() {
         "bun_repl",
         "write_file",
         "edit_file",
-        "apply_patch",
-        "multi_edit",
         "subagent",
         "memory_manage",
         "delete_file",
@@ -72,6 +70,25 @@ async fn plan_mode_allows_only_the_read_only_set() {
             "{name}"
         );
     }
+}
+
+/// Only a host that shows the user every command admits `shell` in plan
+/// mode; everything else the allowlist refuses stays refused.
+#[tokio::test]
+async fn reviewed_shell_admits_only_shell_in_plan_mode() {
+    let gate = PlanGate::new(ModeHandle::new(Mode::Plan), PlanArea::new()).reviewed_shell();
+    assert!(matches!(
+        gate.before_tool(&call("shell")).await.unwrap(),
+        ToolDecision::Continue
+    ));
+    for name in ["process", "pykernel", "write_file", "subagent"] {
+        assert!(
+            denied(&gate.before_tool(&call(name)).await.unwrap()),
+            "{name}"
+        );
+    }
+    let worker = PlanGate::for_worker(ModeHandle::new(Mode::Plan), PlanArea::new());
+    assert!(denied(&worker.before_tool(&call("shell")).await.unwrap()));
 }
 
 /// The allowlist is the whole point: a tool this file has never heard
@@ -97,7 +114,6 @@ async fn orchestrate_mode_allows_reads_edits_and_delegation() {
     let gate = PlanGate::new(ModeHandle::new(Mode::Orchestrate), PlanArea::new());
     for name in [
         "read_file",
-        "list_dir",
         "grep",
         "glob",
         "web_fetch",
@@ -106,8 +122,6 @@ async fn orchestrate_mode_allows_reads_edits_and_delegation() {
         "ask",
         "write_file",
         "edit_file",
-        "apply_patch",
-        "multi_edit",
         "subagent",
         "workflow",
     ] {
@@ -144,12 +158,8 @@ async fn orchestrate_accepts_source_edits_and_delegation_but_blocks_execution() 
             json!({"path": "src/main.rs", "old": "Helo", "new": "Hello"}),
         ),
         (
-            "multi_edit",
+            "edit_file",
             json!({"edits": [{"path": "src/main.rs", "old": "Helo", "new": "Hello"}]}),
-        ),
-        (
-            "apply_patch",
-            json!({"patch": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-// Helo\n+// Hello\n*** End Patch"}),
         ),
         (
             "subagent",
@@ -274,8 +284,6 @@ async fn yolo_mode_gates_nothing() {
         "shell",
         "write_file",
         "edit_file",
-        "apply_patch",
-        "multi_edit",
         "process",
         "pykernel",
         "bun_repl",
@@ -368,45 +376,41 @@ async fn any_plan_file_is_writable_and_nothing_outside_is() {
         gate.before_tool(&edit).await.unwrap(),
         ToolDecision::Continue
     ));
-    let multi_edit = ToolCall {
+    let batch = ToolCall {
         id: "c4".into(),
-        name: "multi_edit".into(),
+        name: "edit_file".into(),
         arguments: json!({"edits": [
             {"path": "docs/plan/x.md", "old": "a", "new": "b"},
             {"path": "docs/plan/y.md", "old": "c", "new": "d"}
         ]}),
     };
     assert!(matches!(
-        gate.before_tool(&multi_edit).await.unwrap(),
-        ToolDecision::Continue
-    ));
-    let patch = ToolCall {
-        id: "c5".into(),
-        name: "apply_patch".into(),
-        arguments: json!({"patch": "*** Begin Patch\n*** Update File: docs/plan/x.md\n@@\n-a\n+b\n*** Add File: docs/plan/z.md\n+# Plan\n*** End Patch"}),
-    };
-    assert!(matches!(
-        gate.before_tool(&patch).await.unwrap(),
+        gate.before_tool(&batch).await.unwrap(),
         ToolDecision::Continue
     ));
 
-    // One path outside the fence denies the entire batch, and plan mode
-    // never permits deletion through a patch.
+    // One path outside the fence denies the entire batch, and a plan
+    // `path` beside an `edits` batch cannot vouch for the batch.
     let mixed = ToolCall {
         id: "c6".into(),
-        name: "multi_edit".into(),
+        name: "edit_file".into(),
         arguments: json!({"edits": [
             {"path": "docs/plan/x.md", "old": "a", "new": "b"},
             {"path": "src/main.rs", "old": "c", "new": "d"}
         ]}),
     };
     assert!(denied(&gate.before_tool(&mixed).await.unwrap()));
-    let deleting_patch = ToolCall {
+    let smuggled = ToolCall {
         id: "c7".into(),
-        name: "apply_patch".into(),
-        arguments: json!({"patch": "*** Begin Patch\n*** Delete File: docs/plan/x.md\n*** End Patch"}),
+        name: "edit_file".into(),
+        arguments: json!({
+            "path": "docs/plan/x.md",
+            "old": "a",
+            "new": "b",
+            "edits": [{"path": "src/main.rs", "old": "c", "new": "d"}]
+        }),
     };
-    assert!(denied(&gate.before_tool(&deleting_patch).await.unwrap()));
+    assert!(denied(&gate.before_tool(&smuggled).await.unwrap()));
 
     // Everything outside the fence stays refused.
     for path in [
@@ -474,13 +478,9 @@ async fn only_successful_plan_writes_are_recorded() {
     assert_eq!(area.written(), ["docs/plan/kept.md".to_string()]);
 
     // An edit of the plan counts as the same artifact, once.
-    gate.tool_result(&result("edit_file", "docs/plan/kept.md", false))
-        .await;
-    assert_eq!(area.written().len(), 1);
-
     gate.tool_result(&orca_harness_core::ToolResult {
         call_id: "c2".into(),
-        tool_name: "apply_patch".into(),
+        tool_name: "edit_file".into(),
         output: json!({
             "paths": ["docs/plan/kept.md", "docs/plan/second.md"],
             "filesChanged": 2

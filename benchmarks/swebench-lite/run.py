@@ -24,7 +24,7 @@ DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
 DEFAULT_MAX_STEPS = 64
 DEFAULT_RESULTS = Path(__file__).resolve().parents[1] / "results" / "swebench-lite"
 DATASET_ROWS_URL = "https://datasets-server.huggingface.co/rows"
-TOOLS = "read_file,list_dir,grep,glob,shell,edit_file,write_file"
+TOOLS = "read_file,grep,glob,shell,edit_file,write_file"
 
 
 def parse_args() -> argparse.Namespace:

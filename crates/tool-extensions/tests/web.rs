@@ -8,9 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use orca_harness_core::{CancellationToken, Tool, ToolContext};
-use orca_harness_tool_extensions::web::{
-    Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
-};
+use orca_harness_tool_extensions::web::{Firecrawl, UrlPolicy, WebFetchTool, WebSearchTool};
 
 fn ctx() -> ToolContext {
     ToolContext {
@@ -186,75 +184,6 @@ async fn search_parses_provider_results() {
     assert_eq!(results.len(), 2);
     assert_eq!(results[0]["title"], json!("Result One"));
     assert_eq!(results[1]["snippet"], json!("second hit"));
-}
-
-fn crawl_page(url: &str, title: &str, markdown: &str) -> serde_json::Value {
-    json!({
-        "markdown": markdown,
-        "metadata": { "title": title, "sourceURL": url, "statusCode": 200 }
-    })
-}
-
-#[tokio::test]
-async fn crawl_polls_the_job_until_completed() {
-    let start = json!({"success": true, "id": "job-1", "url": "http://site.example"}).to_string();
-    let scraping =
-        json!({"status": "scraping", "total": 2, "completed": 1, "data": []}).to_string();
-    let completed = json!({
-        "status": "completed", "total": 2, "completed": 2,
-        "data": [
-            crawl_page("http://site.example/", "Home", "# Home\n\nwelcome"),
-            crawl_page("http://site.example/docs", "Docs", "# Docs\n\ndetails"),
-        ]
-    })
-    .to_string();
-    let addr = spawn_server(vec![
-        http_response("200 OK", "application/json", "", &start),
-        http_response("200 OK", "application/json", "", &scraping),
-        http_response("200 OK", "application/json", "", &completed),
-    ])
-    .await;
-
-    let fc = Arc::new(Firecrawl::new("test-key").base_url(format!("http://{addr}")));
-    let tool = WebCrawlTool::new(fc).poll_interval(std::time::Duration::from_millis(20));
-    let out = tool
-        .call(json!({"url": "http://site.example", "limit": 2}), &ctx())
-        .await
-        .unwrap();
-    assert_eq!(out["status"], json!("completed"));
-    assert_eq!(out["timedOut"], json!(false));
-    assert_eq!(out["pagesReturned"], json!(2));
-    let pages = out["pages"].as_array().unwrap();
-    assert_eq!(pages[0]["title"], json!("Home"));
-    assert!(pages[1]["markdown"].as_str().unwrap().contains("# Docs"));
-    assert_eq!(pages[1]["truncated"], json!(false));
-}
-
-#[tokio::test]
-async fn crawl_returns_partial_pages_when_the_wait_budget_runs_out() {
-    let start = json!({"success": true, "id": "job-2"}).to_string();
-    let scraping = json!({
-        "status": "scraping", "total": 9, "completed": 1,
-        "data": [crawl_page("http://slow.example/", "First", "only page so far")]
-    })
-    .to_string();
-    let addr = spawn_server(vec![
-        http_response("200 OK", "application/json", "", &start),
-        http_response("200 OK", "application/json", "", &scraping),
-    ])
-    .await;
-
-    let fc = Arc::new(Firecrawl::new("test-key").base_url(format!("http://{addr}")));
-    let tool = WebCrawlTool::new(fc).max_wait(std::time::Duration::ZERO);
-    let out = tool
-        .call(json!({"url": "http://slow.example"}), &ctx())
-        .await
-        .unwrap();
-    assert_eq!(out["status"], json!("scraping"));
-    assert_eq!(out["timedOut"], json!(true));
-    assert_eq!(out["pagesReturned"], json!(1));
-    assert_eq!(out["totalPages"], json!(9));
-    assert_eq!(out["pages"][0]["title"], json!("First"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

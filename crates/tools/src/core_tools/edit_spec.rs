@@ -1,4 +1,4 @@
-//! Pure, zero-copy validation and parsing for `multi_edit` operations.
+//! Pure, zero-copy validation and parsing for `edit_file` operations.
 
 use orca_harness_core::ToolError;
 use serde_json::Value;
@@ -39,11 +39,20 @@ struct BorrowedSpec<'a> {
     operation: BorrowedOperation<'a>,
 }
 
-fn edits(input: &Value) -> Result<&[Value], ToolError> {
-    let edits = input
-        .get("edits")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ToolError::msg("`edits` (array) is required"))?;
+/// The call's edits: the `edits` batch, or the call itself as a single
+/// `{path, old, new}` edit.
+pub(super) fn edits(input: &Value) -> Result<&[Value], ToolError> {
+    let edits = match input.get("edits") {
+        Some(edits) => edits
+            .as_array()
+            .ok_or_else(|| ToolError::msg("`edits` must be an array"))?,
+        None if input.get("path").is_some() => return Ok(std::slice::from_ref(input)),
+        None => {
+            return Err(ToolError::msg(
+                "pass `path`, `old`, and `new`, or an `edits` array",
+            ))
+        }
+    };
     if edits.is_empty() {
         return Err(ToolError::msg("`edits` must contain at least one edit"));
     }
@@ -55,19 +64,17 @@ fn edits(input: &Value) -> Result<&[Value], ToolError> {
     Ok(edits)
 }
 
-fn parse_spec(index: usize, edit: &Value) -> Result<BorrowedSpec<'_>, ToolError> {
+fn parse_spec<'a>(at: &str, edit: &'a Value) -> Result<BorrowedSpec<'a>, ToolError> {
     let string = |key| {
         edit.get(key)
             .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::msg(format!("`edits[{index}].{key}` (string) is required")))
+            .ok_or_else(|| ToolError::msg(format!("`{at}{key}` (string) is required")))
     };
     let operation = edit
         .get("operation")
         .map(|value| {
             value.as_str().ok_or_else(|| {
-                ToolError::msg(format!(
-                    "`edits[{index}].operation` must be `replace` or `append`"
-                ))
+                ToolError::msg(format!("`{at}operation` must be `replace` or `append`"))
             })
         })
         .transpose()?
@@ -77,7 +84,7 @@ fn parse_spec(index: usize, edit: &Value) -> Result<BorrowedSpec<'_>, ToolError>
             let old = string("old")?;
             if old.is_empty() {
                 return Err(ToolError::msg(format!(
-                    "`edits[{index}].old` must not be empty for replacement; use `operation: \"append\"` with `content`, or use `apply_patch`"
+                    "`{at}old` must not be empty for replacement; use `operation: \"append\"` with `content`, or write_file for a new file"
                 )));
             }
             BorrowedOperation::Replace {
@@ -93,14 +100,14 @@ fn parse_spec(index: usize, edit: &Value) -> Result<BorrowedSpec<'_>, ToolError>
             let content = string("content")?;
             if content.is_empty() {
                 return Err(ToolError::msg(format!(
-                    "`edits[{index}].content` must not be empty for append"
+                    "`{at}content` must not be empty for append"
                 )));
             }
             BorrowedOperation::Append { content }
         }
         other => {
             return Err(ToolError::msg(format!(
-                "`edits[{index}].operation` must be `replace` or `append`, got `{other}`"
+                "`{at}operation` must be `replace` or `append`, got `{other}`"
             )))
         }
     };
@@ -110,19 +117,31 @@ fn parse_spec(index: usize, edit: &Value) -> Result<BorrowedSpec<'_>, ToolError>
     })
 }
 
+/// Each edit with the field prefix its errors name: `edits[i].` in a
+/// batch, nothing for a single top-level edit.
+fn located(input: &Value) -> Result<impl Iterator<Item = (String, &Value)>, ToolError> {
+    let batch = input.get("edits").is_some();
+    Ok(edits(input)?.iter().enumerate().map(move |(index, edit)| {
+        let at = if batch {
+            format!("edits[{index}].")
+        } else {
+            String::new()
+        };
+        (at, edit)
+    }))
+}
+
 pub(super) fn validate(input: &Value) -> Result<(), ToolError> {
-    for (index, edit) in edits(input)?.iter().enumerate() {
-        parse_spec(index, edit)?;
+    for (at, edit) in located(input)? {
+        parse_spec(&at, edit)?;
     }
     Ok(())
 }
 
 pub(super) fn parse(input: &Value) -> Result<Vec<EditSpec>, ToolError> {
-    edits(input)?
-        .iter()
-        .enumerate()
-        .map(|(index, edit)| {
-            let spec = parse_spec(index, edit)?;
+    located(input)?
+        .map(|(at, edit)| {
+            let spec = parse_spec(&at, edit)?;
             let operation = match spec.operation {
                 BorrowedOperation::Replace {
                     old,

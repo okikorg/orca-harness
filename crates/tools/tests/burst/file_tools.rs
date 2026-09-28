@@ -200,25 +200,6 @@ async fn homogeneous_edit_file_burst() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn homogeneous_list_dir_burst() {
-    let (ws, dir) = temp_ws();
-    write_wide_dir(&dir, 1000);
-    let tools = registry(&ws);
-
-    let single = timed_single(&tools, call("warm", "list_dir", json!({"path": "wide"}))).await;
-    let batch: Vec<ToolCall> = (0..BURST)
-        .map(|i| call(&format!("c{i}"), "list_dir", json!({"path": "wide"})))
-        .collect();
-    let (results, wall) = run(&tools, batch, BURST).await;
-    assert_all_ok(&results);
-    for r in &results {
-        assert_eq!(r.output["entries"].as_array().unwrap().len(), 1000);
-    }
-    report("list_dir (1000 entries)", BURST, single, wall);
-    cleanup(dir);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn homogeneous_grep_burst() {
     let (ws, dir) = temp_ws();
     write_grep_tree(&dir);

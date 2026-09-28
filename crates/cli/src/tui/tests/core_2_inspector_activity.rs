@@ -178,8 +178,8 @@ fn tool_timing_separates_review_from_execution() {
     let started = Instant::now();
     let tool = ToolActivity {
         call_id: "edit-1".into(),
-        call_line: "multi_edit 2 edits · 2 files".into(),
-        tool_name: "multi_edit".into(),
+        call_line: "edit_file 2 edits · 2 files".into(),
+        tool_name: "edit_file".into(),
         input: serde_json::json!({}),
         started,
         execution_started: Some(started + Duration::from_millis(2_300)),

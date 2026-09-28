@@ -18,7 +18,7 @@ class ReportTest(unittest.TestCase):
 
     def test_parses_json_lines_and_aggregates_every_scenario(self):
         lines = []
-        for tool in ("apply_patch", "multi_edit"):
+        for tool in REPORT.TOOLS:
             for scenario in REPORT.SCENARIOS:
                 item = {
                     "tool": tool,
@@ -42,8 +42,8 @@ class ReportTest(unittest.TestCase):
         text = "\n".join(lines)
         parsed = REPORT.parse(text)
         measurements, summary = REPORT.aggregate(parsed, 1)
-        self.assertEqual(len(measurements), 10)
-        self.assertEqual(len(summary), 38)
+        self.assertEqual(len(measurements), 5)
+        self.assertEqual(len(summary), 19)
         self.assertAlmostEqual(measurements[0]["single_average_p50_seconds"], 0.002)
         self.assertAlmostEqual(
             measurements[0]["throughput_p50_operations_per_second"], 32 / 0.016
@@ -59,7 +59,7 @@ class ReportTest(unittest.TestCase):
         spec.loader.exec_module(check_budgets)
         expected = {
             f"core-tools/{tool}/{scenario} wall p50"
-            for tool in ("apply_patch", "multi_edit")
+            for tool in REPORT.TOOLS
             for scenario in REPORT.SCENARIOS
         }
         self.assertEqual(expected, set(check_budgets.CORE_TOOLS_BUDGETS))
@@ -68,7 +68,7 @@ class ReportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected 2 samples"):
             REPORT.aggregate(
                 REPORT.parse(
-                    '[core-tools-bench] {"tool":"apply_patch","scenario":"distinct",'
+                    '[core-tools-bench] {"tool":"edit_file","scenario":"distinct",'
                     '"calls":1,"files":1,"operations":1,"bytes_per_file":1,'
                     '"wall_seconds":0.001,"serial_seconds":0.001,'
                     '"single_average_seconds":0.001,"speedup":1.0}'
@@ -85,7 +85,7 @@ class ReportTest(unittest.TestCase):
                     "concurrent_wall_p50_seconds": 4.0,
                     "throughput_p50_calls_per_second": 10.0,
                 }
-                for tool in ("apply_patch", "multi_edit")
+                for tool in REPORT.TOOLS
             ]
         }
         current = [
@@ -96,16 +96,21 @@ class ReportTest(unittest.TestCase):
                 "wall_p50_seconds": 2.0,
                 "throughput_p50_operations_per_second": 20.0,
             }
-            for tool in ("apply_patch", "multi_edit")
+            for tool in REPORT.TOOLS
         ]
         comparison = REPORT.compare_to_baseline(baseline, current)
         self.assertEqual(
             comparison[0]["single_average_p50_seconds"]["change_percent"], -50.0
         )
         self.assertEqual(
-            comparison[1]["throughput_p50_calls_per_second"]["change_percent"],
+            comparison[0]["throughput_p50_calls_per_second"]["change_percent"],
             100.0,
         )
+
+    def test_baseline_without_the_tool_is_skipped(self):
+        baseline = {"measurements": [{"tool": "retired_tool"}]}
+        current = [{"tool": "edit_file", "scenario": "distinct"}]
+        self.assertEqual(REPORT.compare_to_baseline(baseline, current), [])
 
 
 if __name__ == "__main__":

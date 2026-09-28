@@ -7,7 +7,7 @@
 - `mcp` connects to Model Context Protocol servers, including stdio transports, and catalogs their tools.
 - `skills` discovers, validates, installs, and invokes packaged or local skill instructions.
 - `agent_plugins` handles plugin manifests, paths, MCP servers, skills, and plugin lifecycle hooks.
-- `web` provides policy-aware fetching, search, crawling, and HTML-to-Markdown conversion.
+- `web` provides policy-aware fetching, search, and HTML-to-Markdown conversion.
 - `plugin_hooks` adapts plugin lifecycle callbacks to core extensions.
 
 Activation is explicit: hosts choose the integrations and pass any filesystem, network, or process policy required by their environment. Keeping these modules optional lets a restricted host use only core tools.

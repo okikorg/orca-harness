@@ -108,19 +108,14 @@ CRITERION_BUDGETS = {
 # per workload, roughly 10x an Apple Silicon Mac. Each workload moves 32
 # MiB through the real filesystem, so the ceiling is for a slower disk;
 # what it catches is a per-edit fsync, a lost fan-out, or a rewrite of
-# every file per hunk. p99 and the serial single-call averages are
+# every file per edit. p99 and the serial single-call averages are
 # reported for context and not gated: 20 samples make a p99 the maximum.
 CORE_TOOLS_BUDGETS = {
-    "core-tools/apply_patch/distinct wall p50": 0.075,
-    "core-tools/apply_patch/guarded_distinct wall p50": 0.075,
-    "core-tools/apply_patch/batch_files wall p50": 0.400,
-    "core-tools/apply_patch/repeated_file wall p50": 0.015,
-    "core-tools/apply_patch/append_files wall p50": 0.400,
-    "core-tools/multi_edit/distinct wall p50": 0.050,
-    "core-tools/multi_edit/guarded_distinct wall p50": 0.060,
-    "core-tools/multi_edit/batch_files wall p50": 0.150,
-    "core-tools/multi_edit/repeated_file wall p50": 0.035,
-    "core-tools/multi_edit/append_files wall p50": 0.125,
+    "core-tools/edit_file/distinct wall p50": 0.050,
+    "core-tools/edit_file/guarded_distinct wall p50": 0.060,
+    "core-tools/edit_file/batch_files wall p50": 0.150,
+    "core-tools/edit_file/repeated_file wall p50": 0.035,
+    "core-tools/edit_file/append_files wall p50": 0.125,
 }
 
 INFORMATIONAL = {"process baseline"}

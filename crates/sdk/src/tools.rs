@@ -8,8 +8,8 @@ use std::sync::Arc;
 use orca_harness_core::Tool;
 use orca_harness_tools::{
     core_tools_with_shell_and_process, fs_admin_tools, BunReplTool, EditFileTool, FileGuard,
-    GlobTool, GrepTool, ListDirTool, ProcessController, ProcessTool, PyKernelTool, ReadFileTool,
-    ShellTool, TodoList, TodoWriteTool, Workspace, WriteFileTool,
+    GlobTool, GrepTool, ProcessController, ProcessTool, PyKernelTool, ReadFileTool, ShellTool,
+    TodoList, TodoWriteTool, Workspace, WriteFileTool,
 };
 use tokio::sync::broadcast;
 
@@ -68,7 +68,6 @@ pub(crate) fn preset_tools_and_controller(
         ToolPreset::None => Vec::new(),
         ToolPreset::ReadOnly => vec![
             Arc::new(ReadFileTool::new(workspace.clone()).guard(guard.clone())),
-            Arc::new(ListDirTool::new(workspace.clone())),
             Arc::new(GrepTool::new(workspace.clone())),
             Arc::new(GlobTool::new(workspace.clone())),
         ],
@@ -85,7 +84,6 @@ pub(crate) fn preset_tools_and_controller(
                 Arc::new(ReadFileTool::new(workspace.clone()).guard(guard.clone())),
                 Arc::new(WriteFileTool::new(workspace.clone()).guard(guard.clone())),
                 Arc::new(EditFileTool::new(workspace.clone()).guard(guard.clone())),
-                Arc::new(ListDirTool::new(workspace.clone())),
                 Arc::new(GrepTool::new(workspace.clone())),
                 Arc::new(GlobTool::new(workspace.clone())),
             ];

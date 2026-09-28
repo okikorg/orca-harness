@@ -30,10 +30,10 @@ type ModelRetryNotice = Arc<dyn Fn(u32, Option<u32>, &ModelError) + Send + Sync>
 /// failure.
 ///
 /// What is excluded: with [`exclude_non_idempotent`](Self::exclude_non_idempotent)
-/// on (the default), errors from `write_file`, `edit_file`, `multi_edit`,
-/// and `apply_patch` are never replayed (their failures are deterministic
-/// or may repeat a half-applied mutation), and neither are `subagent`
-/// control actions (`list`, `cancel`, ...); see
+/// on (the default), errors from `write_file` and `edit_file` are never
+/// replayed (their failures are deterministic or may repeat a half-applied
+/// mutation), and neither are `subagent` control actions (`list`,
+/// `cancel`, ...); see
 /// [`orca_harness_tools::retry::retryable_error`].
 ///
 /// Custom predicates compose with the built-ins rather than replace them:

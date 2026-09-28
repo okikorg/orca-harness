@@ -317,10 +317,7 @@ fn activity_lines_from(
             work.push(row.line());
             continuation
         };
-        if matches!(
-            tool.tool_name.as_str(),
-            "edit_file" | "multi_edit" | "apply_patch"
-        ) {
+        if tool.tool_name == "edit_file" {
             work.extend(mutation_diff_preview_lines(tool, width, continuation));
         }
         if owner_id.is_none() && tool.tool_name == "subagent" && tool.output.is_none() {

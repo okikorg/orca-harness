@@ -9,7 +9,7 @@ use crate::view::{self, theme};
 use super::super::format::fmt_tokens;
 use super::super::{App, EffortPicker, ModelPicker, ToolActivity};
 use super::pickers::{command_picker_row, COMMAND_COLUMNS};
-/// Exact, source-preserving mutation context beneath edit and patch rows.
+/// Exact, source-preserving mutation context beneath edit rows.
 /// Small changes remain fully visible; large batches stay bounded so one call
 /// cannot take over the live rail.
 pub(crate) fn mutation_diff_preview_lines(
@@ -21,27 +21,18 @@ pub(crate) fn mutation_diff_preview_lines(
 
     let mut changed = Vec::new();
     match tool.tool_name.as_str() {
-        "edit_file" => push_exact_edit(&mut changed, &tool.input),
-        "multi_edit" => {
-            if let Some(edits) = tool
-                .input
-                .get("edits")
-                .and_then(serde_json::Value::as_array)
-            {
+        "edit_file" => match tool
+            .input
+            .get("edits")
+            .and_then(serde_json::Value::as_array)
+        {
+            Some(edits) => {
                 for edit in edits {
                     push_exact_edit(&mut changed, edit);
                 }
             }
-        }
-        "apply_patch" => {
-            if let Some(patch) = tool.input.get("patch").and_then(serde_json::Value::as_str) {
-                changed.extend(patch.lines().filter_map(|line| match line.chars().next() {
-                    Some('-') => Some(('-', &line[1..], theme().dim)),
-                    Some('+') => Some(('+', &line[1..], theme().success)),
-                    _ => None,
-                }));
-            }
-        }
+            None => push_exact_edit(&mut changed, &tool.input),
+        },
         _ => {}
     }
 

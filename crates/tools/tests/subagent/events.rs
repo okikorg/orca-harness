@@ -4,7 +4,7 @@ async fn spawn_extensions_receive_identity_and_events() {
     let events: Arc<Mutex<Vec<(u64, HarnessEvent)>>> = Arc::new(Mutex::new(Vec::new()));
 
     let model = Arc::new(ScriptedModel::tool_round(
-        vec![call("1", "list_dir", json!({"path": "."}))],
+        vec![call("1", "glob", json!({"pattern": "*"}))],
         "explored",
     ));
     let (ws, _dir) = temp_ws();
@@ -37,7 +37,7 @@ async fn spawn_extensions_receive_identity_and_events() {
 
     let events = events.lock().unwrap();
     assert!(events.iter().any(|(id, e)| *id == spawns[0].id
-        && matches!(e, HarnessEvent::ToolCall { tool_name, .. } if tool_name == "list_dir")));
+        && matches!(e, HarnessEvent::ToolCall { tool_name, .. } if tool_name == "glob")));
     assert!(events
         .iter()
         .any(|(id, e)| *id == spawns[0].id && matches!(e, HarnessEvent::Result { .. })));

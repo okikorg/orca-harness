@@ -99,7 +99,7 @@ OPTIONS:
                      AI_GATEWAY_API_KEY for Vercel AI Gateway,
                      CHEAPERINFERENCE_API_KEY for CheaperInference)
   --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
-                     web_search and web_crawl tools
+                     web_search tool
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
   --anthropic        use the native Anthropic Messages API
   --list-models      print the endpoint's model catalog and exit
@@ -113,7 +113,7 @@ OPTIONS:
   --tools NAMES      headless: comma-separated tool allowlist
   --bare             headless: skip user instructions, skills, memory,
                      MCP, compute, subagents, and web tools; defaults
-                     --tools to read_file,list_dir,grep,glob
+                     --tools to read_file,grep,glob
   --subagent-depth N subagent nesting levels, positive integer (env ORCA_SUBAGENT_DEPTH;
                      default 1; /subagents adjusts it live in the TUI)
   --theme NAME       theme: default, mono, dracula,
@@ -290,8 +290,7 @@ fn resolve_theme(explicit: Option<String>) -> String {
 /// skill is and lists the catalog, and that is rebuilt with the agent.
 fn system_prompt(ws: &Workspace, web_search: bool) -> String {
     let web_tools = if web_search {
-        ", web_fetch (fetch a URL as markdown), web_search, and web_crawl \
-         (read a whole site section via Firecrawl)"
+        ", web_fetch (fetch a URL as markdown), and web_search"
     } else {
         ", and web_fetch (fetch a URL as markdown)"
     };
@@ -304,8 +303,8 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
          variables and imports survive across calls; console.log what you need to see), \
          subagent (spawn an independent agent with its \
          own context and tools for a self-contained task; parallel calls fan out), \
-         read_file, write_file, edit_file, apply_patch (preferred for coordinated \
-         multi-file changes), multi_edit (ordered exact replacements and appends), list_dir, grep, glob, \
+         read_file, write_file, edit_file (one exact replacement, or an ordered `edits` \
+         batch across files), grep, glob, \
          todo_write (the task list for complex or explicitly requested planning), \
          read_tool_result (re-read the full output of a truncated result), \
          memory_search (search global and current-workspace memory), \

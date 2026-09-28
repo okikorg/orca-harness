@@ -24,6 +24,9 @@ multiple flags are present, precedence is plan, orchestrate, normal, auto, yolo.
 `--orchestrate` does not bypass approvals: headless `subagent` calls and gated edits
 still need `--auto-approve`. Interactive plan writes can be approved separately
 for implementation, which switches to normal mode and starts a follow-up turn.
+Interactive plan mode also allows `shell`, but every command asks for approval,
+even one you always allow in normal mode; headless `--plan` and workers keep
+`shell` denied.
 
 Interactive MCP initialization and reload run in the background; local tools
 remain usable while connections are pending. Completed reloads publish tools
@@ -48,8 +51,7 @@ default without a mode flag.
 
 The parent investigates, breaks substantial work into bounded `subagent` tasks
 (or interactive `workflow` stages), and synthesizes results. It may use the
-read-only allowlist plus `write_file`, `edit_file`, `multi_edit`, and `apply_patch`
-for basic edits, including source files. “Basic” is guidance to the model, not
+read-only allowlist plus `write_file` and `edit_file` for basic edits, including source files. “Basic” is guidance to the model, not
 an enforced line-count limit or the plan-mode `docs/plan/` write fence. Parent
 `shell`, `process`, compute, MCP, and unknown tools are denied before approval;
 delegate execution and substantial implementation instead of retrying them.

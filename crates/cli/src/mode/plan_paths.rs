@@ -8,73 +8,36 @@ fn plan_path(path: Option<&str>) -> Option<String> {
 }
 
 /// Every path a write-shaped call targets, only when the complete call stays
-/// inside the plan area. Batch tools fail closed on one bad entry.
+/// inside the plan area. An `edit_file` batch fails closed on one bad entry,
+/// and `edits` wins over a top-level `path` exactly as the tool reads it.
 pub(super) fn written_paths(call: &ToolCall) -> Option<Vec<String>> {
+    let path = |value: &serde_json::Value| plan_path(value.get("path")?.as_str());
     match call.name.as_str() {
-        "write_file" | "edit_file" => Some(vec![plan_path(
-            call.arguments.get("path").and_then(|path| path.as_str()),
-        )?]),
-        "multi_edit" => {
+        "edit_file" if call.arguments.get("edits").is_some() => {
             let edits = call.arguments.get("edits")?.as_array()?;
             if edits.is_empty() {
                 return None;
             }
-            edits
-                .iter()
-                .map(|edit| plan_path(edit.get("path").and_then(|path| path.as_str())))
-                .collect()
+            edits.iter().map(path).collect()
         }
-        "apply_patch" => patch_paths(
-            call.arguments
-                .get("patch")
-                .and_then(|patch| patch.as_str())?,
-        ),
+        "write_file" | "edit_file" => Some(vec![path(&call.arguments)?]),
         _ => None,
     }
 }
 
-fn patch_paths(patch: &str) -> Option<Vec<String>> {
-    let lines: Vec<&str> = patch
-        .lines()
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-        .collect();
-    if lines.first() != Some(&"*** Begin Patch") || lines.last() != Some(&"*** End Patch") {
-        return None;
-    }
-    let mut paths = Vec::new();
-    for line in lines {
-        if line.starts_with("*** Delete File: ") {
-            // Plan mode may create or revise plans, not remove them.
-            return None;
-        }
-        if let Some(path) = line
-            .strip_prefix("*** Add File: ")
-            .or_else(|| line.strip_prefix("*** Update File: "))
-        {
-            paths.push(plan_path(Some(path))?);
-        }
-    }
-    (!paths.is_empty()).then_some(paths)
-}
-
 pub(super) fn result_paths(result: &ToolResult) -> Vec<String> {
+    let output = &result.output;
     match result.tool_name.as_str() {
-        "write_file" | "edit_file" => result
-            .output
-            .get("path")
-            .and_then(|path| path.as_str())
-            .and_then(|path| plan_path(Some(path)))
-            .into_iter()
-            .collect(),
-        "multi_edit" | "apply_patch" => result
-            .output
+        "write_file" => output.get("path").into_iter().collect(),
+        "edit_file" => output
             .get("paths")
             .and_then(|paths| paths.as_array())
             .into_iter()
             .flatten()
-            .filter_map(|path| path.as_str())
-            .filter_map(|path| plan_path(Some(path)))
             .collect(),
         _ => Vec::new(),
     }
+    .into_iter()
+    .filter_map(|path| plan_path(path.as_str()))
+    .collect()
 }

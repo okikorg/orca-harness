@@ -1,7 +1,6 @@
-//! Firecrawl API client: the search and crawl provider.
+//! Firecrawl API client: the `web_search` provider (POST /v2/search).
 //!
-//! One client backs both `web_search` (POST /v2/search) and `web_crawl`
-//! (POST /v2/crawl + status polling). The base URL is overridable for
+//! The base URL is overridable for
 //! tests, proxies, and self-hosted Firecrawl instances. Page fetching
 //! happens on Firecrawl's servers, so the [`UrlPolicy`](crate::web::UrlPolicy)
 //! SSRF guard does not apply here — only `web_fetch` touches the network
@@ -60,38 +59,6 @@ impl Firecrawl {
         resp.json()
             .await
             .map_err(|e| ToolError::msg(format!("firecrawl response was not JSON: {e}")))
-    }
-
-    /// Start a crawl job; returns the job id to poll with [`crawl_status`].
-    ///
-    /// [`crawl_status`]: Self::crawl_status
-    pub async fn start_crawl(&self, url: &str, limit: usize) -> Result<String, ToolError> {
-        let body = json!({
-            "url": url,
-            "limit": limit,
-            "scrapeOptions": { "formats": ["markdown"], "onlyMainContent": true },
-        });
-        let resp = self
-            .request(
-                self.client
-                    .post(format!("{}/v2/crawl", self.base_url))
-                    .json(&body),
-            )
-            .await?;
-        resp["id"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| ToolError::msg(format!("crawl start returned no job id: {resp}")))
-    }
-
-    /// Poll a crawl job. `status` in the result is `scraping`, `completed`,
-    /// or `failed`; `data` holds the pages scraped so far.
-    pub async fn crawl_status(&self, job_id: &str) -> Result<Value, ToolError> {
-        self.request(
-            self.client
-                .get(format!("{}/v2/crawl/{job_id}", self.base_url)),
-        )
-        .await
     }
 }
 

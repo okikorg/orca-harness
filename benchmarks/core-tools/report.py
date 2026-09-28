@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate the real-file core mutation probe into durable JSON results."""
+"""Aggregate the real-file `edit_file` probe into durable JSON results."""
 
 import argparse
 import json
@@ -15,6 +15,7 @@ BENCH_DIR = os.path.dirname(SUITE_DIR)
 RESULTS_DIR = os.path.join(BENCH_DIR, "results", "core-tools")
 
 PREFIX = "[core-tools-bench] "
+TOOLS = ("edit_file",)
 SCENARIOS = (
     "distinct",
     "guarded_distinct",
@@ -58,7 +59,7 @@ def aggregate(
 ) -> tuple[list[dict], list[dict]]:
     measurements = []
     summary = []
-    for tool in ("apply_patch", "multi_edit"):
+    for tool in TOOLS:
         for scenario in SCENARIOS:
             samples = parsed.get((tool, scenario), [])
             if len(samples) != expected_samples:
@@ -144,8 +145,13 @@ def aggregate(
 
 def compare_to_baseline(baseline: dict, measurements: list[dict]) -> list[dict]:
     comparison = []
-    for tool in ("apply_patch", "multi_edit"):
-        old = next(item for item in baseline["measurements"] if item["tool"] == tool)
+    for tool in TOOLS:
+        old = next(
+            (item for item in baseline["measurements"] if item["tool"] == tool), None
+        )
+        if old is None:
+            # A baseline recorded before this tool existed has nothing to compare.
+            continue
         new = next(
             item
             for item in measurements
@@ -187,7 +193,7 @@ def main() -> int:
         "platform": platform.platform(),
         "machine": platform.machine(),
         "python": platform.python_version(),
-        "accuracy_suite": "16 passed",
+        "accuracy_suite": "12 passed",
         "measurements": measurements,
     }
     with open(

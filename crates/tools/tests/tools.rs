@@ -12,9 +12,8 @@ use orca_harness_core::{Agent, CancellationToken, Message, ModelResponse, Tool, 
 use orca_harness_tools::{
     core_tools, core_tools_with_guard, core_tools_with_shell_and_process, BackgroundStats,
     CopyFileTool, CreateFolderTool, DeleteFileTool, EditFileTool, Executor, FileGuard,
-    FileInfoTool, GlobTool, GrepTool, ListDirTool, MultiEditTool, ProcessEntry,
-    ProcessNotificationKind, ProcessSpawn, ProcessTool, ProcessWrite, ReadFileTool, RenameFileTool,
-    ShellTool, Workspace, WriteFileTool,
+    FileInfoTool, GlobTool, GrepTool, ProcessEntry, ProcessNotificationKind, ProcessSpawn,
+    ProcessTool, ProcessWrite, ReadFileTool, RenameFileTool, ShellTool, Workspace, WriteFileTool,
 };
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(20);

@@ -203,7 +203,7 @@ def build_command(
 ) -> list[str]:
     prompt = task_prompt(task)
     if name == "orca":
-        tools = ["read_file", "grep", "glob", "list_dir"]
+        tools = ["read_file", "grep", "glob"]
         if task["mode"] == "edit":
             tools.extend(("edit_file", "write_file"))
         command = [

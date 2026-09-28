@@ -13,15 +13,13 @@ use crate::msg::{ApprovalRequest, ApprovalResponse, UiMsg};
 use crate::presentation;
 
 /// Tools that mutate the machine or egress to arbitrary hosts and
-/// therefore need a human answer. `web_search`/`web_crawl` are not here:
-/// they only talk to the Firecrawl endpoint the user opted into by
+/// therefore need a human answer. `web_search` is not here: it only
+/// talks to the Firecrawl endpoint the user opted into by
 /// providing a key.
 pub const GATED_TOOLS: &[&str] = &[
     "shell",
     "write_file",
     "edit_file",
-    "apply_patch",
-    "multi_edit",
     "web_fetch",
     "pykernel",
     "bun_repl",
@@ -86,7 +84,12 @@ impl Extension for Approval {
         if self.mode.get().bypasses_human_approval() {
             return Ok(ToolDecision::Continue);
         }
-        if !self.gated.contains(&call.name) || self.always_allowed(&call.name) {
+        // Plan mode admits `shell` only because a human reads every
+        // command, so a standing grant never skips the prompt there.
+        let reviewed_every_time = self.mode.is_plan() && call.name == "shell";
+        if !self.gated.contains(&call.name)
+            || (!reviewed_every_time && self.always_allowed(&call.name))
+        {
             return Ok(ToolDecision::Continue);
         }
 
@@ -94,7 +97,8 @@ impl Extension for Approval {
         let request = ApprovalRequest {
             tool_name: call.name.clone(),
             detail: presentation::tool_call_line(&call.name, &call.arguments),
-            yes_no: false,
+            // No standing grant can come out of a prompt that never honors one.
+            yes_no: reviewed_every_time,
             respond,
         };
         let deny = || ToolDecision::Deny {
@@ -209,6 +213,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plan_mode_asks_for_every_shell_call_despite_allow_always() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let approval = Approval::with_mode(ModeHandle::new(Mode::Plan), tx, "/test-ws".into());
+        approval.always.lock().unwrap().insert("shell".into());
+        let answer = tokio::spawn(async move {
+            match rx.recv().await {
+                Some(UiMsg::Approval(req)) => {
+                    assert!(req.yes_no, "plan-mode shell offers no always-allow");
+                    req.respond.send(ApprovalResponse::Deny).unwrap()
+                }
+                _ => panic!("plan mode must prompt shell even when always-allowed"),
+            }
+        });
+        let decision = approval.before_tool(&call("shell")).await.unwrap();
+        assert!(denied(&decision));
+        answer.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn deny_and_dropped_ui_both_deny() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let approval = Approval::with_mode(ModeHandle::default(), tx, "/test-ws".into());
@@ -276,8 +299,7 @@ mod tests {
 
     #[test]
     fn mutations_compute_delegation_and_memory_writes_are_gated() {
-        assert!(GATED_TOOLS.contains(&"apply_patch"));
-        assert!(GATED_TOOLS.contains(&"multi_edit"));
+        assert!(GATED_TOOLS.contains(&"edit_file"));
         assert!(GATED_TOOLS.contains(&"pykernel"));
         assert!(GATED_TOOLS.contains(&"bun_repl"));
         assert!(GATED_TOOLS.contains(&"subagent"));

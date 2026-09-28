@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use orca_harness_core::{Extension, Next, Subscriptions, ToolCall, ToolContext, ToolError};
 
-use super::{multi_edit_spec, patch_format::parse_patch};
+use super::edit_spec;
 
 /// Rejects malformed native mutation calls before later `around_tool`
 /// extensions spend time reviewing or sandboxing them.
@@ -32,16 +32,8 @@ impl Extension for MutationPreflight {
         _ctx: &ToolContext,
         next: Next<'a>,
     ) -> Result<Value, ToolError> {
-        match call.name.as_str() {
-            "multi_edit" => multi_edit_spec::validate(&input)?,
-            "apply_patch" => {
-                let patch = input
-                    .get("patch")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| ToolError::msg("`patch` (string) is required"))?;
-                parse_patch(patch)?;
-            }
-            _ => {}
+        if call.name == "edit_file" {
+            edit_spec::validate(&input)?;
         }
         next.run(input).await
     }
