@@ -1,7 +1,7 @@
-use base64::Engine as _;
 use super::input::insert_image_bytes_for_test;
 use super::state::HeldInput;
 use super::*;
+use base64::Engine as _;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use orca_harness_model_providers::openrouter::ModelInfo;
 use ratatui::backend::TestBackend;
@@ -221,10 +221,7 @@ fn pasted_image_path_that_does_not_exist_remains_plain_text() {
 /// Terminals that intercept an image paste write it to a temp file and
 /// hand the host the path. That path is an image, so it gets a pill.
 fn write_temp_image(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "orca-paste-test-{}-{name}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("orca-paste-test-{}-{name}", std::process::id()));
     std::fs::write(&path, bytes).expect("write temp image");
     path
 }
@@ -246,8 +243,7 @@ fn a_pasted_image_file_path_becomes_a_pill_carrying_the_file_bytes() {
             assert_eq!(images[0].media_type, "image/png");
             assert_eq!(
                 images[0].data,
-                base64::engine::general_purpose::STANDARD
-                    .encode(b"\x89PNG\r\n\x1a\nminimal")
+                base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nminimal")
             );
         }
         other => panic!("expected a run, got {:?}", other.is_ok()),
@@ -283,15 +279,16 @@ fn a_pasted_non_image_file_path_remains_plain_text() {
 }
 
 #[test]
-fn local_model_keeps_image_draft_when_send_is_blocked() {
+fn unknown_local_image_capability_does_not_block_submission() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut app = test_app();
     add_test_image(&mut app);
-    let draft = app.composer.clone();
-
     submit(&mut app, &tx, TEST_TERMINAL_WIDTH);
-    assert_eq!(app.composer, draft);
-    assert!(rx.try_recv().is_err());
+    assert!(app.composer.is_empty());
+    match rx.try_recv().unwrap() {
+        WorkerCmd::Run { images, .. } => assert_eq!(images.len(), 1),
+        _ => panic!("expected image submission"),
+    }
 }
 
 #[test]

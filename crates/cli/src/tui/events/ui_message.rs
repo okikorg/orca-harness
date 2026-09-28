@@ -355,7 +355,7 @@ pub(crate) fn handle_ui_msg(
             app.reasoning_effort = None;
             app.context_window = None;
             app.push_line(Line::from(Span::styled(
-                format!("provider: {} · model: {model}", provider.label()),
+                format!("provider: {} · model: {model}", provider.id()),
                 theme().dim,
             )));
         }

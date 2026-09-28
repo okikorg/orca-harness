@@ -261,29 +261,15 @@ impl Accumulator {
         if (self.stop_reason.as_deref() == Some("tool_use")) != !calls.is_empty() {
             return Err(invalid("stop reason does not match tool calls"));
         }
-        let thinking: Arc<[Value]> = thinking.into();
-        if !calls.is_empty() {
-            Ok(Collected {
-                response: ModelResponse::ToolCalls {
-                    content: (!text.is_empty()).then_some(text),
-                    calls,
-                    usage: self.usage,
-                },
-                thinking,
-            })
-        } else if !text.is_empty() {
-            Ok(Collected {
-                response: ModelResponse::Final {
-                    text,
-                    usage: self.usage,
-                },
-                thinking,
-            })
-        } else {
-            Err(ModelError::IncompleteResponse {
+        if calls.is_empty() && text.is_empty() {
+            return Err(ModelError::IncompleteResponse {
                 message: "Anthropic returned no text or tools".into(),
                 usage: self.usage,
-            })
+            });
         }
+        Ok(Collected {
+            response: crate::response(text, calls, self.usage),
+            thinking: thinking.into(),
+        })
     }
 }

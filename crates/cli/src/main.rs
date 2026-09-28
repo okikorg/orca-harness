@@ -19,6 +19,8 @@ mod plan;
 mod plugin;
 mod presentation;
 mod prompt;
+mod protocol;
+use orca_harness_model_providers::registry::Protocol;
 mod refine;
 mod run_args;
 mod skills;
@@ -37,9 +39,7 @@ use tokio::sync::mpsc;
 
 use orca_harness_core::{Context, Limits, Model};
 use orca_harness_extensions::{RetryModel, MEMORY_GUIDANCE};
-use orca_harness_model_providers::openai::OpenAiModel;
-use orca_harness_model_providers::openai_codex::OpenAiCodexModel;
-use orca_harness_model_providers::openrouter::{self as openrouter, OpenRouterModel};
+use orca_harness_model_providers::{openrouter, ProviderModel};
 use orca_harness_tools::Workspace;
 
 use crate::mode::{Mode, ModeHandle};
@@ -90,16 +90,19 @@ USAGE:
 OPTIONS:
   --model NAME       model id (env ORCA_MODEL; otherwise selected from the
                      provider's live catalog)
-  --base-url URL     API root; native Messages API with --anthropic,
-                     otherwise OpenAI-compatible (env ORCA_BASE_URL;
-                     default: api.openai.com if OPENAI_API_KEY is set,
-                     otherwise http://localhost:11434/v1)
+  --base-url URL     API root for the provider's protocol (env ORCA_BASE_URL;
+                     default: the provider preset's root; without a provider,
+                     OpenAI if OPENAI_API_KEY is set, otherwise
+                     http://localhost:11434/v1)
   --api-key KEY      API key (provider environment variable, including
                      ANTHROPIC_API_KEY for Anthropic,
                      AI_GATEWAY_API_KEY for Vercel AI Gateway,
                      CHEAPERINFERENCE_API_KEY for CheaperInference)
   --firecrawl-key K  Firecrawl key (env FIRECRAWL_API_KEY); enables the
                      web_search and web_crawl tools
+  --protocol NAME    transport override for a custom --base-url (an unknown
+                     name lists the choices)
+  --provider ID      select a provider preset (or ORCA_PROVIDER)
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
   --anthropic        use the native Anthropic Messages API
   --list-models      print the endpoint's model catalog and exit
@@ -165,9 +168,10 @@ pub struct Config {
     pub provider: Provider,
     pub model: String,
     pub base_url: String,
+    pub automatic_base_url: bool,
+    pub protocol: Option<Protocol>,
     pub api_key: Option<String>,
     pub firecrawl_key: Option<String>,
-    pub openrouter: bool,
     pub list_models: bool,
     pub workspace: PathBuf,
     pub prompt: Option<String>,
@@ -254,13 +258,19 @@ fn select_provider(
     openrouter: bool,
     explicit_base_url: bool,
     stored: Option<Provider>,
+    openai_key: bool,
 ) -> Provider {
     if openrouter {
         Provider::OpenRouter
     } else if explicit_base_url {
         Provider::Local
     } else {
-        stored.unwrap_or(Provider::OpenAi)
+        // Without a saved choice, use OpenAI when a key is present, else a local server.
+        stored.unwrap_or(if openai_key {
+            Provider::OpenAi
+        } else {
+            Provider::Local
+        })
     }
 }
 
@@ -363,6 +373,8 @@ fn system_prompt(ws: &Workspace, web_search: bool) -> String {
 struct Endpoint {
     provider: Provider,
     base_url: String,
+    automatic_base_url: bool,
+    protocol: Option<Protocol>,
     api_key: Option<String>,
     model: String,
     reasoning_effort: Option<String>,
@@ -385,6 +397,8 @@ impl Endpoint {
         Self {
             provider: cfg.provider,
             base_url: cfg.base_url.clone(),
+            automatic_base_url: cfg.automatic_base_url,
+            protocol: cfg.protocol,
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
             reasoning_effort: cfg.reasoning_effort.clone(),
@@ -399,52 +413,78 @@ impl Endpoint {
         }
     }
 
-    async fn list_models(
-        &self,
-    ) -> Result<Vec<openrouter::ModelInfo>, orca_harness_core::ModelError> {
-        match self.provider {
-            Provider::Anthropic => {
-                orca_harness_model_providers::anthropic::list_models(
-                    &self.base_url,
-                    self.api_key.as_deref(),
-                )
-                .await
-            }
-            Provider::OpenAiCodex => {
-                orca_harness_model_providers::openai_codex::list_models(Arc::new(
-                    auth::CodexCliCredential::discover(),
-                ))
-                .await
-            }
-            Provider::Vercel => {
-                orca_harness_model_providers::vercel::list_models(self.api_key.as_deref()).await
-            }
-            Provider::CheaperInference => {
-                orca_harness_model_providers::cheaperinference::list_models().await
-            }
-            Provider::OpenRouter | Provider::OpenAi | Provider::Local => {
-                openrouter::list_models(&self.base_url, self.api_key.as_deref()).await
-            }
+    /// A fixed-route endpoint with no key, model or output controls.
+    #[cfg(test)]
+    fn fixture(provider: Provider, base_url: impl Into<String>) -> Self {
+        Self {
+            provider,
+            base_url: base_url.into(),
+            automatic_base_url: false,
+            protocol: None,
+            api_key: None,
+            model: String::new(),
+            reasoning_effort: None,
+            max_output_tokens: None,
+            prompt_cache: false,
+            request_session_id: None,
+            model_retries: Default::default(),
+            model_gates: Default::default(),
+            subagent_settings: Default::default(),
         }
     }
 
-    /// Keep a requested or saved model only while the provider still advertises
-    /// it. Otherwise use the first catalog entry, whose ordering is the
-    /// provider adapter's default-selection policy.
+    /// The registry-backed model for this endpoint, before output controls.
+    fn provider_model(&self) -> ProviderModel {
+        use orca_harness_model_providers::{registry::Credential, Attribution};
+        let model = ProviderModel::new(self.provider, &self.model)
+            .user_agent(ORCACODE_USER_AGENT)
+            .attribution(Attribution {
+                referer: Some(ORCACODE_REFERER.into()),
+                title: Some("Orca Code".into()),
+                categories: Some("cli-agent".into()),
+            })
+            .prompt_cache(self.prompt_cache);
+        let base_url = (!self.automatic_base_url).then_some(self.base_url.as_str());
+        let session = self.request_session_id.as_deref();
+        let model = with(model, self.protocol, ProviderModel::protocol);
+        let model = with(model, self.api_key.as_deref(), ProviderModel::api_key);
+        let model = with(model, base_url, ProviderModel::base_url);
+        let model = with(model, session, ProviderModel::session_id);
+        if self.provider.spec().credential != Credential::OAuth {
+            return model;
+        }
+        model.codex_credentials(Arc::new(auth::CodexCliCredential::discover()))
+    }
+
+    async fn list_models(
+        &self,
+    ) -> Result<Vec<openrouter::ModelInfo>, orca_harness_core::ModelError> {
+        self.provider_model().models().await
+    }
+
+    /// Explicit and saved IDs are authoritative, even when absent from discovery.
     async fn catalog_model(&self, requested: Option<&str>) -> Result<String, String> {
+        if let Some(requested) = requested.filter(|model| !model.is_empty()) {
+            return Ok(requested.to_string());
+        }
+        let help = format!(
+            "specify an explicit model ID with --provider {} --model <ID>",
+            self.provider.id()
+        );
         let models = self
             .list_models()
             .await
-            .map_err(|error| error.to_string())?;
-        if let Some(requested) = requested.filter(|model| !model.is_empty()) {
-            if models.iter().any(|model| model.id == requested) {
-                return Ok(requested.to_string());
-            }
-        }
+            .map_err(|error| format!("{error}; {help}"))?;
         models
-            .first()
-            .map(|model| model.id.clone())
-            .ok_or_else(|| format!("{} returned an empty model catalog", self.provider.label()))
+            .into_iter()
+            .find(|model| !model.id.is_empty())
+            .map(|model| model.id)
+            .ok_or_else(|| {
+                format!(
+                    "{} returned an empty model catalog; {help}",
+                    self.provider.id()
+                )
+            })
     }
 
     fn build_model(&self) -> Arc<dyn Model> {
@@ -464,87 +504,14 @@ impl Endpoint {
         ui: Option<mpsc::UnboundedSender<UiMsg>>,
         retry_label: Option<String>,
     ) -> Arc<dyn Model> {
-        let model: Arc<dyn Model> = match self.provider {
-            Provider::Anthropic => {
-                let mut model = orca_harness_model_providers::AnthropicModel::new(&self.model)
-                    .base_url(&self.base_url)
-                    .prompt_cache(self.prompt_cache);
-                if let Some(key) = &self.api_key {
-                    model = model.api_key(key);
-                }
-                if let Some(max_tokens) = self.max_output_tokens {
-                    model = model.max_tokens(max_tokens);
-                }
-                if let Some(effort) = &self.reasoning_effort {
-                    model = model.reasoning_effort(effort);
-                }
-                Arc::new(model)
-            }
-            Provider::OpenRouter => {
-                let mut model = OpenRouterModel::new(self.model.as_str())
-                    .base_url(self.base_url.clone())
-                    .user_agent(ORCACODE_USER_AGENT)
-                    .referer(ORCACODE_REFERER)
-                    .title("Orca Code")
-                    .categories("cli-agent");
-                if let Some(key) = &self.api_key {
-                    model = model.api_key(key.clone());
-                }
-                if let Some(effort) = &self.reasoning_effort {
-                    model = model.reasoning_effort(effort.clone());
-                }
-                if let Some(max_tokens) = self.max_output_tokens {
-                    model = model.max_tokens(max_tokens);
-                }
-                if self.prompt_cache {
-                    model = model.prompt_cache(true);
-                    if let Some(session_id) = &self.request_session_id {
-                        model = model.session_id(session_id.clone());
-                    }
-                }
-                Arc::new(model)
-            }
-            Provider::Vercel | Provider::CheaperInference | Provider::OpenAi | Provider::Local => {
-                let mut model = OpenAiModel::new(self.model.as_str())
-                    .base_url(self.base_url.clone())
-                    .user_agent(ORCACODE_USER_AGENT);
-                if let Some(key) = &self.api_key {
-                    model = model.api_key(key.clone());
-                }
-                if let Some(effort) = &self.reasoning_effort {
-                    model = if self.provider == Provider::Vercel {
-                        model.nested_reasoning_effort(effort.clone())
-                    } else {
-                        model.reasoning_effort(effort.clone())
-                    };
-                }
-                if let Some(max_tokens) = self.max_output_tokens {
-                    model = model.max_tokens(max_tokens);
-                }
-                if self.provider == Provider::OpenAi && self.api_key.is_some() && self.prompt_cache
-                {
-                    if let Some(session_id) = &self.request_session_id {
-                        model = model.prompt_cache_key(session_id.clone());
-                    }
-                }
-                Arc::new(model)
-            }
-            Provider::OpenAiCodex => {
-                let mut model = OpenAiCodexModel::new(
-                    self.model.as_str(),
-                    Arc::new(auth::CodexCliCredential::discover()),
-                );
-                if let Some(effort) = &self.reasoning_effort {
-                    model = model.reasoning_effort(effort.clone());
-                }
-                if self.prompt_cache {
-                    if let Some(session_id) = &self.request_session_id {
-                        model = model.prompt_cache_key(session_id.clone());
-                    }
-                }
-                Arc::new(model)
-            }
-        };
+        let model = self.provider_model();
+        let model = with(model, self.max_output_tokens, ProviderModel::max_tokens);
+        let model = with(
+            model,
+            self.reasoning_effort.as_deref(),
+            ProviderModel::reasoning_effort,
+        );
+        let model: Arc<dyn Model> = Arc::new(model);
 
         // A long-running turn should survive transient provider routing,
         // connection, HTTP, and timeout failures. Keep this at the shared
@@ -573,10 +540,16 @@ impl Endpoint {
     }
 }
 
+/// Apply an optional setting to a builder.
+fn with<M, V>(model: M, value: Option<V>, set: impl FnOnce(M, V) -> M) -> M {
+    match value {
+        Some(value) => set(model, value),
+        None => model,
+    }
+}
+
 /// Discover the active model's context window from the endpoint, best
-/// effort, and report it to the UI. OpenRouter's catalog carries
-/// `context_length`; a local ollama exposes it via the native
-/// `/api/show`. Plain OpenAI endpoints publish nothing — `None`.
+/// effort, and report it to the UI.
 fn spawn_window_probe(
     endpoint: &Endpoint,
     ui: mpsc::UnboundedSender<UiMsg>,
@@ -587,68 +560,11 @@ fn spawn_window_probe(
     let revision = capacity.begin_update();
     let endpoint = endpoint.clone();
     tokio::spawn(async move {
-        let window = match endpoint.provider {
-            // `/models` lists dated ids, so a configured alias never matches
-            // the catalog; resolve the one model instead of paging all of them.
-            Provider::Anthropic => orca_harness_model_providers::anthropic::retrieve_model(
-                &endpoint.base_url,
-                endpoint.api_key.as_deref(),
-                &endpoint.model,
-            )
-            .await
-            .ok()
-            .and_then(|model| model.context_length),
-            Provider::OpenAiCodex
-            | Provider::OpenRouter
-            | Provider::Vercel
-            | Provider::CheaperInference => endpoint
-                .list_models()
-                .await
-                .ok()
-                .and_then(|models| {
-                    models
-                        .into_iter()
-                        .find(|candidate| candidate.id == endpoint.model)
-                })
-                .and_then(|candidate| candidate.context_length),
-            Provider::Local => ollama_context_window(&endpoint.base_url, &endpoint.model).await,
-            Provider::OpenAi => None,
-        };
+        let window = endpoint.provider_model().context_window().await;
         if capacity.finish_update(revision, window) {
             let _ = ui.send(UiMsg::ContextWindow(window));
         }
     });
-}
-
-/// Ollama native `/api/show`: prefer an explicit `num_ctx` parameter (the
-/// serving window) over the model's trained maximum (`*.context_length`).
-async fn ollama_context_window(base_url: &str, model: &str) -> Option<u64> {
-    let host = base_url.trim_end_matches('/').trim_end_matches("/v1");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
-    let body: serde_json::Value = client
-        .post(format!("{host}/api/show"))
-        .json(&serde_json::json!({"model": model}))
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
-    let num_ctx = body["parameters"].as_str().and_then(|params| {
-        params.lines().find_map(|line| {
-            let mut parts = line.split_whitespace();
-            (parts.next() == Some("num_ctx")).then(|| parts.next()?.parse().ok())?
-        })
-    });
-    num_ctx.or_else(|| {
-        body["model_info"]
-            .as_object()?
-            .iter()
-            .find_map(|(key, value)| key.ends_with(".context_length").then(|| value.as_u64())?)
-    })
 }
 
 mod runtime;

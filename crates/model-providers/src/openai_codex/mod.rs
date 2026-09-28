@@ -1,7 +1,7 @@
 //! OpenAI Codex Responses adapter backed by a ChatGPT subscription.
 //! This is deliberately separate from OpenAI API-key billing.
 
-mod request;
+pub(crate) mod request;
 pub(crate) mod stream;
 
 pub use orca_harness_provider_auth::{
@@ -9,9 +9,7 @@ pub use orca_harness_provider_auth::{
 };
 
 use crate::catalog::{ModelInfo, ReasoningCapabilities, SupportedEfforts};
-use crate::sse::SseBuffer;
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use orca_harness_core::{Context, DeltaSink, Model, ModelError, ModelResponse, ToolSchema};
 use std::{collections::HashMap, sync::Arc};
 use stream::Accumulator;
@@ -85,28 +83,30 @@ impl From<CodexModelInfo> for ModelInfo {
 
 /// Fetch the subscription-backed Codex catalog with OAuth and account headers.
 pub async fn list_models(
+    base_url: &str,
     credentials: Arc<dyn CodexCredentialSource>,
 ) -> Result<Vec<ModelInfo>, ModelError> {
     let credential = credentials.codex_credential().await.map_err(auth_error)?;
     let rejected = credential.bearer.access_token.clone();
     let client = client();
-    let mut response = send_catalog_request(&client, credential).await?;
+    let mut response = send_catalog_request(&client, base_url, credential).await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let renewed = credentials
             .refresh_codex(&rejected)
             .await
             .map_err(auth_error)?;
-        response = send_catalog_request(&client, renewed).await?;
+        response = send_catalog_request(&client, base_url, renewed).await?;
     }
     parse_catalog_response(response).await
 }
 
 async fn send_catalog_request(
     client: &reqwest::Client,
+    base_url: &str,
     credential: CodexCredential,
 ) -> Result<reqwest::Response, ModelError> {
     client
-        .get(catalog_url(CODEX_BASE_URL))
+        .get(catalog_url(base_url))
         .header(reqwest::header::USER_AGENT, ORCACODE_USER_AGENT)
         .bearer_auth(credential.bearer.access_token)
         .header("chatgpt-account-id", credential.account_id)
@@ -241,9 +241,11 @@ impl OpenAiCodexModel {
                 context,
                 tools,
                 stream,
-                &continuation,
-                self.reasoning_effort.as_deref(),
-                self.prompt_cache_key.as_deref(),
+                request::Options::codex(
+                    self.reasoning_effort.as_deref(),
+                    self.prompt_cache_key.as_deref(),
+                ),
+                request::latest_turn(context, &continuation),
             );
             self.prepare_request(&body, stream, credential)
         };
@@ -293,7 +295,7 @@ impl Model for OpenAiCodexModel {
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
         let response = self.send(context, tools, true).await?;
-        let collected = collect_stream(response, None).await?;
+        let collected = collect_stream(response, None, Accumulator::default()).await?;
         self.remember_reasoning(context, &collected).await;
         Ok(collected.response)
     }
@@ -305,7 +307,7 @@ impl Model for OpenAiCodexModel {
         sink: &dyn DeltaSink,
     ) -> Result<ModelResponse, ModelError> {
         let response = self.send(context, tools, true).await?;
-        let collected = collect_stream(response, Some(sink)).await?;
+        let collected = collect_stream(response, Some(sink), Accumulator::default()).await?;
         self.remember_reasoning(context, &collected).await;
         Ok(collected.response)
     }
@@ -344,31 +346,24 @@ impl OpenAiCodexModel {
     }
 }
 
-struct Collected {
-    response: ModelResponse,
-    reasoning: Arc<[serde_json::Value]>,
+pub(crate) struct Collected {
+    pub(crate) response: ModelResponse,
+    pub(crate) reasoning: Arc<[serde_json::Value]>,
 }
 
-async fn collect_stream(
+/// Read a Responses event stream to its end; shared with `ResponsesModel`.
+pub(crate) async fn collect_stream(
     response: reqwest::Response,
     sink: Option<&dyn DeltaSink>,
+    mut accumulator: Accumulator,
 ) -> Result<Collected, ModelError> {
-    let mut bytes = response.bytes_stream();
-    let mut frames = SseBuffer::default();
-    let mut accumulator = Accumulator::default();
-    while let Some(chunk) = bytes.next().await {
-        let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
-        for payload in frames.push(&chunk)? {
-            if payload == "[DONE]" {
-                continue;
-            }
-            for delta in accumulator.apply(&payload)? {
-                if let Some(sink) = sink {
-                    sink.emit(delta).await;
-                }
-            }
+    crate::sse::pump(response, sink, |payload| {
+        if payload == "[DONE]" {
+            return Ok((Vec::new(), false));
         }
-    }
+        Ok((accumulator.apply(payload)?, false))
+    })
+    .await?;
     let reasoning = accumulator.take_reasoning().into();
     let response = accumulator.finish()?;
     Ok(Collected {

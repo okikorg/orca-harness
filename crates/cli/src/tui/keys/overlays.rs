@@ -56,31 +56,7 @@ pub(crate) fn handle_overlay_key(
             &mut app.cursor,
             key.code,
         ),
-        Overlay::Providers { picker } => match picker.on_key(key.code) {
-            PickerEvent::Activated(index) => {
-                let provider = Provider::ALL[index];
-                match provider.auth() {
-                    ProviderAuth::ApiKey { .. } if provider.resolve_key().is_none() => {
-                        After::Push(Overlay::ApiKey {
-                            provider,
-                            input: String::new(),
-                        })
-                    }
-                    ProviderAuth::OAuth => match crate::auth::status(provider) {
-                        Ok(_) => After::CloseAndSend(WorkerCmd::SetProvider {
-                            provider,
-                            api_key: None,
-                        }),
-                        Err(_) => After::CloseAndSend(WorkerCmd::LoginProvider { provider }),
-                    },
-                    _ => After::CloseAndSend(WorkerCmd::SetProvider {
-                        provider,
-                        api_key: None,
-                    }),
-                }
-            }
-            _ => After::Nothing,
-        },
+        Overlay::Providers(picker) => super::catalogs::handle_provider_key(picker, key.code),
         Overlay::Themes { picker } => match picker.on_key(key.code) {
             PickerEvent::Activated(index) => {
                 let name = view::ThemeName::ALL[index];
@@ -138,7 +114,7 @@ pub(crate) fn handle_overlay_key(
                     After::Nothing
                 } else {
                     let provider = *provider;
-                    let note = match crate::config::save_key(provider.label(), &key) {
+                    let note = match crate::config::save_key(provider.id(), &key) {
                         Ok(path) => format!("api key saved to {}", path.display()),
                         Err(err) => {
                             format!("api key kept for this session only (save failed: {err})")
@@ -200,7 +176,7 @@ pub(crate) fn handle_overlay_key(
                     );
                 }
                 if let Some(tier) = crate::tui::subagents::tier(*setting) {
-                    if let Some(provider) = crate::Provider::from_label(&value) {
+                    if let Some(provider) = crate::Provider::from_id(&value) {
                         let after = After::FetchSubagentModels {
                             tier: tier.into(),
                             provider,

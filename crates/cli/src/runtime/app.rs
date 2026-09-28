@@ -13,7 +13,7 @@ pub(crate) async fn entrypoint() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cfg = match invocation {
+    let mut cfg = match invocation {
         Invocation::Update => {
             return match crate::update::run() {
                 Ok(()) => ExitCode::SUCCESS,
@@ -62,11 +62,16 @@ pub(crate) async fn entrypoint() -> ExitCode {
         };
     }
 
-    // Nothing between arg parsing and the loop may touch the network: the
-    // model id is already settled by flag, environment, saved choice, or
-    // `Provider::default_model`. Validating it against the provider catalog
-    // here cost a round trip on every cold start, and an id the provider no
-    // longer serves surfaces as the provider's own error on the first
-    // request instead.
+    // Only absent models need discovery. Manual/saved IDs must
+    // remain usable even when the provider cannot enumerate models.
+    if cfg.model.is_empty() {
+        match Endpoint::from_config(&cfg).catalog_model(None).await {
+            Ok(model) => cfg.model = model,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     run_mode(cfg).await
 }

@@ -12,7 +12,7 @@ pub fn status(provider: Provider) -> Result<&'static str, String> {
         Provider::OpenAiCodex => CodexCliCredential::discover()
             .status()
             .map_err(|error| error.message),
-        _ => Err(format!("{} does not use OAuth", provider.label())),
+        _ => Err(format!("{} does not use OAuth", provider.id())),
     }
 }
 
@@ -34,7 +34,7 @@ pub async fn login(
             .map_err(|error| error.message),
         _ => Err(format!(
             "{} does not support interactive OAuth",
-            provider.label()
+            provider.id()
         )),
     }
 }

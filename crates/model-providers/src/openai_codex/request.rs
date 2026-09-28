@@ -1,14 +1,43 @@
 use orca_harness_core::{Context, Message, ToolSchema};
 use serde_json::{json, Value};
 
-pub(crate) fn body(
+/// Request options that differ between Codex and generic Responses services.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Options<'a> {
+    pub(crate) reasoning_effort: Option<&'a str>,
+    pub(crate) prompt_cache_key: Option<&'a str>,
+    /// Send a reasoning configuration without an effort. Codex always
+    /// reasons; generic Responses also serves non-reasoning models, which
+    /// reject one.
+    pub(crate) always_reason: bool,
+    /// Ask for encrypted reasoning, an OpenAI-specific include selector.
+    pub(crate) encrypted_reasoning: bool,
+}
+
+impl<'a> Options<'a> {
+    /// Codex always reasons and replays encrypted reasoning.
+    pub(crate) fn codex(
+        reasoning_effort: Option<&'a str>,
+        prompt_cache_key: Option<&'a str>,
+    ) -> Self {
+        Self {
+            reasoning_effort,
+            prompt_cache_key,
+            always_reason: true,
+            encrypted_reasoning: true,
+        }
+    }
+}
+
+/// `reasoning` maps a tool call id to the encrypted reasoning items that
+/// produced it; they are replayed immediately before that assistant's calls.
+pub(crate) fn body<'r>(
     model: &str,
     context: &Context,
     tools: &[ToolSchema],
     stream: bool,
-    continuation: &[Value],
-    reasoning_effort: Option<&str>,
-    prompt_cache_key: Option<&str>,
+    options: Options<'_>,
+    reasoning: impl Fn(&str) -> Option<&'r [Value]>,
 ) -> Value {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
@@ -38,6 +67,12 @@ pub(crate) fn body(
                         "type": "message", "role": "assistant",
                         "content": [{"type": "output_text", "text": text}]
                     }));
+                }
+                // Encrypted reasoning must immediately precede the calls it
+                // produced. It is opaque and is never rendered or inserted
+                // into Context. All calls from one response share it.
+                if let Some(items) = tool_calls.iter().find_map(|call| reasoning(&call.id)) {
+                    input.extend(items.iter().cloned());
                 }
                 input.extend(tool_calls.iter().map(|call| {
                     let mut item = json!({
@@ -75,32 +110,11 @@ pub(crate) fn body(
             })),
         }
     }
-    // Encrypted reasoning must immediately precede the tool continuation it
-    // belongs to. It is opaque and is never rendered or inserted into Context.
-    if let Some(first_tool_output) = input
-        .iter()
-        .rposition(|item| item["type"] == "function_call_output")
-        .filter(|_| !continuation.is_empty())
-    {
-        let call_id = input[first_tool_output]["call_id"].as_str();
-        let mut insertion = input[..first_tool_output]
-            .iter()
-            .rposition(|item| {
-                item["type"] == "function_call" && item["call_id"].as_str() == call_id
-            })
-            .unwrap_or(first_tool_output);
-        while insertion > 0 && input[insertion - 1]["type"] == "function_call" {
-            insertion -= 1;
-        }
-        input.splice(insertion..insertion, continuation.iter().cloned());
-    }
     let mut value = json!({
         "model": model,
         "input": [],
         "stream": stream,
         "store": false,
-        "reasoning": {"summary": "auto"},
-        "include": ["reasoning.encrypted_content"],
         "parallel_tool_calls": true
     });
     value["instructions"] = Value::String(instructions.join("\n\n"));
@@ -121,13 +135,36 @@ pub(crate) fn body(
                 .collect(),
         );
     }
-    if let Some(effort) = reasoning_effort {
+    if options.always_reason || options.reasoning_effort.is_some() {
+        value["reasoning"] = json!({"summary": "auto"});
+    }
+    if let Some(effort) = options.reasoning_effort {
         value["reasoning"]["effort"] = json!(effort);
     }
-    if let Some(prompt_cache_key) = prompt_cache_key {
+    if options.encrypted_reasoning {
+        value["include"] = json!(["reasoning.encrypted_content"]);
+    }
+    if let Some(prompt_cache_key) = options.prompt_cache_key {
         value["prompt_cache_key"] = json!(prompt_cache_key);
     }
     value
+}
+
+/// Codex replays one continuation: the reasoning for the calls answered by
+/// the context's final tool result. Earlier tool turns get none.
+pub(crate) fn latest_turn<'a>(
+    context: &'a Context,
+    continuation: &'a [Value],
+) -> impl Fn(&str) -> Option<&'a [Value]> + 'a {
+    let last = context
+        .messages()
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::Tool { results } => results.last().map(|result| result.call_id.as_str()),
+            _ => None,
+        });
+    move |call_id| (!continuation.is_empty() && last == Some(call_id)).then_some(continuation)
 }
 
 #[cfg(test)]
@@ -152,7 +189,14 @@ mod tests {
             description: "run".into(),
             parameters: json!({"type":"object"}),
         }];
-        let value = body("codex", &context, &tools, true, &[], None, None);
+        let value = body(
+            "codex",
+            &context,
+            &tools,
+            true,
+            Options::codex(None, None),
+            |_| None,
+        );
         assert_eq!(value["instructions"], "be careful");
         assert_eq!(value["input"][1]["type"], "function_call");
         assert_eq!(value["input"][2]["type"], "function_call_output");
@@ -173,7 +217,14 @@ mod tests {
             }],
         );
 
-        let value = body("codex", &context, &[], true, &[], None, None);
+        let value = body(
+            "codex",
+            &context,
+            &[],
+            true,
+            Options::codex(None, None),
+            |_| None,
+        );
         assert_eq!(
             value["input"][0]["content"],
             json!([
@@ -197,7 +248,14 @@ mod tests {
             json!({"content": "[image 1]", "_images": [{"media_type": "image/png", "data": "iVBO"}]}),
         )]);
 
-        let value = body("codex", &context, &[], true, &[], None, None);
+        let value = body(
+            "codex",
+            &context,
+            &[],
+            true,
+            Options::codex(None, None),
+            |_| None,
+        );
         assert_eq!(
             value["input"][1],
             json!({
@@ -228,9 +286,8 @@ mod tests {
             &context,
             &[],
             true,
-            std::slice::from_ref(&reasoning),
-            None,
-            None,
+            Options::codex(None, None),
+            latest_turn(&context, std::slice::from_ref(&reasoning)),
         );
         let input = value["input"].as_array().unwrap();
         let reasoning_at = input
@@ -256,14 +313,91 @@ mod tests {
             &Context::new(),
             &[],
             true,
-            &[],
-            Some("xhigh"),
-            Some("run-123"),
+            Options::codex(Some("xhigh"), Some("run-123")),
+            |_| None,
         );
         assert_eq!(
             value["reasoning"],
             json!({"effort": "xhigh", "summary": "auto"})
         );
         assert_eq!(value["prompt_cache_key"], "run-123");
+    }
+
+    #[test]
+    fn replay_covers_every_mapped_turn_or_only_the_latest_for_codex() {
+        let mut context = Context::new();
+        context.push_user("start");
+        for turn in 0..2 {
+            let call = ToolCall {
+                id: format!("c{turn}"),
+                name: "shell".into(),
+                arguments: json!({}),
+            };
+            context.push_assistant_tool_calls(Some(format!("turn {turn}")), vec![call.clone()]);
+            context.append_tool_results(vec![ToolResult::ok(&call, json!({"ok":true}))]);
+        }
+        let reasoning =
+            |turn: usize| vec![json!({"type":"reasoning", "encrypted_content":format!("r{turn}")})];
+        let (first, second) = (reasoning(0), reasoning(1));
+        let kinds = |value: Value| -> Vec<String> {
+            value["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| match item["type"].as_str().unwrap() {
+                    "reasoning" => item["encrypted_content"].as_str().unwrap().to_string(),
+                    kind => kind.to_string(),
+                })
+                .collect()
+        };
+        // Full-context Responses replays each turn before its own calls.
+        let every = body(
+            "m",
+            &context,
+            &[],
+            true,
+            Options::default(),
+            |id| match id {
+                "c0" => Some(&first[..]),
+                "c1" => Some(&second[..]),
+                _ => None,
+            },
+        );
+        assert_eq!(
+            kinds(every),
+            [
+                "message",
+                "message",
+                "r0",
+                "function_call",
+                "function_call_output",
+                "message",
+                "r1",
+                "function_call",
+                "function_call_output"
+            ]
+        );
+        // Codex replays only the continuation of the latest tool turn.
+        let latest = body(
+            "m",
+            &context,
+            &[],
+            true,
+            Options::codex(None, None),
+            latest_turn(&context, &second),
+        );
+        assert_eq!(
+            kinds(latest),
+            [
+                "message",
+                "message",
+                "function_call",
+                "function_call_output",
+                "message",
+                "r1",
+                "function_call",
+                "function_call_output"
+            ]
+        );
     }
 }

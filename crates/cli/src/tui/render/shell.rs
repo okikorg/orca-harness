@@ -399,7 +399,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     };
     status
         .push(Segment::new(
-            format!("{}:{}", app.cfg.provider.label(), app.cfg.model_name),
+            format!("{}:{}", app.cfg.provider.id(), app.cfg.model_name),
             status_bar::MODEL,
         ))
         .push(Segment::new(

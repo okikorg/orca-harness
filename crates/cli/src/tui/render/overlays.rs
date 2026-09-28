@@ -223,11 +223,7 @@ pub(crate) fn model_picker_lines(
         t.dim,
     ));
 
-    let filter_note = if picker.filter.is_empty() {
-        "type to filter".to_string()
-    } else {
-        format!("filter: {}", picker.filter)
-    };
+    let filter_note = super::pickers::filter_note(&picker.filter);
     let title = picker
         .subagent
         .as_ref()
@@ -237,7 +233,7 @@ pub(crate) fn model_picker_lines(
             } else {
                 tier.as_str()
             };
-            format!("Subagent {tier} / {}", provider.label())
+            format!("Subagent {tier} / {}", provider.id())
         })
         .unwrap_or_else(|| "Models".into());
     let action = if picker.subagent.is_some() {

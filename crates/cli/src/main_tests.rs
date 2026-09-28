@@ -15,6 +15,70 @@ mod main_tests {
     use crate::runtime::{context_from, rewind_cut, subagent_extensions};
     use crate::{parse_run_args, resolve_theme, select_provider, system_prompt, Config, Planning};
 
+    fn discovery_endpoint(provider: Provider, base_url: String) -> crate::Endpoint {
+        crate::Endpoint {
+            api_key: Some("fixture-key".into()),
+            ..crate::Endpoint::fixture(provider, base_url)
+        }
+    }
+
+    async fn catalog_fixture(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let mut buf = [0; 4096];
+                let n = stream.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buf[..n]);
+            }
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+            ).as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        (url, task)
+    }
+
+    #[tokio::test]
+    async fn discovery_preserves_manual_and_saved_ids_without_network() {
+        for provider in Provider::ALL.iter().copied() {
+            let endpoint = discovery_endpoint(provider, "http://127.0.0.1:1/v1".into());
+            for id in ["manual-unlisted", "saved-unlisted"] {
+                assert_eq!(endpoint.catalog_model(Some(id)).await.unwrap(), id);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn preset_discovery_uses_live_catalog_and_explicit_key() {
+        let provider = Provider::from_id("deepseek").unwrap();
+        let (url, request) = catalog_fixture(r#"{"data":[{"id":"fixture-only-model"}]}"#).await;
+        let endpoint = discovery_endpoint(provider, url);
+        assert_eq!(
+            endpoint.catalog_model(None).await.unwrap(),
+            "fixture-only-model"
+        );
+        let request = request.await.unwrap().to_lowercase();
+        assert!(request.starts_with("get /v1/models "));
+        assert!(request.contains("authorization: bearer fixture-key"));
+    }
+
+    #[tokio::test]
+    async fn discovery_empty_or_unavailable_requires_explicit_id() {
+        let (url, request) = catalog_fixture(r#"{"data":[]}"#).await;
+        let endpoint = discovery_endpoint(Provider::from_id("deepseek").unwrap(), url);
+        let error = endpoint.catalog_model(None).await.unwrap_err();
+        assert!(error.contains("--model <ID>"), "{error}");
+        request.await.unwrap();
+        let endpoint = discovery_endpoint(Provider::OpenAi, "http://127.0.0.1:1/v1".into());
+        let error = endpoint.catalog_model(None).await.unwrap_err();
+        assert!(error.contains("--model <ID>"), "{error}");
+    }
+
     #[test]
     fn resume_subcommand_reuses_session_options() {
         for command in ["resume", "--resume"] {
@@ -513,10 +577,11 @@ mod main_tests {
         let base = Config {
             provider: Provider::Local,
             model: "m".into(),
+            automatic_base_url: false,
+            protocol: None,
             base_url: "u".into(),
             api_key: None,
             firecrawl_key: None,
-            openrouter: false,
             list_models: false,
             workspace: PathBuf::from("."),
             prompt: None,
@@ -639,17 +704,18 @@ mod main_tests {
     #[test]
     fn provider_precedence_is_explicit_not_inferred_from_url_text() {
         assert_eq!(
-            select_provider(true, true, Some(Provider::OpenAiCodex)),
+            select_provider(true, true, Some(Provider::OpenAiCodex), false),
             Provider::OpenRouter
         );
         assert_eq!(
-            select_provider(false, true, Some(Provider::OpenAiCodex)),
+            select_provider(false, true, Some(Provider::OpenAiCodex), false),
             Provider::Local
         );
         assert_eq!(
-            select_provider(false, false, Some(Provider::OpenAiCodex)),
+            select_provider(false, false, Some(Provider::OpenAiCodex), false),
             Provider::OpenAiCodex
         );
-        assert_eq!(select_provider(false, false, None), Provider::OpenAi);
+        assert_eq!(select_provider(false, false, None, true), Provider::OpenAi);
+        assert_eq!(select_provider(false, false, None, false), Provider::Local);
     }
 }

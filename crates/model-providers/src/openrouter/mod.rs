@@ -7,7 +7,6 @@
 //! metadata), attribution headers, and the endpoint conventions.
 
 use async_trait::async_trait;
-use serde::Deserialize;
 
 pub use crate::catalog::{ModelInfo, Pricing};
 use crate::openai::OpenAiModel;
@@ -134,49 +133,18 @@ impl Model for OpenRouterModel {
     }
 }
 
-/// List the catalog of any OpenAI-compatible endpoint (`GET {base}/models`) in
-/// provider order. OpenRouter's catalog is public; the key is optional.
+/// List OpenRouter's catalog (`GET {base}/models`) in provider order. The
+/// catalog is public; the key is optional. `supported_efforts: null` means
+/// the model accepts OpenRouter's complete gateway effort set.
 pub async fn list_models(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<crate::catalog::ModelInfo>, ModelError> {
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
-    let client = crate::http::client();
-    let mut request = client.get(&url).timeout(crate::http::CATALOG_TIMEOUT);
-    if let Some(api_key) = api_key {
-        request = request.bearer_auth(api_key);
-    }
-    let response = request.send().await.map_err(|e| {
-        // reqwest's Display hides the cause chain; surface it.
-        let mut message = e.to_string();
-        let mut source = std::error::Error::source(&e);
-        while let Some(cause) = source {
-            message.push_str(&format!(": {cause}"));
-            source = cause.source();
-        }
-        ModelError::Request(message)
-    })?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| crate::http_error::transport_error(&e))?;
-    if !status.is_success() {
-        return Err(ModelError::Request(format!("HTTP {status}: {body}")));
-    }
-
-    #[derive(Deserialize)]
-    struct Listing {
-        data: Vec<crate::catalog::ModelInfo>,
-    }
-    let listing: Listing = serde_json::from_str(&body)
-        .map_err(|e| ModelError::InvalidResponse(format!("{e}: {body}")))?;
-    let models = listing
-        .data
+    Ok(crate::discovery::list_openai_models(base_url, api_key)
+        .await?
         .into_iter()
         .map(normalize_reasoning_efforts)
-        .collect::<Vec<_>>();
-    Ok(models)
+        .collect())
 }
 
 fn normalize_reasoning_efforts(mut model: ModelInfo) -> ModelInfo {

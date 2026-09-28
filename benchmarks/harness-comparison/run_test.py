@@ -10,6 +10,22 @@ import run
 
 
 class RunTest(unittest.TestCase):
+    def test_pig_reuses_pi_tools_with_isolated_state(self):
+        with patch.object(sys, "argv", ["run.py", "--harness", "orca-pig"]):
+            args = run.parse_args()
+        self.assertEqual(run.harnesses(args.harness), ["orca", "pig"])
+        task = run.load_tasks(run.HERE / "tasks.json", "all", {"fix-retry-boundary"})[0]
+        pig = run.build_command("pig", "/tmp/pig", task, Path("/tmp/work"), args)
+        pi = run.build_command("pi", "/tmp/pig", task, Path("/tmp/work"), args)
+        self.assertEqual(pig, pi)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = run.prepare_environment("pig", root, args)
+            for key in ("HOME", "PIG_HOME", "PIG_CODING_AGENT_DIR", "PIG_CODING_AGENT_SESSION_DIR"):
+                self.assertTrue(Path(env[key]).is_relative_to(root))
+            self.assertEqual(env["PIG_OFFLINE"], "1")
+            self.assertEqual(env["PI_TELEMETRY"], "0")
+
     def test_harness_selection_and_order_rotate(self):
         self.assertEqual(run.harnesses("all"), ["orca", "pi", "omp", "claude", "kiss"])
         self.assertEqual(run.harnesses("both"), ["orca", "pi"])

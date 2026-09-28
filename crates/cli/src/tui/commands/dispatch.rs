@@ -10,13 +10,13 @@ use tokio::sync::mpsc;
 
 use ratatui::text::{Line, Span};
 
-use crate::msg::{Provider, WorkerCmd};
+use crate::msg::WorkerCmd;
 use crate::tui::components::picker::ListPicker;
 use crate::tui::components::transcript::BlockSpacing;
 use crate::view::{self, theme};
 
 use super::super::state::{
-    App, ModelPickerTarget, Overlay, SESSION_ACTIONS, SETTINGS_ROWS, SUBAGENT_ROWS,
+    App, ModelPickerTarget, Overlay, ProviderPicker, SESSION_ACTIONS, SETTINGS_ROWS, SUBAGENT_ROWS,
 };
 use super::super::{
     copy_command, expand_tool, push_error, push_notice, start_submission, SESSIONS_WINDOW,
@@ -382,9 +382,7 @@ pub(crate) fn slash_command(
             }
         }
         "provider" => {
-            app.overlay = Some(Overlay::Providers {
-                picker: ListPicker::new(Provider::ALL.len()),
-            });
+            app.overlay = Some(Overlay::Providers(ProviderPicker::new(None)));
         }
         "settings" => {
             app.overlay = Some(Overlay::Settings {

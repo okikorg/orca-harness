@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Mutex;
 
 use orca_harness_core::{
     Context, DeltaSink, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
@@ -22,7 +23,8 @@ use crate::sse::SseLineBuffer;
 #[cfg(test)]
 use request::encode_messages;
 
-fn parse_tool_arguments(
+/// Decode streamed tool arguments; an empty string is an empty object.
+pub(crate) fn parse_tool_arguments(
     tool_name: &str,
     arguments: &str,
     finish_reason: Option<&str>,
@@ -46,6 +48,8 @@ pub struct OpenAiModel {
     model: String,
     temperature: Option<f64>,
     max_tokens: Option<u64>,
+    replay_reasoning_content: bool,
+    reasoning_by_call: Mutex<std::collections::HashMap<String, request::SavedReasoning>>,
     reasoning_effort: Option<String>,
     nested_reasoning: bool,
     parallel_tool_calls: Option<bool>,
@@ -64,6 +68,8 @@ impl OpenAiModel {
             model: model.into(),
             temperature: None,
             max_tokens: None,
+            replay_reasoning_content: false,
+            reasoning_by_call: Mutex::new(Default::default()),
             reasoning_effort: None,
             nested_reasoning: false,
             parallel_tool_calls: None,
@@ -124,6 +130,12 @@ impl OpenAiModel {
         self
     }
 
+    /// Replay thinking on matching assistant tool turns for thinking providers.
+    pub fn replay_reasoning_content(mut self, enabled: bool) -> Self {
+        self.replay_reasoning_content = enabled;
+        self
+    }
+
     /// Set OpenAI Chat Completions' flat reasoning-effort parameter.
     pub fn reasoning_effort(mut self, effort: impl Into<String>) -> Self {
         self.reasoning_effort = Some(effort.into());
@@ -157,16 +169,21 @@ impl OpenAiModel {
         self.header(reqwest::header::USER_AGENT.as_str(), user_agent)
     }
 
+    fn remember_reasoning(&self, calls: &[ToolCall], content: &Option<String>, reasoning: String) {
+        if !self.replay_reasoning_content {
+            return;
+        }
+        let saved = request::SavedReasoning::new(calls, content, reasoning);
+        let mut cache = self.reasoning_by_call.lock().unwrap();
+        for call in calls {
+            cache.insert(call.id.clone(), saved.clone());
+        }
+    }
+
     fn prepare_request(&self, body: &Value) -> reqwest::RequestBuilder {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let mut request = crate::http::client().post(&url).json(body);
-        if let Some(api_key) = &self.api_key {
-            request = request.bearer_auth(api_key);
-        }
-        for (name, value) in &self.headers {
-            request = request.header(name.as_str(), value.as_str());
-        }
-        request
+        let request = crate::http::client().post(&url).json(body);
+        authorize(request, self.api_key.as_deref(), &self.headers)
     }
 
     async fn post(&self, body: Value) -> Result<reqwest::Response, ModelError> {
@@ -174,12 +191,23 @@ impl OpenAiModel {
         // RequestBuilder owns the serialized bytes; release the JSON tree
         // before waiting for a potentially long provider response.
         drop(body);
-        let response = request
-            .send()
-            .await
-            .map_err(|e| crate::http_error::transport_error(&e))?;
-        crate::http_error::check_response(response).await
+        crate::sse::send(request).await
     }
+}
+
+/// Attach an optional bearer key and extra headers; shared with `ResponsesModel`.
+pub(crate) fn authorize(
+    mut request: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+    headers: &[(String, String)],
+) -> reqwest::RequestBuilder {
+    if let Some(api_key) = api_key {
+        request = request.bearer_auth(api_key);
+    }
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    request
 }
 
 #[derive(Deserialize)]
@@ -254,6 +282,7 @@ struct Choice {
 #[derive(Deserialize)]
 struct ChoiceMessage {
     content: Option<String>,
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<WireToolCall>,
 }
@@ -318,6 +347,8 @@ impl Model for OpenAiModel {
             });
         }
 
+        let reasoning = choice.message.reasoning_content.clone();
+        let content = choice.message.content.clone();
         let calls = choice
             .message
             .tool_calls
@@ -337,6 +368,9 @@ impl Model for OpenAiModel {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        if let Some(reasoning) = reasoning.filter(|s| !s.is_empty()) {
+            self.remember_reasoning(&calls, &content, reasoning);
+        }
         Ok(ModelResponse::ToolCalls {
             content: choice.message.content,
             calls,
@@ -353,7 +387,6 @@ impl Model for OpenAiModel {
         let mut body = self.request_body(context, tools);
         body["stream"] = json!(true);
         body["stream_options"] = json!({"include_usage": true});
-
         let response = self.post(body).await?;
         let mut bytes = response.bytes_stream();
         let mut lines = SseLineBuffer::default();
@@ -385,7 +418,13 @@ impl Model for OpenAiModel {
             }
         }
 
-        accumulator.finish(done_observed)
+        let (result, reasoning) = accumulator.finish_with_reasoning(done_observed);
+        if let (Ok(ModelResponse::ToolCalls { content, calls, .. }), Some(reasoning)) =
+            (&result, reasoning)
+        {
+            self.remember_reasoning(calls, content, reasoning);
+        }
+        result
     }
 }
 

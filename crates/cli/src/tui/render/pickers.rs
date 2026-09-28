@@ -1,15 +1,17 @@
+use crate::msg::ProviderExt as _;
 use ratatui::text::{Line, Span};
 
-use crate::msg::{Provider, ProviderAuth};
+use crate::msg::Provider;
 use crate::tui::command_catalog::CommandSpec;
 use crate::tui::components::picker::ListPicker;
 use crate::tui::components::section::Section;
 use crate::tui::components::transcript::{transcript_spacing, TranscriptSpacing};
 use crate::view::glyphs::{branch_shape, mark_shape, ui_style, BranchShape, MarkShape, UiStyle};
 use crate::view::{self, theme};
+use orca_harness_model_providers::registry::Credential;
 
 use super::super::format::age_label;
-use super::super::state::SubagentSetting;
+use super::super::state::{ProviderPicker, SubagentSetting};
 use super::super::subagents::{
     subagent_current, subagent_route_description, subagent_setting_label,
 };
@@ -29,6 +31,23 @@ pub(super) fn command_picker_row(spec: &CommandSpec) -> [String; 3] {
 
 pub(super) const COMMAND_COLUMNS: [(usize, usize); 3] = [(6, 16), (0, 10), (12, usize::MAX)];
 
+/// The header note every searchable picker shows for its live filter.
+pub(crate) fn filter_note(filter: &str) -> String {
+    if filter.is_empty() {
+        "type to filter".to_string()
+    } else {
+        format!("filter: {filter}")
+    }
+}
+
+/// The dim single line a searchable picker shows when nothing matches.
+fn no_matches(what: &str, filter: &str) -> Vec<Line<'static>> {
+    vec![Line::from(Span::styled(
+        format!("  No {what} match {filter} · backspace to widen · esc close"),
+        theme().dim,
+    ))]
+}
+
 pub(crate) fn help_picker_lines(
     filter: &str,
     picker: &ListPicker,
@@ -36,18 +55,13 @@ pub(crate) fn help_picker_lines(
 ) -> Vec<Line<'static>> {
     let commands = crate::tui::command_catalog::filter_commands(filter);
     if commands.is_empty() {
-        return vec![Line::from(Span::styled(
-            format!("  No commands match {filter} · backspace to widen · esc close"),
-            theme().dim,
-        ))];
+        return no_matches("commands", filter);
     }
-    let filter_note = if filter.is_empty() {
-        "type to filter".to_string()
-    } else {
-        format!("filter: {filter}")
-    };
     picker.windowed_table_lines(
-        &format!("Help · {filter_note} · ↑↓ move · →/enter use · esc close"),
+        &format!(
+            "Help · {} · ↑↓ move · →/enter use · esc close",
+            filter_note(filter)
+        ),
         commands.into_iter().map(command_picker_row),
         COMMAND_COLUMNS,
         width,
@@ -55,32 +69,40 @@ pub(crate) fn help_picker_lines(
     )
 }
 
-pub(crate) fn provider_lines(picker: &ListPicker, width: usize) -> Vec<Line<'static>> {
-    let rows = Provider::ALL.iter().map(|provider| {
-        let key_note = match provider.auth() {
-            ProviderAuth::None => "no key needed".to_string(),
-            ProviderAuth::OAuth => {
-                let status = crate::auth::status_summary(*provider);
+pub(crate) fn provider_lines(picker: &ProviderPicker, width: usize) -> Vec<Line<'static>> {
+    let providers = picker.filtered();
+    if providers.is_empty() {
+        return no_matches("providers", &picker.filter);
+    }
+    let header = format!(
+        "Providers {} · {} · ↑↓ move · →/enter use · esc close",
+        providers.len(),
+        filter_note(&picker.filter)
+    );
+    let rows = providers.into_iter().map(|provider| {
+        let key_note = match provider.spec().credential {
+            Credential::None => "no key needed".to_string(),
+            Credential::OAuth => {
+                let status = crate::auth::status_summary(provider);
                 format!("subscription OAuth · {status}")
             }
-            ProviderAuth::ApiKey { environment } if provider.env_key().is_some() => {
-                format!("key from ${environment}")
+            Credential::ApiKey { env, .. } if provider.env_key().is_some() => {
+                format!("key from ${env}")
             }
-            ProviderAuth::ApiKey { environment } => {
-                format!("${environment} not set — will ask")
-            }
+            Credential::ApiKey { env, .. } => format!("${env} not set — will ask"),
         };
         [
-            provider.label().to_string(),
+            provider.id().to_string(),
             provider.base_url().to_string(),
             key_note,
         ]
     });
-    picker.table_lines(
-        "Select provider · ↑↓ move · →/enter use · esc close",
+    picker.picker.windowed_table_lines(
+        &header,
         rows,
-        [(12, 12), (36, 36), (0, usize::MAX)],
+        [(12, 26), (0, 36), (0, usize::MAX)],
         width,
+        PICKER_ROWS,
     )
 }
 
@@ -248,7 +270,7 @@ pub(crate) fn settings_lines(app: &App, picker: &ListPicker, width: usize) -> Ve
         approvals.join(", ")
     };
     let rows = [
-        ("provider", provider.label().to_string()),
+        ("provider", provider.id().to_string()),
         ("model", app.cfg.model_name.clone()),
         ("theme", view::theme_name().label().to_string()),
         ("view", app.view_mode.label().to_string()),
@@ -519,7 +541,7 @@ pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static
     let mut tray = Section::tray(
         format!(
             "{} API key (saved for future sessions) · enter confirm · esc close",
-            provider.label()
+            provider.id()
         ),
         t.warn,
     );
@@ -528,4 +550,27 @@ pub(crate) fn api_key_lines(provider: Provider, input: &str) -> Vec<Line<'static
         Span::raw("•".repeat(input.chars().count())),
     ]));
     tray.lines()
+}
+
+#[cfg(test)]
+mod provider_scroll_tests {
+    use super::*;
+
+    #[test]
+    fn every_provider_selection_is_visible_in_a_bounded_window() {
+        for (index, provider) in Provider::ALL.iter().enumerate() {
+            let picker = ProviderPicker::new(Some(*provider));
+            assert_eq!(picker.picker.index(), index);
+            let lines = provider_lines(&picker, 180);
+            assert!(lines.len() <= PICKER_ROWS + 2);
+            assert!(
+                lines
+                    .iter()
+                    .skip(2)
+                    .any(|line| line.to_string().contains(provider.id())),
+                "selected provider {} must be visible",
+                provider.id()
+            );
+        }
+    }
 }

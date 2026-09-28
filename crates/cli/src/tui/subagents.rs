@@ -59,8 +59,8 @@ pub(crate) fn subagent_values(settings: &SubagentDepth, setting: SubagentSetting
     }
     if tier(setting).is_some() {
         return crate::Provider::ALL
-            .into_iter()
-            .map(|provider| provider.label().to_string())
+            .iter()
+            .map(|provider| provider.id().to_string())
             .collect();
     }
     let field = setting.numeric().expect("numeric setting");

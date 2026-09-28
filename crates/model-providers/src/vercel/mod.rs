@@ -9,40 +9,18 @@ pub const VERCEL_GATEWAY_BASE_URL: &str = "https://ai-gateway.vercel.sh/v1";
 
 /// Fetch Vercel's catalog and map its `context_window` and
 /// `reasoning_options` fields into the provider-neutral model metadata.
-pub async fn list_models(api_key: Option<&str>) -> Result<Vec<ModelInfo>, ModelError> {
-    let client = crate::http::client();
-    let mut request = client
-        .get(format!("{VERCEL_GATEWAY_BASE_URL}/models"))
-        .timeout(crate::http::CATALOG_TIMEOUT);
-    if let Some(api_key) = api_key {
-        request = request.bearer_auth(api_key);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| crate::http_error::transport_error(&error))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| crate::http_error::transport_error(&error))?;
-    if !status.is_success() {
-        return Err(ModelError::Request(format!("HTTP {status}: {body}")));
-    }
-    parse_models(&body)
+pub async fn list_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, ModelError> {
+    parse(&crate::discovery::fetch_json(crate::discovery::get(base_url, "/models", api_key)).await?)
 }
 
-fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
-    let listing: Value = serde_json::from_str(body)
-        .map_err(|error| ModelError::InvalidResponse(format!("{error}: {body}")))?;
-    let entries = listing["data"]
-        .as_array()
-        .ok_or_else(|| ModelError::InvalidResponse("model catalog has no data array".into()))?;
-    let models = entries
+fn parse(listing: &Value) -> Result<Vec<ModelInfo>, ModelError> {
+    crate::discovery::rows(listing, "data")?
         .iter()
         .map(|entry| {
-            let mut model: ModelInfo = serde_json::from_value(entry.clone())
-                .map_err(|error| ModelError::InvalidResponse(error.to_string()))?;
+            let mut model = crate::discovery::openai_model(entry)?;
             model.context_length = entry["context_window"].as_u64();
             model.reasoning = effort_values(entry).map(|efforts| ReasoningCapabilities {
                 supported_efforts: Some(SupportedEfforts::Listed(efforts)),
@@ -50,8 +28,7 @@ fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
             });
             Ok(model)
         })
-        .collect::<Result<Vec<_>, ModelError>>()?;
-    Ok(models)
+        .collect()
 }
 
 fn effort_values(model: &Value) -> Option<Vec<String>> {
@@ -72,6 +49,10 @@ fn effort_values(model: &Value) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_models(body: &str) -> Result<Vec<ModelInfo>, ModelError> {
+        parse(&serde_json::from_str(body).unwrap())
+    }
 
     #[test]
     fn maps_vercel_catalog_fields() {

@@ -85,25 +85,14 @@ impl AnthropicModel {
                     block
                 }).collect()),
             };
-            if blocks.is_empty() {
-                continue;
-            }
-            // The native API alternates user/assistant turns. Consecutive tool
-            // result batches and user messages are one user content array.
             // A turn led by thinking never merges: those blocks must stay
             // first in their own message, not land mid-array.
-            let leads_with_thinking = matches!(
-                blocks.first().and_then(|block| block["type"].as_str()),
-                Some("thinking" | "redacted_thinking")
-            );
-            if let Some(last) = messages
-                .last_mut()
-                .filter(|last| last["role"] == role && !leads_with_thinking)
-            {
-                last["content"].as_array_mut().unwrap().extend(blocks);
-            } else {
-                messages.push(json!({"role": role, "content": blocks}));
-            }
+            push_turn(&mut messages, role, blocks, |block| {
+                matches!(
+                    block["type"].as_str(),
+                    Some("thinking" | "redacted_thinking")
+                )
+            });
         }
         // Send no `thinking` key: it is the only shape every model accepts.
         // `disabled` is rejected by the Opus 5 and Fable families, `adaptive`
@@ -135,6 +124,30 @@ impl AnthropicModel {
             body["output_config"] = json!({"effort": effort});
         }
         Ok(body)
+    }
+}
+
+/// Append one turn's `blocks`, skipping an empty turn. The native API
+/// alternates user/assistant turns, so consecutive turns of one role
+/// (tool result batches and user messages) share one content array, unless
+/// the turn's first block `stands_alone`, as a signed reasoning block must.
+pub(crate) fn push_turn(
+    messages: &mut Vec<Value>,
+    role: &str,
+    blocks: Vec<Value>,
+    stands_alone: impl Fn(&Value) -> bool,
+) {
+    let Some(first) = blocks.first() else {
+        return;
+    };
+    let alone = stands_alone(first);
+    if let Some(last) = messages
+        .last_mut()
+        .filter(|last| last["role"] == role && !alone)
+    {
+        last["content"].as_array_mut().unwrap().extend(blocks);
+    } else {
+        messages.push(json!({"role": role, "content": blocks}));
     }
 }
 

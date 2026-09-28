@@ -71,6 +71,7 @@ struct PartialToolCall {
 #[derive(Default)]
 pub(crate) struct ChunkAccumulator {
     text: String,
+    reasoning_content: String,
     tool_calls: Vec<PartialToolCall>,
     usage: Option<Usage>,
     finish_reason: Option<String>,
@@ -105,6 +106,9 @@ impl ChunkAccumulator {
                 self.finish_reason = choice.finish_reason;
             }
             let delta = choice.delta;
+            if let Some(ref text) = delta.reasoning_content {
+                self.reasoning_content.push_str(text);
+            }
             for text in [delta.reasoning, delta.reasoning_content]
                 .into_iter()
                 .flatten()
@@ -140,6 +144,15 @@ impl ChunkAccumulator {
             }
         }
         Ok(deltas)
+    }
+
+    pub(crate) fn finish_with_reasoning(
+        self,
+        done_observed: bool,
+    ) -> (Result<ModelResponse, ModelError>, Option<String>) {
+        let reasoning =
+            (!self.reasoning_content.is_empty()).then(|| self.reasoning_content.clone());
+        (self.finish(done_observed), reasoning)
     }
 
     pub(crate) fn finish(self, done_observed: bool) -> Result<ModelResponse, ModelError> {
@@ -181,13 +194,6 @@ impl ChunkAccumulator {
             });
         }
 
-        if self.tool_calls.is_empty() {
-            return Ok(ModelResponse::Final {
-                text: self.text,
-                usage: self.usage,
-            });
-        }
-
         let calls = self
             .tool_calls
             .into_iter()
@@ -211,15 +217,7 @@ impl ChunkAccumulator {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(ModelResponse::ToolCalls {
-            content: if self.text.is_empty() {
-                None
-            } else {
-                Some(self.text)
-            },
-            calls,
-            usage: self.usage,
-        })
+        Ok(crate::response(self.text, calls, self.usage))
     }
 
     fn tool_diagnostic(&self) -> String {

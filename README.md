@@ -63,8 +63,9 @@ through the Rust SDK.
   models and providers. Sidekicks keep their context across follow-up tasks.
   Workflows run staged fan-out.
 - **Bring any model.** Local OpenAI-compatible servers (Ollama by default),
-  OpenAI, a ChatGPT subscription through OpenAI Codex, native Anthropic,
-  OpenRouter, Vercel AI Gateway and CheaperInference.
+  OpenAI, a ChatGPT subscription through OpenAI Codex, Anthropic, Google Gemini,
+  Amazon Bedrock, DeepSeek, OpenRouter and more. Choose from 46 provider entries;
+  see the [provider guide](crates/model-providers/PROVIDERS.md) for setup and limitations.
 - **Extensible without forking.** MCP servers, Agent Skills, Agent Plugins
   with lifecycle hooks, and project `AGENTS.md` instructions.
 - **Scriptable.** Headless `-p` runs and NDJSON event streams for CI.
@@ -113,7 +114,28 @@ Pick a model:
 | OpenAI API           | set `OPENAI_API_KEY`                                                           |
 | Anthropic            | set `ANTHROPIC_API_KEY` and pass `--anthropic`                                  |
 | OpenRouter           | set `OPENROUTER_API_KEY` and pass `--openrouter`                               |
+| Google Gemini        | set `GEMINI_API_KEY` and pass `--provider google`                              |
+| DeepSeek             | set `DEEPSEEK_API_KEY` and pass `--provider deepseek`                          |
 | Local, no key        | with nothing set it talks to Ollama at `http://localhost:11434/v1`              |
+
+Select any registered provider with `--provider ID`, set `ORCA_PROVIDER=ID`, or
+use `/provider` interactively. Existing flags such as `--anthropic` and
+`--openrouter` still work.
+
+```sh
+orcacode --provider google --model gemini-2.5-flash
+orcacode --provider deepseek --model deepseek-chat
+```
+
+Use `--model` to choose a model and `--base-url` (or `ORCA_BASE_URL`) for an
+explicit API root override. Without an override, routing follows the selected
+provider and model. The [provider guide](crates/model-providers/PROVIDERS.md)
+lists every provider ID, credential variable, and cloud endpoint requirement.
+Model lists come from provider APIs where discovery is supported; missing
+metadata is left unknown. When discovery is unavailable, supply an explicit
+model ID rather than relying on a built-in model list. Bedrock uses
+bearer-token authentication, Vertex does not acquire ADC credentials, and
+Copilot/Cursor require supplied tokens rather than built-in login flows.
 
 Then ask for something:
 
@@ -230,7 +252,7 @@ container through an `Executor` (`Executor::ssh("user@host")`,
 | Crate                       | Role                                                                            |
 | :-------------------------- | :------------------------------------------------------------------------------ |
 | `crates/harness-core`       | agent loop, model and tool contracts, dispatcher, limits, test doubles          |
-| `crates/model-providers`    | OpenAI-compatible, Codex, Anthropic, OpenRouter, Vercel and CheaperInference adapters |
+| `crates/model-providers`    | Provider registry and adapters for Chat Completions, Responses, Anthropic, Google/Vertex, Bedrock, Copilot, Cursor and Radius |
 | `crates/provider-auth`      | provider-neutral credential contracts                                           |
 | `crates/tools`              | shell, processes, files, Python and Bun compute, subagents, workflows, todo     |
 | `crates/tool-extensions`    | MCP, skills and web integrations                                                |

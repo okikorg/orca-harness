@@ -60,7 +60,14 @@ async fn tool_batch_shares_reasoning_and_consumed_calls_are_removed() {
     );
     let continuation = model.continuation_for(&context).await;
     assert!(Arc::ptr_eq(&continuation, &reasoning));
-    let body = request::body("test", &context, &[], true, &continuation, None, None);
+    let body = request::body(
+        "test",
+        &context,
+        &[],
+        true,
+        request::Options::codex(None, None),
+        request::latest_turn(&context, &continuation),
+    );
     assert_eq!(body["input"][0], reasoning[0]);
     assert_eq!(body["input"].as_array().unwrap().len(), 33);
     model

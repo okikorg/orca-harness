@@ -8,6 +8,11 @@ pub(crate) struct SubagentModelSelection {
     pub provider: String,
     pub model: String,
     pub base_url: String,
+    /// Older configurations stored fixed URLs; absence preserves that behavior.
+    #[serde(default)]
+    pub automatic_base_url: bool,
+    #[serde(default)]
+    pub protocol: Option<orca_harness_model_providers::registry::Protocol>,
 }
 
 pub(crate) fn stored_subagent_models() -> BTreeMap<String, SubagentModelSelection> {
@@ -23,7 +28,7 @@ pub(crate) fn stored_subagent_models() -> BTreeMap<String, SubagentModelSelectio
                 return None;
             }
             let selection: SubagentModelSelection = serde_json::from_value(value.clone()).ok()?;
-            if crate::Provider::from_label(&selection.provider).is_none()
+            if crate::Provider::from_id(&selection.provider).is_none()
                 || selection.model.trim().is_empty()
             {
                 return None;

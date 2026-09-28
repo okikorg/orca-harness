@@ -55,7 +55,7 @@ pub struct ToolContext {
 }
 
 /// A single tool invocation requested by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,

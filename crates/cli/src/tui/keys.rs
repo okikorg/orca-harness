@@ -7,7 +7,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc;
 
-use crate::msg::{ApprovalResponse, Provider, ProviderAuth, WorkerCmd};
+use crate::msg::{ApprovalResponse, Provider, WorkerCmd};
 use crate::tui::command_catalog::{filter_commands, CommandSpec};
 use crate::tui::components::picker::{ListPicker, PickerEvent};
 use crate::tui::components::transcript::{
@@ -19,8 +19,8 @@ use crate::view::glyphs::{set_ui_style, ui_style, UiStyle};
 use super::format::byte_index;
 use super::render::matching_indices;
 use super::state::{
-    App, EffortPicker, InspectorMode, LocationEntry, ModelPicker, Overlay, SubagentSetting,
-    ViewMode,
+    App, EffortPicker, InspectorMode, LocationEntry, ModelPicker, Overlay, ProviderPicker,
+    SubagentSetting, ViewMode,
 };
 use super::subagents::{apply_subagent_value, subagent_selected, subagent_values};
 use super::{

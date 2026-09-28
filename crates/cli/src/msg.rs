@@ -7,170 +7,64 @@ use orca_harness_model_providers::openrouter::ModelInfo;
 use orca_harness_tools::{AskRequest, ProcessNotification};
 use tokio::sync::oneshot;
 
-/// A selectable endpoint preset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Provider {
-    OpenRouter,
-    Vercel,
-    CheaperInference,
-    OpenAi,
-    OpenAiCodex,
-    Anthropic,
-    Local,
-}
+/// A selectable endpoint preset. The registry is the single provider table.
+pub use orca_harness_model_providers::ProviderPreset as Provider;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderAuth {
-    ApiKey { environment: &'static str },
-    OAuth,
-    None,
-}
-
-impl Provider {
-    pub const ALL: [Provider; 7] = [
-        Provider::OpenRouter,
-        Provider::Vercel,
-        Provider::CheaperInference,
-        Provider::OpenAi,
-        Provider::OpenAiCodex,
-        Provider::Anthropic,
-        Provider::Local,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Provider::OpenRouter => "openrouter",
-            Provider::Vercel => "vercel",
-            Provider::CheaperInference => "cheaperinference",
-            Provider::OpenAi => "openai",
-            Provider::OpenAiCodex => "openai-codex",
-            Provider::Anthropic => "anthropic",
-            Provider::Local => "local",
-        }
-    }
-
-    /// Parse a label as produced by [`Provider::label`].
-    pub fn from_label(label: &str) -> Option<Provider> {
-        Provider::ALL.into_iter().find(|p| p.label() == label)
-    }
-
-    pub fn base_url(self) -> &'static str {
-        match self {
-            Provider::OpenRouter => orca_harness_model_providers::openrouter::OPENROUTER_BASE_URL,
-            Provider::Vercel => orca_harness_model_providers::vercel::VERCEL_GATEWAY_BASE_URL,
-            Provider::CheaperInference => {
-                orca_harness_model_providers::cheaperinference::CHEAPERINFERENCE_BASE_URL
-            }
-            Provider::OpenAi => "https://api.openai.com/v1",
-            Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL,
-            Provider::Anthropic => orca_harness_model_providers::anthropic::ANTHROPIC_BASE_URL,
-            Provider::Local => "http://localhost:11434/v1",
-        }
-    }
-
-    pub fn auth(self) -> ProviderAuth {
-        match self {
-            Provider::OpenRouter => ProviderAuth::ApiKey {
-                environment: "OPENROUTER_API_KEY",
-            },
-            Provider::Vercel => ProviderAuth::ApiKey {
-                environment: "AI_GATEWAY_API_KEY",
-            },
-            Provider::CheaperInference => ProviderAuth::ApiKey {
-                environment: "CHEAPERINFERENCE_API_KEY",
-            },
-            Provider::OpenAi => ProviderAuth::ApiKey {
-                environment: "OPENAI_API_KEY",
-            },
-            Provider::OpenAiCodex => ProviderAuth::OAuth,
-            Provider::Anthropic => ProviderAuth::ApiKey {
-                environment: "ANTHROPIC_API_KEY",
-            },
-            Provider::Local => ProviderAuth::None,
-        }
-    }
-
-    /// The environment variable holding this provider's key, if it needs one.
-    pub fn key_env(self) -> Option<&'static str> {
-        match self.auth() {
-            ProviderAuth::ApiKey { environment } => Some(environment),
-            ProviderAuth::OAuth | ProviderAuth::None => None,
-        }
-    }
-
+/// Host-side conveniences over registry presets: key lookup and persistence.
+pub trait ProviderExt: Copy {
     /// The key from the environment, ignoring blank values.
-    pub fn env_key(self) -> Option<String> {
+    fn env_key(self) -> Option<String>;
+    /// The key saved to the config file by a previous session.
+    fn stored_key(self) -> Option<String>;
+    /// The key a session would use without an explicit override:
+    /// environment first, then the config file.
+    fn resolve_key(self) -> Option<String> {
+        self.env_key().or_else(|| self.stored_key())
+    }
+}
+
+impl ProviderExt for Provider {
+    fn env_key(self) -> Option<String> {
         self.key_env()
             .and_then(|env| std::env::var(env).ok())
             .filter(|key| !key.trim().is_empty())
     }
 
-    /// The key saved to the config file by a previous session.
-    pub fn stored_key(self) -> Option<String> {
+    fn stored_key(self) -> Option<String> {
         self.key_env()?;
-        crate::config::stored_key(self.label())
-    }
-
-    /// The key a session would use without an explicit override:
-    /// environment first, then the config file.
-    pub fn resolve_key(self) -> Option<String> {
-        self.env_key().or_else(|| self.stored_key())
-    }
-
-    /// The model a session starts on when nothing is selected: no flag, no
-    /// `ORCA_MODEL`, no saved choice. A static answer on purpose — asking the
-    /// provider's catalog for one would put a network round trip in front of
-    /// every cold start, and the picker and the window probe both refresh the
-    /// real catalog in the background once the session is up.
-    pub fn default_model(self) -> &'static str {
-        match self {
-            Provider::OpenRouter => "openrouter/auto",
-            Provider::Vercel => "anthropic/claude-haiku-4.5",
-            Provider::CheaperInference => "anthropic/claude-haiku-4.5",
-            Provider::OpenAi => "gpt-4o-mini",
-            Provider::OpenAiCodex => "gpt-5.4",
-            Provider::Anthropic => "claude-haiku-4-5",
-            Provider::Local => "qwen3.5:9b",
-        }
-    }
-
-    pub fn supports_images(self) -> bool {
-        matches!(
-            self,
-            Provider::OpenRouter
-                | Provider::Vercel
-                | Provider::CheaperInference
-                | Provider::OpenAi
-                | Provider::OpenAiCodex
-                | Provider::Anthropic
-        )
+        crate::config::stored_key(self.id())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Provider, ProviderAuth};
+    use super::Provider;
+    use orca_harness_model_providers::registry::{Credential, KeyPlacement};
 
     #[test]
     fn vercel_gateway_provider_has_expected_configuration() {
-        assert_eq!(Provider::from_label("vercel"), Some(Provider::Vercel));
+        assert_eq!(Provider::from_id("vercel"), Some(Provider::Vercel));
+        assert_eq!(
+            Provider::from_id("vercel-ai-gateway"),
+            Some(Provider::Vercel)
+        );
         assert_eq!(
             Provider::Vercel.base_url(),
             "https://ai-gateway.vercel.sh/v1"
         );
         assert_eq!(
-            Provider::Vercel.auth(),
-            ProviderAuth::ApiKey {
-                environment: "AI_GATEWAY_API_KEY"
+            Provider::Vercel.spec().credential,
+            Credential::ApiKey {
+                env: "AI_GATEWAY_API_KEY",
+                placement: KeyPlacement::Native
             }
         );
-        assert!(Provider::Vercel.supports_images());
     }
 
     #[test]
     fn cheaperinference_provider_has_expected_configuration() {
         assert_eq!(
-            Provider::from_label("cheaperinference"),
+            Provider::from_id("cheaperinference"),
             Some(Provider::CheaperInference)
         );
         assert_eq!(
@@ -178,12 +72,12 @@ mod tests {
             "https://api.cheaperinference.com/v1"
         );
         assert_eq!(
-            Provider::CheaperInference.auth(),
-            ProviderAuth::ApiKey {
-                environment: "CHEAPERINFERENCE_API_KEY"
+            Provider::CheaperInference.spec().credential,
+            Credential::ApiKey {
+                env: "CHEAPERINFERENCE_API_KEY",
+                placement: KeyPlacement::Native
             }
         );
-        assert!(Provider::CheaperInference.supports_images());
     }
 }
 
@@ -292,7 +186,7 @@ pub enum UiMsg {
     },
     /// The active model's context window, discovered from the endpoint.
     ContextWindow(Option<u64>),
-    /// The worker switched provider and reset the model to its default.
+    /// The worker selected a provider and resolved its explicit, saved, or discovered model.
     ProviderChanged {
         provider: Provider,
         model: String,
@@ -450,4 +344,25 @@ pub enum WorkerCmd {
         source: String,
         here: bool,
     },
+}
+
+#[cfg(test)]
+mod provider_registry_tests {
+    use super::*;
+
+    #[test]
+    fn visible_providers_preserve_legacy_order() {
+        assert_eq!(
+            &Provider::ALL[..6],
+            &[
+                Provider::OpenRouter,
+                Provider::Vercel,
+                Provider::CheaperInference,
+                Provider::OpenAi,
+                Provider::OpenAiCodex,
+                Provider::Anthropic,
+            ]
+        );
+        assert_eq!(Provider::ALL.last(), Some(&Provider::Local));
+    }
 }

@@ -24,11 +24,17 @@ static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// The shared client, built on first use.
 ///
-/// Falls back to `Client::new()` if the builder fails, which keeps the
-/// signature infallible for constructors that cannot report an error.
+/// Provider credentials may use custom headers that reqwest does not strip
+/// across origins. Never follow redirects, including for discovery requests.
+/// Initialization fails closed instead of falling back to an unsafe client.
 pub fn client() -> reqwest::Client {
     CLIENT
-        .get_or_init(|| reqwest::Client::builder().build().unwrap_or_default())
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("initialize no-redirect provider HTTP client")
+        })
         .clone()
 }
 
@@ -40,4 +46,37 @@ pub fn warm() {
     std::thread::spawn(|| {
         let _ = client();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_server::{serve, Reply};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn custom_credentials_are_never_forwarded_on_redirect() {
+        for status in [301, 302, 303, 307, 308] {
+            let destination = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let location = format!("http://{}/stolen", destination.local_addr().unwrap());
+            let redirect = Reply::new(&format!("{status} Redirect"), "text/plain", "")
+                .header("Location", &location);
+            let (url, server) = serve(vec![redirect]).await;
+            let response = client()
+                .get(url)
+                .header("cf-aig-authorization", "Bearer gateway-secret")
+                .header("api-key", "azure-secret")
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            server.await.unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), destination.accept())
+                    .await
+                    .is_err()
+            );
+        }
+    }
 }
