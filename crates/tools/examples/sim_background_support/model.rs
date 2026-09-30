@@ -107,13 +107,13 @@ impl SimModel {
             .flatten()
             .collect::<Vec<_>>();
         let has = |name: &str| tools.iter().any(|schema| schema.name == name);
+        // Workspace-relative file paths the glob step found.
         let listed = results
             .iter()
-            .filter(|result| result.tool_name == "list_dir")
-            .filter_map(|result| result.output["entries"].as_array())
+            .filter(|result| result.tool_name == "glob")
+            .filter_map(|result| result.output["matches"].as_array())
             .flatten()
-            .filter(|entry| entry["isDir"] != true)
-            .filter_map(|entry| entry["name"].as_str().map(str::to_string))
+            .filter_map(|path| path.as_str().map(str::to_string))
             .collect::<Vec<_>>();
         let dir = format!("docs/{area}");
         let call = |id: &str, name: &str, arguments: Value| ToolCall {
@@ -122,19 +122,19 @@ impl SimModel {
             arguments,
         };
         match step {
-            0 if has("list_dir") => Plan::Calls {
+            0 if has("glob") => Plan::Calls {
                 reasoning: format!(
                     "I should look at what is in {dir} before searching for {topic}."
                 ),
-                calls: vec![call("list", "list_dir", json!({"path": dir}))],
+                calls: vec![call("list", "glob", json!({"pattern": "*", "path": dir}))],
             },
             1 if has("grep") => {
                 let mut calls = vec![call("grep", "grep", json!({"query": topic, "path": dir}))];
-                for (index, name) in listed.iter().take(3).enumerate() {
+                for (index, path) in listed.iter().take(3).enumerate() {
                     calls.push(call(
                         &format!("read{index}"),
                         "read_file",
-                        json!({"path": format!("{dir}/{name}")}),
+                        json!({"path": path}),
                     ));
                 }
                 Plan::Calls {
@@ -151,14 +151,14 @@ impl SimModel {
                     calls.push(call(
                         "sh",
                         "shell",
-                        json!({"command": format!("grep -c {topic:?} {dir}/{first}")}),
+                        json!({"command": format!("grep -c {topic:?} {first}")}),
                     ));
                 }
-                for (index, name) in listed.iter().skip(3).take(2).enumerate() {
+                for (index, path) in listed.iter().skip(3).take(2).enumerate() {
                     calls.push(call(
                         &format!("read{index}"),
                         "read_file",
-                        json!({"path": format!("{dir}/{name}")}),
+                        json!({"path": path}),
                     ));
                 }
                 if calls.is_empty() {

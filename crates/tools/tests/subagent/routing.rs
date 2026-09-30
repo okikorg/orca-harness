@@ -136,7 +136,7 @@ fn settings_handle_clamps_live_governance() {
 #[tokio::test]
 async fn explicit_builders_survive_later_shared_settings_attachment() {
     let model = Arc::new(ScriptedModel::new(vec![ModelResponse::tool_calls(vec![
-        call("1", "list_dir", json!({"path": "."})),
+        call("1", "glob", json!({"pattern": "*"})),
     ])]));
     let settings = SubagentDepth::new(1);
     let (ws, _dir) = temp_ws();

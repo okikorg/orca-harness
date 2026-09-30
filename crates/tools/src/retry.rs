@@ -9,7 +9,7 @@ use orca_harness_core::{ToolCall, ToolError};
 use serde_json::Value;
 
 /// Tool names whose errors are never replayed: native file mutations.
-const NON_IDEMPOTENT: &[&str] = &["write_file", "edit_file", "multi_edit", "apply_patch"];
+const NON_IDEMPOTENT: &[&str] = &["write_file", "edit_file"];
 
 /// The data-failure rule: an `Ok` result the core tools report as a
 /// failure *in data*, so a retry layer covers the failures that happen
@@ -122,8 +122,6 @@ mod tests {
     fn mutation_errors_are_not_retryable() {
         let error = ToolError::msg("deterministic");
 
-        assert!(!retryable_error(&call("multi_edit", json!({})), &error));
-        assert!(!retryable_error(&call("apply_patch", json!({})), &error));
         assert!(!retryable_error(&call("write_file", json!({})), &error));
         assert!(!retryable_error(&call("edit_file", json!({})), &error));
         assert!(retryable_error(&call("web_fetch", json!({})), &error));

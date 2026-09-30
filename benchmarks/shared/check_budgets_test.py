@@ -178,7 +178,7 @@ class GateTests(unittest.TestCase):
             {
                 "summary.json": [
                     {
-                        "name": "core-tools/apply_patch/distinct wall p50",
+                        "name": "core-tools/edit_file/distinct wall p50",
                         "unit": "s",
                         "value": 2.0,
                         "extra": "32 calls, 32 files",
@@ -196,10 +196,10 @@ class GateTests(unittest.TestCase):
             "core-tools",
             {
                 "summary.json": [
-                    {"name": "core-tools/apply_patch/distinct wall p50", "unit": "s", "value": 0.007},
-                    {"name": "core-tools/apply_patch/distinct wall p99", "unit": "s", "value": 9.0},
+                    {"name": "core-tools/edit_file/distinct wall p50", "unit": "s", "value": 0.007},
+                    {"name": "core-tools/edit_file/distinct wall p99", "unit": "s", "value": 9.0},
                     {
-                        "name": "core-tools/apply_patch/distinct throughput p50",
+                        "name": "core-tools/edit_file/distinct throughput p50",
                         "unit": "operations/sec",
                         "value": 1.0,
                     },

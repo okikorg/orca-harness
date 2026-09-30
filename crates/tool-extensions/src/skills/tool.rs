@@ -246,7 +246,7 @@ fn floor_boundary(text: &str, mut index: usize) -> usize {
 }
 
 /// Files beside `SKILL.md`, relative to the skill directory, so the
-/// model can ask for one by name without a `list_dir` round trip.
+/// model can ask for one by name without a directory-listing round trip.
 ///
 /// Bounded twice over — `MAX_RESOURCES` entries and `MAX_DEPTH` levels —
 /// because a skill folder can contain anything, including a vendored

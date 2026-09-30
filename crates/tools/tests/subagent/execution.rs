@@ -254,7 +254,7 @@ async fn step_limit_exhaustion_is_a_tool_error() {
     // One permitted step that returns tool calls: the run cannot finish.
     let model = Arc::new(ScriptedModel::new(vec![ModelResponse::ToolCalls {
         content: None,
-        calls: vec![call("1", "list_dir", json!({"path": "."}))],
+        calls: vec![call("1", "glob", json!({"pattern": "*"}))],
         usage: Some(Usage {
             cache_read_tokens: 41,
             cache_create_tokens: 43,

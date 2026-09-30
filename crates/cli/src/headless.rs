@@ -15,9 +15,7 @@ use orca_harness_extensions::{
 };
 use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::skills::SkillOnce;
-use orca_harness_tool_extensions::web::{
-    Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
-};
+use orca_harness_tool_extensions::web::{Firecrawl, UrlPolicy, WebFetchTool, WebSearchTool};
 use orca_harness_tools::{
     core_tools, BunReplTool, PyKernelTool, SubagentDepth, SubagentModel, TodoList, TodoWriteTool,
     Workspace,
@@ -29,7 +27,7 @@ use crate::mode::{ModeHandle, PlanGate};
 use crate::presentation;
 use crate::Config;
 
-const BARE_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
+const BARE_TOOLS: [&str; 3] = ["read_file", "grep", "glob"];
 
 pub(crate) fn bare_system_prompt(ws: &Workspace, tools: &[String]) -> String {
     format!(
@@ -225,15 +223,10 @@ pub async fn run<M: Model + Clone + 'static>(
     if !cfg.bare && enabled("web_fetch") {
         agent = agent.tool_arc(Arc::new(WebFetchTool::new(UrlPolicy::strict())));
     }
-    if !cfg.bare {
+    if !cfg.bare && enabled("web_search") {
         if let Some(key) = &cfg.firecrawl_key {
             let firecrawl = Arc::new(Firecrawl::new(key.clone()));
-            if enabled("web_search") {
-                agent = agent.tool_arc(Arc::new(WebSearchTool::new(firecrawl.clone())));
-            }
-            if enabled("web_crawl") {
-                agent = agent.tool_arc(Arc::new(WebCrawlTool::new(firecrawl)));
-            }
+            agent = agent.tool_arc(Arc::new(WebSearchTool::new(firecrawl)));
         }
     }
     if !cfg.bare {

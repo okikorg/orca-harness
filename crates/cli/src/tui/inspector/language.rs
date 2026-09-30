@@ -19,7 +19,7 @@ pub(super) fn inspector_output_language(
     if (output.is_object() || output.is_array())
         && !matches!(
             tool.tool_name.as_str(),
-            "shell" | "process" | "grep" | "read_file" | "list_dir"
+            "shell" | "process" | "grep" | "read_file"
         )
     {
         Some("json")

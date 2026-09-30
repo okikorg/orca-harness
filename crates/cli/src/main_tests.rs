@@ -69,7 +69,7 @@ mod main_tests {
                 "--prompt-cache",
                 "--bare",
                 "--tools",
-                "read_file,grep,glob,list_dir",
+                "read_file,grep,glob",
                 "--max-output-tokens",
                 "512",
                 "-p",
@@ -85,10 +85,7 @@ mod main_tests {
         assert_eq!(cfg.max_output_tokens, Some(512));
         assert!(cfg.prompt_cache);
         assert!(cfg.bare);
-        assert_eq!(
-            cfg.tools.unwrap(),
-            ["read_file", "grep", "glob", "list_dir"]
-        );
+        assert_eq!(cfg.tools.unwrap(), ["read_file", "grep", "glob"]);
     }
 
     #[test]
@@ -167,7 +164,7 @@ mod main_tests {
     }
 
     /// The advertised tool list must match what build_agent registers:
-    /// web_fetch is always on, search/crawl only with a Firecrawl key.
+    /// web_fetch is always on, web_search only with a Firecrawl key.
     #[test]
     fn system_prompt_advertises_web_tools_to_match_registration() {
         let ws = Workspace::new(PathBuf::from("."));
@@ -176,7 +173,6 @@ mod main_tests {
         assert!(!without.contains("web_search"));
         let with = system_prompt(&ws, true);
         assert!(with.contains("web_search"));
-        assert!(with.contains("web_crawl"));
     }
 
     /// `skill` is the one registered tool the prompt must *not* name.

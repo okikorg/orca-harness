@@ -33,11 +33,12 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
             theme().code,
         ),
         "pykernel" | "bun_repl" => append_code_input(lines, tool, width),
+        "edit_file" if tool.input.get("edits").is_some() => {
+            append_edit_batch_input(lines, tool, width)
+        }
         "edit_file" => append_edit_input(lines, tool, width),
-        "multi_edit" => append_multi_edit_input(lines, tool, width),
-        "apply_patch" => append_patch_input(lines, tool, width),
         "write_file" => append_file_content(lines, tool, width),
-        "read_file" | "list_dir" => text_section(
+        "read_file" => text_section(
             lines,
             "path",
             string(&tool.input, "path"),
@@ -81,7 +82,7 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
             width,
             Style::default(),
         ),
-        "web_fetch" | "web_crawl" => text_section(
+        "web_fetch" => text_section(
             lines,
             "url",
             string(&tool.input, "url"),
@@ -136,10 +137,7 @@ fn append_result(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usi
     match tool.tool_name.as_str() {
         "shell" | "exec_command" => append_shell_result(lines, output, width),
         "read_file" => append_file_result(lines, tool, output, width),
-        "write_file" | "edit_file" | "multi_edit" | "apply_patch" => {
-            append_mutation_result(lines, output, width)
-        }
-        "list_dir" => append_collection(lines, output, "entries", "entries", width),
+        "write_file" | "edit_file" => append_mutation_result(lines, output, width),
         "grep" => append_grep_result(lines, output, width),
         "glob" => append_collection(lines, output, "matches", "matches", width),
         "process" => append_process_result(lines, output, width),
@@ -149,7 +147,6 @@ fn append_result(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usi
         "subagent" => append_subagent_result(lines, output, width),
         "web_fetch" => append_web_fetch_result(lines, output, width),
         "web_search" | "mcp_search_tools" => append_ranked_results(lines, output, width),
-        "web_crawl" => append_crawl_result(lines, output, width),
         "read_tool_result" => append_paged_result(lines, output, width),
         "skill" => append_skill_result(lines, output, width),
         _ => append_generic_value(lines, "result", output, width),
@@ -256,42 +253,12 @@ fn append_edit_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width:
     change.append_to(lines);
 }
 
-fn append_multi_edit_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
+fn append_edit_batch_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
     let Some(edits) = tool.input.get("edits") else {
         return;
     };
     let count = edits.as_array().map(Vec::len).unwrap_or_default();
     append_generic_value(lines, &format!("edits · {count}"), edits, width);
-}
-
-fn append_patch_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
-    let patch = string(&tool.input, "patch");
-    let (preview, omitted) = limit_inspector_preview(patch);
-    let mut input = section(
-        width,
-        format!(
-            "patch · {} · {}",
-            line_label(patch),
-            inspector_size_label(patch.len() as u64)
-        ),
-    );
-    input.extend(
-        CodePreview {
-            text: &preview,
-            language: "diff",
-            width,
-            indent: INSPECTOR_BODY_INDENT,
-            plain_style: Style::default(),
-        }
-        .lines(),
-    );
-    if omitted {
-        input.push(Line::from(Span::styled(
-            format!("{INSPECTOR_BODY_INDENT}patch preview shortened"),
-            theme().dim,
-        )));
-    }
-    input.append_to(lines);
 }
 
 fn append_process_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usize) {
@@ -406,7 +373,6 @@ fn waiting_label(tool_name: &str) -> &'static str {
     match tool_name {
         "ask" => "Waiting for your answer",
         "subagent" => "The delegated agent is working",
-        "web_crawl" => "Collecting pages",
         "process" => "Waiting for process state",
         _ => "Waiting for result",
     }

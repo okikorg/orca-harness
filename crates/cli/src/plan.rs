@@ -161,7 +161,7 @@ pub fn briefing(today: &str) -> String {
          Decide for yourself whether a plan is warranted. A greeting, a question, or a request \
          to explain something needs no file — answer it. Write a plan when the user has asked \
          for work that spans several steps, and only once you have investigated enough with \
-         read_file, list_dir, grep, and glob to know what it should say.\n\
+         read_file, grep, and glob to know what it should say.\n\
          \n\
          Structure a plan as: a one-sentence goal, two or three sentences on the approach, the \
          files each step creates or modifies, and the steps themselves as `- [ ]` checkboxes \

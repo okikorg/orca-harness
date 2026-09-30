@@ -3,7 +3,7 @@
 //! The core set of tools that make the harness independently useful: run
 //! commands on the host (or a target machine / container), keep
 //! long-lived processes and interactive sessions alive across calls, and
-//! read, write, patch, batch-edit, list, glob, and search files. Four workflow tools
+//! read, write, edit, glob, and search files. Four workflow tools
 //! build on the same primitives: [`PyKernelTool`] (persistent Python
 //! compute), [`BunReplTool`] (persistent JavaScript/TypeScript compute),
 //! [`SubagentTool`] (spawn
@@ -57,11 +57,10 @@ pub use ask::{
 pub use bun_repl::BunReplTool;
 pub use core_tools::{
     core_tools, core_tools_with_executor, core_tools_with_guard, core_tools_with_process,
-    core_tools_with_shell_and_process, ApplyPatchTool, BackgroundProcess, BackgroundStats,
-    EditFileTool, Executor, FileGuard, GlobTool, GrepTool, ListDirTool, MultiEditTool,
-    MutationPreflight, ProcessController, ProcessEntry, ProcessNotification,
-    ProcessNotificationKind, ProcessSnapshot, ProcessSpawn, ProcessTool, ProcessWrite,
-    ReadFileTool, ShellTool, Workspace, WriteFileTool,
+    core_tools_with_shell_and_process, BackgroundProcess, BackgroundStats, EditFileTool, Executor,
+    FileGuard, GlobTool, GrepTool, MutationPreflight, ProcessController, ProcessEntry,
+    ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn, ProcessTool,
+    ProcessWrite, ReadFileTool, ShellTool, Workspace, WriteFileTool,
 };
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use kernel::PyKernelTool;

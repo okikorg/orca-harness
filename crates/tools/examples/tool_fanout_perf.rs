@@ -282,7 +282,7 @@ async fn main() {
     let mixed_guard = FileGuard::new();
     measure(
         "mixed batch → every tool at once",
-        10,
+        9,
         iters.min(20),
         |_| {
             vec![
@@ -298,7 +298,6 @@ async fn main() {
                     "write_file",
                     json!({"path": "out.txt", "content": "x"}),
                 ),
-                call("m-list", "list_dir", json!({"path": "."})),
                 call("m-grep", "grep", json!({"query": "needle"})),
                 call("m-glob", "glob", json!({"pattern": "*.rs"})),
                 call(

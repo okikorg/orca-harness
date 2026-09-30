@@ -15,9 +15,6 @@ pub fn tool_action_label(name: &str) -> &'static str {
         "read_file" => "Read",
         "write_file" => "Write",
         "edit_file" => "Edit",
-        "multi_edit" => "Multi-edit",
-        "apply_patch" => "Apply patch",
-        "list_dir" => "List directory",
         "grep" => "Search text",
         "web_search" => "Web search",
         "glob" => "Find",
@@ -29,7 +26,6 @@ pub fn tool_action_label(name: &str) -> &'static str {
         "todo_write" => "Todo",
         "ask" => "Ask",
         "web_fetch" => "Fetch web page",
-        "web_crawl" => "Crawl web pages",
         "read_tool_result" => "Read tool result",
         "skill" => "Load skill",
         "mcp_search_tools" => "Search MCP tools",
@@ -50,11 +46,10 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
             .get("command")
             .and_then(Value::as_str)
             .map(|c| format!("$ {c}")),
-        "read_file" | "write_file" | "edit_file" | "list_dir" => {
+        "edit_file" if args.get("edits").is_some() => edit_batch_call_detail(args),
+        "read_file" | "write_file" | "edit_file" => {
             args.get("path").and_then(Value::as_str).map(str::to_string)
         }
-        "apply_patch" => patch_call_detail(args),
-        "multi_edit" => multi_edit_call_detail(args),
         "grep" => args.get("query").and_then(Value::as_str).map(|query| {
             let path = args
                 .get("path")
@@ -90,7 +85,7 @@ pub fn tool_call_line(name: &str, args: &Value) -> String {
                 ),
             },
         ),
-        "web_fetch" | "web_crawl" => args.get("url").and_then(Value::as_str).map(str::to_string),
+        "web_fetch" => args.get("url").and_then(Value::as_str).map(str::to_string),
         "web_search" => args
             .get("query")
             .and_then(Value::as_str)
@@ -130,7 +125,7 @@ fn glob_call_detail(args: &Value) -> Option<String> {
     })
 }
 
-fn multi_edit_call_detail(args: &Value) -> Option<String> {
+fn edit_batch_call_detail(args: &Value) -> Option<String> {
     let edits = args.get("edits")?.as_array()?;
     let files = edits
         .iter()
@@ -142,27 +137,6 @@ fn multi_edit_call_detail(args: &Value) -> Option<String> {
         count_label(edits.len(), "edit", "edits"),
         count_label(files, "file", "files")
     ))
-}
-
-fn patch_call_detail(args: &Value) -> Option<String> {
-    let patch = args.get("patch")?.as_str()?;
-    let paths: Vec<&str> = patch
-        .lines()
-        .filter_map(|line| {
-            line.strip_prefix("*** Add File: ")
-                .or_else(|| line.strip_prefix("*** Update File: "))
-                .or_else(|| line.strip_prefix("*** Delete File: "))
-        })
-        .collect();
-    match paths.as_slice() {
-        [] => Some("no file operations".into()),
-        [path] => Some((*path).to_owned()),
-        [first, ..] => Some(format!(
-            "{} · {}",
-            first,
-            count_label(paths.len(), "file", "files")
-        )),
-    }
 }
 
 pub(super) fn process_call_detail(args: &Value) -> Option<String> {
@@ -251,42 +225,7 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .get("bytesWritten")
             .and_then(Value::as_u64)
             .map(|b| format!("wrote {}", byte_label(b))),
-        "edit_file" => output
-            .get("replacements")
-            .and_then(Value::as_u64)
-            .map(|n| count_label(n as usize, "replacement", "replacements")),
-        "multi_edit" => output
-            .get("filesChanged")
-            .and_then(Value::as_u64)
-            .map(|files| {
-                let edits = output
-                    .get("editsApplied")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default();
-                format!("{edits} edits · {files} files")
-            }),
-        "apply_patch" => output
-            .get("filesChanged")
-            .and_then(Value::as_u64)
-            .map(|files| {
-                let added = output
-                    .get("added")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default();
-                let updated = output
-                    .get("updated")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default();
-                let deleted = output
-                    .get("deleted")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default();
-                format!("{files} files · +{added} ~{updated} -{deleted}")
-            }),
-        "list_dir" => output
-            .get("entries")
-            .and_then(Value::as_array)
-            .map(|e| format!("{} entries", e.len())),
+        "edit_file" => edit_result_summary(output),
         "glob" | "grep" => matches_summary(output),
         "skill" => output.get("name").and_then(Value::as_str).map(|name| {
             match output.get("alreadyLoaded") == Some(&Value::Bool(true)) {
@@ -300,7 +239,6 @@ pub fn tool_result_summary(name: &str, output: &Value, is_error: bool) -> String
             .get("results")
             .and_then(Value::as_array)
             .map(|results| count_label(results.len(), "result", "results")),
-        "web_crawl" => web_crawl_result_summary(output),
         "process" => process_result_summary(output),
         _ => None,
     };
@@ -402,16 +340,17 @@ fn web_fetch_result_summary(output: &Value) -> Option<String> {
     Some(summary)
 }
 
-fn web_crawl_result_summary(output: &Value) -> Option<String> {
-    let pages = output.get("pagesReturned").and_then(Value::as_u64)? as usize;
-    let mut summary = count_label(pages, "page", "pages");
-    if output.get("timedOut").and_then(Value::as_bool) == Some(true) {
-        summary.push_str(" · timed out");
-    } else if let Some(status) = output.get("status").and_then(Value::as_str) {
-        summary.push_str(" · ");
-        summary.push_str(status);
+/// One edit reads as its replacement count; a batch as edits across files.
+fn edit_result_summary(output: &Value) -> Option<String> {
+    let count = |key| output.get(key).and_then(Value::as_u64).map(|n| n as usize);
+    match count("editsApplied")? {
+        1 => count("replacements").map(|n| count_label(n, "replacement", "replacements")),
+        edits => Some(format!(
+            "{} · {}",
+            count_label(edits, "edit", "edits"),
+            count_label(count("filesChanged").unwrap_or_default(), "file", "files")
+        )),
     }
-    Some(summary)
 }
 
 fn count_label(count: usize, singular: &str, plural: &str) -> String {

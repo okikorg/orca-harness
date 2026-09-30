@@ -100,11 +100,6 @@ impl FileGuard {
         }
     }
 
-    /// Drop a stamp after a tool deletes the file.
-    pub(crate) fn forget(&self, path: &Path) {
-        self.0.lock().expect("file guard lock").remove(path);
-    }
-
     /// The read-before-write check. `Ok` when the path does not exist
     /// (a create), when it is not a regular file (the write will fail on
     /// its own terms), or when the recorded stamp still matches.
@@ -386,175 +381,23 @@ impl Tool for WriteFileTool {
     }
 }
 
-/// `edit_file` — replace an exact substring, once or for all occurrences.
-/// Fails if `old` is absent or (for single mode) not unique.
-pub struct EditFileTool {
-    ws: Workspace,
-    guard: Option<FileGuard>,
-}
-
-impl EditFileTool {
-    pub fn new(ws: Workspace) -> Self {
-        Self { ws, guard: None }
-    }
-
-    /// Stamp what this tool writes. An edit is never *checked* against
-    /// the guard — it reads the current contents and fails if its `old`
-    /// text is not in them, which is the same protection by other means
-    /// — but its write moves the file's mtime, and leaving that
-    /// unrecorded would strand the next `write_file` to the same path.
-    pub fn guard(mut self, guard: FileGuard) -> Self {
-        self.guard = Some(guard);
-        self
-    }
-}
-
-#[async_trait]
-impl Tool for EditFileTool {
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "edit_file".into(),
-            description: "Replace an exact string in a workspace file. By default the match \
-                must be unique; set replaceAll to replace every occurrence."
-                .into(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "old": {"type": "string", "description": "Exact text to replace."},
-                    "new": {"type": "string", "description": "Replacement text."},
-                    "replaceAll": {"type": "boolean", "default": false}
-                },
-                "required": ["path", "old", "new"]
-            }),
-        }
-    }
-
-    fn concurrency(&self, input: &Value) -> Concurrency {
-        match input.get("path").and_then(Value::as_str) {
-            Some(p) => Concurrency::Keyed(format!("file:{p}")),
-            None => Concurrency::Serial,
-        }
-    }
-
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        let rel = rel_arg(&input, "path")?;
-        let old = rel_arg(&input, "old")?;
-        let new = rel_arg(&input, "new")?;
-        let replace_all = input
-            .get("replaceAll")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if old.is_empty() {
-            return Err(ToolError::msg("`old` must not be empty"));
-        }
-        let path = self.ws.resolve(rel)?;
-        let _io = crate::iogate::fs_permit().await;
-        let content = fs::read_to_string(&path)
-            .await
-            .map_err(|e| ToolError::msg(format!("read failed: {e}")))?;
-
-        let count = content.matches(old).count();
-        if count == 0 {
-            return Err(ToolError::msg("`old` not found in file"));
-        }
-        if count > 1 && !replace_all {
-            return Err(ToolError::msg(format!(
-                "`old` occurs {count} times ({}); pass replaceAll or make it unique",
-                occurrence_lines(&content, old)
-            )));
-        }
-        let updated = if replace_all {
-            content.replace(old, new)
-        } else {
-            content.replacen(old, new, 1)
-        };
-        // Owned String: tokio's zero-copy fast path (a borrow would be
-        // deep-copied onto the blocking pool).
-        fs::write(&path, updated)
-            .await
-            .map_err(|e| ToolError::msg(format!("write failed: {e}")))?;
-        if let Some(guard) = &self.guard {
-            guard.restamp(&path).await;
-        }
-        Ok(json!({ "path": rel, "replacements": if replace_all { count } else { 1 } }))
-    }
-}
-
-/// `list_dir` — list entries of a workspace directory (non-recursive).
-pub struct ListDirTool {
-    ws: Workspace,
-}
-
-impl ListDirTool {
-    pub fn new(ws: Workspace) -> Self {
-        Self { ws }
-    }
-}
-
-#[async_trait]
-impl Tool for ListDirTool {
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "list_dir".into(),
-            description: "List the entries of a workspace-relative directory (non-recursive). Absolute paths are rejected.".into(),
-            parameters: json!({
-                "type": "object",
-                "properties": { "path": {
-                    "type": "string",
-                    "description": "Path relative to the workspace root; absolute paths are rejected.",
-                    "default": "."
-                } },
-            }),
-        }
-    }
-
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        let rel = input.get("path").and_then(Value::as_str).unwrap_or(".");
-        let dir = self.ws.resolve(rel)?;
-        let _io = crate::iogate::fs_permit().await;
-        let mut entries = fs::read_dir(&dir)
-            .await
-            .map_err(|e| ToolError::msg(format!("read_dir failed: {e}")))?;
-        let mut out = Vec::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ToolError::msg(format!("read_dir failed: {e}")))?
-        {
-            let file_type = entry.file_type().await.ok();
-            out.push(json!({
-                "name": entry.file_name().to_string_lossy(),
-                "isDir": file_type.map(|t| t.is_dir()).unwrap_or(false),
-            }));
-        }
-        out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-        Ok(json!({ "path": rel, "entries": out }))
-    }
-}
-
 // The test module sits at the end of the file: clippy's
 // `items_after_test_module` treats anything below it as misplaced.
 #[cfg(test)]
 mod tests {
-    use super::{capped_list, occurrence_lines, take_string_arg, ListDirTool, ReadFileTool};
+    use super::{capped_list, occurrence_lines, take_string_arg, ReadFileTool};
     use crate::Workspace;
     use orca_harness_core::Tool;
     use serde_json::json;
 
     #[test]
-    fn read_and_list_schemas_require_workspace_relative_paths() {
-        let ws = Workspace::new("/work");
-        for schema in [
-            ReadFileTool::new(ws.clone()).schema(),
-            ListDirTool::new(ws).schema(),
-        ] {
-            assert!(schema.description.contains("Absolute paths are rejected."));
-            assert_eq!(
-                schema.parameters["properties"]["path"]["description"],
-                "Path relative to the workspace root; absolute paths are rejected."
-            );
-        }
+    fn read_schema_requires_workspace_relative_paths() {
+        let schema = ReadFileTool::new(Workspace::new("/work")).schema();
+        assert!(schema.description.contains("Absolute paths are rejected."));
+        assert_eq!(
+            schema.parameters["properties"]["path"]["description"],
+            "Path relative to the workspace root; absolute paths are rejected."
+        );
     }
 
     /// The write path hands content to tokio's `fs::write`, whose

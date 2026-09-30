@@ -135,7 +135,7 @@ mod tests {
     fn action_labels_preserve_targets_and_unknown_tool_identity() {
         for (call, expected) in [
             ("shell $ cargo test", "Shell · $ cargo test"),
-            ("list_dir docs/", "List directory · docs/"),
+            ("read_file docs/a.md", "Read · docs/a.md"),
             ("grep 'error' in src", "Search text · 'error' in src"),
             ("custom.search docs", "custom.search · docs"),
             ("subagent inspect files", "Subagent · inspect files"),

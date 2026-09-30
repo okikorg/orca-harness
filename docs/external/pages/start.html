@@ -19,7 +19,7 @@
 
 □ Thinking · 1.4s · 1 update
 □ Work · 1 tool
-  └ ✓ list_dir . · 15 entries · 1ms
+  └ ✓ glob * · 15 matches · 1ms
 □ Thinking · 1.3s · 1 update
 □ Work · 1 tool
   └ ✓ read_file README.md · read 41.6 kB
@@ -48,8 +48,8 @@ openai-codex:gpt-5.6-sol · low</pre></div><p>Drop <code>--plan</code> and shell
 
     <section class="section" id="your-product"><h2>3. Your product</h2>
     <div class="step"><span class="step-number">01</span><div><h3>Run it unattended</h3><p><code>-p</code> runs one prompt and exits. This is a real run in a two-file project, output as printed:</p><div class="terminal"><pre><span class="prompt">$</span> orcacode --bare --no-session -p "List the files here and say in one sentence what this project is."
-• list_dir .
-  2 entries
+• glob *
+  2 matches
 • read_file README.md
 • read_file calc.py
   read 34 bytes
@@ -59,7 +59,7 @@ Files:
 - `calc.py`
 
 This project is a tiny Python calculator module (currently just an `add(a, b)` function) with a short README.
-tokens: 445 in, 139 out</pre></div><p>Tool rows and token counts go to stderr and the answer to stdout, so <code>2&gt;/dev/null</code> keeps only the answer. A model that streams its reasoning prints that to stderr as well.</p><p><code>--bare</code> strips instructions, skills, memory, MCP and subagents and limits the tools to <code>read_file,list_dir,grep,glob</code>, which is what a CI check usually wants. <code>--json</code> emits one NDJSON event per line instead of the transcript: an opening <code>metadata</code>, streaming <code>assistant_delta</code> and <code>reasoning_delta</code>, <code>tool_call</code>, <code>tool_started</code>, <code>tool_finished</code>, <code>tool_result</code>, <code>assistant</code>, <code>usage</code>, <code>result</code> and a closing <code>summary</code> with status, steps and duration. <code>--auto-approve</code> lets shell, write and edit run without a prompt. <a href="#headless">Headless runs</a> has the scripting rules.</p></div></div>
+tokens: 445 in, 139 out</pre></div><p>Tool rows and token counts go to stderr and the answer to stdout, so <code>2&gt;/dev/null</code> keeps only the answer. A model that streams its reasoning prints that to stderr as well.</p><p><code>--bare</code> strips instructions, skills, memory, MCP and subagents and limits the tools to <code>read_file,grep,glob</code>, which is what a CI check usually wants. <code>--json</code> emits one NDJSON event per line instead of the transcript: an opening <code>metadata</code>, streaming <code>assistant_delta</code> and <code>reasoning_delta</code>, <code>tool_call</code>, <code>tool_started</code>, <code>tool_finished</code>, <code>tool_result</code>, <code>assistant</code>, <code>usage</code>, <code>result</code> and a closing <code>summary</code> with status, steps and duration. <code>--auto-approve</code> lets shell, write and edit run without a prompt. <a href="#headless">Headless runs</a> has the scripting rules.</p></div></div>
     <div class="step"><span class="step-number">02</span><div><h3>Put your own code around the loop</h3><p>A plugin packages skills, an MCP server and lifecycle hooks in Python or TypeScript. Hooks see <code>before_tool</code>, <code>after_tool</code>, <code>before_model</code> and <code>after_model</code>, can deny or rewrite a call, and fail closed: a hook that errors stops the run.</p><div class="terminal"><pre><span class="prompt">$</span> orcacode plugin init hooks --python
 <span class="prompt">$</span> orcacode plugin validate ./hooks
 <span class="prompt">$</span> orcacode plugin test ./hooks

@@ -4,13 +4,12 @@
 //! [`core_tools`]. Optional workflow tools and the shell-less filesystem
 //! administration bundle remain separate at the crate root.
 
+mod edit;
+mod edit_spec;
 mod files;
 mod glob;
 pub(crate) mod iogate;
-mod multi_edit_spec;
 mod mutation_preflight;
-mod mutations;
-mod patch_format;
 pub(crate) mod pgroup;
 mod process;
 mod search;
@@ -22,10 +21,10 @@ use std::sync::Arc;
 
 use orca_harness_core::Tool;
 
-pub use files::{EditFileTool, FileGuard, ListDirTool, ReadFileTool, WriteFileTool};
+pub use edit::EditFileTool;
+pub use files::{FileGuard, ReadFileTool, WriteFileTool};
 pub use glob::GlobTool;
 pub use mutation_preflight::MutationPreflight;
-pub use mutations::{ApplyPatchTool, MultiEditTool};
 pub use process::{
     ProcessController, ProcessEntry, ProcessNotification, ProcessNotificationKind, ProcessSnapshot,
     ProcessSpawn, ProcessTool, ProcessWrite,
@@ -37,7 +36,7 @@ pub use workspace::Workspace;
 
 /// The recommended default tool set: a local `shell` and `process`
 /// (persistent sessions / background processes), plus file
-/// read/write/edit/patch/multi-edit/list, `grep`, and `glob`, all rooted at
+/// read/write/edit, `grep`, and `glob`, all rooted at
 /// `ws`. Returned as trait objects ready for
 /// [`Agent::tool_arc`](orca_harness_core::Agent).
 ///
@@ -111,9 +110,6 @@ fn file_tools(ws: &Workspace, guard: &FileGuard) -> Vec<Arc<dyn Tool>> {
         Arc::new(ReadFileTool::new(ws.clone()).guard(guard.clone())),
         Arc::new(WriteFileTool::new(ws.clone()).guard(guard.clone())),
         Arc::new(EditFileTool::new(ws.clone()).guard(guard.clone())),
-        Arc::new(ApplyPatchTool::new(ws.clone()).guard(guard.clone())),
-        Arc::new(MultiEditTool::new(ws.clone()).guard(guard.clone())),
-        Arc::new(ListDirTool::new(ws.clone())),
         Arc::new(GrepTool::new(ws.clone())),
         Arc::new(GlobTool::new(ws.clone())),
     ]

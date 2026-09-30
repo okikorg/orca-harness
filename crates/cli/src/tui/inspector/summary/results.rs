@@ -88,9 +88,6 @@ fn append_mutation_result(lines: &mut Vec<Line<'static>>, output: &Value, width:
     for (field, label) in [
         ("filesChanged", "files changed"),
         ("editsApplied", "edits applied"),
-        ("added", "added"),
-        ("updated", "updated"),
-        ("deleted", "deleted"),
     ] {
         if let Some(count) = output.get(field).and_then(Value::as_u64) {
             rows.push((label, count.to_string()));
@@ -388,46 +385,6 @@ fn append_ranked_results(lines: &mut Vec<Line<'static>>, output: &Value, width: 
         "tools"
     };
     append_collection(lines, output, field, field, width);
-}
-
-fn append_crawl_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {
-    let mut result = section(width, "crawl");
-    result.extend(inspector_fields(
-        [
-            ("status", string(output, "status").to_owned()),
-            (
-                "pages",
-                output
-                    .get("pagesReturned")
-                    .map(compact_value)
-                    .unwrap_or_default(),
-            ),
-            (
-                "total",
-                output
-                    .get("totalPages")
-                    .map(compact_value)
-                    .unwrap_or_default(),
-            ),
-        ]
-        .into_iter()
-        .filter(|(_, value)| !value.is_empty()),
-        width,
-    ));
-    result.append_to(lines);
-    if let Some(pages) = output.get("pages").and_then(Value::as_array) {
-        let mut list = section(width, format!("pages · {}", pages.len()));
-        for page in pages.iter().take(30) {
-            let title = string(page, "title");
-            let url = string(page, "url");
-            let text = if title.is_empty() { url } else { title };
-            list.push(Line::from(Span::raw(view::truncate_line(
-                &format!("    {text}"),
-                width,
-            ))));
-        }
-        list.append_to(lines);
-    }
 }
 
 fn append_paged_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {

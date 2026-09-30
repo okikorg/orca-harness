@@ -7,9 +7,9 @@
     #[test]
     fn every_builtin_tool_has_a_human_activity_label() {
         let tools = [
-            "shell", "read_file", "write_file", "edit_file", "multi_edit", "apply_patch",
-            "list_dir", "grep", "glob", "process", "pykernel", "bun_repl", "subagent",
-            "todo_write", "ask", "web_fetch", "web_search", "web_crawl", "read_tool_result",
+            "shell", "read_file", "write_file", "edit_file", "grep", "glob", "process",
+            "pykernel", "bun_repl", "subagent", "todo_write", "ask", "web_fetch", "web_search",
+            "read_tool_result",
             "skill", "mcp_search_tools", "mcp_select_tool", "mcp_features", "copy_file",
             "rename_file", "delete_file", "create_folder", "file_info",
         ];
@@ -21,10 +21,6 @@
         assert_eq!(crate::presentation::tool_action_label("grep"), "Search text");
         assert_eq!(crate::presentation::tool_action_label("web_search"), "Web search");
         assert_eq!(crate::presentation::tool_action_label("edit_file"), "Edit");
-        assert_eq!(
-            crate::presentation::tool_action_label("multi_edit"),
-            "Multi-edit"
-        );
     }
 
     #[test]
@@ -36,23 +32,16 @@
     }
 
     #[test]
-    fn batch_mutations_show_compact_scope() {
+    fn batch_edits_show_compact_scope() {
         assert_eq!(
             tool_call_line(
-                "multi_edit",
+                "edit_file",
                 &json!({"edits": [
                     {"path": "a.rs", "old": "a", "new": "b"},
                     {"path": "b.rs", "old": "c", "new": "d"}
                 ]})
             ),
-            "multi_edit 2 edits · 2 files"
-        );
-        assert_eq!(
-            tool_call_line(
-                "apply_patch",
-                &json!({"patch": "*** Begin Patch\n*** Update File: a.rs\n@@\n-a\n+b\n*** Add File: b.rs\n+x\n*** End Patch"})
-            ),
-            "apply_patch a.rs · 2 files"
+            "edit_file 2 edits · 2 files"
         );
     }
 
@@ -184,29 +173,19 @@
             tool_result_summary("write_file", &out, false),
             "wrote 42 bytes"
         );
-        let out = json!({"path": "a.rs", "replacements": 2});
+        let out = json!({"editsApplied": 1, "filesChanged": 1, "replacements": 2});
         assert_eq!(
             tool_result_summary("edit_file", &out, false),
             "2 replacements"
         );
         assert_eq!(
             tool_result_summary(
-                "multi_edit",
+                "edit_file",
                 &json!({"editsApplied": 3, "filesChanged": 2}),
                 false
             ),
             "3 edits · 2 files"
         );
-        assert_eq!(
-            tool_result_summary(
-                "apply_patch",
-                &json!({"filesChanged": 3, "added": 1, "updated": 2, "deleted": 0}),
-                false
-            ),
-            "3 files · +1 ~2 -0"
-        );
-        let out = json!({"path": ".", "entries": ["a", "b"]});
-        assert_eq!(tool_result_summary("list_dir", &out, false), "2 entries");
     }
 
     #[test]
@@ -275,14 +254,6 @@
             tool_result_summary("web_search", &json!({"results": [{}, {}]}), false),
             "2 results"
         );
-        assert_eq!(
-            tool_result_summary(
-                "web_crawl",
-                &json!({"pagesReturned": 2, "status": "completed", "timedOut": false}),
-                false
-            ),
-            "2 pages · completed"
-        );
     }
 
     #[test]
@@ -343,7 +314,7 @@
     #[test]
     fn expand_generic_output_pretty_prints_json() {
         let out = json!({"entries": ["a", "b"]});
-        let lines = expand_output("list_dir", &out);
+        let lines = expand_output("some_tool", &out);
         let joined = lines.join("\n");
         assert!(joined.contains("\"entries\""));
         assert!(lines.len() >= 3, "pretty multi-line: {lines:?}");

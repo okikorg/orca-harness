@@ -157,7 +157,7 @@ async fn tool_retry_error_rule_skips_non_retryable_failure() {
     let deterministic = {
         let attempts = attempts.clone();
         FnTool::new(
-            "multi_edit",
+            "edit_file",
             "returns a deterministic matching error",
             json!({"type": "object"}),
             move |_input, _ctx| {
@@ -170,13 +170,13 @@ async fn tool_retry_error_rule_skips_non_retryable_failure() {
         )
     };
     let model = Arc::new(ScriptedModel::tool_round(
-        vec![call("c0", "multi_edit", json!({}))],
+        vec![call("c0", "edit_file", json!({}))],
         "done",
     ));
     let agent = Agent::new(model.clone()).tool(deterministic).extension(
         ToolRetry::new(3)
             .backoff(Duration::from_secs(1))
-            .retry_error_when(|call, _error| call.name != "multi_edit"),
+            .retry_error_when(|call, _error| call.name != "edit_file"),
     );
 
     timeout(RUN_TIMEOUT, agent.run("retry"))

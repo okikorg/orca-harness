@@ -6,7 +6,7 @@ use orca_harness_sdk::{
 
 let policy = ToolPolicy::new().rule(|call: &amp;ToolCall| {
     let allowed = match call.name.as_str() {
-        "read_file" | "list_dir" | "grep" | "glob"
+        "read_file" | "grep" | "glob"
         | "skill" | "subagent" | "workflow"
         | "mcp_select_tool" | "mcp__release__check" =&gt; true,
         "process" =&gt; call.arguments["action"] == "spawn"

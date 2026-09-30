@@ -17,9 +17,7 @@ use orca_harness_extensions::{
 };
 use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::skills::SkillOnce;
-use orca_harness_tool_extensions::web::{
-    Firecrawl, UrlPolicy, WebCrawlTool, WebFetchTool, WebSearchTool,
-};
+use orca_harness_tool_extensions::web::{Firecrawl, UrlPolicy, WebFetchTool, WebSearchTool};
 use orca_harness_tools::{
     core_tools_with_guard, ActiveInventory, AskTool, BackgroundStats, CompletionInbox, FileGuard,
     SubagentDepth, SubagentManager, SubagentSpawn, TodoList, TodoWriteTool, Workspace,
@@ -423,7 +421,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         .limits(cfg.limits())
         .extension(events)
         .extension(delivery(completions.clone(), ui.clone()))
-        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()).reviewed_shell())
         .extension(orca_harness_tools::MutationPreflight)
         .extension(auto_approval.clone());
     if let Some(plugin_hooks) = plugin_hooks {
@@ -484,9 +482,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
         .tool_arc(std::sync::Arc::new(WebFetchTool::new(UrlPolicy::strict())));
     if let Some(key) = &cfg.firecrawl_key {
         let fc = std::sync::Arc::new(Firecrawl::new(key.clone()));
-        agent = agent
-            .tool_arc(std::sync::Arc::new(WebSearchTool::new(fc.clone())))
-            .tool_arc(std::sync::Arc::new(WebCrawlTool::new(fc)));
+        agent = agent.tool_arc(std::sync::Arc::new(WebSearchTool::new(fc)));
     }
     for tool in catalog.tools() {
         agent = agent.tool_arc(tool);

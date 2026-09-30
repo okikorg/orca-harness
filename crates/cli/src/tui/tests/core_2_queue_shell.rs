@@ -2,7 +2,7 @@
 fn parallel_batch_results_are_labeled_with_their_tool() {
     let mut app = test_app();
     for (id, name, args) in [
-        ("c1", "list_dir", serde_json::json!({"path": "."})),
+        ("c1", "glob", serde_json::json!({"pattern": "*.rs"})),
         ("c2", "shell", serde_json::json!({"command": "git log"})),
     ] {
         handle_harness_event(
@@ -20,8 +20,8 @@ fn parallel_batch_results_are_labeled_with_their_tool() {
         &mut app,
         HarnessEvent::ToolResult {
             tool_call_id: "c1".into(),
-            tool_name: "list_dir".into(),
-            output: serde_json::json!({"path": ".", "entries": ["a", "b"]}),
+            tool_name: "glob".into(),
+            output: serde_json::json!({"pattern": "*.rs", "matches": ["a", "b"], "truncated": false}),
             is_error: false,
         },
         80,
@@ -48,7 +48,7 @@ fn parallel_batch_results_are_labeled_with_their_tool() {
         .join("\n");
     // Each result sits on its own call's row.
     assert!(
-        crate::tui::text::has_row(&joined, &["List directory", ".", "2 entries"])
+        crate::tui::text::has_row(&joined, &["Find", "*.rs", "2 matches"])
             && crate::tui::text::has_row(&joined, &["Shell", "$ git log", "exit 0 · abc123"]),
         "results stay attached: {joined}"
     );

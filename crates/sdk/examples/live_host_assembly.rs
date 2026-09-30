@@ -121,7 +121,6 @@ fn policy() -> ToolPolicy {
     ToolPolicy::new().rule(|call: &ToolCall| {
         let allowed = match call.name.as_str() {
             "read_file"
-            | "list_dir"
             | "grep"
             | "glob"
             | "skill"

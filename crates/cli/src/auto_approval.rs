@@ -103,7 +103,7 @@ impl AutoApproval {
             return true;
         }
         if READ_ONLY_TOOLS.contains(&call.name.as_str())
-            && !matches!(call.name.as_str(), "web_fetch" | "web_search" | "web_crawl")
+            && !matches!(call.name.as_str(), "web_fetch" | "web_search")
         {
             return true;
         }
@@ -113,25 +113,9 @@ impl AutoApproval {
         // These tools are already constrained to workspace-relative paths and
         // fail closed through read-before-overwrite, exact-match, and
         // transactional preflight checks. They are the normal implementation
-        // path, not privileged administration. Patch deletion stays reviewed
-        // because it is the one native mutation that removes a whole file.
-        if matches!(
-            call.name.as_str(),
-            "write_file" | "edit_file" | "multi_edit"
-        ) {
+        // path, not privileged administration.
+        if matches!(call.name.as_str(), "write_file" | "edit_file") {
             return true;
-        }
-        if call.name == "apply_patch" {
-            return input
-                .get("patch")
-                .and_then(Value::as_str)
-                .is_some_and(|patch| {
-                    !patch.lines().any(|line| {
-                        line.strip_suffix('\r')
-                            .unwrap_or(line)
-                            .starts_with("*** Delete File: ")
-                    })
-                });
         }
         call.name == "process"
             && matches!(
