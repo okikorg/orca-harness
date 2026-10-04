@@ -35,6 +35,7 @@ pub(crate) struct AgentDefinition {
     pub memory_tools: Vec<Arc<dyn Tool>>,
     pub extensions: Vec<Arc<dyn Extension>>,
     pub extension_config: ExtensionConfig,
+    pub programmatic_tools: Option<orca_harness_core::ProgrammaticTools>,
     pub context_capacity: Option<u64>,
     /// Caller-owned instances that every session uses instead of creating
     /// its own. `None` means each session gets a fresh one.
@@ -58,6 +59,7 @@ pub struct AgentBuilder {
     tool_sources: Vec<ToolSource>,
     extensions: Vec<Arc<dyn Extension>>,
     extension_config: ExtensionConfig,
+    programmatic_tools: Option<orca_harness_core::ProgrammaticTools>,
     context_capacity: Option<u64>,
     shared_file_guard: Option<FileGuard>,
     shared_todo_list: Option<TodoList>,
@@ -80,6 +82,7 @@ impl AgentBuilder {
             tool_sources: Vec::new(),
             extensions: Vec::new(),
             extension_config: ExtensionConfig::default(),
+            programmatic_tools: None,
             context_capacity: None,
             shared_file_guard: None,
             shared_todo_list: None,
@@ -98,6 +101,12 @@ impl AgentBuilder {
 
     pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// Enable programmatic tools for sessions and their sandboxed children.
+    pub fn programmatic_tools(mut self, config: orca_harness_core::ProgrammaticTools) -> Self {
+        self.programmatic_tools = Some(config);
         self
     }
 
@@ -365,6 +374,7 @@ impl AgentBuilder {
                 memory_tools,
                 extensions: self.extensions,
                 extension_config: self.extension_config,
+                programmatic_tools: self.programmatic_tools,
                 context_capacity: self.context_capacity,
                 shared_file_guard: self.shared_file_guard,
                 shared_todo_list: self.shared_todo_list,

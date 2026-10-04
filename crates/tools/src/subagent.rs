@@ -128,6 +128,8 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
     limits: Limits,
     limits_configured: bool,
     system_prompt: Option<String>,
+    programmatic_tools: Option<orca_harness_core::ProgrammaticTools>,
+    programmatic_bun: Option<(Arc<dyn orca_harness_core::Sandbox>, String)>,
     /// Distance from the top-level agent; the instance registered there
     /// is depth 0.
     depth: u32,
@@ -172,6 +174,8 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             },
             limits_configured: false,
             system_prompt: None,
+            programmatic_tools: None,
+            programmatic_bun: None,
             depth: 0,
             max_depth: SubagentDepth::default(),
             spawn_extensions: None,
@@ -183,6 +187,22 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             retry_error: None,
             background: None,
         }
+    }
+
+    /// Enable nested dispatch in every child, including nested children.
+    pub fn programmatic_tools(mut self, config: orca_harness_core::ProgrammaticTools) -> Self {
+        self.programmatic_tools = Some(config);
+        self
+    }
+
+    /// Give every child a fresh Bun interpreter in the inherited sandbox.
+    pub fn programmatic_bun(
+        mut self,
+        sandbox: Arc<dyn orca_harness_core::Sandbox>,
+        workspace: String,
+    ) -> Self {
+        self.programmatic_bun = Some((sandbox, workspace));
+        self
     }
 
     /// Attach host extensions (event streams, policy, ...) to every
@@ -323,6 +343,8 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             limits: self.limits.clone(),
             limits_configured: self.limits_configured,
             system_prompt: self.system_prompt.clone(),
+            programmatic_tools: self.programmatic_tools.clone(),
+            programmatic_bun: self.programmatic_bun.clone(),
             depth: self.depth + 1,
             max_depth: self.max_depth.clone(),
             spawn_extensions: self.spawn_extensions.clone(),

@@ -70,7 +70,8 @@ impl BackgroundServices {
     /// configuration: executor and limits, but no notifier, since a
     /// child's processes have no host to report to) over a fresh
     /// read-before-write guard per spawn plus the caller-owned custom
-    /// tools; they get no REPLs, todo list, skills, MCP, or memory tools.
+    /// tools. Programmatic-tool mode adds a fresh sandbox Bun interpreter;
+    /// children otherwise get no REPLs, todo list, skills, MCP, or memory tools.
     /// Nesting is governed by the shared [`SubagentDepth`] handle, as for
     /// the model tool.
     ///
@@ -132,6 +133,16 @@ impl BackgroundServices {
             // explicit limits are per spawn, not a rewrite of what every
             // session of the agent sees.
             .max_depth(settings.clone());
+        if let Some(config) = &definition.programmatic_tools {
+            tool = tool.programmatic_tools(config.clone());
+            if let crate::SessionEnvironment::Sandbox {
+                sandbox, workspace, ..
+            } = environment
+            {
+                tool = tool
+                    .programmatic_bun(sandbox.clone(), workspace.to_string_lossy().into_owned());
+            }
+        }
         if let Some(prompt) = &config.system_prompt {
             tool = tool.system_prompt(prompt.clone());
         }
