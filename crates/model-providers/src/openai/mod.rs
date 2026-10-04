@@ -231,8 +231,9 @@ pub(crate) struct WireUsage {
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: WirePromptTokensDetails,
+    /// Some gateways send `null` here; treat it like an absent object.
     #[serde(default)]
-    completion_tokens_details: WireCompletionTokensDetails,
+    completion_tokens_details: Option<WireCompletionTokensDetails>,
     /// DeepSeek-style cache reporting, used when details are absent.
     #[serde(default)]
     prompt_cache_hit_tokens: u64,
@@ -275,7 +276,9 @@ impl WireUsage {
             output_tokens: self.completion_tokens,
             cache_read_tokens: cache_read,
             cache_create_tokens: cache_write,
-            reasoning_tokens: self.completion_tokens_details.reasoning_tokens,
+            reasoning_tokens: self
+                .completion_tokens_details
+                .and_then(|details| details.reasoning_tokens),
         }
     }
 }

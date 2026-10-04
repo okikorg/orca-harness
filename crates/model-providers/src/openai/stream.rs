@@ -521,6 +521,33 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_usage_preserves_absence_and_zero_without_double_counting() {
+        for (details, expected) in [
+            ("null", None),
+            ("{}", None),
+            ("{\"reasoning_tokens\":0}", Some(0)),
+            ("{\"reasoning_tokens\":2}", Some(2)),
+        ] {
+            let wire:super::super::WireUsage=serde_json::from_str(&format!("{{\"prompt_tokens\":12,\"completion_tokens\":8,\"completion_tokens_details\":{details}}}")).unwrap();
+            let usage = wire.into_usage();
+            assert_eq!(usage.reasoning_tokens, expected);
+            assert_eq!(usage.output_tokens, 8);
+            assert_eq!(usage.context_tokens(), 20);
+        }
+        let mut acc = ChunkAccumulator::new();
+        apply_all(
+            &mut acc,
+            &[
+                r#"{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}"#,
+                r#"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":8,"completion_tokens_details":{"reasoning_tokens":2}}}"#,
+            ],
+        );
+        assert!(
+            matches!(acc.finish(true).unwrap(),ModelResponse::Final{usage:Some(usage),..} if usage.reasoning_tokens==Some(2)&&usage.context_tokens()==20)
+        );
+    }
+
+    #[test]
     fn openrouter_cache_reads_and_writes_are_disjoint() {
         // OpenRouter usage accounting: cached_tokens (reads) and
         // cache_write_tokens are separate, non-overlapping counts, not
