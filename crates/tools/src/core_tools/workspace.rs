@@ -186,6 +186,19 @@ impl Workspace {
         }
     }
 
+    /// [`stat`](Self::stat) for a check that must not pass on a failure:
+    /// a sandbox that cannot say what is at `path` is an error here, not
+    /// an absent file. The host keeps `stat`'s answer unchanged.
+    pub(crate) async fn stat_checked(&self, path: &Path) -> Result<Option<Stat>, ToolError> {
+        match &self.backend {
+            Backend::Host => Ok(self.stat(path).await),
+            Backend::Sandbox(sandbox) => sandbox
+                .stat(&display(path))
+                .await
+                .map_err(|e| ToolError::msg(format!("stat failed: {e}"))),
+        }
+    }
+
     /// One directory's entries as `(name, is_dir)`, unsorted.
     pub(crate) async fn list(&self, path: &Path) -> Result<Vec<(String, bool)>, ToolError> {
         match &self.backend {
