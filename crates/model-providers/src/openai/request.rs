@@ -1,6 +1,6 @@
 //! Chat-completions request encoding, separate from transport and response handling.
 use super::OpenAiModel;
-use orca_harness_core::{Context, Message, ToolSchema};
+use orca_harness_core::{Context, Message, ModelError, ToolSchema};
 use serde_json::{json, Value};
 
 impl OpenAiModel {
@@ -42,6 +42,15 @@ impl OpenAiModel {
             } else {
                 body["reasoning_effort"] = json!(effort);
             }
+        }
+        if let Some(tier) = &self.service_tier {
+            body["service_tier"] = json!(tier);
+        }
+        if let Some(verbosity) = &self.verbosity {
+            body["verbosity"] = json!(verbosity);
+        }
+        if let Some(format) = &self.response_format {
+            body["response_format"] = format.clone();
         }
         if self.usage_accounting {
             body["usage"] = json!({"include": true});
@@ -121,4 +130,59 @@ pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
         }
     }
     out
+}
+
+/// Responses' JSON-schema format is flat; Chat wraps schema attributes.
+pub(super) fn chat_response_format(format: Value) -> Result<Value, ModelError> {
+    let invalid = |message: &str| ModelError::Request(format!("invalid text.format: {message}"));
+    let Value::Object(mut fields) = format else {
+        return Err(invalid("expected an object"));
+    };
+    let kind = fields
+        .remove("type")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| invalid("type must be a string"))?;
+    match kind.as_str() {
+        "text" | "json_object" if fields.is_empty() => Ok(json!({"type":kind})),
+        "text" | "json_object" => Err(invalid("unexpected format attributes")),
+        "json_schema" => {
+            if fields
+                .keys()
+                .any(|key| !matches!(key.as_str(), "name" | "schema" | "description" | "strict"))
+            {
+                return Err(invalid("unsupported JSON schema format attribute"));
+            }
+            let valid_name = fields
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| {
+                    !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                });
+            if !valid_name {
+                return Err(invalid(
+                    "name must contain 1-64 ASCII letters, digits, underscores or hyphens",
+                ));
+            }
+            if !fields.get("schema").is_some_and(Value::is_object) {
+                return Err(invalid("schema must be an object"));
+            }
+            if fields.get("description").is_some_and(|v| !v.is_string()) {
+                return Err(invalid("description must be a string"));
+            }
+            if fields
+                .get("strict")
+                .is_some_and(|v| !v.is_boolean() && !v.is_null())
+            {
+                return Err(invalid("strict must be a boolean or null"));
+            }
+            Ok(json!({"type":"json_schema", "json_schema":fields}))
+        }
+        _ => Err(invalid(
+            "supported types are text, json_object and json_schema",
+        )),
+    }
 }
