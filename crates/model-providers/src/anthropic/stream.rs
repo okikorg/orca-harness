@@ -182,13 +182,13 @@ impl Accumulator {
                 return Err(ModelError::OutputLimit {
                     message: "Anthropic reached its token limit".into(),
                     usage: self.usage,
-                })
+                });
             }
             Some("refusal") => {
                 return Err(ModelError::ContentFiltered {
                     message: "Anthropic refused the response".into(),
                     usage: self.usage,
-                })
+                });
             }
             _ => {}
         }

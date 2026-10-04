@@ -230,10 +230,12 @@ mod tests {
     #[test]
     fn sse_buffer_accepts_crlf_and_split_frames() {
         let mut buffer = SseBuffer::default();
-        assert!(buffer
-            .push(b"event: response.output_text.delta\r\ndata:")
-            .unwrap()
-            .is_empty());
+        assert!(
+            buffer
+                .push(b"event: response.output_text.delta\r\ndata:")
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             buffer
                 .push(b" {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\r\n\r\n")

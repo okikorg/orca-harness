@@ -27,7 +27,9 @@ fn request_preparation_benchmark() {
                 .build()
                 .unwrap()
         });
-        println!("chat/{name}: bytes={bytes} encode_us={encode:.2} serialize_headers_build_us={prepare:.2} total_us={total:.2}");
+        println!(
+            "chat/{name}: bytes={bytes} encode_us={encode:.2} serialize_headers_build_us={prepare:.2} total_us={total:.2}"
+        );
     }
 }
 

@@ -25,7 +25,7 @@
 
 use crate::openai::WireUsage;
 use orca_harness_core::Usage;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// One provider wire payload and the prompt total it reports.
 struct Fixture {
