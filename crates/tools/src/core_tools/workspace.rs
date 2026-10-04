@@ -186,8 +186,6 @@ impl Workspace {
         }
     }
 
-
-
     /// One directory's entries as `(name, is_dir)`, unsorted.
     pub(crate) async fn list(&self, path: &Path) -> Result<Vec<(String, bool)>, ToolError> {
         match &self.backend {

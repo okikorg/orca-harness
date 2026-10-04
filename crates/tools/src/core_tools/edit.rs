@@ -103,9 +103,12 @@ async fn read_all(
     paths: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, String>, ToolError> {
     if let Some((rel, path)) = paths.first_key_value().filter(|_| paths.len() == 1) {
-        return Ok(BTreeMap::from(
-            [read_text(ws.clone(), rel.clone(), path.clone()).await?],
-        ));
+        return Ok(BTreeMap::from([read_text(
+            ws.clone(),
+            rel.clone(),
+            path.clone(),
+        )
+        .await?]));
     }
     let mut reads = JoinSet::new();
     for (rel, path) in paths {
