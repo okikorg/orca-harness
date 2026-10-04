@@ -104,7 +104,7 @@ impl FileGuard {
         path: &Path,
         rel: &str,
     ) -> Result<(), ToolError> {
-        let Some(current) = ws.stat(path).await else {
+        let Some(current) = ws.stat_checked(path).await? else {
             return Ok(());
         };
         if current.is_dir {

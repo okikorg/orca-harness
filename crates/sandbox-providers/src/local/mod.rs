@@ -29,6 +29,8 @@ const PROVIDER: &str = "docker";
 const DEFAULT_IMAGE: &str = "debian:stable-slim";
 /// Enough for the output of one command; the tools truncate above this.
 const OUTPUT_CHANNEL_CHUNKS: usize = 32;
+/// `stat` exit code for "nothing at this path", distinct from a failure.
+const STAT_ABSENT: i32 = 3;
 
 /// Creates local Docker sandboxes.
 pub struct DockerProvisioner {
@@ -506,17 +508,34 @@ impl Sandbox for DockerSandbox {
         Ok(parse_ls(&String::from_utf8_lossy(&output.stdout)))
     }
 
+    /// Absence is `Ok(None)`; anything else that stops a stamp being read
+    /// is an error. Reporting a failed stat as absence would let the
+    /// read-before-write guard wave through an overwrite it never checked.
     async fn stat(&self, path: &str) -> Result<Option<Stat>, SandboxError> {
+        let quoted = shell_quote(path);
+        // `%.9Y` keeps the nanoseconds: whole seconds would let a
+        // same-length edit within one second compare equal.
         let output = self
             .execute_bounded(ExecRequest::new(format!(
-                "stat -c '%Y %s %F' -- {}",
-                shell_quote(path)
+                "[ -e {quoted} ] || [ -L {quoted} ] || exit {STAT_ABSENT}; \
+                 exec stat -c '%.9Y %s %F' -- {quoted}"
             )))
             .await?;
-        if output.exit_code != 0 {
-            return Ok(None);
+        match output.exit_code {
+            0 => parse_stat(&String::from_utf8_lossy(&output.stdout))
+                .map(Some)
+                .ok_or_else(|| {
+                    SandboxError::Request(format!(
+                        "stat {path}: unreadable output {:?}",
+                        String::from_utf8_lossy(&output.stdout).trim()
+                    ))
+                }),
+            STAT_ABSENT => Ok(None),
+            _ => Err(SandboxError::Request(format!(
+                "stat {path}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))),
         }
-        Ok(parse_stat(&String::from_utf8_lossy(&output.stdout)))
     }
 
     async fn shutdown(&self) -> Result<(), SandboxError> {
@@ -554,23 +573,33 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-/// `stat -c '%Y %s %F'` — epoch seconds, size, and a type description
-/// whose wording varies ("directory", "regular file", "symbolic link"),
-/// so only the directory case is matched by name.
+/// `stat -c '%.9Y %s %F'` — modification time as epoch seconds with a
+/// nanosecond fraction, size, and a type description whose wording varies
+/// ("directory", "regular file", "symbolic link"), so only the directory
+/// case is matched by name. Whole seconds (`%Y`, or a `stat` without the
+/// precision flag) still parse; they are just coarser.
 pub(crate) fn parse_stat(line: &str) -> Option<Stat> {
     let mut parts = line.trim().splitn(3, ' ');
-    let modified = parts
-        .next()?
-        .parse::<u64>()
-        .ok()
-        .map(|secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
+    let modified = parse_epoch(parts.next()?)?;
     let len = parts.next()?.parse::<u64>().ok()?;
     let is_dir = parts.next().is_some_and(|kind| kind.trim() == "directory");
     Some(Stat {
-        modified,
+        modified: Some(modified),
         len,
         is_dir,
     })
+}
+
+/// `seconds[.fraction]`, keeping up to nine fractional digits exactly
+/// rather than going through a float.
+fn parse_epoch(text: &str) -> Option<std::time::SystemTime> {
+    let (secs, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let secs = secs.parse::<u64>().ok()?;
+    if fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let nanos = format!("{fraction:0<9}").parse::<u32>().ok()?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::new(secs, nanos))
 }
 
 /// `ls -Ap` marks directories with a trailing slash and omits `.`/`..`.
@@ -654,20 +683,40 @@ mod tests {
 
     #[test]
     fn stat_output_parses_into_a_comparable_stamp() {
-        let stat = parse_stat("1757635200 4096 regular file\n").expect("parse");
+        let stat = parse_stat("1757635200.123456789 4096 regular file\n").expect("parse");
         assert_eq!(
             stat.modified,
-            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1757635200))
+            Some(std::time::UNIX_EPOCH + std::time::Duration::new(1757635200, 123456789))
         );
         assert_eq!(stat.len, 4096);
         assert!(!stat.is_dir);
 
-        let dir = parse_stat("1757635200 64 directory").expect("parse");
+        let dir = parse_stat("1757635200 64 directory").expect("whole seconds still parse");
         assert!(dir.is_dir);
+        assert_eq!(
+            dir.modified,
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1757635200))
+        );
 
         // Garbage must not become a stamp that silently compares equal.
         assert!(parse_stat("").is_none());
         assert!(parse_stat("nonsense").is_none());
+        assert!(parse_stat("1757635200.1x 4 regular file").is_none());
+        assert!(parse_stat("1757635200.1234567890 4 regular file").is_none());
+    }
+
+    #[test]
+    fn edits_within_one_second_get_different_stamps() {
+        // The guard compares mtime and length; two same-length writes in
+        // the same second must still differ.
+        let first = parse_stat("1757635200.100000000 5 regular file").unwrap();
+        let second = parse_stat("1757635200.500000000 5 regular file").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            parse_stat("1757635200.5 5 regular file").unwrap(),
+            second,
+            "a short fraction is tenths, not nanoseconds"
+        );
     }
 
     #[test]
