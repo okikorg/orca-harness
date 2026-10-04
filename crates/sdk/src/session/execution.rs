@@ -131,6 +131,9 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
             }),
         );
     }
+    for extension in request.extensions {
+        agent = agent.extension_arc(extension);
+    }
     if definition.inner.extension_config.usage {
         agent = agent.extension(meter);
     }
