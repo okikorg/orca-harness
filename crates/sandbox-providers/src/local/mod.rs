@@ -32,11 +32,167 @@ const OUTPUT_CHANNEL_CHUNKS: usize = 32;
 /// Creates local Docker sandboxes.
 pub struct DockerProvisioner {
     spec: EnvironmentSpec,
+    identity: Option<(String, String)>,
 }
 
 impl DockerProvisioner {
     pub fn new(spec: EnvironmentSpec) -> Self {
-        Self { spec }
+        Self {
+            spec,
+            identity: None,
+        }
+    }
+
+    /// Bind a managed container name to a host-owned opaque identity, so the
+    /// host can reconnect after restart without provisioning a replacement.
+    pub fn named(mut self, name: impl Into<String>, owner: impl Into<String>) -> Self {
+        self.identity = Some((name.into(), owner.into()));
+        self
+    }
+
+    /// Remove a managed container only after matching its opaque ownership
+    /// label and exact name. Absence is successful, daemon failures are not.
+    pub async fn cleanup_named(name: &str, owner: &str) -> Result<(), SandboxError> {
+        let output = docker(&[
+            "ps".into(),
+            "--all".into(),
+            "--filter".into(),
+            format!("label=orca.environment={owner}"),
+            "--format".into(),
+            "{{json .}}".into(),
+        ])
+        .await?;
+        if !output.status.success() {
+            return Err(SandboxError::Request(
+                "could not inventory managed Docker containers".into(),
+            ));
+        }
+        for line in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.is_empty())
+        {
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|_| SandboxError::Request("invalid Docker inventory".into()))?;
+            if row["Names"] != name {
+                return Err(SandboxError::Request(
+                    "managed Docker container was renamed".into(),
+                ));
+            }
+            let id = row["ID"].as_str().ok_or_else(|| {
+                SandboxError::Request("Docker inventory has no container id".into())
+            })?;
+            let removed = docker(&["rm".into(), "-f".into(), id.into()]).await?;
+            if !removed.status.success() {
+                return Err(SandboxError::Request(
+                    "managed Docker cleanup failed".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Reconnect only to a running container bearing the expected identity.
+    /// Container names are not sufficient proof of ownership on their own.
+    pub async fn attach_named(
+        name: &str,
+        owner: &str,
+        workspace: &str,
+    ) -> Result<Arc<dyn Sandbox>, SandboxError> {
+        Ok(Arc::new(Self::inspect_named(name, owner, workspace).await?))
+    }
+
+    async fn inspect_named(
+        name: &str,
+        owner: &str,
+        workspace: &str,
+    ) -> Result<DockerSandbox, SandboxError> {
+        let output = docker(&["inspect".into(), name.into()]).await?;
+        if !output.status.success() {
+            return Err(SandboxError::Request(
+                "managed Docker environment is unavailable".into(),
+            ));
+        }
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|_| SandboxError::Request("invalid Docker inspect response".into()))?;
+        let container = rows
+            .as_array()
+            .and_then(|rows| rows.first())
+            .ok_or_else(|| {
+                SandboxError::Request("managed Docker environment is unavailable".into())
+            })?;
+        if container["Config"]["Labels"]["orca.environment"] != owner
+            || container["State"]["Running"] != true
+            || container["Config"]["WorkingDir"] != workspace
+        {
+            return Err(SandboxError::Request(
+                "Docker environment identity or state does not match".into(),
+            ));
+        }
+        let id = container["Id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| SandboxError::Request("Docker environment has no id".into()))?;
+        Ok(DockerSandbox {
+            user: Some("65532:65532".into()),
+            id: id.into(),
+            workspace: workspace.into(),
+            capabilities: Capabilities {
+                sessions: true,
+                file_api: true,
+                network_policy: false,
+            },
+        })
+    }
+
+    /// Complete host-owned setup and expose all subsequent operations as an
+    /// unprivileged user. Protected trees and their ancestors remain root-owned.
+    pub async fn finalize_named(
+        name: &str,
+        owner: &str,
+        workspace: &str,
+        directories: &[String],
+    ) -> Result<Arc<dyn Sandbox>, SandboxError> {
+        let mut sandbox = Self::inspect_named(name, owner, workspace).await?;
+        sandbox.user = Some("0:0".into());
+        sandbox
+            .run_setup(&format!(
+                "chown -hR 65532:65532 {0} && chown 0:0 {0} && chmod 1777 {0}",
+                shell_quote(workspace)
+            ))
+            .await?;
+        let mut ancestors = std::collections::BTreeSet::new();
+        for directory in directories {
+            if directory != workspace && !directory.starts_with(&format!("{workspace}/")) {
+                return Err(SandboxError::Request(
+                    "protected directory must be inside workspace".into(),
+                ));
+            }
+            let mut path = std::path::Path::new(directory).parent();
+            while let Some(parent) = path {
+                let text = parent.to_string_lossy();
+                if text == workspace {
+                    break;
+                }
+                if !text.starts_with(&format!("{workspace}/")) {
+                    break;
+                }
+                ancestors.insert(text.into_owned());
+                path = parent.parent();
+            }
+        }
+        for directory in ancestors {
+            sandbox
+                .run_setup(&format!(
+                    "chown 0:0 {0} && chmod 1777 {0}",
+                    shell_quote(&directory)
+                ))
+                .await?;
+        }
+        for directory in directories {
+            sandbox.run_setup(&format!("test -z \"$(find {0} -type l -print -quit)\" && chown -hR 0:0 {0} && chmod -R a-w {0}", shell_quote(directory))).await?;
+        }
+        sandbox.user = Some("65532:65532".into());
+        Ok(Arc::new(sandbox))
     }
 }
 
@@ -66,9 +222,29 @@ impl Provisioner for DockerProvisioner {
             "run".into(),
             "-d".into(),
             "--rm".into(),
+            "--security-opt".into(),
+            "no-new-privileges".into(),
             "-w".into(),
             self.spec.workspace_directory.clone(),
         ];
+        if let Some((name, owner)) = &self.identity {
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+                || owner.is_empty()
+            {
+                return Err(SandboxError::Provision(
+                    "invalid managed Docker identity".into(),
+                ));
+            }
+            args.extend([
+                "--name".into(),
+                name.clone(),
+                "--label".into(),
+                format!("orca.environment={owner}"),
+            ]);
+        }
         if matches!(self.spec.network, Network::Disabled) {
             args.push("--network".into());
             args.push("none".into());
@@ -92,16 +268,21 @@ impl Provisioner for DockerProvisioner {
         }
 
         let sandbox = DockerSandbox {
+            user: None,
             id,
             workspace: self.spec.workspace_directory.clone(),
             capabilities: self.capabilities(),
         };
-        sandbox.prepare(&self.spec).await?;
+        if let Err(error) = sandbox.prepare(&self.spec).await {
+            let _ = sandbox.shutdown().await;
+            return Err(error);
+        }
         Ok(Arc::new(sandbox))
     }
 }
 
 pub struct DockerSandbox {
+    user: Option<String>,
     id: String,
     workspace: String,
     capabilities: Capabilities,
@@ -116,19 +297,41 @@ impl DockerSandbox {
             .await?;
 
         if !spec.packages.system.is_empty() {
-            let names = spec.packages.system.join(" ");
+            let names = spec
+                .packages
+                .system
+                .iter()
+                .map(|name| shell_quote(name))
+                .collect::<Vec<_>>()
+                .join(" ");
             self.run_setup(&format!(
                 "apt-get update && apt-get install -y --no-install-recommends {names}"
             ))
             .await?;
         }
         if !spec.packages.python.is_empty() {
-            self.run_setup(&format!("pip install {}", spec.packages.python.join(" ")))
-                .await?;
+            self.run_setup(&format!(
+                "pip install {}",
+                spec.packages
+                    .python
+                    .iter()
+                    .map(|name| shell_quote(name))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ))
+            .await?;
         }
         if !spec.packages.npm.is_empty() {
-            self.run_setup(&format!("npm install -g {}", spec.packages.npm.join(" ")))
-                .await?;
+            self.run_setup(&format!(
+                "npm install -g {}",
+                spec.packages
+                    .npm
+                    .iter()
+                    .map(|name| shell_quote(name))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ))
+            .await?;
         }
 
         for setup in &spec.setup_commands {
@@ -167,6 +370,9 @@ impl DockerSandbox {
 
     fn exec_args(&self, cwd: Option<&str>, interactive: bool) -> Vec<String> {
         let mut args = vec!["exec".to_string()];
+        if let Some(user) = &self.user {
+            args.extend(["--user".into(), user.clone()]);
+        }
         if interactive {
             args.push("-i".into());
         }
@@ -371,7 +577,12 @@ impl Sandbox for DockerSandbox {
     async fn shutdown(&self) -> Result<(), SandboxError> {
         // `--rm` removes it once stopped; force so a busy container still
         // goes away rather than leaking past the session.
-        docker(&["rm".into(), "-f".into(), self.id.clone()]).await?;
+        let output = docker(&["rm".into(), "-f".into(), self.id.clone()]).await?;
+        if !output.status.success() {
+            return Err(SandboxError::Request(
+                "Docker sandbox shutdown failed".into(),
+            ));
+        }
         Ok(())
     }
 }
