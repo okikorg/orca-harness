@@ -243,6 +243,49 @@ async fn abandoned_provisioning_leaves_no_container() {
 }
 
 #[tokio::test]
+async fn provisioning_cancelled_during_docker_run_leaves_no_container() {
+    if !docker_available().await {
+        eprintln!("skipping: no Docker daemon available");
+        return;
+    }
+    // Cancel at several points across `docker run` itself, before the
+    // adapter has a container id to clean up by.
+    for delay_ms in [0, 20, 50, 100, 200, 400] {
+        let marker = marker(&format!("cancel-run-{delay_ms}"));
+        let (key, value) = marker.split_once('=').unwrap();
+        let provisioner = DockerProvisioner::new(EnvironmentSpec::new().env([(key, value)]));
+        let start = tokio::spawn(async move { provisioner.start().await.map(|_| ()) });
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        start.abort();
+        let finished = start.await;
+
+        if matches!(finished, Ok(Ok(()))) {
+            // It won the race: a sandbox the caller dropped is the
+            // caller's to shut down, so remove it here.
+            for id in containers_marked(&marker).await {
+                let _ = tokio::process::Command::new("docker")
+                    .args(["rm", "-f", &id])
+                    .output()
+                    .await;
+            }
+            continue;
+        }
+        let mut removed = false;
+        for _ in 0..150 {
+            if containers_marked(&marker).await.is_empty() {
+                removed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            removed,
+            "cancelled after {delay_ms}ms: the container was left behind"
+        );
+    }
+}
+
+#[tokio::test]
 async fn an_edit_within_the_same_second_is_seen_by_the_guard() {
     if !docker_available().await {
         eprintln!("skipping: no Docker daemon available");

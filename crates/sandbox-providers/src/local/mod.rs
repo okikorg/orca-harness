@@ -38,6 +38,10 @@ const OUTPUT_CHANNEL_CHUNKS: usize = 32;
 const AGENT_USER: &str = "65532:65532";
 /// `stat` exit code for "nothing at this path", distinct from a failure.
 const STAT_ABSENT: i32 = 3;
+/// Label carrying a container's provisioning token, so one whose
+/// `docker run` was interrupted can still be found and removed.
+const SANDBOX_LABEL: &str = "orca.sandbox";
+static NEXT_SANDBOX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Creates local Docker sandboxes.
 pub struct DockerProvisioner {
@@ -71,11 +75,42 @@ impl Provisioner for DockerProvisioner {
             });
         }
 
+        // A name like `--index-url=...` would reach the installer as an
+        // option; quoting stops the shell, not the installer's own parser.
+        let packages = &self.spec.packages;
+        if let Some(name) = packages
+            .system
+            .iter()
+            .chain(&packages.python)
+            .chain(&packages.npm)
+            .find(|name| name.is_empty() || name.starts_with('-'))
+        {
+            return Err(SandboxError::Provision(format!(
+                "invalid package name {name:?}: must be non-empty and not start with '-'"
+            )));
+        }
+
+        // Claimed before `docker run`: if this future is dropped while the
+        // daemon is still creating the container, the guard can only find
+        // it by this label.
+        let token = format!(
+            "{:x}-{:x}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            NEXT_SANDBOX.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let mut guard = Unclaimed(Some(token.clone()));
+
         let image = self.spec.image.as_deref().unwrap_or(DEFAULT_IMAGE);
         let mut args: Vec<String> = vec![
             "run".into(),
             "-d".into(),
             "--rm".into(),
+            "--label".into(),
+            format!("{SANDBOX_LABEL}={token}"),
             // Reaps the descendants a killed process group leaves behind.
             "--init".into(),
             "--security-opt".into(),
@@ -105,10 +140,9 @@ impl Provisioner for DockerProvisioner {
             )));
         }
 
-        // From here the container exists and is ours to remove: on a
-        // failed preparation, and on cancellation, where no caller will
-        // ever hold a handle to shut it down.
-        let mut guard = Unclaimed(Some(id.clone()));
+        // The container exists and is ours to remove on a failed
+        // preparation; the guard still covers cancellation, where no caller
+        // will ever hold a handle to shut it down.
         let mut sandbox = DockerSandbox {
             user: None,
             id,
@@ -134,29 +168,51 @@ impl Provisioner for DockerProvisioner {
     }
 }
 
-/// A started container no caller owns yet. Dropped while still holding the
-/// id — the provisioning future was cancelled — it removes the container.
+/// A container being provisioned that no caller owns yet, by its label
+/// token. Dropped while still holding it — the provisioning future was
+/// cancelled — it removes whatever carries the label.
 struct Unclaimed(Option<String>);
 
 impl Drop for Unclaimed {
     fn drop(&mut self) {
-        let Some(id) = self.0.take() else {
+        let Some(token) = self.0.take() else {
             return;
         };
-        // `docker rm -f` outlives this frame either way: on the runtime
-        // when there is one, otherwise as a detached child.
+        // A `docker run` cut off mid-flight may still create the container
+        // after this point, so the sweep looks for up to ten seconds rather
+        // than once. It runs as its own process so it outlives this frame,
+        // and the runtime if that is shutting down too.
+        let sweep = format!(
+            "i=0; while [ $i -lt 40 ]; do \
+               ids=$(docker ps -aq --filter label={SANDBOX_LABEL}={token}); \
+               [ -n \"$ids\" ] && docker rm -f $ids >/dev/null 2>&1 && exit 0; \
+               i=$((i + 1)); sleep 0.25; \
+             done"
+        );
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
-                runtime.spawn(async move {
-                    let _ = docker(&["rm".into(), "-f".into(), id]).await;
-                });
-            }
-            Err(_) => {
-                let _ = std::process::Command::new("docker")
-                    .args(["rm", "-f", &id])
+                if let Ok(mut child) = Command::new("sh")
+                    .args(["-c", &sweep])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
-                    .spawn();
+                    .spawn()
+                {
+                    runtime.spawn(async move {
+                        let _ = child.wait().await;
+                    });
+                }
+            }
+            Err(_) => {
+                if let Ok(mut child) = std::process::Command::new("sh")
+                    .args(["-c", &sweep])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
             }
         }
     }
@@ -451,6 +507,7 @@ async fn docker(args: &[String]) -> Result<std::process::Output, SandboxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::Packages;
 
     #[test]
     fn restricted_network_is_refused_rather_than_ignored() {
@@ -474,6 +531,37 @@ mod tests {
             }) => {}
             Err(other) => panic!("wrong refusal: {other}"),
             Ok(_) => panic!("restricted network must be refused, not silently ignored"),
+        }
+    }
+
+    #[test]
+    fn package_names_that_look_like_options_are_refused() {
+        // Refused before any container is created, so this needs no Docker.
+        for packages in [
+            Packages {
+                python: vec!["--index-url=https://example.com/simple".into()],
+                ..Default::default()
+            },
+            Packages::system(["-o", "APT::Get::AllowUnauthenticated=true"]),
+            Packages {
+                npm: vec![String::new()],
+                ..Default::default()
+            },
+        ] {
+            let started = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(
+                    DockerProvisioner::new(EnvironmentSpec::new().packages(packages)).start(),
+                );
+            match started {
+                Err(SandboxError::Provision(message)) => {
+                    assert!(message.contains("invalid package name"), "{message}")
+                }
+                Err(other) => panic!("wrong refusal: {other}"),
+                Ok(_) => panic!("an option-like package name was accepted"),
+            }
         }
     }
 
