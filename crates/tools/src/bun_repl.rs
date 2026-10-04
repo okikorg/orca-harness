@@ -275,9 +275,12 @@ impl BunReplTool {
     }
 
     async fn kill_live(&self, session: &mut Session) {
-        if let Some(mut live) = session.live.take() {
+        // Retain the handle if cancellation interrupts provider I/O, so a
+        // later reset or SDK drop cleanup can retry the kill.
+        if let Some(live) = session.live.as_mut() {
             live.process.kill().await;
         }
+        session.live = None;
         self.set_live_pgid(None);
     }
 
@@ -447,7 +450,10 @@ impl BunReplTool {
         }
     }
 
-    async fn reset(&self) -> Result<Value, ToolError> {
+    /// Request termination of the live interpreter and discard its state.
+    /// Remote cleanup follows Spawner's best-effort kill semantics: it awaits
+    /// the kill request but does not propagate provider errors or await exit.
+    pub async fn reset(&self) -> Result<Value, ToolError> {
         let mut session = self.session.lock().await;
         self.kill_live(&mut session).await;
         session.restart_notice = false;
