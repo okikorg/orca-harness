@@ -34,6 +34,7 @@ const OUTPUT_CHANNEL_CHUNKS: usize = 32;
 pub struct DockerProvisioner {
     spec: EnvironmentSpec,
     identity: Option<(String, String)>,
+    isolated_network: Option<(String, String)>,
 }
 
 impl DockerProvisioner {
@@ -41,6 +42,7 @@ impl DockerProvisioner {
         Self {
             spec,
             identity: None,
+            isolated_network: None,
         }
     }
 
@@ -48,6 +50,19 @@ impl DockerProvisioner {
     /// host can reconnect after restart without provisioning a replacement.
     pub fn named(mut self, name: impl Into<String>, owner: impl Into<String>) -> Self {
         self.identity = Some((name.into(), owner.into()));
+        self
+    }
+
+    /// Attach to a host-owned isolated network and mount its public trust volume.
+    /// The host must enforce and verify network topology and proxy policy; this
+    /// mechanism does not advertise restricted-domain enforcement by itself.
+    /// Incompatible with Disabled/Restricted specs to avoid overriding them.
+    pub fn isolated_network(
+        mut self,
+        name: impl Into<String>,
+        trust_volume: impl Into<String>,
+    ) -> Self {
+        self.isolated_network = Some((name.into(), trust_volume.into()));
         self
     }
 
@@ -250,6 +265,34 @@ impl Provisioner for DockerProvisioner {
         if matches!(self.spec.network, Network::Disabled) {
             args.push("--network".into());
             args.push("none".into());
+        }
+        if let Some((network, trust)) = &self.isolated_network {
+            if self.spec.network != Network::Enabled
+                || [network, trust].iter().any(|name| {
+                    name.is_empty()
+                        || !name.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
+                        })
+                })
+            {
+                return Err(SandboxError::Provision(
+                    "invalid host-owned network attachment".into(),
+                ));
+            }
+            args.extend([
+                "--network".into(),
+                network.clone(),
+                "--cap-drop".into(),
+                "NET_RAW".into(),
+                "--cap-drop".into(),
+                "NET_ADMIN".into(),
+                "--dns".into(),
+                "127.0.0.1".into(),
+                "--sysctl".into(),
+                "net.ipv6.conf.all.disable_ipv6=1".into(),
+                "--mount".into(),
+                format!("type=volume,source={trust},target=/etc/orca-network,readonly"),
+            ]);
         }
         for (key, value) in &self.spec.env {
             args.push("-e".into());
