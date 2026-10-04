@@ -35,9 +35,10 @@ pub use skills::{SkillDestination, SkillPreview, SkillSourceOutcome, Skills};
 pub use tools::ToolPreset;
 
 pub use orca_harness_core::{
-    CancellationToken, Concurrency, Context, Extension, ExtensionError, FnTool, HarnessError,
-    Image, Limits, Message, Model, ModelDelta, ModelError, ModelResponse, Next, Subscriptions,
-    Tool, ToolCall, ToolContext, ToolDecision, ToolError, ToolResult, ToolSchema, Usage,
+    current_tool_invocation, CancellationToken, Concurrency, Context, Extension, ExtensionError,
+    FnTool, HarnessError, Image, Limits, Message, Model, ModelDelta, ModelError, ModelResponse,
+    Next, ProgrammaticCall, ProgrammaticTools, Subscriptions, Tool, ToolCall, ToolContext,
+    ToolDecision, ToolError, ToolInvocation, ToolResult, ToolSchema, Usage,
 };
 pub use orca_harness_extensions::{
     CompactConfig, CompactReport, HarnessEvent, LongSessionConfig, MemoryRecord, PolicyOutcome,

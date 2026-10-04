@@ -8,7 +8,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -44,6 +44,37 @@ struct Live {
 struct Session {
     live: Option<Live>,
     restart_notice: bool,
+    interrupted: Arc<AtomicBool>,
+}
+
+// The dispatcher may drop a tool future before its own cancellation branch
+// runs. Mark the interpreter synchronously, and arrange owned async cleanup.
+// A subsequent call checks the mark under the session lock before reuse.
+struct InterruptedRepl {
+    session: Arc<tokio::sync::Mutex<Session>>,
+    interrupted: Arc<AtomicBool>,
+    armed: bool,
+}
+impl Drop for InterruptedRepl {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.interrupted.store(true, Ordering::SeqCst);
+        let session = self.session.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let mut session = session.lock().await;
+                if session.interrupted.swap(false, Ordering::SeqCst) {
+                    if let Some(live) = session.live.as_mut() {
+                        live.process.kill().await;
+                    }
+                    session.live = None;
+                    session.restart_notice = true;
+                }
+            });
+        }
+    }
 }
 
 /// Removes the per-call source even when execution is cancelled or times out.
@@ -176,9 +207,8 @@ pub struct BunReplTool {
     max_output_bytes: usize,
     default_timeout: Duration,
     max_timeout: Duration,
-    session: tokio::sync::Mutex<Session>,
+    session: Arc<tokio::sync::Mutex<Session>>,
     live_pgid: StdMutex<Option<u32>>,
-    seq: AtomicU64,
     stats: BackgroundStats,
 }
 
@@ -190,6 +220,16 @@ impl Default for BunReplTool {
 
 impl Drop for BunReplTool {
     fn drop(&mut self) {
+        let session = self.session.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let mut session = session.lock().await;
+                if let Some(live) = session.live.as_mut() {
+                    live.process.kill().await;
+                }
+                session.live = None;
+            });
+        }
         if let Some(pgid) = self.live_pgid.lock().unwrap().take() {
             pgroup::kill_group(pgid);
             self.stats.dec_bun_repls();
@@ -206,9 +246,8 @@ impl BunReplTool {
             max_output_bytes: 64 * 1024,
             default_timeout: Duration::from_secs(30),
             max_timeout: Duration::from_secs(300),
-            session: tokio::sync::Mutex::new(Session::default()),
+            session: Arc::new(tokio::sync::Mutex::new(Session::default())),
             live_pgid: StdMutex::new(None),
-            seq: AtomicU64::new(0),
             stats: BackgroundStats::default(),
         }
     }
@@ -285,6 +324,10 @@ impl BunReplTool {
     }
 
     async fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let rpc_enabled = ctx.programmatic_tools_enabled();
+        if rpc_enabled && matches!(self.spawner, crate::Spawner::Local) {
+            return Err(ToolError::msg("Programmatic Bun tools require a sandbox"));
+        }
         let code = input
             .get("code")
             .and_then(Value::as_str)
@@ -297,6 +340,15 @@ impl BunReplTool {
             .min(self.max_timeout);
 
         let mut session = self.session.lock().await;
+        if session.interrupted.swap(false, Ordering::SeqCst) {
+            self.kill_live(&mut session).await;
+            session.restart_notice = true;
+        }
+        let mut interrupted = InterruptedRepl {
+            session: self.session.clone(),
+            interrupted: session.interrupted.clone(),
+            armed: true,
+        };
         if let Some(live) = &mut session.live {
             if live.process.has_exited() {
                 session.live = None;
@@ -311,14 +363,75 @@ impl BunReplTool {
         }
 
         let token = format!(
-            "{}_{}",
+            "{}_{}_{}",
             std::process::id(),
-            self.seq.fetch_add(1, Ordering::SeqCst)
+            TEMP_SEQ.fetch_add(1, Ordering::SeqCst),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
         );
         let ok = format!("ORCA_BUN_{token}_OK");
         let end = format!("\"ORCA_BUN_{token}_END\"");
         let stderr_end = format!("ORCA_BUN_{token}_STDERR_END");
         let marker = json!(ok).to_string();
+        // The invocation capability is scoped to this execution, never stored
+        // on the persistent interpreter or shared with a later run.
+        let rpc_marker = format!("ORCA_BUN_{token}_RPC ");
+        let rpc_path = format!(
+            "{}/orca-bun-rpc-{token}.json",
+            self.working_dir.as_deref().unwrap_or("/tmp")
+        );
+        let _rpc_cleanup = rpc_enabled.then(|| TempSource {
+            path: PathBuf::from(&rpc_path),
+            sandbox: match &self.spawner {
+                crate::Spawner::Sandbox(s) => Some(s.clone()),
+                _ => None,
+            },
+        });
+        let bootstrap = if rpc_enabled {
+            format!(
+                r#"globalThis.tools = (() => {{
+              const path = {path}; const marker = {marker}; let seq = 0; let queue = Promise.resolve();
+              const request = (payload) => {{
+                const run = async () => {{
+                  const id = ++seq;
+                  const frame = JSON.stringify({{id,...payload}});
+                  if (Buffer.byteLength(frame) > 65536) throw new Error("Tool RPC request is too large");
+                  process.stderr.write(marker + frame + "\n ");
+                  for (;;) {{
+                    try {{
+                      const response = await Bun.file(path).json();
+                      if (response.id === id) {{
+                        if (response.error) throw new Error(response.error);
+                        return response.result;
+                      }}
+                    }} catch (error) {{
+                      if (error instanceof Error && error.message === "Programmatic dispatch failed") throw error;
+                    }}
+                    await Bun.sleep(5);
+                  }}
+                }};
+                const result = queue.then(run); queue = result.catch(() => {{}}); return result;
+              }};
+              return Object.freeze({{
+                batch: (calls) => request({{calls}}),
+                call: async (name, arguments_) => {{
+                  const [result] = await request({{calls:[{{name, arguments:arguments_}}]}});
+                  if (result.is_error) throw new Error(JSON.stringify(result.output));
+                  return result.output;
+                }},
+                list: () => request({{list:true}})
+              }});
+            }})();
+"#,
+                path = json!(rpc_path),
+                marker = json!(rpc_marker)
+            )
+        } else {
+            "globalThis.tools = undefined;\n".to_owned()
+        };
+        let rpc_code = format!("{bootstrap}\n{code}");
         let source = match &self.spawner {
             crate::Spawner::Sandbox(sandbox) => {
                 // `.load` runs inside the REPL, so the file must exist
@@ -326,12 +439,12 @@ impl BunReplTool {
                 TempSource::write_sandboxed(
                     sandbox,
                     self.working_dir.as_deref().unwrap_or("/tmp"),
-                    code,
+                    &rpc_code,
                     &marker,
                 )
                 .await?
             }
-            crate::Spawner::Local => TempSource::write(code, &marker)?,
+            crate::Spawner::Local => TempSource::write(&rpc_code, &marker)?,
         };
         let end_command = format!(
             "process.stderr.write([\"ORCA\",\"BUN\",\"{token}\",\"STDERR\",\"END\"].join(\"_\") + \"\\n\"); [\"ORCA\",\"BUN\",\"{token}\",\"END\"].join(\"_\")\n"
@@ -348,12 +461,68 @@ impl BunReplTool {
 
         let deadline = tokio::time::Instant::now() + timeout;
         let keep = self.max_output_bytes + ok.len() + end.len() + 4096;
-        let stderr_keep = self.max_output_bytes + stderr_end.len() + 256;
+        let stderr_keep = self.max_output_bytes + stderr_end.len() + 65536 + 256;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut dropped = 0u64;
         let mut ok_seen = false;
+        let mut rpc_sequence = 0u64;
         let outcome = loop {
+            if rpc_enabled {
+                if let Some(start) = find(&stderr, rpc_marker.as_bytes()) {
+                    if let Some(end) = stderr[start..].iter().position(|b| *b == b'\n') {
+                        let frame = stderr[start + rpc_marker.len()..start + end].to_vec();
+                        stderr.drain(start..=start + end);
+                        let request: Value = serde_json::from_slice(&frame).unwrap_or(Value::Null);
+                        let id = request["id"].as_u64().unwrap_or(0);
+                        if frame.len() > 65536 || id != rpc_sequence + 1 {
+                            break ReadOutcome::Closed;
+                        }
+                        rpc_sequence = id;
+                        let operation = async {
+                            let result = if request["list"] == true {
+                                ctx.programmatic_tool_schemas().map(|v| json!(v))
+                            } else {
+                                match serde_json::from_value::<
+                                    Vec<orca_harness_core::ProgrammaticCall>,
+                                >(request["calls"].clone())
+                                {
+                                    Ok(calls) => ctx.dispatch_tools(calls).await.map(|v| json!(v)),
+                                    Err(_) => Err(ToolError::msg("Invalid programmatic calls")),
+                                }
+                            };
+                            let response = match result {
+                                Ok(v) => json!({"id":id,"result":v}),
+                                Err(_) => json!({"id":id,"error":"Programmatic dispatch failed"}),
+                            };
+                            let bytes = serde_json::to_vec(&response)
+                                .map_err(|_| ToolError::msg("RPC serialization failed"))?;
+                            if bytes.len() > 1024 * 1024 {
+                                return Err(ToolError::msg("RPC result exceeds 1 MiB"));
+                            }
+                            match &self.spawner {
+                                crate::Spawner::Sandbox(s) => s
+                                    .write_file(
+                                        &rpc_path,
+                                        &bytes,
+                                        orca_harness_core::FileMode::Regular,
+                                    )
+                                    .await
+                                    .map_err(|_| ToolError::msg("RPC response failed")),
+                                _ => unreachable!(),
+                            }
+                        };
+                        tokio::select! {
+                            biased;
+                            _=ctx.cancellation.cancelled()=>break ReadOutcome::Cancelled,
+                            _=tokio::time::sleep_until(deadline)=>break ReadOutcome::Timeout,
+                            result=operation=>if result.is_err(){break ReadOutcome::Closed;}
+                        }
+                        continue;
+                    }
+                }
+            }
+
             if let (Some(end_pos), Some(stderr_end_pos)) = (
                 find(&stdout, end.as_bytes()),
                 find(&stderr, stderr_end.as_bytes()),
@@ -387,6 +556,9 @@ impl BunReplTool {
             }
         };
 
+        if matches!(outcome, ReadOutcome::Complete { .. }) {
+            interrupted.armed = false;
+        }
         match outcome {
             ReadOutcome::Complete {
                 end_pos,
@@ -539,7 +711,7 @@ impl Tool for BunReplTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "bun_repl".into(),
-            description: "Execute JavaScript or TypeScript in a persistent Bun REPL. Variables, imports, and functions survive across calls; top-level await and multi-line code work. Use console.log() for output. reset discards all state. A timed-out execution kills the REPL, and the next call reports restarted: true."
+            description: "Execute JavaScript or TypeScript in a persistent Bun REPL. Variables, imports, and functions survive across calls; top-level await and multi-line code work. Use console.log() for output. When sandbox programmatic tools are enabled, await tools.list() for visible schemas, await tools.call(name, arguments) for an output, or await tools.batch([{name, arguments}]) for parallel call results. Tool errors reject tools.call; batch preserves is_error. Always await calls. reset discards all state. A timed-out execution kills the REPL, and the next call reports restarted: true."
                 .into(),
             parameters: json!({
                 "type": "object",

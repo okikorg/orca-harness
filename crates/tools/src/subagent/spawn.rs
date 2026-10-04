@@ -202,6 +202,17 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         let mut agent = Agent::new(model.clone())
             .limits(agent_limits)
             .extension(meter);
+        if let Some(config) = &self.programmatic_tools {
+            agent = agent.programmatic_tools(config.clone());
+        }
+        if let Some((sandbox, workspace)) = &self.programmatic_bun {
+            let bun = Arc::new(
+                crate::BunReplTool::new()
+                    .sandbox(sandbox.clone())
+                    .working_dir(workspace),
+            );
+            agent = agent.tool_arc(bun.clone()).extension(ChildBunCleanup(bun));
+        }
         if let Some(system) = system {
             agent = agent.system_prompt(system);
         }
@@ -278,5 +289,19 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             in_flight: InFlight(self.stats.clone()),
             context,
         })
+    }
+}
+
+struct ChildBunCleanup(Arc<crate::BunReplTool>);
+#[async_trait::async_trait]
+impl orca_harness_core::Extension for ChildBunCleanup {
+    fn name(&self) -> &str {
+        "child_bun_cleanup"
+    }
+    fn subscriptions(&self) -> orca_harness_core::Subscriptions {
+        orca_harness_core::Subscriptions::NONE.on_agent_end()
+    }
+    async fn on_agent_end(&self, _: &orca_harness_core::Context) {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), self.0.reset()).await;
     }
 }

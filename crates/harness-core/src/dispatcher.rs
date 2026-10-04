@@ -55,7 +55,9 @@ use crate::extension::{ExtensionRegistry, Next, ToolDecision};
 use crate::tool::{Concurrency, Tool, ToolCall, ToolResult};
 
 #[derive(Debug, Clone, Default)]
-pub struct Dispatcher;
+pub struct Dispatcher {
+    programmatic: Option<crate::ProgrammaticTools>,
+}
 
 /// One executable unit after resolution and policy. The call itself is
 /// addressed by index into the shared batch to avoid cloning `ToolCall`s
@@ -69,7 +71,12 @@ struct Job {
 
 impl Dispatcher {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn programmatic_tools(mut self, config: crate::ProgrammaticTools) -> Self {
+        self.programmatic = Some(config);
+        self
     }
 
     pub async fn execute(
@@ -82,6 +89,18 @@ impl Dispatcher {
         max_parallel: usize,
     ) -> Result<Vec<ToolResult>, HarnessError> {
         validate_pairing(&calls)?;
+        if let Some(config) = &self.programmatic {
+            return crate::programmatic::Runtime::new(
+                tools,
+                extensions,
+                config.clone(),
+                max_parallel,
+                cancellation,
+                deadline,
+            )
+            .execute(calls)
+            .await;
+        }
 
         let n = calls.len();
         let mut calls = calls;
