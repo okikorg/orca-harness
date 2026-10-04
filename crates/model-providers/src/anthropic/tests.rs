@@ -108,6 +108,7 @@ async fn native_request_headers_caching_images_and_tool_round_trip() {
     context.push_user_with_images(
         "Inspect",
         vec![Image {
+            source_url: None,
             media_type: "image/png".into(),
             data: "aGVsbG8=".into(),
         }],
@@ -508,4 +509,20 @@ fn replayed_thinking_leads_its_own_assistant_turn() {
         .request_body(&context, &tools(), &no_thinking())
         .unwrap();
     assert_eq!(body["messages"][1]["content"][0]["type"], "text");
+}
+
+#[test]
+fn user_image_urls_are_native_image_sources() {
+    let mut context = Context::new();
+    context.push_user_with_images(
+        "describe",
+        vec![Image::url("https://images.example.test/pixel.png")],
+    );
+    let body = AnthropicModel::new("fixture")
+        .request_body(&context, &[], &no_thinking())
+        .unwrap();
+    assert_eq!(
+        body["messages"][0]["content"][1],
+        json!({"type":"image","source":{"type":"url","url":"https://images.example.test/pixel.png"}})
+    );
 }

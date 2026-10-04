@@ -123,6 +123,7 @@ fn insert_image_bytes(app: &mut App, bytes: Vec<u8>) {
 fn insert_image_bytes_typed(app: &mut App, bytes: Vec<u8>, media_type: &str) {
     let label = unique_clipboard_label(&app.pastes, media_type);
     let image = Image {
+        source_url: None,
         media_type: media_type.into(),
         data: base64::engine::general_purpose::STANDARD.encode(bytes),
     };

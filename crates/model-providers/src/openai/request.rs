@@ -85,7 +85,7 @@ pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
                     let mut parts = vec![json!({"type": "text", "text": content})];
                     parts.extend(images.iter().map(|image| {
                         let mut part = json!({"type": "image_url", "image_url": {}});
-                        part["image_url"]["url"] = Value::String(crate::image_data_url(image));
+                        part["image_url"]["url"] = Value::String(crate::image_url(image));
                         part
                     }));
                     let mut message = json!({"role": "user", "content": null});
