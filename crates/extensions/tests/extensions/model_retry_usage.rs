@@ -189,6 +189,73 @@ async fn usage_meter_accumulates_across_steps() {
     assert_eq!(usage.metered_steps(), 2);
 }
 
+#[tokio::test]
+async fn failed_model_call_usage_is_metered_and_emitted() {
+    struct Truncates;
+    #[async_trait::async_trait]
+    impl Model for Truncates {
+        async fn generate(
+            &self,
+            _c: &orca_harness_core::Context,
+            _t: &[orca_harness_core::ToolSchema],
+        ) -> Result<ModelResponse, ModelError> {
+            Err(ModelError::OutputLimit {
+                message: "max_tokens".into(),
+                usage: Some(Usage {
+                    input_tokens: 40,
+                    output_tokens: 900,
+                    cache_read_tokens: 7,
+                    ..Default::default()
+                }),
+            })
+        }
+    }
+    let (meter, usage) = UsageMeter::new();
+    let (stream, mut rx) = EventStream::channel();
+    let agent = Agent::new(Truncates).extension(stream).extension(meter);
+    let result = timeout(RUN_TIMEOUT, agent.run("go")).await.unwrap();
+    assert!(result.is_err());
+
+    let total = usage.total();
+    assert_eq!(total.input_tokens, 40);
+    assert_eq!(total.output_tokens, 900);
+    assert_eq!(total.cache_read_tokens, 7);
+    let mut emitted = Usage::default();
+    let mut error_seen = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            HarnessEvent::Usage { usage } => {
+                assert!(!error_seen, "usage must precede the error event");
+                emitted.add(&usage);
+            }
+            HarnessEvent::Error { .. } => error_seen = true,
+            _ => {}
+        }
+    }
+    assert!(error_seen);
+    assert_eq!(emitted, total);
+}
+
+#[tokio::test]
+async fn failed_model_call_without_usage_meters_nothing() {
+    struct Refused;
+    #[async_trait::async_trait]
+    impl Model for Refused {
+        async fn generate(
+            &self,
+            _c: &orca_harness_core::Context,
+            _t: &[orca_harness_core::ToolSchema],
+        ) -> Result<ModelResponse, ModelError> {
+            Err(ModelError::Request("503".into()))
+        }
+    }
+    let (meter, usage) = UsageMeter::new();
+    let agent = Agent::new(Refused).extension(meter);
+    assert!(timeout(RUN_TIMEOUT, agent.run("go")).await.unwrap().is_err());
+    assert_eq!(usage.total(), Usage::default());
+    assert_eq!(usage.metered_steps(), 0);
+}
+
 fn last_tool_results(
     contexts: &[orca_harness_core::Context],
 ) -> Vec<orca_harness_core::ToolResult> {

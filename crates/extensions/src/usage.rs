@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use orca_harness_core::{Context, Extension, ExtensionError, ModelResponse, Subscriptions, Usage};
+use orca_harness_core::{
+    Context, Extension, ExtensionError, HarnessError, ModelResponse, Subscriptions, Usage,
+};
 
 /// A cloneable handle to a run's cumulative token usage. Cheap to clone;
 /// all clones observe the same counters.
@@ -92,7 +94,7 @@ impl Extension for UsageMeter {
     }
 
     fn subscriptions(&self) -> Subscriptions {
-        Subscriptions::none().after_model()
+        Subscriptions::none().after_model().on_error()
     }
 
     async fn after_model(
@@ -104,6 +106,15 @@ impl Extension for UsageMeter {
             self.handle.add(usage);
         }
         Ok(())
+    }
+
+    /// A failed model call ends the run, so this fires at most once per call.
+    async fn on_error(&self, error: &HarnessError) {
+        if let HarnessError::Model(error) = error {
+            if let Some(usage) = error.usage() {
+                self.handle.add(usage);
+            }
+        }
     }
 }
 
