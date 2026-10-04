@@ -11,7 +11,7 @@ mod stream;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use orca_harness_core::{
     Context, DeltaSink, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
@@ -230,10 +230,18 @@ pub(crate) struct WireUsage {
     #[serde(default)]
     completion_tokens: u64,
     #[serde(default)]
+    completion_tokens_details: Option<WireCompletionTokensDetails>,
+    #[serde(default)]
     prompt_tokens_details: WirePromptTokensDetails,
     /// DeepSeek-style cache reporting, used when details are absent.
     #[serde(default)]
     prompt_cache_hit_tokens: u64,
+}
+
+#[derive(Deserialize)]
+struct WireCompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -268,7 +276,7 @@ impl WireUsage {
             output_tokens: self.completion_tokens,
             cache_read_tokens: cache_read,
             cache_create_tokens: cache_write,
-            reasoning_tokens: None,
+            reasoning_tokens: self.completion_tokens_details.and_then(|details|details.reasoning_tokens),
         }
     }
 }
