@@ -305,6 +305,15 @@ impl Session {
         observer: Option<RunObserver>,
         busy: BusyGuard,
     ) -> Result<RunExecution, SdkError> {
+        if let Some(messages) = &request.input_messages {
+            if messages.is_empty()
+                || request.continuation
+                || !request.prompt.is_empty()
+                || !request.images.is_empty()
+            {
+                return Err(SdkError::Config("input messages must be nonempty and cannot be combined with prompt, images or continuation".into()));
+            }
+        }
         if request.continuation && !request.prompt.is_empty() {
             return Err(SdkError::Config(
                 "a continuation carries no prompt; use RunRequest::new for a new turn".into(),

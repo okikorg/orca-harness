@@ -15,10 +15,33 @@ pub type EventCallback = Arc<dyn Fn(HarnessEvent) + Send + Sync>;
 /// [`RunHandle::events`]; see [`RunRequest::event_capacity`].
 pub const DEFAULT_EVENT_CAPACITY: usize = 1024;
 
+/// A user-authored input turn. Roles are intentionally absent: run input
+/// cannot inject system, assistant or tool messages into an existing session.
+#[derive(Clone, Debug)]
+pub struct RunInputMessage {
+    pub content: String,
+    pub images: Vec<Image>,
+}
+
+impl RunInputMessage {
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            images: Vec::new(),
+        }
+    }
+
+    pub fn image(mut self, image: Image) -> Self {
+        self.images.push(image);
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct RunRequest {
     pub prompt: String,
     pub images: Vec<Image>,
+    pub(crate) input_messages: Option<Vec<RunInputMessage>>,
     pub deadline: Option<Duration>,
     pub(crate) on_event: Option<EventCallback>,
     pub(crate) continue_at_step_limit: bool,
@@ -34,12 +57,27 @@ impl RunRequest {
         Self {
             prompt: prompt.into(),
             images: Vec::new(),
+            input_messages: None,
             deadline: None,
             on_event: None,
             continue_at_step_limit: false,
             continuation: false,
             cancellation: None,
             event_capacity: DEFAULT_EVENT_CAPACITY,
+        }
+    }
+
+    /// Append a nonempty batch of user turns, preserving each turn's text
+    /// and images in order. The model runs once over the entire batch.
+    /// Mixing this with prompt/images or continuation is rejected before
+    /// the transcript changes. Deadlines, cancellation and events apply
+    /// to the entire run as usual. As with single-message requests, the
+    /// current core transcript format omits image payloads on disk; images
+    /// remain available in the live session but not after disk resume.
+    pub fn messages(messages: impl IntoIterator<Item = RunInputMessage>) -> Self {
+        Self {
+            input_messages: Some(messages.into_iter().collect()),
+            ..Self::new("")
         }
     }
 
