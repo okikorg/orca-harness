@@ -100,6 +100,27 @@ fn tool_result_images_follow_the_tool_batch_in_one_user_message() {
 }
 
 #[test]
+fn top_level_combinators_are_stripped_from_tool_parameters() {
+    let tools = vec![ToolSchema {
+        name: "workflow".into(),
+        description: "run".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {"action": {"enum": ["run", "list"]}},
+            "required": ["action"],
+            "oneOf": [{"properties": {"action": {"const": "run"}}}],
+        }),
+    }];
+    let body = OpenAiModel::new("m").request_body(&context(), &tools);
+    let sent = &body["tools"][0]["function"]["parameters"];
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        assert!(sent.get(keyword).is_none(), "sent a top-level `{keyword}`");
+    }
+    assert_eq!(sent["properties"], tools[0].parameters["properties"]);
+    assert_eq!(sent["required"], json!(["action"]));
+}
+
+#[test]
 fn parallel_tool_calls_is_omitted_when_unset() {
     let model = OpenAiModel::new("m");
     let body = model.request_body(&context(), &schemas());

@@ -20,7 +20,9 @@ impl OpenAiModel {
                             "function": {
                                 "name": t.name,
                                 "description": t.description,
-                                "parameters": t.parameters,
+                                // Gateways like OpenRouter re-encode this for
+                                // Anthropic, which rejects top-level combinators.
+                                "parameters": crate::anthropic::input_schema(&t.parameters),
                             }
                         })
                     })
