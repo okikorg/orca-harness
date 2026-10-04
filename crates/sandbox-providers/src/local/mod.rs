@@ -10,6 +10,8 @@
 //! `docker exec -i` gives a real stdin channel to a live process, so this
 //! adapter reports `sessions: true` and can host the tools that need one.
 
+mod process;
+
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -20,7 +22,6 @@ use orca_harness_core::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::Mutex;
 
 use crate::spec::{EnvironmentSpec, Network};
 
@@ -222,6 +223,7 @@ impl Provisioner for DockerProvisioner {
             "run".into(),
             "-d".into(),
             "--rm".into(),
+            "--init".into(),
             "--security-opt".into(),
             "no-new-privileges".into(),
             "-w".into(),
@@ -390,93 +392,21 @@ impl Sandbox for DockerSandbox {
     }
 
     async fn exec(&self, request: ExecRequest) -> Result<ExecOutput, SandboxError> {
-        let mut args = self.exec_args(request.cwd.as_deref(), false);
-        for (key, value) in &request.env {
-            args.insert(1, format!("{key}={value}"));
-            args.insert(1, "-e".into());
-        }
-        args.push("sh".into());
-        args.push("-c".into());
-        args.push(request.command.clone());
-
-        let run = docker(&args);
-        let output = match request.timeout_ms {
-            Some(ms) => tokio::time::timeout(std::time::Duration::from_millis(ms), run)
-                .await
-                .map_err(|_| SandboxError::Timeout(request.command.clone()))??,
-            None => run.await?,
-        };
-        Ok(ExecOutput {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })
+        self.execute_bounded(request).await
     }
 
     async fn spawn(
         &self,
         request: SpawnRequest,
     ) -> Result<(Arc<dyn Session>, Output), SandboxError> {
-        let mut args = self.exec_args(request.cwd.as_deref(), true);
-        for (key, value) in &request.env {
-            args.insert(1, format!("{key}={value}"));
-            args.insert(1, "-e".into());
-        }
-        args.push(request.program.clone());
-        args.extend(request.args.iter().cloned());
-
-        let mut child = Command::new("docker")
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| SandboxError::Request(format!("docker exec -i failed to start: {e}")))?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| SandboxError::Request("docker exec gave no stdin".into()))?;
-        let (tx, rx) = tokio::sync::mpsc::channel(OUTPUT_CHANNEL_CHUNKS);
-        if let Some(pipe) = child.stdout.take() {
-            pump(pipe, tx.clone(), false);
-        }
-        if let Some(pipe) = child.stderr.take() {
-            pump(pipe, tx, true);
-        }
-
-        // The child is owned by a supervisor task rather than a mutex:
-        // `wait` would hold that mutex for the whole life of the process
-        // and deadlock the `kill` that is supposed to end it.
-        let (exit_tx, exit_rx) = tokio::sync::watch::channel(None);
-        let kill = CancellationToken::new();
-        let killed = kill.clone();
-        tokio::spawn(async move {
-            let status = tokio::select! {
-                biased;
-                _ = killed.cancelled() => {
-                    let _ = child.start_kill();
-                    child.wait().await
-                }
-                status = child.wait() => status,
-            };
-            let _ = exit_tx.send(Some(status.ok().and_then(|s| s.code())));
-        });
-
-        let session = DockerSession {
-            stdin: Mutex::new(Some(stdin)),
-            exit: exit_rx,
-            kill,
-        };
-        Ok((Arc::new(session), rx))
+        self.start_process(request).await
     }
 
     async fn read_file(&self, path: &str) -> Result<Vec<u8>, SandboxError> {
-        let mut args = self.exec_args(None, false);
-        args.extend(["cat".to_string(), path.to_string()]);
-        let output = docker(&args).await?;
-        if !output.status.success() {
+        let output = self
+            .execute_bounded(ExecRequest::new(format!("cat -- {}", shell_quote(path))))
+            .await?;
+        if output.exit_code != 0 {
             return Err(SandboxError::Request(format!(
                 "read {path}: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -492,46 +422,26 @@ impl Sandbox for DockerSandbox {
         mode: FileMode,
     ) -> Result<(), SandboxError> {
         let quoted = shell_quote(path);
-        let mut args = self.exec_args(None, true);
-        args.push("sh".into());
-        args.push("-c".into());
-        // Written through stdin rather than an argument so that binary
-        // content and arbitrary bytes survive intact.
-        args.push(format!(
-            "mkdir -p \"$(dirname {quoted})\" && cat > {quoted}"
-        ));
-
-        let mut child = Command::new("docker")
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| SandboxError::Request(format!("docker exec failed to start: {e}")))?;
-        {
-            let mut stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| SandboxError::Request("docker exec gave no stdin".into()))?;
-            stdin
-                .write_all(bytes)
-                .await
-                .map_err(|e| SandboxError::Request(format!("write {path}: {e}")))?;
-            stdin
-                .shutdown()
-                .await
-                .map_err(|e| SandboxError::Request(format!("write {path}: {e}")))?;
-        }
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| SandboxError::Request(format!("write {path}: {e}")))?;
-        if !output.status.success() {
-            return Err(SandboxError::Request(format!(
-                "write {path}: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+        let (session, mut output) = self
+            .start_process(SpawnRequest {
+                program: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!("mkdir -p \"$(dirname {quoted})\" && cat > {quoted}"),
+                ],
+                ..Default::default()
+            })
+            .await?;
+        let write = async {
+            let result = session.write_stdin(bytes).await;
+            session.close_stdin().await?;
+            result
+        };
+        let drain = async { while output.recv().await.is_some() {} };
+        let (written, ()) = tokio::join!(write, drain);
+        written?;
+        if session.wait().await? != Some(0) {
+            return Err(SandboxError::Request("Sandbox file write failed".into()));
         }
 
         if mode == FileMode::Executable {
@@ -541,14 +451,10 @@ impl Sandbox for DockerSandbox {
     }
 
     async fn list_dir(&self, path: &str) -> Result<Vec<Entry>, SandboxError> {
-        let mut args = self.exec_args(None, false);
-        args.extend([
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("ls -Ap {}", shell_quote(path)),
-        ]);
-        let output = docker(&args).await?;
-        if !output.status.success() {
+        let output = self
+            .execute_bounded(ExecRequest::new(format!("ls -Ap -- {}", shell_quote(path))))
+            .await?;
+        if output.exit_code != 0 {
             return Err(SandboxError::Request(format!(
                 "list {path}: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -558,17 +464,13 @@ impl Sandbox for DockerSandbox {
     }
 
     async fn stat(&self, path: &str) -> Result<Option<Stat>, SandboxError> {
-        let mut args = self.exec_args(None, false);
-        // `%Y` mtime, `%s` size, `%F` human-readable type. One call, and
-        // a missing file is reported as absence rather than failure.
-        args.extend([
-            "stat".to_string(),
-            "-c".to_string(),
-            "%Y %s %F".to_string(),
-            path.to_string(),
-        ]);
-        let output = docker(&args).await?;
-        if !output.status.success() {
+        let output = self
+            .execute_bounded(ExecRequest::new(format!(
+                "stat -c '%Y %s %F' -- {}",
+                shell_quote(path)
+            )))
+            .await?;
+        if output.exit_code != 0 {
             return Ok(None);
         }
         Ok(parse_stat(&String::from_utf8_lossy(&output.stdout)))
@@ -585,89 +487,6 @@ impl Sandbox for DockerSandbox {
         }
         Ok(())
     }
-}
-
-struct DockerSession {
-    /// `None` once stdin has been closed; the pipe is dropped to make the
-    /// process see EOF.
-    stdin: Mutex<Option<tokio::process::ChildStdin>>,
-    /// `Some(code)` once the supervisor has reaped the child.
-    exit: tokio::sync::watch::Receiver<Option<Option<i32>>>,
-    kill: CancellationToken,
-}
-
-#[async_trait]
-impl Session for DockerSession {
-    async fn write_stdin(&self, bytes: &[u8]) -> Result<(), SandboxError> {
-        let mut guard = self.stdin.lock().await;
-        let stdin = guard
-            .as_mut()
-            .ok_or_else(|| SandboxError::Request("stdin is closed".into()))?;
-        stdin
-            .write_all(bytes)
-            .await
-            .map_err(|e| SandboxError::Request(format!("stdin write failed: {e}")))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| SandboxError::Request(format!("stdin flush failed: {e}")))
-    }
-
-    async fn close_stdin(&self) -> Result<(), SandboxError> {
-        *self.stdin.lock().await = None;
-        Ok(())
-    }
-
-    async fn wait(&self) -> Result<Option<i32>, SandboxError> {
-        let mut exit = self.exit.clone();
-        // `borrow` first: the supervisor may have finished before this
-        // receiver was cloned, and `changed` only reports what comes next.
-        if let Some(code) = *exit.borrow_and_update() {
-            return Ok(code);
-        }
-        while exit.changed().await.is_ok() {
-            if let Some(code) = *exit.borrow_and_update() {
-                return Ok(code);
-            }
-        }
-        // The supervisor task is gone without reporting — the runtime is
-        // shutting down. Staying pending would be a lie of a different
-        // kind, but claiming an exit we never saw is the worse one.
-        Err(SandboxError::Terminated("supervisor stopped".into()))
-    }
-
-    async fn kill(&self) -> Result<(), SandboxError> {
-        self.kill.cancel();
-        Ok(())
-    }
-}
-
-/// Backpressure the reader instead of letting a runaway program queue
-/// output without limit — the same shape the REPL tools already use.
-fn pump<R>(mut pipe: R, tx: tokio::sync::mpsc::Sender<Chunk>, stderr: bool)
-where
-    R: tokio::io::AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        let mut buf = [0u8; 8192];
-        loop {
-            match pipe.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx
-                        .send(Chunk {
-                            stderr,
-                            bytes: buf[..n].to_vec(),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    });
 }
 
 async fn docker(args: &[String]) -> Result<std::process::Output, SandboxError> {
