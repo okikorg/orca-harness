@@ -1,5 +1,5 @@
 use orca_harness_core::{Context, Message, ToolSchema};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(crate) fn body(
     model: &str,
@@ -19,7 +19,7 @@ pub(crate) fn body(
                 let mut parts = vec![json!({"type": "input_text", "text": content})];
                 parts.extend(images.iter().map(|image| {
                     let mut part = json!({"type": "input_image", "detail": "auto"});
-                    part["image_url"] = Value::String(crate::image_data_url(image));
+                    part["image_url"] = Value::String(crate::image_url(image));
                     part
                 }));
                 let mut message = json!({
@@ -146,6 +146,7 @@ mod tests {
         context.push_user_with_images(
             "describe",
             vec![Image {
+                source_url: None,
                 media_type: "image/jpeg".into(),
                 data: "/9j/".into(),
             }],
@@ -216,5 +217,18 @@ mod tests {
             json!({"effort": "xhigh", "summary": "auto"})
         );
         assert_eq!(value["prompt_cache_key"], "run-123");
+    }
+    #[test]
+    fn user_image_urls_are_native_input_image_parts() {
+        let mut context = Context::new();
+        context.push_user_with_images(
+            "describe",
+            vec![Image::url("https://images.example.test/pixel.png")],
+        );
+        let value = body("codex", &context, &[], true, &[], None, None);
+        assert_eq!(
+            value["input"][0]["content"][1],
+            json!({"type":"input_image","image_url":"https://images.example.test/pixel.png","detail":"auto"})
+        );
     }
 }

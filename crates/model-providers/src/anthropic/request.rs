@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use orca_harness_core::{Context, Message, ModelError, ToolSchema};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::AnthropicModel;
 
@@ -33,10 +33,13 @@ impl AnthropicModel {
                     if !content.is_empty() {
                         blocks.push(json!({"type": "text", "text": content}));
                     }
-                    blocks.extend(images.iter().map(|image| json!({
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": image.media_type, "data": image.data}
-                    })));
+                    blocks.extend(images.iter().map(|image| {
+                        let source = match &image.source_url {
+                            Some(url) => json!({"type":"url", "url":url}),
+                            None => json!({"type":"base64", "media_type":image.media_type, "data":image.data}),
+                        };
+                        json!({"type":"image", "source":source})
+                    }));
                     ("user", blocks)
                 }
                 Message::Assistant { content, tool_calls } => {
@@ -94,13 +97,15 @@ impl AnthropicModel {
             body["system"] = json!(system);
         }
         if !tools.is_empty() {
-            body["tools"] = json!(tools
-                .iter()
-                .map(|tool| json!({
-                    "name": tool.name, "description": tool.description,
-                    "input_schema": input_schema(&tool.parameters)
-                }))
-                .collect::<Vec<_>>());
+            body["tools"] = json!(
+                tools
+                    .iter()
+                    .map(|tool| json!({
+                        "name": tool.name, "description": tool.description,
+                        "input_schema": input_schema(&tool.parameters)
+                    }))
+                    .collect::<Vec<_>>()
+            );
         }
         if self.prompt_cache {
             body["cache_control"] = json!({"type": "ephemeral"});

@@ -1,7 +1,7 @@
 //! Chat-completions request encoding, separate from transport and response handling.
 use super::OpenAiModel;
 use orca_harness_core::{Context, Message, ModelError, ToolSchema};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 impl OpenAiModel {
     pub(super) fn request_body(&self, context: &Context, tools: &[ToolSchema]) -> Value {
@@ -82,7 +82,7 @@ pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
                     let mut parts = vec![json!({"type": "text", "text": content})];
                     parts.extend(images.iter().map(|image| {
                         let mut part = json!({"type": "image_url", "image_url": {}});
-                        part["image_url"]["url"] = Value::String(crate::image_data_url(image));
+                        part["image_url"]["url"] = Value::String(crate::image_url(image));
                         part
                     }));
                     let mut message = json!({"role": "user", "content": null});

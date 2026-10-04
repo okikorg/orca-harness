@@ -9,6 +9,28 @@ use crate::tool::{ToolCall, ToolResult};
 pub struct Image {
     pub media_type: String,
     pub data: String,
+    /// Provider-fetched image URL. Absent in legacy base64 snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+}
+
+impl Image {
+    pub fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self {
+            media_type: media_type.into(),
+            data: data.into(),
+            source_url: None,
+        }
+    }
+
+    /// The caller validates the URL against its input policy. No fetch occurs here.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self {
+            media_type: String::new(),
+            data: String::new(),
+            source_url: Some(url.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +128,7 @@ mod tests {
     #[test]
     fn push_user_with_images_preserves_image_data() {
         let image = Image {
+            source_url: None,
             media_type: "image/png".into(),
             data: "aGVsbG8=".into(),
         };
@@ -117,5 +140,19 @@ mod tests {
             Message::User { content, images }
                 if content == "look" && images == std::slice::from_ref(&image)
         ));
+    }
+    #[test]
+    fn image_urls_and_legacy_base64_snapshots_round_trip() {
+        let legacy = json!({"media_type":"image/png","data":"cGl4ZWw="});
+        let image: Image = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(image, Image::base64("image/png", "cGl4ZWw="));
+        assert_eq!(serde_json::to_value(image).unwrap(), legacy);
+        let image = Image::url("https://images.example.test/pixel.png?version=2");
+        let saved = serde_json::to_value(&image).unwrap();
+        assert_eq!(
+            saved["source_url"],
+            "https://images.example.test/pixel.png?version=2"
+        );
+        assert_eq!(serde_json::from_value::<Image>(saved).unwrap(), image);
     }
 }

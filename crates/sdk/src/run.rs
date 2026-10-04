@@ -176,6 +176,7 @@ impl RunRequest {
             }
         };
         self.images.push(Image {
+            source_url: None,
             media_type: media_type.into(),
             data: base64_encode(&data),
         });

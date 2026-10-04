@@ -29,6 +29,7 @@ pub(crate) fn fixtures() -> Vec<(&'static str, Context, Vec<ToolSchema>)> {
     image.push_user_with_images(
         "Inspect this screenshot",
         vec![Image {
+            source_url: None,
             media_type: "image/png".into(),
             data: "AAAA".repeat(256 * 1024),
         }],

@@ -18,6 +18,7 @@ async fn batch_preserves_user_boundaries_images_and_persistence() {
         .unwrap();
     let session = agent.new_session().persistent().open().unwrap();
     let image = Image {
+        source_url: None,
         media_type: "image/png".into(),
         data: "cGl4ZWw=".into(),
     };
@@ -81,15 +82,59 @@ async fn invalid_batches_do_not_change_transcript_or_call_model() {
     mixed.prompt = "also prompt".into();
     assert!(session.run(mixed).await.is_err());
     let mixed = RunRequest::messages([RunInputMessage::new("message")]).image(Image {
+        source_url: None,
         media_type: "image/png".into(),
         data: "".into(),
     });
     assert!(session.run(mixed).await.is_err());
-    assert!(session
-        .continue_run(RunRequest::messages([RunInputMessage::new("message")]))
-        .await
-        .is_err());
+    assert!(
+        session
+            .continue_run(RunRequest::messages([RunInputMessage::new("message")]))
+            .await
+            .is_err()
+    );
     assert!(session.messages().await.is_empty());
     assert!(model.observed_contexts().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn url_image_survives_persistent_session_reopen() {
+    let root = common::temp_dir("url-image");
+    let harness = Harness::builder()
+        .workspace(&root)
+        .state_dir(root.join("state"))
+        .build()
+        .unwrap();
+    let model = std::sync::Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("done")]));
+    let agent = harness.agent(model).build().unwrap();
+    let session = agent.new_session().persistent().open().unwrap();
+    let image = Image::url("https://images.example.test/pixel.png?version=2");
+    session
+        .run(RunRequest::messages([
+            RunInputMessage::new("describe").image(image.clone())
+        ]))
+        .await
+        .unwrap();
+    let id = session.id().unwrap();
+    drop(session);
+    drop(agent);
+    drop(harness);
+    let harness = Harness::builder()
+        .workspace(&root)
+        .state_dir(root.join("state"))
+        .build()
+        .unwrap();
+    let model = std::sync::Arc::new(ScriptedModel::new(vec![]));
+    let agent = harness.agent(model).build().unwrap();
+    let resumed = agent.resume_session(&id).unwrap();
+    assert!(
+        resumed.messages().await.iter().any(
+            |message| matches!(message,Message::User{images,..} if images==&vec![image.clone()])
+        )
+    );
+    drop(resumed);
+    drop(agent);
+    drop(harness);
     std::fs::remove_dir_all(root).unwrap();
 }
