@@ -10,35 +10,25 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::fs;
 
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
 use crate::workspace::Workspace;
 
-/// What a file looked like the last time these tools saw it. Modified
-/// time and length together are enough to notice an outside edit without
-/// hashing the contents on every call; a change that preserves both is
-/// possible in theory and has never been the failure this guards against
-/// (an editor saving, a `git checkout`, a build regenerating a file).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    modified: Option<SystemTime>,
-    len: u64,
-}
-
-impl Stamp {
-    fn of(meta: &std::fs::Metadata) -> Self {
-        Self {
-            modified: meta.modified().ok(),
-            len: meta.len(),
-        }
-    }
-}
+/// What a file looked like the last time these tools saw it is
+/// [`Stat`](orca_harness_core::Stat) — modified time and length, which
+/// together notice an outside edit without hashing contents on every
+/// call. A change preserving both is possible in theory and has never
+/// been the failure this guards against (an editor saving, a `git
+/// checkout`, a build regenerating a file).
+///
+/// It is the kernel's type rather than a local one so the check means the
+/// same thing whether the file lives on this machine or inside a sandbox;
+/// the [`Workspace`] reports it from whichever backend it is rooted at.
+type Stamp = orca_harness_core::Stat;
 
 /// Read-before-write bookkeeping, shared by `read_file`, `write_file`,
 /// and `edit_file`.
@@ -94,24 +84,29 @@ impl FileGuard {
     /// Stamp what is on disk now. Called after a write, from the file's
     /// own post-write metadata rather than the clock, so the stamp is
     /// exactly what the next check will compare against.
-    pub(crate) async fn restamp(&self, path: &Path) {
-        if let Ok(meta) = fs::metadata(path).await {
-            self.record(path, Stamp::of(&meta));
+    pub(crate) async fn restamp(&self, ws: &Workspace, path: &Path) {
+        if let Some(stamp) = ws.stat(path).await {
+            self.record(path, stamp);
         }
     }
 
     /// The read-before-write check. `Ok` when the path does not exist
     /// (a create), when it is not a regular file (the write will fail on
     /// its own terms), or when the recorded stamp still matches.
-    async fn check_overwrite(&self, path: &Path, rel: &str) -> Result<(), ToolError> {
-        let Ok(meta) = fs::metadata(path).await else {
+    async fn check_overwrite(
+        &self,
+        ws: &Workspace,
+        path: &Path,
+        rel: &str,
+    ) -> Result<(), ToolError> {
+        let Some(current) = ws.stat_checked(path).await? else {
             return Ok(());
         };
-        if !meta.is_file() {
+        if current.is_dir {
             return Ok(());
         }
         match self.stamp(path) {
-            Some(seen) if seen == Stamp::of(&meta) => Ok(()),
+            Some(seen) if seen == current => Ok(()),
             Some(_) => Err(ToolError::msg(format!(
                 "{rel} changed on disk after you read it — read_file it again before \
                  overwriting, or use edit_file, which works from the current contents"
@@ -191,7 +186,7 @@ pub(super) fn occurrence_lines(content: &str, needle: &str) -> String {
 async fn not_found_hint(ws: &Workspace, path: &Path) -> Option<String> {
     let mut dir = path.parent()?;
     loop {
-        if fs::metadata(dir).await.is_ok_and(|meta| meta.is_dir()) {
+        if ws.stat(dir).await.is_some_and(|stat| stat.is_dir) {
             break;
         }
         if dir == ws.root() {
@@ -199,14 +194,9 @@ async fn not_found_hint(ws: &Workspace, path: &Path) -> Option<String> {
         }
         dir = dir.parent()?;
     }
-    let mut entries = fs::read_dir(dir).await.ok()?;
     let mut names = Vec::new();
-    while let Some(entry) = entries.next_entry().await.ok()? {
-        let mut name = entry.file_name().to_string_lossy().into_owned();
-        if entry.file_type().await.is_ok_and(|kind| kind.is_dir()) {
-            name.push('/');
-        }
-        names.push(name);
+    for (name, is_dir) in ws.list(dir).await.ok()? {
+        names.push(if is_dir { format!("{name}/") } else { name });
     }
     names.sort();
     let rel = ws.display_rel(dir).to_string_lossy();
@@ -277,14 +267,17 @@ impl Tool for ReadFileTool {
         // the contents and the next overwrite is refused. The other
         // order would silently bless a write based on stale contents.
         let stamp = match &self.guard {
-            Some(_) => fs::metadata(&path).await.ok().map(|meta| Stamp::of(&meta)),
+            Some(_) => self.ws.stat(&path).await,
             None => None,
         };
-        let bytes = match fs::read(&path).await {
+        let bytes = match self.ws.read(&path).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                let mut message = format!("read failed: {e}");
-                if e.kind() == std::io::ErrorKind::NotFound {
+                let mut message = e.to_string();
+                // The hint only helps when the path is genuinely absent;
+                // a permissions or transport failure is not a wrong guess
+                // at the tree's shape.
+                if self.ws.stat(&path).await.is_none() {
                     if let Some(hint) = not_found_hint(&self.ws, &path).await {
                         message.push_str(&hint);
                     }
@@ -364,18 +357,11 @@ impl Tool for WriteFileTool {
         // Under the keyed lock for this path, so the check and the write
         // cannot be separated by another call to the same file.
         if let Some(guard) = &self.guard {
-            guard.check_overwrite(&path, &rel).await?;
+            guard.check_overwrite(&self.ws, &path, &rel).await?;
         }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ToolError::msg(format!("mkdir failed: {e}")))?;
-        }
-        fs::write(&path, content)
-            .await
-            .map_err(|e| ToolError::msg(format!("write failed: {e}")))?;
+        self.ws.write(&path, content.as_bytes()).await?;
         if let Some(guard) = &self.guard {
-            guard.restamp(&path).await;
+            guard.restamp(&self.ws, &path).await;
         }
         Ok(json!({ "path": rel, "bytesWritten": bytes }))
     }

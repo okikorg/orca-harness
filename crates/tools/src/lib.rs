@@ -41,6 +41,7 @@ mod core_tools;
 mod fs_admin;
 mod kernel;
 pub mod retry;
+mod spawner;
 mod subagent;
 mod todo;
 
@@ -56,14 +57,15 @@ pub use ask::{
 };
 pub use bun_repl::BunReplTool;
 pub use core_tools::{
-    core_tools, core_tools_with_executor, core_tools_with_guard, core_tools_with_process,
-    core_tools_with_shell_and_process, BackgroundProcess, BackgroundStats, EditFileTool, Executor,
-    FileGuard, GlobTool, GrepTool, MutationPreflight, ProcessController, ProcessEntry,
-    ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn, ProcessTool,
-    ProcessWrite, ReadFileTool, ShellTool, Workspace, WriteFileTool,
+    core_tools, core_tools_in_sandbox, core_tools_with_executor, core_tools_with_guard,
+    core_tools_with_process, core_tools_with_shell_and_process, BackgroundProcess, BackgroundStats,
+    EditFileTool, Executor, FileGuard, GlobTool, GrepTool, MutationPreflight, ProcessController,
+    ProcessEntry, ProcessNotification, ProcessNotificationKind, ProcessSnapshot, ProcessSpawn,
+    ProcessTool, ProcessWrite, ReadFileTool, ShellTool, Workspace, WriteFileTool,
 };
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use kernel::PyKernelTool;
+pub use spawner::{Spawn, Spawned, Spawner};
 pub use subagent::{
     refresh_inventory, subagent_completions_prompt, ActiveInventory, BackgroundAcknowledgement,
     BackgroundJob, BackgroundStatus, CompletionDelivery, CompletionInbox, SidekickAcknowledgement,

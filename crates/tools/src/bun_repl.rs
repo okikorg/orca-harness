@@ -8,16 +8,13 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStdin};
-use tokio::sync::mpsc;
 
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
@@ -25,15 +22,6 @@ use crate::pgroup;
 use crate::BackgroundStats;
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-// Backpressure the child readers instead of letting a noisy or runaway
-// program queue output without limit before `exec` can truncate it.
-const OUTPUT_CHANNEL_CHUNKS: usize = 32;
-
-struct OutputChunk {
-    stderr: bool,
-    bytes: Vec<u8>,
-}
 
 enum ReadOutcome {
     Complete {
@@ -48,10 +36,8 @@ enum ReadOutcome {
 }
 
 struct Live {
-    child: Child,
-    stdin: ChildStdin,
-    output: mpsc::Receiver<OutputChunk>,
-    pgid: Option<u32>,
+    process: crate::Spawned,
+    output: crate::spawner::Output,
 }
 
 #[derive(Default)]
@@ -61,9 +47,58 @@ struct Session {
 }
 
 /// Removes the per-call source even when execution is cancelled or times out.
-struct TempSource(PathBuf);
+///
+/// The file has to live wherever `bun` does: `.load` is executed *by the
+/// REPL*, so a host temp file is invisible to a sandboxed interpreter.
+/// Under a sandbox the source is written through the provider and removed
+/// the same way.
+struct TempSource {
+    path: PathBuf,
+    /// Set when the file lives in a sandbox, so `Drop` knows where to
+    /// delete it from.
+    sandbox: Option<Arc<dyn orca_harness_core::Sandbox>>,
+}
 
 impl TempSource {
+    /// The per-call file name. Process id plus sequence, so two tools in
+    /// one process never collide and neither do two processes.
+    fn file_name(seq: u64) -> String {
+        format!("orca-bun-repl-{}-{seq}.ts", std::process::id())
+    }
+
+    fn body(code: &str, marker: &str) -> Vec<u8> {
+        let mut out = code.as_bytes().to_vec();
+        out.extend_from_slice(b"\n;console.log(");
+        out.extend_from_slice(marker.as_bytes());
+        out.extend_from_slice(b")\n");
+        out
+    }
+
+    /// Write the source inside `sandbox`, in the directory `bun` runs in.
+    async fn write_sandboxed(
+        sandbox: &Arc<dyn orca_harness_core::Sandbox>,
+        dir: &str,
+        code: &str,
+        marker: &str,
+    ) -> Result<Self, ToolError> {
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::SeqCst);
+        let path = PathBuf::from(dir).join(Self::file_name(seq));
+        sandbox
+            .write_file(
+                &path.to_string_lossy(),
+                &Self::body(code, marker),
+                orca_harness_core::FileMode::Regular,
+            )
+            .await
+            .map_err(|error: orca_harness_core::SandboxError| {
+                ToolError::msg(format!("failed to write Bun REPL input: {error}"))
+            })?;
+        Ok(Self {
+            path,
+            sandbox: Some(sandbox.clone()),
+        })
+    }
+
     fn write(code: &str, marker: &str) -> Result<Self, ToolError> {
         let dir = std::env::temp_dir();
         if dir.to_string_lossy().chars().any(char::is_whitespace) {
@@ -73,7 +108,7 @@ impl TempSource {
         }
         for _ in 0..16 {
             let seq = TEMP_SEQ.fetch_add(1, Ordering::SeqCst);
-            let path = dir.join(format!("orca-bun-repl-{}-{seq}.ts", std::process::id()));
+            let path = dir.join(Self::file_name(seq));
             let mut options = std::fs::OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]
@@ -84,7 +119,10 @@ impl TempSource {
             let file = options.open(&path);
             match file {
                 Ok(mut file) => {
-                    let source = Self(path);
+                    let source = Self {
+                        path,
+                        sandbox: None,
+                    };
                     file.write_all(code.as_bytes())
                         .and_then(|_| file.write_all(b"\n;console.log("))
                         .and_then(|_| file.write_all(marker.as_bytes()))
@@ -110,12 +148,30 @@ impl TempSource {
 
 impl Drop for TempSource {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let Some(sandbox) = self.sandbox.take() else {
+            let _ = std::fs::remove_file(&self.path);
+            return;
+        };
+        // A provider delete is async and `Drop` is not, so it is handed
+        // to the runtime. The file is one small per-call source; losing
+        // the race at shutdown leaks it inside a sandbox that is about to
+        // be destroyed anyway.
+        let path = std::mem::take(&mut self.path);
+        tokio::spawn(async move {
+            let command = format!("rm -f '{}'", path.to_string_lossy().replace('\'', r"'\''"));
+            let _ = sandbox
+                .exec(orca_harness_core::ExecRequest::new(command))
+                .await;
+        });
     }
 }
 
 pub struct BunReplTool {
     bun: String,
+    /// Where the REPL runs. Local by default; a sandbox-backed spawner
+    /// keeps the interpreter — and its per-call source file — inside the
+    /// boundary with the rest of the agent's tools.
+    spawner: crate::Spawner,
     working_dir: Option<String>,
     max_output_bytes: usize,
     default_timeout: Duration,
@@ -145,6 +201,7 @@ impl BunReplTool {
     pub fn new() -> Self {
         Self {
             bun: "bun".into(),
+            spawner: crate::Spawner::Local,
             working_dir: None,
             max_output_bytes: 64 * 1024,
             default_timeout: Duration::from_secs(30),
@@ -154,6 +211,16 @@ impl BunReplTool {
             seq: AtomicU64::new(0),
             stats: BackgroundStats::default(),
         }
+    }
+
+    /// Run the interpreter inside `sandbox` instead of on this machine.
+    /// The provider must report
+    /// [`sessions`](orca_harness_core::Capabilities::sessions); one that
+    /// does not cannot hold a live process, and the first call says so
+    /// rather than silently starting one on the host.
+    pub fn sandbox(mut self, sandbox: std::sync::Arc<dyn orca_harness_core::Sandbox>) -> Self {
+        self.spawner = crate::Spawner::Sandbox(sandbox);
+        self
     }
 
     pub fn stats(mut self, stats: BackgroundStats) -> Self {
@@ -191,46 +258,25 @@ impl BunReplTool {
         *guard = pgid;
     }
 
-    fn spawn_repl(&self) -> Result<Live, ToolError> {
-        let mut command = tokio::process::Command::new(&self.bun);
-        command
-            .args(["repl", "--no-install"])
-            .env("NO_COLOR", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        if let Some(dir) = &self.working_dir {
-            command.current_dir(dir);
-        }
-        #[cfg(unix)]
-        command.process_group(0);
-        let mut child = command
-            .spawn()
-            .map_err(|error| ToolError::msg(format!("failed to spawn {}: {error}", self.bun)))?;
-        let pgid = child.id();
-        let stdin = child.stdin.take().expect("stdin piped");
-        let stdout = child.stdout.take().expect("stdout piped");
-        let stderr = child.stderr.take().expect("stderr piped");
-        let (send, output) = mpsc::channel(OUTPUT_CHANNEL_CHUNKS);
-        pump_output(stdout, false, send.clone());
-        pump_output(stderr, true, send);
-        self.set_live_pgid(pgid);
-        Ok(Live {
-            child,
-            stdin,
-            output,
-            pgid,
-        })
+    async fn spawn_repl(&self) -> Result<Live, ToolError> {
+        let (process, output) = self
+            .spawner
+            .spawn(crate::Spawn {
+                program: self.bun.clone(),
+                args: vec!["repl".into(), "--no-install".into()],
+                working_dir: self.working_dir.clone(),
+                // Kept separate: the end-of-execution sentinel is written
+                // to each stream and both must be seen.
+                capture_stderr: true,
+            })
+            .await?;
+        self.set_live_pgid(process.pgid());
+        Ok(Live { process, output })
     }
 
     async fn kill_live(&self, session: &mut Session) {
         if let Some(mut live) = session.live.take() {
-            if let Some(pgid) = live.pgid {
-                pgroup::kill_group(pgid);
-            }
-            let _ = live.child.start_kill();
-            let _ = live.child.wait().await;
+            live.process.kill().await;
         }
         self.set_live_pgid(None);
     }
@@ -249,7 +295,7 @@ impl BunReplTool {
 
         let mut session = self.session.lock().await;
         if let Some(live) = &mut session.live {
-            if live.child.try_wait().ok().flatten().is_some() {
+            if live.process.has_exited() {
                 session.live = None;
                 session.restart_notice = true;
                 self.set_live_pgid(None);
@@ -257,7 +303,7 @@ impl BunReplTool {
         }
         let restarted = session.restart_notice && session.live.is_none();
         if session.live.is_none() {
-            session.live = Some(self.spawn_repl()?);
+            session.live = Some(self.spawn_repl().await?);
             session.restart_notice = false;
         }
 
@@ -269,15 +315,27 @@ impl BunReplTool {
         let ok = format!("ORCA_BUN_{token}_OK");
         let end = format!("\"ORCA_BUN_{token}_END\"");
         let stderr_end = format!("ORCA_BUN_{token}_STDERR_END");
-        let source = TempSource::write(code, &json!(ok).to_string())?;
+        let marker = json!(ok).to_string();
+        let source = match &self.spawner {
+            crate::Spawner::Sandbox(sandbox) => {
+                // `.load` runs inside the REPL, so the file must exist
+                // where the REPL can see it: the sandbox, not this host.
+                TempSource::write_sandboxed(
+                    sandbox,
+                    self.working_dir.as_deref().unwrap_or("/tmp"),
+                    code,
+                    &marker,
+                )
+                .await?
+            }
+            crate::Spawner::Local => TempSource::write(code, &marker)?,
+        };
         let end_command = format!(
             "process.stderr.write([\"ORCA\",\"BUN\",\"{token}\",\"STDERR\",\"END\"].join(\"_\") + \"\\n\"); [\"ORCA\",\"BUN\",\"{token}\",\"END\"].join(\"_\")\n"
         );
-        let command = format!(".load {}\n{end_command}", source.0.display());
+        let command = format!(".load {}\n{end_command}", source.path.display());
         let live = session.live.as_mut().expect("just ensured");
-        if live.stdin.write_all(command.as_bytes()).await.is_err()
-            || live.stdin.flush().await.is_err()
-        {
+        if live.process.write_stdin(command.as_bytes()).await.is_err() {
             self.kill_live(&mut session).await;
             session.restart_notice = true;
             return Err(ToolError::msg(
@@ -395,32 +453,6 @@ impl BunReplTool {
         session.restart_notice = false;
         Ok(json!({"state": "ok", "restarted": true, "output": "", "stderr": ""}))
     }
-}
-
-fn pump_output<R>(mut reader: R, stderr: bool, send: mpsc::Sender<OutputChunk>)
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        let mut buffer = [0u8; 8192];
-        loop {
-            match reader.read(&mut buffer).await {
-                Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    if send
-                        .send(OutputChunk {
-                            stderr,
-                            bytes: buffer[..read].to_vec(),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    });
 }
 
 fn push_bounded(buffer: &mut Vec<u8>, chunk: &[u8], cap: usize) -> u64 {

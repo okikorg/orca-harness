@@ -33,6 +33,7 @@ mod error;
 mod extension;
 mod limits;
 mod model;
+mod sandbox;
 mod tool;
 
 pub mod testing;
@@ -44,6 +45,10 @@ pub use error::{ExtensionError, HarnessError, ModelError, ToolError};
 pub use extension::{Extension, ExtensionRegistry, Next, Subscriptions, ToolDecision};
 pub use limits::Limits;
 pub use model::{DeltaSink, Model, ModelDelta, ModelResponse, Usage};
+pub use sandbox::{
+    Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner, Sandbox,
+    SandboxError, Session, SpawnRequest, Stat,
+};
 pub use tool::{
     Concurrency, FnTool, Tool, ToolCall, ToolContext, ToolName, ToolRegistry, ToolResult,
     ToolSchema,

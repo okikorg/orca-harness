@@ -5,6 +5,7 @@ members = [
     "crates/harness-dag",
     "crates/provider-auth",
     "crates/model-providers",
+    "crates/sandbox-providers",
     "crates/tools",
     "crates/tool-extensions",
     "crates/extensions",

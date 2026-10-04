@@ -6,7 +6,6 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::fs;
 
 use orca_harness_core::{Tool, ToolContext, ToolError, ToolSchema};
 
@@ -70,30 +69,23 @@ impl Tool for GrepTool {
             if ctx.cancellation.is_cancelled() {
                 return Err(ToolError::msg("cancelled"));
             }
-            let meta = match fs::metadata(&dir).await {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Some(stat) = self.ws.stat(&dir).await else {
+                continue;
             };
-            if meta.is_dir() {
-                let mut rd = match fs::read_dir(&dir).await {
-                    Ok(rd) => rd,
-                    Err(_) => continue,
+            if stat.is_dir {
+                let Ok(entries) = self.ws.list(&dir).await else {
+                    continue;
                 };
-                while let Ok(Some(entry)) = rd.next_entry().await {
-                    let name = entry.file_name();
+                for (name, _) in entries {
                     // Skip common noise directories.
-                    if matches!(
-                        name.to_str(),
-                        Some(".git") | Some("target") | Some("node_modules")
-                    ) {
+                    if matches!(name.as_str(), ".git" | "target" | "node_modules") {
                         continue;
                     }
-                    stack.push(entry.path());
+                    stack.push(dir.join(name));
                 }
-            } else if meta.len() as usize <= self.max_file_bytes {
-                let content = match fs::read(&dir).await {
-                    Ok(b) => b,
-                    Err(_) => continue,
+            } else if stat.len as usize <= self.max_file_bytes {
+                let Ok(content) = self.ws.read(&dir).await else {
+                    continue;
                 };
                 // Skip probable binaries.
                 if content.contains(&0) {

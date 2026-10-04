@@ -14,15 +14,12 @@
 //! explicit, never silent. The driver also exits on stdin EOF, so a dead
 //! host cannot leave a kernel behind.
 
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStdin, ChildStdout};
 
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
@@ -64,11 +61,9 @@ while True:
 "#;
 
 struct Live {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: ChildStdout,
+    process: crate::Spawned,
+    output: crate::spawner::Output,
     nonce: String,
-    pgid: Option<u32>,
 }
 
 #[derive(Default)]
@@ -81,6 +76,10 @@ struct Session {
 
 pub struct PyKernelTool {
     python: String,
+    /// Where the interpreter runs. Local by default; a sandbox-backed
+    /// spawner keeps the kernel inside the boundary with the rest of the
+    /// agent's tools.
+    spawner: crate::Spawner,
     working_dir: Option<String>,
     max_output_bytes: usize,
     default_timeout: Duration,
@@ -112,6 +111,7 @@ impl PyKernelTool {
     pub fn new() -> Self {
         Self {
             python: "python3".into(),
+            spawner: crate::Spawner::Local,
             working_dir: None,
             max_output_bytes: 64 * 1024,
             default_timeout: Duration::from_secs(30),
@@ -124,6 +124,16 @@ impl PyKernelTool {
     }
 
     /// Adopt shared live counters.
+    /// Run the interpreter inside `sandbox` instead of on this machine.
+    /// The provider must report
+    /// [`sessions`](orca_harness_core::Capabilities::sessions); one that
+    /// does not cannot hold a live process, and the first call says so
+    /// rather than silently starting one on the host.
+    pub fn sandbox(mut self, sandbox: std::sync::Arc<dyn orca_harness_core::Sandbox>) -> Self {
+        self.spawner = crate::Spawner::Sandbox(sandbox);
+        self
+    }
+
     pub fn stats(mut self, stats: BackgroundStats) -> Self {
         self.stats = stats;
         self
@@ -161,47 +171,37 @@ impl PyKernelTool {
         self
     }
 
-    fn spawn_kernel(&self) -> Result<Live, ToolError> {
+    async fn spawn_kernel(&self) -> Result<Live, ToolError> {
         let nonce = format!(
             "ORCA_K_{}_{}",
             std::process::id(),
             self.seq.fetch_add(1, Ordering::SeqCst)
         );
-        let mut cmd = tokio::process::Command::new(&self.python);
-        cmd.args(["-u", "-c", DRIVER, &nonce])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        if let Some(dir) = &self.working_dir {
-            cmd.current_dir(dir);
-        }
-        #[cfg(unix)]
-        cmd.process_group(0);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ToolError::msg(format!("failed to spawn {}: {e}", self.python)))?;
-        let pgid = child.id();
-        let stdin = child.stdin.take().expect("stdin piped");
-        let stdout = child.stdout.take().expect("stdout piped");
-        self.set_live_pgid(pgid);
+        // The driver travels as an argv element, so it needs no file on
+        // either side of the boundary.
+        let (process, output) = self
+            .spawner
+            .spawn(crate::Spawn {
+                program: self.python.clone(),
+                args: vec!["-u".into(), "-c".into(), DRIVER.into(), nonce.clone()],
+                working_dir: self.working_dir.clone(),
+                // The driver dup2s stderr onto stdout itself, so ordering
+                // is preserved without a second stream.
+                capture_stderr: false,
+            })
+            .await?;
+        self.set_live_pgid(process.pgid());
         Ok(Live {
-            child,
-            stdin,
-            stdout,
+            process,
+            output,
             nonce,
-            pgid,
         })
     }
 
     /// Kill the live kernel (whole group) and reap it.
     async fn kill_live(&self, session: &mut Session) {
         if let Some(mut live) = session.live.take() {
-            if let Some(pgid) = live.pgid {
-                pgroup::kill_group(pgid);
-            }
-            let _ = live.child.start_kill();
-            let _ = live.child.wait().await;
+            live.process.kill().await;
         }
         self.set_live_pgid(None);
     }
@@ -222,7 +222,7 @@ impl PyKernelTool {
 
         // A kernel that exited on its own (crash, os._exit) lost state too.
         if let Some(live) = &mut session.live {
-            if live.child.try_wait().ok().flatten().is_some() {
+            if live.process.has_exited() {
                 session.live = None;
                 session.restart_notice = true;
                 self.set_live_pgid(None);
@@ -230,18 +230,17 @@ impl PyKernelTool {
         }
         let restarted = session.restart_notice && session.live.is_none();
         if session.live.is_none() {
-            session.live = Some(self.spawn_kernel()?);
+            session.live = Some(self.spawn_kernel().await?);
             session.restart_notice = false;
         }
         let live = session.live.as_mut().expect("just ensured");
 
         let header = format!("EXEC {}\n", code.len());
-        let write = async {
-            live.stdin.write_all(header.as_bytes()).await?;
-            live.stdin.write_all(code.as_bytes()).await?;
-            live.stdin.flush().await
-        };
-        if write.await.is_err() {
+        let mut framed = header.into_bytes();
+        framed.extend_from_slice(code.as_bytes());
+        // One write: a sandbox session is a round trip per call, and the
+        // header must not be able to arrive without its payload.
+        if live.process.write_stdin(&framed).await.is_err() {
             // Broken pipe: kernel died mid-write. Recover next call.
             self.kill_live(&mut session).await;
             session.restart_notice = true;
@@ -271,16 +270,16 @@ impl PyKernelTool {
                     break Some(("error", pos, Some(traceback)));
                 }
             }
-            let mut chunk = [0u8; 8192];
             let read = tokio::select! {
                 biased;
                 _ = ctx.cancellation.cancelled() => break None,
-                read = tokio::time::timeout(timeout, live.stdout.read(&mut chunk)) => read,
+                chunk = tokio::time::timeout(timeout, live.output.recv()) => chunk,
             };
             match read {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break None, // EOF, error, or timeout
-                Ok(Ok(n)) => {
-                    buf.extend_from_slice(&chunk[..n]);
+                // Channel closed (the process is gone) or timed out.
+                Ok(None) | Err(_) => break None,
+                Ok(Some(chunk)) => {
+                    buf.extend_from_slice(&chunk.bytes);
                     if buf.len() > keep {
                         let excess = buf.len() - keep;
                         buf.drain(..excess);
