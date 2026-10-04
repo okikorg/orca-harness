@@ -2,6 +2,7 @@
 
 mod agent;
 mod background;
+mod environment;
 mod error;
 mod extensions;
 mod harness;
@@ -17,6 +18,7 @@ pub use background::{
     BackgroundNotification, ChildEventCallback, ProcessConfig, Processes, SubagentConfig,
     Subagents, Workflows, NOTIFICATION_CAPACITY,
 };
+pub use environment::SessionEnvironment;
 pub use error::SdkError;
 pub use extensions::{
     CompactCallback, Compaction, ModelRetryOptions, RetryConfig, ToolRetryOptions, TruncationConfig,

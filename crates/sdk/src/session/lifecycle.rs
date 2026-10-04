@@ -43,12 +43,14 @@ impl Session {
         let result = (|| -> Result<Self, SdkError> {
             recorder.fork()?;
             let fork_path = recorder.path();
+            self.environment.persist(&fork_path)?;
             recorder.sync(&context);
             let fork_store = self.truncation_store.snapshot();
             save_session_store(&fork_store, &fork_path)?;
             let (new_handler, loaded) = SessionHandler::resume(&fork_path)?;
             Ok(Self {
-                tools: SessionTools::new(&self.agent.inner),
+                tools: SessionTools::new(&self.agent.inner, &self.environment),
+                environment: self.environment.clone(),
                 agent: self.agent.clone(),
                 context: Arc::new(Mutex::new(loaded.context)),
                 recorder: Some(Arc::new(new_handler)),
@@ -81,9 +83,28 @@ impl Session {
         let fresh = fresh_context(&self.agent);
         let mut context = self.context.lock().await;
         if let Some(recorder) = &self.recorder {
-            recorder.start_new_with_context(&fresh)?;
+            let candidate = SessionHandler::create(
+                &self.agent.inner.harness.inner.sessions_dir,
+                &self
+                    .agent
+                    .inner
+                    .harness
+                    .workspace()
+                    .root()
+                    .display()
+                    .to_string(),
+                &self.agent.inner.model_name,
+            )?;
+            adopt_prepared(recorder, candidate, |candidate| {
+                self.environment.persist(&candidate.path())?;
+                candidate.sync(&fresh);
+                verify_candidate(candidate, &fresh)?;
+                save_session_store(
+                    &super::persistence::session_store(&self.agent),
+                    &candidate.path(),
+                )
+            })?;
             self.truncation_store.clear();
-            save_session_store(&self.truncation_store, &recorder.path())?;
         } else {
             self.truncation_store.clear();
         }
@@ -147,6 +168,10 @@ impl Session {
     /// the wait covers their stage workers, and
     /// [`workflows`](Self::workflows) afterwards refuses submissions and
     /// knows no runs.
+    /// SDK-owned Python/Bun interpreters also receive kill requests within
+    /// `grace`. Remote interpreter kills use Spawner's best-effort semantics:
+    /// errors are not propagated and exit is not confirmed. Timeout counters
+    /// describe background workers/process tools and exclude REPL cleanup.
     pub async fn shutdown(&self, grace: Duration) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         self.closed.store(true, Ordering::Release);
@@ -169,7 +194,8 @@ impl Session {
                     if let Some(process) = process {
                         process.wait_idle().await;
                     }
-                }
+                },
+                self.tools.reset_repls()
             );
         };
         match tokio::time::timeout(grace, idle).await {
@@ -180,5 +206,112 @@ impl Session {
                 still_running_processes: process.map_or(0, ProcessController::running),
             }),
         }
+    }
+}
+
+/// `sync` logs write failures; verify the persisted candidate explicitly
+/// before adopting it so a failed append cannot silently lose the prompt.
+fn verify_candidate(
+    candidate: &SessionHandler,
+    expected: &orca_harness_core::Context,
+) -> Result<(), SdkError> {
+    let loaded = orca_harness_extensions::SessionFile::load(&candidate.path())?;
+    let serialized = |context: &orca_harness_core::Context| {
+        serde_json::to_value(context.messages())
+            .map_err(|e| SdkError::Config(format!("cannot verify candidate transcript: {e}")))
+    };
+    if !loaded.warnings.is_empty() || serialized(&loaded.context)? != serialized(expected)? {
+        return Err(SdkError::Config(
+            "candidate transcript was not completely persisted".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Prepare every companion before switching the active recorder. Failed
+/// preparation leaves the original recorder/context untouched.
+fn adopt_prepared(
+    recorder: &SessionHandler,
+    candidate: SessionHandler,
+    prepare: impl FnOnce(&SessionHandler) -> Result<(), SdkError>,
+) -> Result<(), SdkError> {
+    let path = candidate.path();
+    let result = prepare(&candidate).and_then(|()| {
+        // Reading back also validates candidate transcript before adoption.
+        recorder.switch_to(&path)?;
+        Ok(())
+    });
+    if result.is_err() {
+        drop(candidate);
+        for file in [
+            path.clone(),
+            path.with_extension("environment.json"),
+            path.with_extension("recovery.json"),
+        ] {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod environment_rotation_tests {
+    use super::*;
+
+    #[test]
+    fn failed_binding_preparation_preserves_original_recorder() {
+        let dir = std::env::temp_dir().join(format!(
+            "orca-rotation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let recorder = SessionHandler::create(&dir, "/workspace", "test").unwrap();
+        let original = recorder.path();
+        let environment = crate::SessionEnvironment::Disabled;
+        environment.persist(&original).unwrap();
+        let candidate = SessionHandler::create(&dir, "/workspace", "test").unwrap();
+        let candidate_path = candidate.path();
+        let result = adopt_prepared(&recorder, candidate, |candidate| {
+            // A directory at the exact sidecar destination deterministically
+            // makes the real binding write fail, even when run as root.
+            std::fs::create_dir(candidate.path().with_extension("environment.json"))?;
+            environment.persist(&candidate.path())
+        });
+        assert!(result.is_err());
+        assert_eq!(recorder.path(), original);
+        environment.verify(&original).unwrap();
+        assert!(!candidate_path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn incomplete_candidate_cannot_replace_original_transcript() {
+        let dir = std::env::temp_dir().join(format!(
+            "orca-rotation-content-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let recorder = SessionHandler::create(&dir, "/workspace", "test").unwrap();
+        let original = recorder.path();
+        let mut context = orca_harness_core::Context::new();
+        context.push_system("must survive");
+        recorder.sync(&context);
+        let candidate = SessionHandler::create(&dir, "/workspace", "test").unwrap();
+        let candidate_path = candidate.path();
+        let result = adopt_prepared(&recorder, candidate, |candidate| {
+            // A valid header with the expected prompt absent models a failed
+            // append that sync would log instead of returning to its caller.
+            verify_candidate(candidate, &context)
+        });
+        assert!(result.is_err());
+        assert_eq!(recorder.path(), original);
+        verify_candidate(&recorder, &context).unwrap();
+        assert!(!candidate_path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
