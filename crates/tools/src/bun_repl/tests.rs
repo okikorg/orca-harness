@@ -4,8 +4,9 @@ use serde_json::json;
 
 use orca_harness_core::{CancellationToken, Concurrency, Tool, ToolContext};
 
+use super::rpc::Rpc;
 use super::{clean_stdout, output::strip_ansi, BunReplTool, TempSource};
-use crate::BackgroundStats;
+use crate::{BackgroundStats, ProgrammaticTools, ToolDispatch};
 
 fn ctx() -> ToolContext {
     ToolContext {
@@ -259,4 +260,127 @@ fn temporary_source_is_private_and_removed_on_drop() {
     }
     drop(source);
     assert!(!path.exists());
+}
+
+fn dispatch(extensions: Vec<std::sync::Arc<dyn orca_harness_core::Extension>>) -> ToolDispatch {
+    let echo =
+        orca_harness_core::FnTool::new("echo", "", json!({}), |input, _| async move { Ok(input) });
+    let tools: Vec<std::sync::Arc<dyn Tool>> = vec![
+        std::sync::Arc::new(BunReplTool::new()),
+        std::sync::Arc::new(echo),
+    ];
+    ToolDispatch::new(tools, extensions, ProgrammaticTools::new())
+}
+
+#[test]
+fn a_dispatching_repl_is_serial_and_documents_the_tools_global() {
+    let repl = std::sync::Arc::new(BunReplTool::new());
+    let tool = repl.clone().with_dispatch(dispatch(Vec::new()));
+    assert_eq!(tool.schema().name, "bun_repl");
+    assert!(tool.schema().description.contains("tools.batch"));
+    assert!(!repl.schema().description.contains("tools.batch"));
+    assert_eq!(tool.concurrency(&json!({"code": "1"})), Concurrency::Serial);
+    assert_eq!(
+        repl.concurrency(&json!({"code": "1"})),
+        Concurrency::Keyed("bun_repl".into())
+    );
+}
+
+struct Offline;
+
+#[async_trait::async_trait]
+impl orca_harness_core::Extension for Offline {
+    fn name(&self) -> &str {
+        "gate"
+    }
+
+    fn subscriptions(&self) -> orca_harness_core::Subscriptions {
+        orca_harness_core::Subscriptions::none().before_tool()
+    }
+
+    async fn before_tool(
+        &self,
+        _call: &orca_harness_core::ToolCall,
+    ) -> Result<orca_harness_core::ToolDecision, orca_harness_core::ExtensionError> {
+        Err(orca_harness_core::ExtensionError::new(
+            "gate",
+            "policy store offline",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn tools_requests_report_their_real_errors() {
+    let plain = dispatch(Vec::new());
+    let repl = BunReplTool::new();
+    let rpc = Rpc::new(&plain, &repl);
+    let listed = rpc.respond(&json!({"list": true}), &ctx()).await.unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["name"], "echo");
+    let empty = rpc.respond(&json!({"calls": []}), &ctx()).await;
+    assert_eq!(
+        empty.unwrap_err(),
+        "a tools batch holds 1 to 64 calls, not 0"
+    );
+    let wide: Vec<_> = (0..65).map(|_| json!({"name": "echo"})).collect();
+    let wide = rpc.respond(&json!({"calls": wide}), &ctx()).await;
+    assert_eq!(
+        wide.unwrap_err(),
+        "a tools batch holds 1 to 64 calls, not 65"
+    );
+    let invalid = rpc
+        .respond(&json!({"calls": [{"arguments": {}}]}), &ctx())
+        .await;
+    assert!(invalid
+        .unwrap_err()
+        .starts_with("invalid tools request: missing field `name`"));
+
+    let gated = dispatch(vec![std::sync::Arc::new(Offline)]);
+    let rpc = Rpc::new(&gated, &repl);
+    let failed = rpc
+        .respond(&json!({"calls": [{"name": "echo"}]}), &ctx())
+        .await;
+    assert_eq!(
+        failed.unwrap_err(),
+        "extension error: gate: policy store offline"
+    );
+}
+
+#[tokio::test]
+async fn tools_frames_are_answered_in_sequence_through_the_response_file() {
+    let dispatch = dispatch(Vec::new());
+    let repl = BunReplTool::new();
+    let mut rpc = Rpc::new(&dispatch, &repl);
+    let prelude = rpc.prelude();
+    let marker = prelude
+        .split("const marker = ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .map(|marker| serde_json::from_str::<String>(marker).unwrap())
+        .unwrap();
+    let path: String = prelude
+        .split("const path = ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .map(|path| serde_json::from_str(path).unwrap())
+        .unwrap();
+
+    let frame = r#"{"id":1,"calls":[{"name":"echo","arguments":{"n":7}}]}"#;
+    let mut stderr = format!("warn: noise\n{marker}{frame}\n tail").into_bytes();
+    let taken = rpc.take_frame(&mut stderr).unwrap();
+    assert_eq!(taken, frame.as_bytes());
+    assert_eq!(stderr, b"warn: noise\n tail");
+    assert!(rpc.take_frame(&mut stderr).is_none());
+
+    rpc.answer(&taken, &ctx()).await.unwrap();
+    let response: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["result"][0]["output"], json!({"n": 7}));
+    assert_eq!(response["result"][0]["call_id"], "t.ptc1");
+
+    let skipped = rpc.answer(br#"{"id":3,"list":true}"#, &ctx()).await;
+    assert_eq!(skipped.unwrap_err(), "out-of-sequence tools request");
+    drop(rpc);
+    assert!(!std::path::Path::new(&path).exists());
 }
