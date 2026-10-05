@@ -339,8 +339,12 @@ fn unsupported_or_malformed_text_formats_are_rejected() {
         json!({"type":"json_schema", "name":"valid", "schema":{}, "strict":"yes"}),
         json!({"type":"json_schema", "name":"valid", "schema":{}, "description":1}),
     ] {
+        // Not `Request`: the retry layer would resend a configuration error.
         assert!(
-            OpenAiModel::new("m").text_format(input.clone()).is_err(),
+            matches!(
+                OpenAiModel::new("m").text_format(input.clone()),
+                Err(ModelError::InvalidResponse(_))
+            ),
             "{input}"
         );
     }
