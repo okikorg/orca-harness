@@ -218,3 +218,21 @@ fn codex_plugin_skips_skills_with_unusable_names() {
         );
     }
 }
+
+#[test]
+fn codex_plugin_resolves_paths_against_the_filesystem_root() {
+    let manifest = manifest(json!({}));
+    let mcp = br#"{"mcpServers": {"local": {"command": "./bin/server", "cwd": "./data"}}}"#;
+    let entries: Vec<(&str, &[u8])> =
+        vec![(".codex-plugin/plugin.json", &manifest), (".mcp.json", mcp)];
+    let plugin = parse_codex_plugin(&entries, "/").unwrap();
+    assert_eq!(
+        plugin.mcp_servers[0].transport,
+        CodexPluginTransport::Stdio {
+            command: "/bin/server".into(),
+            args: vec![],
+            cwd: "/data".into(),
+            env_vars: vec![],
+        }
+    );
+}
