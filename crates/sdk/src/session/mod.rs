@@ -325,11 +325,16 @@ impl Session {
             ));
         }
         let cancellation = request.run_token();
-        let RunTools { tools, skill_once } = self.tools.run_tools(&self.agent.inner);
+        let RunTools {
+            tools,
+            skill_once,
+            bun,
+        } = self.tools.run_tools(&self.agent.inner);
         Ok(RunExecution {
             definition: self.agent.clone(),
             tools,
             skill_once,
+            bun,
             context: self.context.clone(),
             recorder: self.recorder.clone(),
             store: self.truncation_store.clone(),

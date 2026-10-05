@@ -56,7 +56,8 @@ impl ProgrammaticTools {
         self
     }
 
-    pub(crate) fn visible(&self, schema: &ToolSchema) -> bool {
+    /// Whether nested code may see and call `schema`'s tool.
+    pub fn visible(&self, schema: &ToolSchema) -> bool {
         self.visibility
             .as_ref()
             .is_none_or(|visible| visible(schema))

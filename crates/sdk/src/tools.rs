@@ -174,6 +174,8 @@ pub(crate) struct RunTools {
     /// `SkillOnce`. Not an agent extension: that list is registered
     /// ahead of compaction, and `SkillOnce` has to run after it.
     pub(crate) skill_once: bool,
+    /// The interpreter behind this run's `bun_repl`, if the session has one.
+    pub(crate) bun: Option<Arc<BunReplTool>>,
 }
 
 impl SessionTools {
@@ -271,7 +273,11 @@ impl SessionTools {
         tools.extend(skill);
         tools.extend(definition.mcp.iter().flat_map(Mcp::tools));
         tools.extend(definition.memory_tools.iter().cloned());
-        RunTools { tools, skill_once }
+        RunTools {
+            tools,
+            skill_once,
+            bun: self.bun.last().cloned(),
+        }
     }
 
     /// Reset every session-owned built-in: the guard, todos, detached
