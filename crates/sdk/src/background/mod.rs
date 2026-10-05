@@ -83,6 +83,7 @@ impl BackgroundServices {
         definition: &AgentDefinition,
         config: &SubagentConfig,
         events: broadcast::Sender<BackgroundNotification>,
+        environment: &crate::SessionEnvironment,
     ) -> Self {
         let settings = config.settings.clone();
         let manager = SubagentManager::from_settings(settings.clone());
@@ -91,9 +92,9 @@ impl BackgroundServices {
         if let Some(store) = &store {
             inbox = inbox.with_workflow_store(store.clone());
         }
-        let workspace = definition.harness.workspace().clone();
-        let preset = definition.preset;
-        let processes = definition.processes.clone();
+        let workspace = environment.workspace(definition);
+        let preset = environment.preset(definition.preset);
+        let processes = environment.processes(definition);
         let custom: Vec<Arc<dyn Tool>> = definition
             .tool_sources
             .iter()
