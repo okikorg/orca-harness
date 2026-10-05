@@ -35,7 +35,7 @@ impl AnthropicModel {
                         blocks.push(json!({"type": "text", "text": content}));
                     }
                     blocks.extend(images.iter().map(|image| {
-                        let source = match &image.source_url {
+                        let source = match crate::image_link(image) {
                             Some(url) => json!({"type":"url", "url":url}),
                             None => json!({"type":"base64", "media_type":image.media_type, "data":image.data}),
                         };

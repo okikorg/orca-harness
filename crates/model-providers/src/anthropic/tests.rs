@@ -526,3 +526,18 @@ fn user_image_urls_are_native_image_sources() {
         json!({"type":"image","source":{"type":"url","url":"https://images.example.test/pixel.png"}})
     );
 }
+
+#[test]
+fn an_image_with_bytes_and_a_url_is_sent_inline() {
+    let mut context = Context::new();
+    let mut image = Image::base64("image/png", "aGVsbG8=");
+    image.source_url = Some("https://images.example.test/pixel.png".into());
+    context.push_user_with_images("describe", vec![image]);
+    let body = AnthropicModel::new("fixture")
+        .request_body(&context, &[], &no_thinking())
+        .unwrap();
+    assert_eq!(
+        body["messages"][0]["content"][1]["source"],
+        json!({"type":"base64","media_type":"image/png","data":"aGVsbG8="})
+    );
+}

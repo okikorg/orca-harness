@@ -364,3 +364,16 @@ fn user_image_urls_are_native_image_parts() {
         json!({"type":"image_url","image_url":{"url":"https://images.example.test/pixel.png"}})
     );
 }
+
+#[test]
+fn an_image_with_bytes_and_a_url_is_sent_inline() {
+    let mut context = Context::new();
+    let mut image = Image::base64("image/png", "aGVsbG8=");
+    image.source_url = Some("https://images.example.test/pixel.png".into());
+    context.push_user_with_images("describe", vec![image]);
+    let messages = encode_messages(&context);
+    assert_eq!(
+        messages[0]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,aGVsbG8="
+    );
+}
