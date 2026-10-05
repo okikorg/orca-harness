@@ -44,7 +44,9 @@ impl Tool for TestTool {
         Ok(json!(n))
     }
 }
-struct Policy(Arc<Mutex<Vec<(String, Option<String>, String)>>>);
+/// Each call seen: tool name, parent call id, call id.
+type Seen = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
+struct Policy(Seen);
 #[async_trait]
 impl Extension for Policy {
     fn name(&self) -> &str {

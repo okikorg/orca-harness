@@ -18,9 +18,12 @@ use tokio::sync::Notify;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Decides whether a schema is visible to programmatic callers.
+pub type ToolVisibility = Arc<dyn Fn(&ToolSchema) -> bool + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub struct ProgrammaticTools {
-    visibility: Option<Arc<dyn Fn(&ToolSchema) -> bool + Send + Sync>>,
+    visibility: Option<ToolVisibility>,
 }
 impl std::fmt::Debug for ProgrammaticTools {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -33,10 +36,7 @@ impl ProgrammaticTools {
     }
     /// Re-evaluated before every nested call and catalog request. The host can
     /// share its deferred discovery state here without exposing hidden schemas.
-    pub fn visibility(
-        mut self,
-        visibility: Arc<dyn Fn(&ToolSchema) -> bool + Send + Sync>,
-    ) -> Self {
+    pub fn visibility(mut self, visibility: ToolVisibility) -> Self {
         self.visibility = Some(visibility);
         self
     }
@@ -275,6 +275,7 @@ impl Runtime {
             }
         }
     }
+    #[allow(clippy::result_large_err)] // HarnessError is large crate-wide
     pub(crate) async fn execute(
         self: Arc<Self>,
         calls: Vec<ToolCall>,
@@ -483,6 +484,7 @@ impl Runtime {
         })
     }
 }
+#[allow(clippy::result_large_err)] // HarnessError is large crate-wide
 async fn guarded<F: std::future::Future>(
     token: &CancellationToken,
     deadline: Option<tokio::time::Instant>,
