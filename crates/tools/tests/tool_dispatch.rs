@@ -281,12 +281,13 @@ async fn the_run_deadline_interrupts_nested_calls_as_it_does_top_level_ones() {
 }
 
 #[tokio::test]
-async fn dropping_a_dispatch_aborts_nested_calls_and_cancels_nothing() {
+async fn dropping_a_dispatch_interrupts_nested_calls_and_cancels_nothing() {
     let dropped = Arc::new(AtomicUsize::new(0));
     let started = Arc::new(AtomicUsize::new(0));
+    let finished = Arc::new(Finished::default());
     let dispatch = ToolDispatch::new(
         [sleeper(dropped.clone(), started.clone())],
-        [],
+        [finished.clone() as Arc<dyn Extension>],
         ProgrammaticTools::new(),
     );
     let parent = ctx("parent");
@@ -310,6 +311,41 @@ async fn dropping_a_dispatch_aborts_nested_calls_and_cancels_nothing() {
     }
     assert_eq!(dropped.load(Ordering::SeqCst), 2);
     assert!(!parent.cancellation.is_cancelled());
+    // Every nested call that started also reports a finish, as an error.
+    for _ in 0..100 {
+        if finished.0.lock().unwrap().len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let mut seen = finished.0.lock().unwrap().clone();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            ("parent.ptc1".to_string(), true),
+            ("parent.ptc2".to_string(), true)
+        ]
+    );
+}
+
+/// Records every `tool_finished` it sees.
+#[derive(Default)]
+struct Finished(Mutex<Vec<(String, bool)>>);
+
+#[async_trait]
+impl Extension for Finished {
+    fn name(&self) -> &str {
+        "finished"
+    }
+
+    fn subscriptions(&self) -> Subscriptions {
+        Subscriptions::none().tool_finished()
+    }
+
+    async fn tool_finished(&self, call_id: &str, _tool_name: &str, is_error: bool) {
+        self.0.lock().unwrap().push((call_id.to_string(), is_error));
+    }
 }
 
 fn keyed(name: &'static str, key: &'static str) -> Arc<dyn Tool> {

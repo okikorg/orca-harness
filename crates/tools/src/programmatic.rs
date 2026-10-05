@@ -115,15 +115,17 @@ impl ToolDispatch {
     /// Dispatch `calls` (name and arguments) on behalf of the call `parent`
     /// describes, through the kernel dispatcher. Nested call ids are
     /// `{parent}.ptc{n}`, numbered across the run. Cancellation and the run
-    /// deadline come from `parent`; dropping the returned future aborts
-    /// every nested call still running and cancels nothing else.
+    /// deadline come from `parent`. Dropping the returned future cancels
+    /// the nested calls still running, and nothing else; the dispatcher
+    /// still interrupts each of them, so every nested call that reported
+    /// a start also reports a finish.
     #[allow(clippy::result_large_err)] // HarnessError is large crate-wide
     pub async fn execute(
         &self,
         parent: &ToolContext,
         calls: Vec<(String, Value)>,
     ) -> Result<Vec<ToolResult>, HarnessError> {
-        let calls = calls
+        let calls: Vec<ToolCall> = calls
             .into_iter()
             .map(|(name, arguments)| ToolCall {
                 id: format!(
@@ -135,16 +137,29 @@ impl ToolDispatch {
                 arguments,
             })
             .collect();
-        Dispatcher::new()
-            .execute(
-                calls,
-                &self.registry(),
-                &self.extensions,
-                &parent.cancellation,
-                parent.deadline,
-                self.max_parallel,
-            )
-            .await
+        // The batch runs in its own task under a child token. Dropping this
+        // future cancels the token instead of aborting the task, so the
+        // dispatcher interrupts each call through its normal path and
+        // `tool_finished` and `tool_result` fire for every one of them.
+        let cancellation = parent.cancellation.child_token();
+        let guard = cancellation.clone().drop_guard();
+        let (registry, extensions) = (self.registry(), self.extensions.clone());
+        let (deadline, max_parallel) = (parent.deadline, self.max_parallel);
+        let batch = tokio::spawn(async move {
+            Dispatcher::new()
+                .execute(
+                    calls,
+                    &registry,
+                    &extensions,
+                    &cancellation,
+                    deadline,
+                    max_parallel,
+                )
+                .await
+        });
+        let results = batch.await;
+        guard.disarm();
+        results.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
     }
 
     /// The visible tools right now. Rebuilt per request so a visibility
