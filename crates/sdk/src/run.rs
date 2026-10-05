@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use orca_harness_core::{CancellationToken, Image, Message, Usage};
+use orca_harness_core::{CancellationToken, Extension, Image, Message, Usage};
 use orca_harness_extensions::HarnessEvent;
 use tokio::sync::mpsc;
 
@@ -15,10 +15,33 @@ pub type EventCallback = Arc<dyn Fn(HarnessEvent) + Send + Sync>;
 /// [`RunHandle::events`]; see [`RunRequest::event_capacity`].
 pub const DEFAULT_EVENT_CAPACITY: usize = 1024;
 
+/// A user-authored input turn. Roles are intentionally absent: run input
+/// cannot inject system, assistant or tool messages into an existing session.
+#[derive(Clone, Debug)]
+pub struct RunInputMessage {
+    pub content: String,
+    pub images: Vec<Image>,
+}
+
+impl RunInputMessage {
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            images: Vec::new(),
+        }
+    }
+
+    pub fn image(mut self, image: Image) -> Self {
+        self.images.push(image);
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct RunRequest {
     pub prompt: String,
     pub images: Vec<Image>,
+    pub(crate) input_messages: Option<Vec<RunInputMessage>>,
     pub deadline: Option<Duration>,
     pub(crate) on_event: Option<EventCallback>,
     pub(crate) continue_at_step_limit: bool,
@@ -27,6 +50,7 @@ pub struct RunRequest {
     /// A caller-owned token; the run gets a child of it.
     pub(crate) cancellation: Option<CancellationToken>,
     pub(crate) event_capacity: usize,
+    pub(crate) extensions: Vec<Arc<dyn Extension>>,
 }
 
 impl RunRequest {
@@ -34,12 +58,42 @@ impl RunRequest {
         Self {
             prompt: prompt.into(),
             images: Vec::new(),
+            input_messages: None,
             deadline: None,
             on_event: None,
             continue_at_step_limit: false,
             continuation: false,
             cancellation: None,
             event_capacity: DEFAULT_EVENT_CAPACITY,
+            extensions: Vec::new(),
+        }
+    }
+
+    /// Attach an extension to this run only. It is not installed on the agent
+    /// definition, subsequent runs, other sessions, or child agents. Run hooks
+    /// execute before the built-in usage, truncation, compaction, and recorder
+    /// extensions, so injected context participates in those operations.
+    pub fn extension(self, extension: impl Extension + 'static) -> Self {
+        self.extension_arc(Arc::new(extension))
+    }
+
+    /// Attach a shared extension to this run only; see [`Self::extension`].
+    pub fn extension_arc(mut self, extension: Arc<dyn Extension>) -> Self {
+        self.extensions.push(extension);
+        self
+    }
+
+    /// Append a nonempty batch of user turns, preserving each turn's text
+    /// and images in order. The model runs once over the entire batch.
+    /// Mixing this with prompt/images or continuation is rejected before
+    /// the transcript changes. Deadlines, cancellation and events apply
+    /// to the entire run as usual. As with single-message requests, the
+    /// current core transcript format omits image payloads on disk; images
+    /// remain available in the live session but not after disk resume.
+    pub fn messages(messages: impl IntoIterator<Item = RunInputMessage>) -> Self {
+        Self {
+            input_messages: Some(messages.into_iter().collect()),
+            ..Self::new("")
         }
     }
 
