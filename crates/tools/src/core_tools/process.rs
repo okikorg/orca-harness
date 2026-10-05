@@ -350,7 +350,7 @@ impl ProcessCore<'_> {
             if write.eof {
                 // A local pipe closes by being dropped; a sandbox session
                 // has to be told, so ask the handle rather than assuming.
-                stdin.close().await;
+                stdin.close().await?;
                 *guard = None;
             }
         }
