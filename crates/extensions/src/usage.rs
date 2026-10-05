@@ -13,7 +13,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use orca_harness_core::{
-    Context, Extension, ExtensionError, HarnessError, ModelResponse, Subscriptions, Usage,
+    Context, Extension, ExtensionError, HarnessError, ModelError, ModelResponse, Subscriptions,
+    Usage,
 };
 
 /// A cloneable handle to a run's cumulative token usage. Cheap to clone;
@@ -69,6 +70,20 @@ impl UsageHandle {
     }
 }
 
+/// Usage the provider reported before the call failed. These calls are
+/// billed, so meters must count them like a successful step.
+pub(crate) fn failed_call_usage(error: &ModelError) -> Option<&Usage> {
+    match error {
+        ModelError::OutputLimit { usage, .. }
+        | ModelError::ContentFiltered { usage, .. }
+        | ModelError::IncompleteResponse { usage, .. }
+        | ModelError::MalformedToolArguments { usage, .. } => usage.as_ref(),
+        ModelError::Authentication(_) | ModelError::Request(_) | ModelError::InvalidResponse(_) => {
+            None
+        }
+    }
+}
+
 /// Aggregates per-step usage into a [`UsageHandle`].
 pub struct UsageMeter {
     handle: UsageHandle,
@@ -111,7 +126,7 @@ impl Extension for UsageMeter {
     /// A failed model call ends the run, so this fires at most once per call.
     async fn on_error(&self, error: &HarnessError) {
         if let HarnessError::Model(error) = error {
-            if let Some(usage) = error.usage() {
+            if let Some(usage) = failed_call_usage(error) {
                 self.handle.add(usage);
             }
         }

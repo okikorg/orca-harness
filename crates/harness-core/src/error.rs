@@ -85,20 +85,6 @@ pub enum ModelError {
     },
 }
 
-impl ModelError {
-    /// Usage the provider reported before the call failed. These calls are
-    /// billed, so meters must count them like a successful step.
-    pub fn usage(&self) -> Option<&Usage> {
-        match self {
-            Self::OutputLimit { usage, .. }
-            | Self::ContentFiltered { usage, .. }
-            | Self::IncompleteResponse { usage, .. }
-            | Self::MalformedToolArguments { usage, .. } => usage.as_ref(),
-            Self::Authentication(_) | Self::Request(_) | Self::InvalidResponse(_) => None,
-        }
-    }
-}
-
 /// Failure raised by a [`crate::Tool`] (or an `around_tool` wrapper).
 #[derive(Debug, Error)]
 #[error("{message}")]

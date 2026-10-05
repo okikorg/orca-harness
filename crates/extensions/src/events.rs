@@ -274,7 +274,7 @@ impl Extension for EventStream {
     async fn on_error(&self, error: &HarnessError) {
         // Billed tokens of a failed model call, ahead of the error itself.
         if let HarnessError::Model(model) = error {
-            if let Some(usage) = model.usage() {
+            if let Some(usage) = crate::usage::failed_call_usage(model) {
                 self.sink.emit(HarnessEvent::Usage { usage: *usage }).await;
             }
         }
