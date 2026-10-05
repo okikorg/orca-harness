@@ -516,7 +516,7 @@ fn user_image_urls_are_native_image_sources() {
     let mut context = Context::new();
     context.push_user_with_images(
         "describe",
-        vec![Image::url("https://images.example.test/pixel.png")],
+        vec![Image::url("https://images.example.test/pixel.png").unwrap()],
     );
     let body = AnthropicModel::new("fixture")
         .request_body(&context, &[], &no_thinking())

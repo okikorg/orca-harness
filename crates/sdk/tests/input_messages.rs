@@ -107,7 +107,7 @@ async fn url_image_survives_persistent_session_reopen() {
     let model = std::sync::Arc::new(ScriptedModel::new(vec![ModelResponse::final_text("done")]));
     let agent = harness.agent(model).build().unwrap();
     let session = agent.new_session().persistent().open().unwrap();
-    let image = Image::url("https://images.example.test/pixel.png?version=2");
+    let image = Image::url("https://images.example.test/pixel.png?version=2").unwrap();
     session
         .run(RunRequest::messages([
             RunInputMessage::new("describe").image(image.clone())

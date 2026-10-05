@@ -456,7 +456,7 @@ mod tests {
         let text_only = estimated_context_tokens(&context);
         // A ~500 KB PNG would count as ~167k tokens at the byte rate.
         let png = Image::base64("image/png", "A".repeat(500_000));
-        let url = Image::url("https://images.example.test/pixel.png");
+        let url = Image::url("https://images.example.test/pixel.png").unwrap();
         for images in [vec![png.clone()], vec![url.clone()]] {
             let mut context = Context::new();
             context.push_user_with_images("describe", images);

@@ -23,13 +23,19 @@ impl Image {
         }
     }
 
+    /// An image the provider fetches. Only `http` and `https` URLs with a
+    /// host are accepted; `data:`, `file:` and other schemes return `None`.
     /// The caller validates the URL against its input policy. No fetch occurs here.
-    pub fn url(url: impl Into<String>) -> Self {
-        Self {
+    pub fn url(url: impl Into<String>) -> Option<Self> {
+        let url = url.into();
+        let (scheme, rest) = url.split_once("://")?;
+        let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        (web && !host.is_empty()).then(|| Self {
             media_type: String::new(),
             data: String::new(),
-            source_url: Some(url.into()),
-        }
+            source_url: Some(url),
+        })
     }
 }
 
@@ -147,12 +153,35 @@ mod tests {
         let image: Image = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(image, Image::base64("image/png", "cGl4ZWw="));
         assert_eq!(serde_json::to_value(image).unwrap(), legacy);
-        let image = Image::url("https://images.example.test/pixel.png?version=2");
+        let image = Image::url("https://images.example.test/pixel.png?version=2").unwrap();
         let saved = serde_json::to_value(&image).unwrap();
         assert_eq!(
             saved["source_url"],
             "https://images.example.test/pixel.png?version=2"
         );
         assert_eq!(serde_json::from_value::<Image>(saved).unwrap(), image);
+    }
+
+    #[test]
+    fn image_urls_must_be_http_or_https() {
+        for url in [
+            "https://images.example.test/pixel.png",
+            "http://images.example.test/pixel.png",
+            "HTTPS://images.example.test/pixel.png",
+        ] {
+            assert_eq!(Image::url(url).unwrap().source_url.as_deref(), Some(url));
+        }
+        for url in [
+            "data:image/png;base64,cGl4ZWw=",
+            "file:///etc/passwd",
+            "ftp://images.example.test/pixel.png",
+            "javascript:alert(1)",
+            "//images.example.test/pixel.png",
+            "https://",
+            "https:///pixel.png",
+            "",
+        ] {
+            assert!(Image::url(url).is_none(), "{url}");
+        }
     }
 }
