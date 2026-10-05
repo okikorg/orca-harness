@@ -83,6 +83,7 @@ impl DockerProvisioner {
     /// Remove a managed container only after matching its opaque ownership
     /// label and exact name. Absence is successful, daemon failures are not.
     pub async fn cleanup_named(name: &str, owner: &str) -> Result<(), SandboxError> {
+        check_identity(name, owner)?;
         let output = docker(&[
             "ps".into(),
             "--all".into(),
@@ -128,6 +129,7 @@ impl DockerProvisioner {
         owner: &str,
         workspace: &str,
     ) -> Result<Arc<dyn Sandbox>, SandboxError> {
+        check_identity(name, owner)?;
         Ok(Arc::new(Self::inspect_named(name, owner, workspace).await?))
     }
 
@@ -136,7 +138,13 @@ impl DockerProvisioner {
         owner: &str,
         workspace: &str,
     ) -> Result<DockerSandbox, SandboxError> {
-        let output = docker(&["inspect".into(), name.into()]).await?;
+        let output = docker(&[
+            "inspect".into(),
+            "--type".into(),
+            "container".into(),
+            name.into(),
+        ])
+        .await?;
         if !output.status.success() {
             return Err(SandboxError::Request(
                 "managed Docker environment is unavailable".into(),
@@ -183,6 +191,7 @@ impl DockerProvisioner {
         workspace: &str,
         directories: &[String],
     ) -> Result<Arc<dyn Sandbox>, SandboxError> {
+        check_identity(name, owner)?;
         if !plain_path(workspace) {
             return Err(SandboxError::Request(format!(
                 "workspace must be absolute without parent traversal: {workspace}"
@@ -204,12 +213,25 @@ impl DockerProvisioner {
     }
 }
 
-/// A Docker object name: nonempty, letters, digits, `_`, `-` and `.` only.
+/// A Docker object name: a letter or digit, then letters, digits, `_`, `-`
+/// and `.` only, so it can never be read as a command-line flag.
 pub(super) fn docker_name(name: &str) -> bool {
-    !name.is_empty()
+    name.bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+/// Refuse a managed identity before any Docker command sees it.
+fn check_identity(name: &str, owner: &str) -> Result<(), SandboxError> {
+    if !docker_name(name) || owner.is_empty() {
+        return Err(SandboxError::Request(
+            "invalid managed Docker identity".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Absolute and free of `..`, as the SDK requires of a session workspace.
@@ -229,7 +251,12 @@ mod tests {
 
     #[test]
     fn invalid_identities_are_refused_before_docker_runs() {
-        for (name, owner) in [("", "owner"), ("bad name", "owner"), ("ok", "")] {
+        for (name, owner) in [
+            ("", "owner"),
+            ("-rm", "owner"),
+            ("bad name", "owner"),
+            ("ok", ""),
+        ] {
             let started = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -304,6 +331,39 @@ mod tests {
                 }
                 Err(other) => panic!("wrong refusal for {directory}: {other}"),
                 Ok(_) => panic!("{directory} was accepted"),
+            }
+        }
+    }
+
+    #[test]
+    fn identities_docker_could_misread_are_refused_before_docker_runs() {
+        assert!(docker_name("orca-env_1.2"));
+        for (name, owner) in [
+            ("", "owner"),
+            ("-rm", "owner"),
+            (".hidden", "owner"),
+            ("bad name", "owner"),
+            ("ok", ""),
+        ] {
+            assert!(!docker_name(name) || owner.is_empty());
+            for refused in [
+                block_on(DockerProvisioner::cleanup_named(name, owner)),
+                block_on(DockerProvisioner::attach_named(name, owner, "/workspace")).map(|_| ()),
+                block_on(DockerProvisioner::finalize_named(
+                    name,
+                    owner,
+                    "/workspace",
+                    &[],
+                ))
+                .map(|_| ()),
+            ] {
+                match refused {
+                    Err(SandboxError::Request(message)) => {
+                        assert!(message.contains("identity"), "{message}")
+                    }
+                    Err(other) => panic!("wrong refusal for {name:?}: {other}"),
+                    Ok(()) => panic!("{name:?}/{owner:?} was accepted"),
+                }
             }
         }
     }
