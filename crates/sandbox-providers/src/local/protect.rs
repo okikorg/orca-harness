@@ -71,6 +71,10 @@ pub(super) fn ancestors(workspace: &str, directories: &[String]) -> BTreeSet<Str
 /// it and runs `action` there, refusing unless the directory entered is the
 /// one at `directory` before and after `action`. The parent must already be
 /// out of the agent's reach, which [`ancestors`] order guarantees.
+///
+/// The checks read the path with `cd -P .` first: dash's and busybox's
+/// builtin `pwd -P` return the path cached by the last `cd`, so a directory
+/// moved during `action` would still read as in place.
 pub(super) fn anchored(directory: &str, action: &str) -> String {
     let path = Path::new(directory);
     let parent = path.parent().map_or("/".into(), |p| p.to_string_lossy());
@@ -79,7 +83,8 @@ pub(super) fn anchored(directory: &str, action: &str) -> String {
     let refusal = format!("refusing to protect {directory}: it is not a directory in place");
     format!(
         "mkdir -p -- {dir} && parent=\"$(cd -P -- {parent} && pwd -P)\" && cd -P -- {dir} \
-         && [ \"$(pwd -P)\" = {here} ] && {action} && [ \"$(pwd -P)\" = {here} ] \
+         && [ \"$(cd -P . && pwd -P)\" = {here} ] && {action} \
+         && [ \"$(cd -P . && pwd -P)\" = {here} ] \
          || {{ echo {refusal} >&2; exit 1; }}",
         dir = shell_quote(directory),
         parent = shell_quote(&parent),
