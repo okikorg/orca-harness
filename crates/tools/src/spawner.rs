@@ -180,14 +180,18 @@ impl Stdin {
     }
 
     /// Close stdin so the process sees EOF.
-    pub async fn close(&mut self) {
+    pub async fn close(&mut self) -> Result<(), ToolError> {
         match self {
             // Dropping the pipe is what closes it.
             Stdin::Local(slot) => *slot = None,
             Stdin::Sandbox(session) => {
-                let _ = session.close_stdin().await;
+                session
+                    .close_stdin()
+                    .await
+                    .map_err(|e| ToolError::msg(e.to_string()))?;
             }
         }
+        Ok(())
     }
 }
 

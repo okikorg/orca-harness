@@ -85,6 +85,10 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
     let mut context = context.lock().await;
     if request.continuation {
         ensure_continuable(&context)?;
+    } else if let Some(messages) = request.input_messages {
+        for message in messages {
+            context.push_user_with_images(message.content, message.images);
+        }
     } else {
         context.push_user_with_images(request.prompt, request.images);
     }
@@ -126,6 +130,9 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
                 });
             }),
         );
+    }
+    for extension in request.extensions {
+        agent = agent.extension_arc(extension);
     }
     if definition.inner.extension_config.usage {
         agent = agent.extension(meter);

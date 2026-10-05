@@ -27,7 +27,8 @@ pub use harness::{Harness, HarnessBuilder};
 pub use mcp::{Mcp, McpServerStatus};
 pub use memory::{Memory, MemoryConfig};
 pub use run::{
-    EventCallback, RunEvent, RunHandle, RunOutcome, RunRequest, RunResult, DEFAULT_EVENT_CAPACITY,
+    EventCallback, RunEvent, RunHandle, RunInputMessage, RunOutcome, RunRequest, RunResult,
+    DEFAULT_EVENT_CAPACITY,
 };
 pub use session::{Session, SessionBuilder, SessionMode, Sessions};
 pub use skills::{SkillDestination, SkillPreview, SkillSourceOutcome, Skills};
