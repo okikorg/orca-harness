@@ -347,7 +347,7 @@ impl BunReplTool {
         let marker = json!(ok).to_string();
         let mut rpc = dispatch.map(|dispatch| rpc::Rpc::new(dispatch, self));
         let code = match &rpc {
-            Some(rpc) => format!("{}{code}", rpc.prelude()),
+            Some(rpc) => format!("{}{code}{}", rpc.prelude(), rpc::EPILOGUE),
             None if session.tools_installed => format!("{}{code}", rpc::UNINSTALL),
             None => code.to_owned(),
         };
@@ -366,8 +366,9 @@ impl BunReplTool {
             }
             crate::Spawner::Local => TempSource::write(code, &marker)?,
         };
+        let close = rpc::CLOSE;
         let end_command = format!(
-            "process.stderr.write([\"ORCA\",\"BUN\",\"{token}\",\"STDERR\",\"END\"].join(\"_\") + \"\\n\"); [\"ORCA\",\"BUN\",\"{token}\",\"END\"].join(\"_\")\n"
+            "{close}process.stderr.write([\"ORCA\",\"BUN\",\"{token}\",\"STDERR\",\"END\"].join(\"_\") + \"\\n\"); [\"ORCA\",\"BUN\",\"{token}\",\"END\"].join(\"_\")\n"
         );
         let command = format!(".load {}\n{end_command}", source.path.display());
         let mut dirty = rpc

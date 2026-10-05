@@ -384,3 +384,80 @@ async fn tools_frames_are_answered_in_sequence_through_the_response_file() {
     drop(rpc);
     assert!(!std::path::Path::new(&path).exists());
 }
+
+#[tokio::test]
+async fn unawaited_calls_finish_and_stale_handles_reject_at_once() {
+    require_bun!();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = {
+        let seen = seen.clone();
+        orca_harness_core::FnTool::new("record", "", json!({}), move |input, _| {
+            let seen = seen.clone();
+            async move {
+                seen.lock().unwrap().push(input["n"].as_i64().unwrap());
+                Ok(json!(null))
+            }
+        })
+    };
+    let dispatch = ToolDispatch::new(
+        [std::sync::Arc::new(record) as std::sync::Arc<dyn Tool>],
+        [],
+        ProgrammaticTools::new(),
+    );
+    let repl = std::sync::Arc::new(BunReplTool::new());
+    let tool = repl.clone().with_dispatch(dispatch);
+
+    let out = tool
+        .call(
+            json!({"code": "globalThis.keep = tools; tools.call('record', {n: 1}); tools.call('record', {n: 2}); 1"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["state"], "ok", "{out}");
+    assert_eq!(*seen.lock().unwrap(), [1, 2]);
+
+    // A saved handle from the earlier execution must fail fast, not poll
+    // until the timeout kills the interpreter.
+    let started = std::time::Instant::now();
+    let out = tool
+        .call(
+            json!({"code": "try { await keep.call('record', {n: 3}); console.log('reached') } catch (e) { console.log(e.message) }", "timeoutMs": 10000}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["state"], "ok", "{out}");
+    assert_eq!(
+        out["output"].as_str().unwrap().trim(),
+        "tools is only usable during the bun_repl call that installed it"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(out.get("restarted").is_none(), "{out}");
+    assert_eq!(*seen.lock().unwrap(), [1, 2]);
+
+    // Code that throws skips the epilogue; the end command still closes
+    // the handle, so the pending call rejects instead of polling forever.
+    let out = tool
+        .call(
+            json!({"code": "globalThis.late = tools; throw new Error('boom')"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["state"], "error", "{out}");
+    let out = tool
+        .call(
+            json!({"code": "try { await late.list() } catch (e) { console.log(e.message) }"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        out["output"]
+            .as_str()
+            .unwrap()
+            .contains("only usable during"),
+        "{out}"
+    );
+}

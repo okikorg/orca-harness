@@ -32,6 +32,15 @@ const MAX_BATCH: usize = 64;
 /// execution without the capability cannot reach a stale one.
 pub(super) const UNINSTALL: &str = "delete globalThis.tools;\n";
 
+/// Runs after the code: calls it started but did not await still complete
+/// inside this execution, so their side effects are not silently lost.
+pub(super) const EPILOGUE: &str = "\n;await globalThis[Symbol.for(\"orca.tools.settle\")]?.();";
+
+/// Prefixed to every end command: closes the handle of the execution that
+/// just ended, even when its code threw before the epilogue ran.
+pub(super) const CLOSE: &str =
+    "try { globalThis[Symbol.for(\"orca.tools.close\")]?.() } catch {}; ";
+
 /// `bun_repl` with the capability to call the run's other tools. Built
 /// per run by [`BunReplTool::with_dispatch`]; the persistent interpreter
 /// never stores the handle.
@@ -126,14 +135,18 @@ impl<'a> Rpc<'a> {
         format!(
             r#"globalThis.tools = (() => {{
   const path = {path}; const marker = {marker}; let seq = 0; let queue = Promise.resolve();
+  let closed = false;
+  const expired = () => new Error("tools is only usable during the bun_repl call that installed it");
   const request = (payload) => {{
     const run = async () => {{
+      if (closed) throw expired();
       const id = seq + 1;
       const frame = JSON.stringify({{id, ...payload}});
       if (Buffer.byteLength(frame) > {MAX_FRAME}) throw new Error("tools request exceeds 64 KiB");
       seq = id;
       process.stderr.write(marker + frame + "\n ");
       for (;;) {{
+        if (closed) throw expired();
         let response;
         try {{ response = await Bun.file(path).json(); }} catch {{}}
         if (response && response.id === id) {{
@@ -145,6 +158,13 @@ impl<'a> Rpc<'a> {
     }};
     const result = queue.then(run); queue = result.catch(() => {{}}); return result;
   }};
+  // The epilogue waits for calls the code did not await; the end command
+  // closes the handle, so a pending or saved reference rejects instead of
+  // polling a response file nobody writes.
+  globalThis[Symbol.for("orca.tools.settle")] = async () => {{
+    for (let last; last !== queue;) {{ last = queue; await last; }}
+  }};
+  globalThis[Symbol.for("orca.tools.close")] = () => {{ closed = true; }};
   return Object.freeze({{
     batch: (calls) => request({{calls}}),
     call: async (name, args) => {{
@@ -224,9 +244,12 @@ impl<'a> Rpc<'a> {
         let path = &self.file.path;
         let Some(sandbox) = &self.file.sandbox else {
             // Written aside and renamed, so Bun never reads a partial file.
+            // `create_new` so a planted symlink at the staged path is never
+            // followed; a stale file of our own is removed first.
             let staged = path.with_extension("json.part");
+            let _ = std::fs::remove_file(&staged);
             let mut options = std::fs::OpenOptions::new();
-            options.write(true).create(true).truncate(true);
+            options.write(true).create_new(true);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
