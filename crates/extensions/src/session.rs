@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use orca_harness_core::{Context, Extension, ExtensionError, Image, Message, Subscriptions};
+use orca_harness_core::{Context, Extension, ExtensionError, Message, Subscriptions};
 
 pub const SESSION_FORMAT_VERSION: u32 = 1;
 
@@ -161,7 +161,11 @@ impl SessionFile {
         let mut warnings = Vec::new();
         let mut messages: Vec<Message> = Vec::new();
         for (index, line) in lines.iter().enumerate().skip(1) {
-            match serde_json::from_str::<Message>(line) {
+            let parsed = serde_json::from_str::<Message>(line).and_then(|mut message| {
+                record::restore(line, &mut message)?;
+                Ok(message)
+            });
+            match parsed {
                 Ok(message) => messages.push(message),
                 // An unterminated final line is the crash artifact the
                 // format anticipates; anything else is corruption.
@@ -459,26 +463,9 @@ fn write_header(file: &mut File, meta: &SessionMeta) -> std::io::Result<()> {
     writeln!(file, "{header}")
 }
 
-/// `Message::User` with its images. Core skips them when serializing a
-/// message; this writes the same shape with them included, and
-/// `Message`'s own deserializer reads them back on load.
-#[derive(Serialize)]
-enum UserRecord<'a> {
-    User {
-        content: &'a str,
-        images: &'a [Image],
-    },
-}
-
 fn append(file: &mut File, messages: &[Message]) -> std::io::Result<()> {
     for message in messages {
-        let line = match message {
-            Message::User { content, images } if !images.is_empty() => {
-                serde_json::to_string(&UserRecord::User { content, images })
-            }
-            message => serde_json::to_string(message),
-        }
-        .map_err(std::io::Error::other)?;
+        let line = record::line(message).map_err(std::io::Error::other)?;
         writeln!(file, "{line}")?;
     }
     file.flush()
@@ -499,6 +486,9 @@ fn read_header(path: &Path) -> Option<SessionMeta> {
     std::io::BufReader::new(file).read_line(&mut first).ok()?;
     serde_json::from_str(&first).ok()
 }
+
+#[path = "session/record.rs"]
+mod record;
 
 #[cfg(test)]
 #[path = "session/tests.rs"]
