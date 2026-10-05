@@ -418,6 +418,7 @@ impl Agent {
 
     /// Resume only when the supplied binding matches the persisted environment.
     /// The host reconnects or provisions the sandbox before calling this method.
+    #[allow(clippy::result_large_err)] // SdkError is large crate-wide
     pub fn resume_session_with_environment(
         &self,
         id: &str,

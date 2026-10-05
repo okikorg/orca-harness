@@ -1,4 +1,6 @@
 //! Session-specific execution binding. Provisioning and teardown belong to the host.
+// SdkError is large crate-wide; boxing it is a separate API change.
+#![allow(clippy::result_large_err)]
 use crate::{agent::AgentDefinition, background::ProcessConfig, tools::ToolSource};
 use crate::{SdkError, ToolPreset};
 use orca_harness_core::Sandbox;

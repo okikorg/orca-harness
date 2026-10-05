@@ -78,6 +78,7 @@ impl Session {
     /// that finishes after this call has its result refused rather than
     /// delivered to the new conversation, and a cancelled run's id is no
     /// longer known to [`Workflows`](crate::Workflows).
+    #[allow(clippy::result_large_err)] // SdkError is large crate-wide
     pub async fn clear(&self) -> Result<(), SdkError> {
         let _busy = self.acquire()?;
         let fresh = fresh_context(&self.agent);
@@ -211,6 +212,7 @@ impl Session {
 
 /// `sync` logs write failures; verify the persisted candidate explicitly
 /// before adopting it so a failed append cannot silently lose the prompt.
+#[allow(clippy::result_large_err)] // SdkError is large crate-wide
 fn verify_candidate(
     candidate: &SessionHandler,
     expected: &orca_harness_core::Context,
@@ -230,6 +232,7 @@ fn verify_candidate(
 
 /// Prepare every companion before switching the active recorder. Failed
 /// preparation leaves the original recorder/context untouched.
+#[allow(clippy::result_large_err)] // SdkError is large crate-wide
 fn adopt_prepared(
     recorder: &SessionHandler,
     candidate: SessionHandler,
@@ -255,6 +258,7 @@ fn adopt_prepared(
 }
 
 #[cfg(test)]
+#[allow(clippy::result_large_err)] // SdkError is large crate-wide
 mod environment_rotation_tests {
     use super::*;
 
