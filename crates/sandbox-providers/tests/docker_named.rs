@@ -60,13 +60,43 @@ async fn proof(identity: &str, root: &Arc<dyn Sandbox>) {
     .await
     {
         Err(error) => assert!(
-            error.to_string().contains("test ! -L '/workspace/.orca'"),
+            error
+                .to_string()
+                .ends_with("refusing to protect /workspace/.orca: it is not a directory in place"),
             "refused by something other than the symlink check: {error}"
         ),
         Ok(_) => panic!("finalize protected through a symlinked ancestor"),
     }
     assert_eq!(run(root, "stat -c %a:%u /etc").await, before);
     assert_ne!(run(root, "test -e /etc/skills").await.0, 0);
+    assert_eq!(run(root, "rm /workspace/.orca").await.0, 0);
+
+    // A real ancestor is protected and the tree inside it made read-only.
+    assert_eq!(
+        run(
+            root,
+            "mkdir -p /workspace/.orca/skills/a && touch /workspace/.orca/skills/a/f"
+        )
+        .await
+        .0,
+        0
+    );
+    DockerProvisioner::finalize_named(
+        identity,
+        identity,
+        "/workspace",
+        &["/workspace/.orca/skills".into()],
+    )
+    .await
+    .expect("finalize");
+    assert_eq!(
+        run(
+            root,
+            "stat -c %a:%u /workspace/.orca /workspace/.orca/skills/a/f"
+        )
+        .await,
+        (0, "1777:0\n444:0".into())
+    );
 
     // Another owner's cleanup finds nothing to remove.
     DockerProvisioner::cleanup_named(identity, "someone-else")

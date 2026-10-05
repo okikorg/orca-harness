@@ -171,9 +171,9 @@ impl DockerProvisioner {
         directories: &[String],
     ) -> Result<Arc<dyn Sandbox>, SandboxError> {
         check_identity(name, owner)?;
-        if !plain_path(workspace) {
+        if super::protect::canonical(workspace).is_err() {
             return Err(SandboxError::Request(format!(
-                "workspace must be absolute without parent traversal: {workspace}"
+                "workspace must be absolute, below / and without parent traversal: {workspace}"
             )));
         }
         if let Some(outside) = directories.iter().find(|directory| {
@@ -336,6 +336,7 @@ mod tests {
             ("/workspace", "/workspace/.orca/../../opt"),
             ("/workspace", "workspace/skills"),
             ("/workspace/../opt", "/workspace/../opt/skills"),
+            ("/", "/skills"),
         ] {
             let refused = block_on(DockerProvisioner::finalize_named(
                 "name",
