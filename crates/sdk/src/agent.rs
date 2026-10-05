@@ -416,8 +416,19 @@ impl Agent {
         session.run(request).await
     }
 
+    /// Resume only when the supplied binding matches the persisted environment.
+    /// The host reconnects or provisions the sandbox before calling this method.
+    #[allow(clippy::result_large_err)] // SdkError is large crate-wide
+    pub fn resume_session_with_environment(
+        &self,
+        id: &str,
+        environment: crate::SessionEnvironment,
+    ) -> Result<crate::Session, SdkError> {
+        crate::Session::resume(self.clone(), id, environment)
+    }
+
     pub fn resume_session(&self, id: &str) -> Result<crate::Session, SdkError> {
-        crate::Session::resume(self.clone(), id)
+        crate::Session::resume(self.clone(), id, crate::SessionEnvironment::Local)
     }
 
     /// The caller-owned todo list configured with

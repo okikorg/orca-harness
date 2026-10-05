@@ -39,6 +39,7 @@ pub struct SessionBuilder {
     agent: Agent,
     mode: SessionMode,
     context: Vec<Message>,
+    environment: crate::SessionEnvironment,
 }
 
 impl SessionBuilder {
@@ -47,6 +48,7 @@ impl SessionBuilder {
             agent,
             mode: SessionMode::Ephemeral,
             context: Vec::new(),
+            environment: crate::SessionEnvironment::Local,
         }
     }
 
@@ -82,7 +84,13 @@ impl SessionBuilder {
         self
     }
 
+    /// Bind built-in tools to a host-provisioned environment for this session.
+    pub fn environment(mut self, environment: crate::SessionEnvironment) -> Self {
+        self.environment = environment;
+        self
+    }
+
     pub fn open(self) -> Result<Session, SdkError> {
-        Session::open(self.agent, self.mode, self.context)
+        Session::open(self.agent, self.mode, self.context, self.environment)
     }
 }
