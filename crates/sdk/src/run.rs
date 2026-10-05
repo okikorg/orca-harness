@@ -51,7 +51,6 @@ pub struct RunRequest {
     pub(crate) cancellation: Option<CancellationToken>,
     pub(crate) event_capacity: usize,
     pub(crate) extensions: Vec<Arc<dyn Extension>>,
-    pub(crate) programmatic_tools: Option<orca_harness_core::ProgrammaticTools>,
 }
 
 impl RunRequest {
@@ -67,15 +66,7 @@ impl RunRequest {
             cancellation: None,
             event_capacity: DEFAULT_EVENT_CAPACITY,
             extensions: Vec::new(),
-            programmatic_tools: None,
         }
-    }
-
-    /// Enable nested dispatch for this run only. For inheritance by child
-    /// agents, use `AgentBuilder::programmatic_tools` instead.
-    pub fn programmatic_tools(mut self, config: orca_harness_core::ProgrammaticTools) -> Self {
-        self.programmatic_tools = Some(config);
-        self
     }
 
     /// Attach an extension to this run only. It is not installed on the agent

@@ -109,12 +109,6 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
 
     let continue_at_step_limit = request.continue_at_step_limit && limits.max_steps > 0;
     let mut agent = CoreAgent::new(definition.inner.model.clone()).limits(limits);
-    if let Some(config) = request
-        .programmatic_tools
-        .or_else(|| definition.inner.programmatic_tools.clone())
-    {
-        agent = agent.programmatic_tools(config);
-    }
     for tool in tools {
         agent = agent.tool_arc(tool);
     }

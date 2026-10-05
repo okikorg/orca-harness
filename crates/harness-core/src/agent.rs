@@ -54,11 +54,6 @@ impl<M: Model> Agent<M> {
         self
     }
 
-    pub fn programmatic_tools(mut self, config: crate::ProgrammaticTools) -> Self {
-        self.dispatcher = self.dispatcher.programmatic_tools(config);
-        self
-    }
-
     pub fn limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
         self

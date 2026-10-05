@@ -33,7 +33,6 @@ mod error;
 mod extension;
 mod limits;
 mod model;
-mod programmatic;
 mod sandbox;
 mod tool;
 
@@ -46,9 +45,6 @@ pub use error::{ExtensionError, HarnessError, ModelError, ToolError};
 pub use extension::{Extension, ExtensionRegistry, Next, Subscriptions, ToolDecision};
 pub use limits::Limits;
 pub use model::{DeltaSink, Model, ModelDelta, ModelResponse, Usage};
-pub use programmatic::{
-    current_tool_invocation, ProgrammaticCall, ProgrammaticTools, ToolInvocation,
-};
 pub use sandbox::{
     Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner, Sandbox,
     SandboxError, Session, SpawnRequest, Stat,
