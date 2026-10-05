@@ -10,8 +10,10 @@
 //! `docker exec -i` gives a real stdin channel to a live process, so this
 //! adapter reports `sessions: true` and can host the tools that need one.
 
+mod named;
 mod parse;
 mod process;
+mod protect;
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -46,11 +48,19 @@ static NEXT_SANDBOX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// Creates local Docker sandboxes.
 pub struct DockerProvisioner {
     spec: EnvironmentSpec,
+    /// Container name and opaque owner label; see [`Self::named`].
+    identity: Option<(String, String)>,
+    /// Host network and trust volume; see [`Self::isolated_network`].
+    isolated_network: Option<(String, String)>,
 }
 
 impl DockerProvisioner {
     pub fn new(spec: EnvironmentSpec) -> Self {
-        Self { spec }
+        Self {
+            spec,
+            identity: None,
+            isolated_network: None,
+        }
     }
 }
 
@@ -90,6 +100,9 @@ impl Provisioner for DockerProvisioner {
             )));
         }
 
+        let identity = self.identity_args()?;
+        let attachment = self.network_args()?;
+
         // Claimed before `docker run`: if this future is dropped while the
         // daemon is still creating the container, the guard can only find
         // it by this label.
@@ -118,10 +131,12 @@ impl Provisioner for DockerProvisioner {
             "-w".into(),
             self.spec.workspace_directory.clone(),
         ];
+        args.extend(identity);
         if matches!(self.spec.network, Network::Disabled) {
             args.push("--network".into());
             args.push("none".into());
         }
+        args.extend(attachment);
         for (key, value) in &self.spec.env {
             args.push("-e".into());
             args.push(format!("{key}={value}"));
@@ -283,45 +298,28 @@ impl DockerSandbox {
     /// - the workspace and every directory between it and a capability tree
     ///   become root-owned and sticky, so the agent can still create files
     ///   there but cannot rename or delete the protected tree to swap it.
+    ///
+    /// Each change after the first is made from inside the directory and
+    /// checked in place (see the `protect` module), so an agent process
+    /// still running on a live container cannot redirect it with a symlink.
     async fn protect(&self, directories: &[String]) -> Result<(), SandboxError> {
-        let workspace = &self.workspace;
-        let inside = format!("{workspace}/");
+        let workspace = protect::canonical(&self.workspace)?;
+        let directories = directories
+            .iter()
+            .map(|directory| protect::canonical(directory))
+            .collect::<Result<Vec<_>, _>>()?;
         self.run_setup(&format!(
             "chown -hR {AGENT_USER} {0} && chown 0:0 {0} && chmod 1777 {0}",
-            shell_quote(workspace)
+            shell_quote(&workspace)
         ))
         .await?;
-        let mut ancestors = std::collections::BTreeSet::new();
-        for directory in directories {
-            if !directory.starts_with('/') {
-                return Err(SandboxError::Provision(format!(
-                    "capability directory must be absolute: {directory}"
-                )));
-            }
-            let mut path = std::path::Path::new(directory).parent();
-            while let Some(parent) = path {
-                let text = parent.to_string_lossy();
-                if !text.starts_with(&inside) {
-                    break;
-                }
-                ancestors.insert(text.into_owned());
-                path = parent.parent();
-            }
+        for directory in protect::ancestors(&workspace, &directories) {
+            self.run_setup(&protect::anchored(&directory, protect::ANCESTOR))
+                .await?;
         }
-        for directory in &ancestors {
-            self.run_setup(&format!(
-                "mkdir -p {0} && chown 0:0 {0} && chmod 1777 {0}",
-                shell_quote(directory)
-            ))
-            .await?;
-        }
-        for directory in directories {
-            self.run_setup(&format!(
-                "mkdir -p {0} && test -z \"$(find {0} -type l -print -quit)\" \
-                 && chown -hR 0:0 {0} && chmod -R a-w {0}",
-                shell_quote(directory)
-            ))
-            .await?;
+        for directory in &directories {
+            self.run_setup(&protect::anchored(directory, protect::TREE))
+                .await?;
         }
         Ok(())
     }
