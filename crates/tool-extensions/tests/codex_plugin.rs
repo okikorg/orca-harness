@@ -183,3 +183,38 @@ fn codex_plugin_skips_skills_without_descriptions_or_with_duplicate_names() {
     assert_eq!(plugin.skills.len(), 1);
     assert_eq!(plugin.warnings.len(), 2, "{:?}", plugin.warnings);
 }
+
+#[test]
+fn codex_plugin_skips_skills_with_unusable_names() {
+    let manifest = manifest(json!({}));
+    let entries: Vec<(&str, &[u8])> = vec![
+        (".codex-plugin/plugin.json", &manifest),
+        ("skills/a/SKILL.md", SKILL),
+        (
+            "skills/b/SKILL.md",
+            b"---\nname: \"foo bar\"\ndescription: d\n---\n",
+        ),
+        (
+            "skills/c/SKILL.md",
+            b"---\nname: ../x\ndescription: d\n---\n",
+        ),
+        ("skills/my skill/SKILL.md", b"---\ndescription: d\n---\n"),
+    ];
+    let plugin = parse_codex_plugin(&entries, ROOT).unwrap();
+    let names: Vec<_> = plugin.skills.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["summarize"]);
+    let warnings: Vec<_> = plugin.warnings.iter().map(|w| w.to_string()).collect();
+    assert_eq!(warnings.len(), 3, "{warnings:?}");
+    for (scope, name) in [
+        ("skills.b:", "\"foo bar\""),
+        ("skills.c:", "\"../x\""),
+        ("skills.my skill:", "\"my skill\""),
+    ] {
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with(scope) && w.contains(name)),
+            "{scope} {name} in {warnings:?}"
+        );
+    }
+}

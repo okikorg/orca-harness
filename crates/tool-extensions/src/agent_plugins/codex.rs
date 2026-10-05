@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use crate::skills::parse_frontmatter;
+use crate::skills::{parse_frontmatter, validate_name as validate_skill_name};
 
 use super::{normalize_plugin_server_id, PluginError, PluginWarning};
 
@@ -264,6 +264,10 @@ fn skills(
             }
         };
         let name = front.name.unwrap_or_else(|| dir_name.to_owned());
+        if let Err(message) = validate_skill_name(&name) {
+            warnings.push(PluginWarning::new(scope, message));
+            continue;
+        }
         let Some(description) = front.description.filter(|value| !value.is_empty()) else {
             warnings.push(PluginWarning::new(
                 scope,

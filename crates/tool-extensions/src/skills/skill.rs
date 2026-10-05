@@ -194,7 +194,7 @@ fn load(dir: &Path, file: &Path, dir_name: &str, root: &str) -> Result<Skill, St
 
 /// The name is what the model passes back, so it must survive a JSON
 /// enum and a picker row: no whitespace, no surprises.
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name.len() > 64 {
         return Err(format!("unusable skill name: {name:?}"));
     }
