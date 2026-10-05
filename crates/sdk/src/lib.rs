@@ -92,8 +92,8 @@ pub mod providers {
 /// host can refuse to start rather than assemble a half-isolated tool set.
 pub mod sandbox {
     pub use orca_harness_core::{
-        Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Provisioner, Sandbox,
-        SandboxError, Session, SpawnRequest,
+        Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner,
+        Sandbox, SandboxError, Session, SpawnRequest, Stat,
     };
     pub use orca_harness_sandbox_providers::{
         DockerProvisioner, EnvironmentSpec, Network, Packages, SetupCommand,

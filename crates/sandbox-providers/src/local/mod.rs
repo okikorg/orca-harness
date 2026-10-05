@@ -10,6 +10,7 @@
 //! `docker exec -i` gives a real stdin channel to a live process, so this
 //! adapter reports `sessions: true` and can host the tools that need one.
 
+mod named;
 mod parse;
 mod process;
 
@@ -46,11 +47,16 @@ static NEXT_SANDBOX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// Creates local Docker sandboxes.
 pub struct DockerProvisioner {
     spec: EnvironmentSpec,
+    /// Container name and opaque owner label; see [`Self::named`].
+    identity: Option<(String, String)>,
 }
 
 impl DockerProvisioner {
     pub fn new(spec: EnvironmentSpec) -> Self {
-        Self { spec }
+        Self {
+            spec,
+            identity: None,
+        }
     }
 }
 
@@ -90,6 +96,8 @@ impl Provisioner for DockerProvisioner {
             )));
         }
 
+        let identity = self.identity_args()?;
+
         // Claimed before `docker run`: if this future is dropped while the
         // daemon is still creating the container, the guard can only find
         // it by this label.
@@ -118,6 +126,7 @@ impl Provisioner for DockerProvisioner {
             "-w".into(),
             self.spec.workspace_directory.clone(),
         ];
+        args.extend(identity);
         if matches!(self.spec.network, Network::Disabled) {
             args.push("--network".into());
             args.push("none".into());
