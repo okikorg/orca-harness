@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use crate::skills::parse_frontmatter;
+use crate::skills::{parse_frontmatter, validate_name as validate_skill_name};
 
 use super::{normalize_plugin_server_id, PluginError, PluginWarning};
 
@@ -88,8 +88,10 @@ pub struct CodexPluginServer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexPluginTransport {
-    /// `command` is a bare executable name, an absolute path, or resolved
-    /// against the staged plugin root; `cwd` is always absolute.
+    /// A `./` `command` is resolved against the staged plugin root; any
+    /// other `command` (a bare name, an absolute path, or another relative
+    /// path, which the launcher resolves against `cwd`) is passed through
+    /// unchanged. `cwd` is always absolute.
     Stdio {
         command: String,
         args: Vec<String>,
@@ -106,6 +108,10 @@ pub enum CodexPluginTransport {
 /// Parse one plugin from archive `entries` (path, contents), resolving
 /// server paths against `root`, the absolute directory the host stages the
 /// plugin root into.
+///
+/// `entries` must hold files only, each path once: directory entries are
+/// rejected as unnormalized paths, and of duplicate paths only the last is
+/// read.
 pub fn parse_codex_plugin(
     entries: &[(&str, &[u8])],
     root: &str,
@@ -264,6 +270,10 @@ fn skills(
             }
         };
         let name = front.name.unwrap_or_else(|| dir_name.to_owned());
+        if let Err(message) = validate_skill_name(&name) {
+            warnings.push(PluginWarning::new(scope, message));
+            continue;
+        }
         let Some(description) = front.description.filter(|value| !value.is_empty()) else {
             warnings.push(PluginWarning::new(
                 scope,
@@ -385,7 +395,7 @@ fn stdio(object: &Map<String, Value>, root: &str) -> Result<CodexPluginTransport
     let command = match command.strip_prefix("./") {
         Some(inner) => {
             relative_path(inner).map_err(|message| format!("command {message}"))?;
-            format!("{root}/{inner}")
+            join(root, inner)
         }
         None => command.to_owned(),
     };
@@ -400,7 +410,7 @@ fn stdio(object: &Map<String, Value>, root: &str) -> Result<CodexPluginTransport
                 root.to_owned()
             } else {
                 relative_path(inner).map_err(|message| format!("cwd {message}"))?;
-                format!("{root}/{inner}")
+                join(root, inner)
             }
         }
         Some(_) => return Err("cwd must be a string".into()),
@@ -415,6 +425,11 @@ fn stdio(object: &Map<String, Value>, root: &str) -> Result<CodexPluginTransport
         cwd,
         env_vars,
     })
+}
+
+/// `root` has no trailing slash unless it is `/` itself.
+fn join(root: &str, inner: &str) -> String {
+    format!("{}/{inner}", root.trim_end_matches('/'))
 }
 
 fn http(object: &Map<String, Value>) -> Result<CodexPluginTransport, String> {

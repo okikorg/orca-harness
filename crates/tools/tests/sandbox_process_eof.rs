@@ -96,6 +96,7 @@ async fn unsupported_eof_preserves_stdin_for_later_write_and_successful_retry() 
         .await
         .unwrap_err();
     assert!(error.to_string().contains("closing active process stdin"));
+    assert!(!error.to_string().contains("input written"));
     let snapshot = controller
         .write(
             &id,
@@ -117,5 +118,43 @@ async fn unsupported_eof_preserves_stdin_for_later_write_and_successful_retry() 
         .unwrap();
     assert!(!snapshot.running);
     assert_eq!(snapshot.exit_code, Some(0));
+    controller.kill(&id).await.unwrap();
+}
+#[tokio::test]
+async fn failed_eof_after_input_reports_the_input_as_written() {
+    let remote = Arc::new(Remote::default());
+    let tool = ProcessTool::new(Executor::sandbox(Arc::new(Boundary(remote.clone()))));
+    let controller = tool.controller();
+    let id = controller
+        .spawn(ProcessSpawn::new("remote-only"), CancellationToken::new())
+        .await
+        .unwrap()
+        .id;
+    let error = controller
+        .write(
+            &id,
+            ProcessWrite::new("payload").newline(false).eof(true),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("input written, but closing stdin failed: "),
+        "{error}"
+    );
+    assert!(error.contains("closing active process stdin"), "{error}");
+    assert_eq!(*remote.written.lock().unwrap(), b"payload");
+    remote.eof_supported.store(true, Ordering::SeqCst);
+    let snapshot = controller
+        .write(
+            &id,
+            ProcessWrite::new("").newline(false).eof(true),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(!snapshot.running);
+    assert_eq!(*remote.written.lock().unwrap(), b"payload");
     controller.kill(&id).await.unwrap();
 }
