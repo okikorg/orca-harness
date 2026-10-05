@@ -84,35 +84,14 @@ impl DockerProvisioner {
     /// label and exact name. Absence is successful, daemon failures are not.
     pub async fn cleanup_named(name: &str, owner: &str) -> Result<(), SandboxError> {
         check_identity(name, owner)?;
-        let output = docker(&[
-            "ps".into(),
-            "--all".into(),
-            "--filter".into(),
-            format!("label={OWNER_LABEL}={owner}"),
-            "--format".into(),
-            "{{json .}}".into(),
-        ])
-        .await?;
+        let output = docker(&inventory_args(name, owner)).await?;
         if !output.status.success() {
             return Err(SandboxError::Request(
                 "could not inventory managed Docker containers".into(),
             ));
         }
-        for line in String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter(|line| !line.is_empty())
-        {
-            let row: serde_json::Value = serde_json::from_str(line)
-                .map_err(|_| SandboxError::Request("invalid Docker inventory".into()))?;
-            if row["Names"] != name {
-                return Err(SandboxError::Request(
-                    "managed Docker container was renamed".into(),
-                ));
-            }
-            let id = row["ID"].as_str().ok_or_else(|| {
-                SandboxError::Request("Docker inventory has no container id".into())
-            })?;
-            let removed = docker(&["rm".into(), "-f".into(), id.into()]).await?;
+        for id in inventory_ids(&output.stdout, name)? {
+            let removed = docker(&["rm".into(), "-f".into(), id]).await?;
             if !removed.status.success() {
                 return Err(SandboxError::Request(
                     "managed Docker cleanup failed".into(),
@@ -243,6 +222,45 @@ fn plain_path(path: &str) -> bool {
             .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
+/// The `docker ps` arguments listing containers that carry both the owner
+/// label and exactly this name. Docker matches names as regular expressions
+/// against `/name`, so the one metacharacter a valid name allows is escaped.
+fn inventory_args(name: &str, owner: &str) -> Vec<String> {
+    vec![
+        "ps".into(),
+        "--all".into(),
+        "--filter".into(),
+        format!("label={OWNER_LABEL}={owner}"),
+        "--filter".into(),
+        format!("name=^/{}$", name.replace('.', "\\.")),
+        "--format".into(),
+        "{{json .}}".into(),
+    ]
+}
+
+/// The container ids an inventory lists, with every row checked before any
+/// is returned, so a mismatch removes nothing rather than some.
+fn inventory_ids(stdout: &[u8], name: &str) -> Result<Vec<String>, SandboxError> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|_| SandboxError::Request("invalid Docker inventory".into()))?;
+            if row["Names"] != name {
+                return Err(SandboxError::Request(
+                    "managed Docker container was renamed".into(),
+                ));
+            }
+            row["ID"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(String::from)
+                .ok_or_else(|| SandboxError::Request("Docker inventory has no container id".into()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +383,36 @@ mod tests {
                     Ok(()) => panic!("{name:?}/{owner:?} was accepted"),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn cleanup_lists_by_owner_label_and_exact_name() {
+        let args = inventory_args("orca.env-1", "owner");
+        assert_eq!(args[..2], ["ps", "--all"]);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--filter", "label=orca.environment=owner"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--filter", "name=^/orca\\.env-1$"]));
+    }
+
+    #[test]
+    fn cleanup_checks_every_row_before_removing_any() {
+        let ids = inventory_ids(b"{\"ID\":\"abc\",\"Names\":\"env\"}\n\n", "env").unwrap();
+        assert_eq!(ids, ["abc"]);
+        assert!(inventory_ids(b"", "env").unwrap().is_empty());
+        for stdout in [
+            &b"{\"ID\":\"abc\",\"Names\":\"env\"}\n{\"ID\":\"def\",\"Names\":\"other\"}"[..],
+            b"{\"ID\":\"abc\",\"Names\":\"env\"}\n{\"Names\":\"env\"}",
+            b"{\"ID\":\"\",\"Names\":\"env\"}",
+            b"{\"ID\":\"abc\",\"Names\":\"env\"}\nnot json",
+        ] {
+            assert!(matches!(
+                inventory_ids(stdout, "env"),
+                Err(SandboxError::Request(_))
+            ));
         }
     }
 }
