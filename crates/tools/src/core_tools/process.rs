@@ -350,7 +350,14 @@ impl ProcessCore<'_> {
             if write.eof {
                 // A local pipe closes by being dropped; a sandbox session
                 // has to be told, so ask the handle rather than assuming.
-                stdin.close().await?;
+                // Say when bytes already went through, so they are not resent.
+                stdin.close().await.map_err(|e| {
+                    if data.is_empty() {
+                        e
+                    } else {
+                        ToolError::msg(format!("input written, but closing stdin failed: {e}"))
+                    }
+                })?;
                 *guard = None;
             }
         }
