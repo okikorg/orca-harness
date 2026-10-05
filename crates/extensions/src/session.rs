@@ -2,8 +2,10 @@
 //! session, so a run survives its process and can be resumed later.
 //!
 //! Line 1 is a [`SessionMeta`] header; every following line is one
-//! serialized [`Message`]. A crash loses at most the line being written,
-//! and the loader knows how to drop a truncated final line.
+//! serialized [`Message`]. User images, which core never serializes, are
+//! written into their message's line here so a resumed session keeps them.
+//! A crash loses at most the line being written, and the loader knows how
+//! to drop a truncated final line.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, Write};
@@ -14,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use orca_harness_core::{Context, Extension, ExtensionError, Message, Subscriptions};
+use orca_harness_core::{Context, Extension, ExtensionError, Image, Message, Subscriptions};
 
 pub const SESSION_FORMAT_VERSION: u32 = 1;
 
@@ -457,9 +459,26 @@ fn write_header(file: &mut File, meta: &SessionMeta) -> std::io::Result<()> {
     writeln!(file, "{header}")
 }
 
+/// `Message::User` with its images. Core skips them when serializing a
+/// message; this writes the same shape with them included, and
+/// `Message`'s own deserializer reads them back on load.
+#[derive(Serialize)]
+enum UserRecord<'a> {
+    User {
+        content: &'a str,
+        images: &'a [Image],
+    },
+}
+
 fn append(file: &mut File, messages: &[Message]) -> std::io::Result<()> {
     for message in messages {
-        let line = serde_json::to_string(message).map_err(std::io::Error::other)?;
+        let line = match message {
+            Message::User { content, images } if !images.is_empty() => {
+                serde_json::to_string(&UserRecord::User { content, images })
+            }
+            message => serde_json::to_string(message),
+        }
+        .map_err(std::io::Error::other)?;
         writeln!(file, "{line}")?;
     }
     file.flush()

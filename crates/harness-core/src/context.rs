@@ -46,7 +46,7 @@ pub enum Message {
     },
     User {
         content: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default, skip_serializing)]
         images: Vec<Image>,
     },
     Assistant {

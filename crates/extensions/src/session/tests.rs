@@ -211,6 +211,43 @@ fn sync_appends_only_new_messages() {
 }
 
 #[test]
+fn user_images_survive_append_and_rewrite() {
+    let dir = temp_dir("images");
+    let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+    let png = Image::base64("image/png", "cGl4ZWw=");
+    let url = Image::url("https://images.example.test/pixel.png").unwrap();
+    let mut context = Context::new();
+    context.push_system("sys");
+    context.push_user_with_images("look", vec![png.clone(), url.clone()]);
+    context.push_user("plain");
+    handler.sync(&context);
+    let user_images = |context: &Context| -> Vec<Vec<Image>> {
+        context
+            .messages()
+            .iter()
+            .filter_map(|message| match message {
+                Message::User { images, .. } => Some(images.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let loaded = SessionFile::load(&handler.path()).unwrap();
+    assert_eq!(
+        user_images(&loaded.context),
+        vec![vec![png.clone(), url.clone()], vec![]]
+    );
+    // Text-only messages keep the core on-disk shape.
+    let text = fs::read_to_string(handler.path()).unwrap();
+    assert!(text.ends_with("{\"User\":{\"content\":\"plain\"}}\n"));
+
+    let mut compacted = Context::new();
+    compacted.push_user_with_images("again", vec![url.clone()]);
+    handler.sync(&compacted);
+    let loaded = SessionFile::load(&handler.path()).unwrap();
+    assert_eq!(user_images(&loaded.context), vec![vec![url]]);
+}
+
+#[test]
 fn sync_rewrites_after_context_shrinks() {
     let dir = temp_dir("shrink");
     let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
