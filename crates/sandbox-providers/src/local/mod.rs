@@ -296,7 +296,9 @@ impl DockerSandbox {
     ///   elsewhere;
     /// - the workspace and every directory between it and a capability tree
     ///   become root-owned and sticky, so the agent can still create files
-    ///   there but cannot rename or delete the protected tree to swap it.
+    ///   there but cannot rename or delete the protected tree to swap it;
+    ///   an ancestor that is a symlink is refused, since the chown and chmod
+    ///   would follow it out of the workspace.
     async fn protect(&self, directories: &[String]) -> Result<(), SandboxError> {
         let workspace = &self.workspace;
         let inside = format!("{workspace}/");
@@ -324,7 +326,7 @@ impl DockerSandbox {
         }
         for directory in &ancestors {
             self.run_setup(&format!(
-                "mkdir -p {0} && chown 0:0 {0} && chmod 1777 {0}",
+                "test ! -L {0} && mkdir -p {0} && chown 0:0 {0} && chmod 1777 {0}",
                 shell_quote(directory)
             ))
             .await?;
