@@ -88,8 +88,7 @@ impl RunRequest {
     /// Mixing this with prompt/images or continuation is rejected before
     /// the transcript changes. Deadlines, cancellation and events apply
     /// to the entire run as usual. As with single-message requests, the
-    /// current core transcript format omits image payloads on disk; images
-    /// remain available in the live session but not after disk resume.
+    /// image payloads and source URLs persist with the transcript.
     pub fn messages(messages: impl IntoIterator<Item = RunInputMessage>) -> Self {
         Self {
             input_messages: Some(messages.into_iter().collect()),
@@ -176,6 +175,7 @@ impl RunRequest {
             }
         };
         self.images.push(Image {
+            source_url: None,
             media_type: media_type.into(),
             data: base64_encode(&data),
         });

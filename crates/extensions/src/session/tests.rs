@@ -1,5 +1,5 @@
 use super::*;
-use orca_harness_core::{ToolCall, ToolResult};
+use orca_harness_core::{Image, ToolCall, ToolResult};
 use std::sync::atomic::Ordering;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -207,6 +207,83 @@ fn sync_appends_only_new_messages() {
     assert_eq!(
         serde_json::to_string(loaded.context.messages()).unwrap(),
         serde_json::to_string(context.messages()).unwrap(),
+    );
+}
+
+fn user_images(context: &Context) -> Vec<Vec<Image>> {
+    context
+        .messages()
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { images, .. } => Some(images.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn user_images_survive_append_and_rewrite() {
+    let dir = temp_dir("images");
+    let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+    let png = Image::base64("image/png", "cGl4ZWw=");
+    let url = Image::url("https://images.example.test/pixel.png").unwrap();
+    let mut context = Context::new();
+    context.push_system("sys");
+    context.push_user_with_images("look", vec![png.clone(), url.clone()]);
+    context.push_user("plain");
+    handler.sync(&context);
+    let loaded = SessionFile::load(&handler.path()).unwrap();
+    assert_eq!(
+        user_images(&loaded.context),
+        vec![vec![png.clone(), url.clone()], vec![]]
+    );
+    // Text-only messages keep the core on-disk shape.
+    let text = fs::read_to_string(handler.path()).unwrap();
+    assert!(text.ends_with("{\"User\":{\"content\":\"plain\"}}\n"));
+
+    let mut compacted = Context::new();
+    compacted.push_user_with_images("again", vec![url.clone()]);
+    handler.sync(&compacted);
+    let loaded = SessionFile::load(&handler.path()).unwrap();
+    assert_eq!(user_images(&loaded.context), vec![vec![url]]);
+}
+
+/// Mixed images keep their order, and a URL image is stored apart from the
+/// inline ones, where a build without URL images cannot misread it.
+#[test]
+fn url_images_are_stored_where_older_builds_skip_them() {
+    let dir = temp_dir("url-images");
+    let handler = SessionHandler::create(&dir, "/tmp/ws", "test-model").unwrap();
+    let png = Image::base64("image/png", "cGl4ZWw=");
+    let url = Image::url("https://images.example.test/pixel.png").unwrap();
+    let mut mixed = Context::new();
+    let late = Image::url("https://images.example.test/late.png").unwrap();
+    mixed.push_user_with_images("mix", vec![url.clone(), png.clone(), late.clone()]);
+    handler.sync(&mixed);
+    let loaded = SessionFile::load(&handler.path()).unwrap();
+    assert_eq!(
+        user_images(&loaded.context),
+        vec![vec![url.clone(), png.clone(), late]]
+    );
+    let line = fs::read_to_string(handler.path()).unwrap();
+    let line = line.lines().last().unwrap();
+    #[derive(serde::Deserialize)]
+    struct OldImage {
+        media_type: String,
+        data: String,
+    }
+    #[derive(serde::Deserialize)]
+    enum OldMessage {
+        User {
+            #[serde(default)]
+            images: Vec<OldImage>,
+        },
+    }
+    let OldMessage::User { images } = serde_json::from_str(line).unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(
+        (images[0].media_type.as_str(), images[0].data.as_str()),
+        ("image/png", "cGl4ZWw=")
     );
 }
 

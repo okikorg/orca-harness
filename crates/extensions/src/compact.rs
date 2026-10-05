@@ -22,9 +22,10 @@ use crate::truncation::TruncationStore;
 /// Rough bytes-per-token used for all estimates (no tokenizer in the
 /// harness; provider-reported usage is the ground truth between runs).
 const APPROX_BYTES_PER_TOKEN: usize = 4;
-/// Flat token estimate per tool image. Base64 length says little about
+/// Flat token estimate per image. Base64 length says little about
 /// what a provider bills for an image (roughly width x height / 750,
-/// capped near this), so image data counts at this rate instead.
+/// capped near this), and a URL image carries no data at all, so every
+/// image counts at this rate instead.
 const APPROX_IMAGE_TOKENS: usize = 1_600;
 
 /// Per-result serialized-output size below which stage 1 leaves a tool
@@ -94,6 +95,17 @@ pub(crate) fn estimated_context_tokens(context: &Context) -> u64 {
 }
 
 fn message_bytes(message: &Message) -> usize {
+    if let Message::User { content, images } = message {
+        if !images.is_empty() {
+            // Size the text alone, whether or not images serialize.
+            let text = Message::User {
+                content: content.clone(),
+                images: Vec::new(),
+            };
+            return message_bytes(&text)
+                + images.len() * APPROX_IMAGE_TOKENS * APPROX_BYTES_PER_TOKEN;
+        }
+    }
     let bytes = serde_json::to_string(message).map(|s| s.len()).unwrap_or(0);
     let Message::Tool { results } = message else {
         return bytes;
@@ -340,7 +352,7 @@ pub fn compact(
 mod tests {
     use super::*;
     use orca_harness_core::testing::call;
-    use orca_harness_core::ToolResult;
+    use orca_harness_core::{Image, ToolResult};
 
     fn result(id: &str, tool: &str, output: Value) -> ToolResult {
         ToolResult {
@@ -435,6 +447,30 @@ mod tests {
         assert_eq!(results[0].output["_imagesDropped"], json!(1));
         let (_, stored) = store.get("c3").unwrap();
         assert!(!stored.contains("AAAA"), "the store keeps text only");
+    }
+
+    #[test]
+    fn user_images_count_at_a_flat_rate_whatever_their_size_or_source() {
+        let mut context = Context::new();
+        context.push_user("describe");
+        let text_only = estimated_context_tokens(&context);
+        // A ~500 KB PNG would count as ~167k tokens at the byte rate.
+        let png = Image::base64("image/png", "A".repeat(500_000));
+        let url = Image::url("https://images.example.test/pixel.png").unwrap();
+        for images in [vec![png.clone()], vec![url.clone()]] {
+            let mut context = Context::new();
+            context.push_user_with_images("describe", images);
+            assert_eq!(
+                estimated_context_tokens(&context) - text_only,
+                APPROX_IMAGE_TOKENS as u64
+            );
+        }
+        let mut context = Context::new();
+        context.push_user_with_images("describe", vec![png, url]);
+        assert_eq!(
+            estimated_context_tokens(&context) - text_only,
+            2 * APPROX_IMAGE_TOKENS as u64
+        );
     }
 
     #[test]

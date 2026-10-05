@@ -34,10 +34,13 @@ impl AnthropicModel {
                     if !content.is_empty() {
                         blocks.push(json!({"type": "text", "text": content}));
                     }
-                    blocks.extend(images.iter().map(|image| json!({
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": image.media_type, "data": image.data}
-                    })));
+                    blocks.extend(images.iter().map(|image| {
+                        let source = match crate::image_link(image) {
+                            Some(url) => json!({"type":"url", "url":url}),
+                            None => json!({"type":"base64", "media_type":image.media_type, "data":image.data}),
+                        };
+                        json!({"type":"image", "source":source})
+                    }));
                     ("user", blocks)
                 }
                 Message::Assistant { content, tool_calls } => {

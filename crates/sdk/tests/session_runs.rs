@@ -368,6 +368,7 @@ async fn continuation_rejects_prompt_and_images() {
 
     // Images have no message to attach to on a continuation.
     let with_image = RunRequest::continuation().image(orca_harness_core::Image {
+        source_url: None,
         media_type: "image/png".into(),
         data: "AAAA".into(),
     });

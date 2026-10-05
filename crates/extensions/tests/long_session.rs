@@ -1,4 +1,4 @@
-use orca_harness_core::{Context, Extension, ModelResponse, Usage};
+use orca_harness_core::{Context, Extension, Image, Message, ModelResponse, Usage};
 use orca_harness_extensions::{ContextCapacity, LongSession, LongSessionConfig, TruncationStore};
 
 fn large_context() -> Context {
@@ -105,4 +105,28 @@ fn stale_capacity_probe_cannot_overwrite_a_newer_model() {
     assert!(!capacity.finish_update(old, Some(16_000)));
     assert!(capacity.finish_update(current, Some(128_000)));
     assert_eq!(capacity.get(), Some(128_000));
+}
+
+#[tokio::test]
+async fn a_large_user_image_does_not_compact_away_its_own_turn() {
+    let extension = LongSession::new(
+        ContextCapacity::new(Some(128_000)),
+        TruncationStore::default(),
+    );
+    let mut context = Context::new();
+    context.push_system("system");
+    context.push_user("open the settings page");
+    context.push_assistant_text("opened");
+    // ~500 KB of base64, a typical screenshot: ~167k tokens at the byte rate.
+    let png = Image::base64("image/png", "A".repeat(500_000));
+    context.push_user_with_images("what is on this screen?", vec![png.clone()]);
+
+    extension.before_model(&mut context).await.unwrap();
+
+    assert_eq!(context.messages().len(), 4);
+    assert!(matches!(
+        &context.messages()[3],
+        Message::User { content, images }
+            if content == "what is on this screen?" && images == &vec![png.clone()]
+    ));
 }

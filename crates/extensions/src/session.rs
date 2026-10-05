@@ -2,8 +2,10 @@
 //! session, so a run survives its process and can be resumed later.
 //!
 //! Line 1 is a [`SessionMeta`] header; every following line is one
-//! serialized [`Message`]. A crash loses at most the line being written,
-//! and the loader knows how to drop a truncated final line.
+//! serialized [`Message`]. User images, which core never serializes, are
+//! written into their message's line here so a resumed session keeps them.
+//! A crash loses at most the line being written, and the loader knows how
+//! to drop a truncated final line.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, Write};
@@ -159,7 +161,11 @@ impl SessionFile {
         let mut warnings = Vec::new();
         let mut messages: Vec<Message> = Vec::new();
         for (index, line) in lines.iter().enumerate().skip(1) {
-            match serde_json::from_str::<Message>(line) {
+            let parsed = serde_json::from_str::<Message>(line).and_then(|mut message| {
+                record::restore(line, &mut message)?;
+                Ok(message)
+            });
+            match parsed {
                 Ok(message) => messages.push(message),
                 // An unterminated final line is the crash artifact the
                 // format anticipates; anything else is corruption.
@@ -459,7 +465,7 @@ fn write_header(file: &mut File, meta: &SessionMeta) -> std::io::Result<()> {
 
 fn append(file: &mut File, messages: &[Message]) -> std::io::Result<()> {
     for message in messages {
-        let line = serde_json::to_string(message).map_err(std::io::Error::other)?;
+        let line = record::line(message).map_err(std::io::Error::other)?;
         writeln!(file, "{line}")?;
     }
     file.flush()
@@ -480,6 +486,9 @@ fn read_header(path: &Path) -> Option<SessionMeta> {
     std::io::BufReader::new(file).read_line(&mut first).ok()?;
     serde_json::from_str(&first).ok()
 }
+
+#[path = "session/record.rs"]
+mod record;
 
 #[cfg(test)]
 #[path = "session/tests.rs"]

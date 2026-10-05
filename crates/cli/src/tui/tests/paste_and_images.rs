@@ -323,6 +323,7 @@ fn image_payloads_follow_visual_pill_order() {
     let first = HeldInput::Image {
         label: "first.png".into(),
         image: orca_harness_core::Image {
+            source_url: None,
             media_type: "image/png".into(),
             data: "first".into(),
         },
@@ -330,6 +331,7 @@ fn image_payloads_follow_visual_pill_order() {
     let second = HeldInput::Image {
         label: "second.png".into(),
         image: orca_harness_core::Image {
+            source_url: None,
             media_type: "image/png".into(),
             data: "second".into(),
         },
