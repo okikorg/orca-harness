@@ -160,6 +160,7 @@ pub(super) fn encode_messages(context: &Context) -> Vec<Value> {
 }
 
 /// Responses' JSON-schema format is flat; Chat wraps schema attributes.
+#[allow(clippy::result_large_err)] // ModelError is large crate-wide
 pub(super) fn chat_response_format(format: Value) -> Result<Value, ModelError> {
     let invalid = |message: &str| ModelError::Request(format!("invalid text.format: {message}"));
     let Value::Object(mut fields) = format else {

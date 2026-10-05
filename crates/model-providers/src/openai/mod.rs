@@ -155,6 +155,7 @@ impl OpenAiModel {
     /// Supports text, json_object and json_schema, moving the latter's
     /// name/schema/description/strict fields into the Chat json_schema object.
     /// Unsupported types/fields or malformed shapes fail before any request.
+    #[allow(clippy::result_large_err)] // ModelError is large crate-wide
     pub fn text_format(self, format: Value) -> Result<Self, ModelError> {
         Ok(self.response_format(request::chat_response_format(format)?))
     }
