@@ -100,6 +100,27 @@ fn tool_result_images_follow_the_tool_batch_in_one_user_message() {
 }
 
 #[test]
+fn top_level_combinators_are_stripped_from_tool_parameters() {
+    let tools = vec![ToolSchema {
+        name: "workflow".into(),
+        description: "run".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {"action": {"enum": ["run", "list"]}},
+            "required": ["action"],
+            "oneOf": [{"properties": {"action": {"const": "run"}}}],
+        }),
+    }];
+    let body = OpenAiModel::new("m").request_body(&context(), &tools);
+    let sent = &body["tools"][0]["function"]["parameters"];
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        assert!(sent.get(keyword).is_none(), "sent a top-level `{keyword}`");
+    }
+    assert_eq!(sent["properties"], tools[0].parameters["properties"]);
+    assert_eq!(sent["required"], json!(["action"]));
+}
+
+#[test]
 fn parallel_tool_calls_is_omitted_when_unset() {
     let model = OpenAiModel::new("m");
     let body = model.request_body(&context(), &schemas());
@@ -240,5 +261,91 @@ fn completion_reasoning_tokens_preserve_absent_zero_and_nonzero() {
 
         assert_eq!(usage.output_tokens, 30);
         assert_eq!(usage.reasoning_tokens, expected);
+    }
+}
+
+#[test]
+fn model_options_are_opt_in_and_do_not_enable_router_usage() {
+    let body = OpenAiModel::new("m").request_body(&context(), &[]);
+    for key in [
+        "service_tier",
+        "verbosity",
+        "response_format",
+        "usage",
+        "text",
+        "reasoning",
+    ] {
+        assert!(body.get(key).is_none(), "{key}");
+    }
+    let model = OpenAiModel::new("m")
+        .service_tier("priority")
+        .verbosity("low")
+        .reasoning_effort("high")
+        .text_format(json!({"type":"text"}))
+        .unwrap();
+    let body = model.request_body(&context(), &schemas());
+    assert_eq!(body["service_tier"], "priority");
+    assert_eq!(body["verbosity"], "low");
+    assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["response_format"], json!({"type":"text"}));
+    for key in ["usage", "text", "reasoning", "summary"] {
+        assert!(body.get(key).is_none(), "{key}");
+    }
+}
+
+#[test]
+fn text_formats_translate_to_chat_without_losing_schema_attributes() {
+    for kind in ["text", "json_object"] {
+        let body = OpenAiModel::new("m")
+            .text_format(json!({"type":kind}))
+            .unwrap()
+            .request_body(&context(), &[]);
+        assert_eq!(body["response_format"], json!({"type":kind}));
+    }
+    let attributes = json!({"name":"answer_v1", "description":"An answer", "schema":{"type":"object", "properties":{"answer":{"type":"string"}}, "required":["answer"], "additionalProperties":false}, "strict":true});
+    let mut input = attributes.clone();
+    input["type"] = json!("json_schema");
+    let body = OpenAiModel::new("m")
+        .text_format(input)
+        .unwrap()
+        .request_body(&context(), &[]);
+    assert_eq!(
+        body["response_format"],
+        json!({"type":"json_schema", "json_schema":attributes})
+    );
+    assert!(body.get("schema").is_none());
+    assert!(body.get("text").is_none());
+}
+
+#[test]
+fn chat_response_format_can_be_supplied_directly() {
+    let format = json!({"type":"json_schema", "json_schema":{"name":"answer", "schema":{"type":"object"}, "strict":false}});
+    let body = OpenAiModel::new("m")
+        .response_format(format.clone())
+        .request_body(&context(), &[]);
+    assert_eq!(body["response_format"], format);
+}
+
+#[test]
+fn unsupported_or_malformed_text_formats_are_rejected() {
+    for input in [
+        Value::Null,
+        json!({}),
+        json!({"type":"grammar"}),
+        json!({"type":"text", "schema":{}}),
+        json!({"type":"json_schema", "name":"valid", "schema":{}, "extra":true}),
+        json!({"type":"json_schema", "name":"bad name", "schema":{}}),
+        json!({"type":"json_schema", "name":"valid", "schema":[]}),
+        json!({"type":"json_schema", "name":"valid", "schema":{}, "strict":"yes"}),
+        json!({"type":"json_schema", "name":"valid", "schema":{}, "description":1}),
+    ] {
+        // Not `Request`: the retry layer would resend a configuration error.
+        assert!(
+            matches!(
+                OpenAiModel::new("m").text_format(input.clone()),
+                Err(ModelError::InvalidResponse(_))
+            ),
+            "{input}"
+        );
     }
 }

@@ -47,6 +47,9 @@ pub struct OpenAiModel {
     temperature: Option<f64>,
     max_tokens: Option<u64>,
     reasoning_effort: Option<String>,
+    service_tier: Option<String>,
+    verbosity: Option<String>,
+    response_format: Option<Value>,
     nested_reasoning: bool,
     parallel_tool_calls: Option<bool>,
     headers: Vec<(String, String)>,
@@ -65,6 +68,9 @@ impl OpenAiModel {
             temperature: None,
             max_tokens: None,
             reasoning_effort: None,
+            service_tier: None,
+            verbosity: None,
+            response_format: None,
             nested_reasoning: false,
             parallel_tool_calls: None,
             headers: Vec::new(),
@@ -122,6 +128,36 @@ impl OpenAiModel {
     pub fn max_tokens(mut self, max_tokens: u64) -> Self {
         self.max_tokens = Some(max_tokens);
         self
+    }
+
+    /// Set Chat Completions' processing tier. Omitted unless configured.
+    /// Supported tiers and model availability are endpoint-specific.
+    pub fn service_tier(mut self, tier: impl Into<String>) -> Self {
+        self.service_tier = Some(tier.into());
+        self
+    }
+
+    /// Set Chat Completions' flat verbosity field (`low`, `medium`, `high`).
+    /// This is not the Responses API's nested `text.verbosity` field.
+    pub fn verbosity(mut self, verbosity: impl Into<String>) -> Self {
+        self.verbosity = Some(verbosity.into());
+        self
+    }
+
+    /// Set an already-encoded Chat Completions response_format object.
+    /// For flat Agents/Responses text.format input, use [`Self::text_format`].
+    pub fn response_format(mut self, format: Value) -> Self {
+        self.response_format = Some(format);
+        self
+    }
+
+    /// Translate Agents/Responses text.format to Chat response_format.
+    /// Supports text, json_object and json_schema, moving the latter's
+    /// name/schema/description/strict fields into the Chat json_schema object.
+    /// Unsupported types/fields or malformed shapes fail before any request.
+    #[allow(clippy::result_large_err)] // ModelError is large crate-wide
+    pub fn text_format(self, format: Value) -> Result<Self, ModelError> {
+        Ok(self.response_format(request::chat_response_format(format)?))
     }
 
     /// Set OpenAI Chat Completions' flat reasoning-effort parameter.
@@ -196,8 +232,9 @@ pub(crate) struct WireUsage {
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: WirePromptTokensDetails,
+    /// Some gateways send `null` here; treat it like an absent object.
     #[serde(default)]
-    completion_tokens_details: WireCompletionTokensDetails,
+    completion_tokens_details: Option<WireCompletionTokensDetails>,
     /// DeepSeek-style cache reporting, used when details are absent.
     #[serde(default)]
     prompt_cache_hit_tokens: u64,
@@ -240,7 +277,9 @@ impl WireUsage {
             output_tokens: self.completion_tokens,
             cache_read_tokens: cache_read,
             cache_create_tokens: cache_write,
-            reasoning_tokens: self.completion_tokens_details.reasoning_tokens,
+            reasoning_tokens: self
+                .completion_tokens_details
+                .and_then(|details| details.reasoning_tokens),
         }
     }
 }
