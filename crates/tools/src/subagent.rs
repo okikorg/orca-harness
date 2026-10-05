@@ -29,7 +29,7 @@ use orca_harness_core::{
     ModelResponse, Next, Subscriptions, Tool, ToolCall, ToolContext, ToolError, ToolSchema, Usage,
 };
 
-use crate::{core_tools, BackgroundStats, Workspace};
+use crate::{core_tools, BackgroundStats, ProgrammaticTools, Workspace};
 
 mod host;
 mod settings;
@@ -131,6 +131,13 @@ pub struct SubagentTool<M: Model + Clone + 'static> {
     limits: Limits,
     limits_configured: bool,
     system_prompt: Option<String>,
+    /// Gives every child, nested ones included, its own `bun_repl` in
+    /// this sandbox and working directory, able to call the child's tools.
+    programmatic_bun: Option<(
+        Arc<dyn orca_harness_core::Sandbox>,
+        String,
+        ProgrammaticTools,
+    )>,
     /// Distance from the top-level agent; the instance registered there
     /// is depth 0.
     depth: u32,
@@ -180,6 +187,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             },
             limits_configured: false,
             system_prompt: None,
+            programmatic_bun: None,
             depth: 0,
             max_depth: SubagentDepth::default(),
             spawn_extensions: None,
@@ -192,6 +200,19 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             background: None,
             sidekicks: Default::default(),
         }
+    }
+
+    /// Give every child, nested ones included, a fresh `bun_repl` inside
+    /// `sandbox`, running in `working_dir`, whose code can call the
+    /// child's own tools; see [`crate::BunReplTool::with_dispatch`].
+    pub fn programmatic_bun(
+        mut self,
+        sandbox: Arc<dyn orca_harness_core::Sandbox>,
+        working_dir: impl Into<String>,
+        config: ProgrammaticTools,
+    ) -> Self {
+        self.programmatic_bun = Some((sandbox, working_dir.into(), config));
+        self
     }
 
     /// Attach host extensions (event streams, policy, ...) to every
@@ -332,6 +353,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             limits: self.limits.clone(),
             limits_configured: self.limits_configured,
             system_prompt: self.system_prompt.clone(),
+            programmatic_bun: self.programmatic_bun.clone(),
             depth: self.depth + 1,
             max_depth: self.max_depth.clone(),
             spawn_extensions: self.spawn_extensions.clone(),

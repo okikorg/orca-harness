@@ -8,7 +8,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -19,7 +19,15 @@ use serde_json::{json, Value};
 use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
 use crate::pgroup;
-use crate::BackgroundStats;
+use crate::{BackgroundStats, ToolDispatch};
+
+mod output;
+mod rpc;
+
+use output::{clean_stdout, clean_text, find, push_bounded, trim_front, truncate_tail};
+
+/// The tool's name, which a [`ToolDispatch`] never offers to nested code.
+pub(crate) const NAME: &str = "bun_repl";
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -33,6 +41,8 @@ enum ReadOutcome {
     Cancelled,
     Timeout,
     Closed,
+    /// The programmatic tool protocol broke; the message says how.
+    Failed(String),
 }
 
 struct Live {
@@ -44,6 +54,12 @@ struct Live {
 struct Session {
     live: Option<Live>,
     restart_notice: bool,
+    /// Set when a programmatic execution was dropped mid-flight; see
+    /// [`rpc::DirtyOnDrop`].
+    interrupted: Arc<AtomicBool>,
+    /// The live interpreter holds a `tools` global from an earlier
+    /// programmatic execution.
+    tools_installed: bool,
 }
 
 /// Removes the per-call source even when execution is cancelled or times out.
@@ -176,7 +192,7 @@ pub struct BunReplTool {
     max_output_bytes: usize,
     default_timeout: Duration,
     max_timeout: Duration,
-    session: tokio::sync::Mutex<Session>,
+    session: Arc<tokio::sync::Mutex<Session>>,
     live_pgid: StdMutex<Option<u32>>,
     seq: AtomicU64,
     stats: BackgroundStats,
@@ -206,7 +222,7 @@ impl BunReplTool {
             max_output_bytes: 64 * 1024,
             default_timeout: Duration::from_secs(30),
             max_timeout: Duration::from_secs(300),
-            session: tokio::sync::Mutex::new(Session::default()),
+            session: Arc::new(tokio::sync::Mutex::new(Session::default())),
             live_pgid: StdMutex::new(None),
             seq: AtomicU64::new(0),
             stats: BackgroundStats::default(),
@@ -284,7 +300,12 @@ impl BunReplTool {
         self.set_live_pgid(None);
     }
 
-    async fn exec(&self, input: &Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    async fn exec(
+        &self,
+        input: &Value,
+        ctx: &ToolContext,
+        dispatch: Option<&ToolDispatch>,
+    ) -> Result<Value, ToolError> {
         let code = input
             .get("code")
             .and_then(Value::as_str)
@@ -297,6 +318,10 @@ impl BunReplTool {
             .min(self.max_timeout);
 
         let mut session = self.session.lock().await;
+        if session.interrupted.swap(false, Ordering::SeqCst) {
+            self.kill_live(&mut session).await;
+            session.restart_notice = true;
+        }
         if let Some(live) = &mut session.live {
             if live.process.has_exited() {
                 session.live = None;
@@ -308,6 +333,7 @@ impl BunReplTool {
         if session.live.is_none() {
             session.live = Some(self.spawn_repl().await?);
             session.restart_notice = false;
+            session.tools_installed = false;
         }
 
         let token = format!(
@@ -319,6 +345,13 @@ impl BunReplTool {
         let end = format!("\"ORCA_BUN_{token}_END\"");
         let stderr_end = format!("ORCA_BUN_{token}_STDERR_END");
         let marker = json!(ok).to_string();
+        let mut rpc = dispatch.map(|dispatch| rpc::Rpc::new(dispatch, self));
+        let code = match &rpc {
+            Some(rpc) => format!("{}{code}{}", rpc.prelude(), rpc::EPILOGUE),
+            None if session.tools_installed => format!("{}{code}", rpc::UNINSTALL),
+            None => code.to_owned(),
+        };
+        let code = code.as_str();
         let source = match &self.spawner {
             crate::Spawner::Sandbox(sandbox) => {
                 // `.load` runs inside the REPL, so the file must exist
@@ -333,10 +366,14 @@ impl BunReplTool {
             }
             crate::Spawner::Local => TempSource::write(code, &marker)?,
         };
+        let close = rpc::CLOSE;
         let end_command = format!(
-            "process.stderr.write([\"ORCA\",\"BUN\",\"{token}\",\"STDERR\",\"END\"].join(\"_\") + \"\\n\"); [\"ORCA\",\"BUN\",\"{token}\",\"END\"].join(\"_\")\n"
+            "{close}process.stderr.write([\"ORCA\",\"BUN\",\"{token}\",\"STDERR\",\"END\"].join(\"_\") + \"\\n\"); [\"ORCA\",\"BUN\",\"{token}\",\"END\"].join(\"_\")\n"
         );
         let command = format!(".load {}\n{end_command}", source.path.display());
+        let mut dirty = rpc
+            .as_ref()
+            .map(|_| rpc::DirtyOnDrop::new(self.session.clone(), session.interrupted.clone()));
         let live = session.live.as_mut().expect("just ensured");
         if live.process.write_stdin(command.as_bytes()).await.is_err() {
             self.kill_live(&mut session).await;
@@ -345,15 +382,33 @@ impl BunReplTool {
                 "Bun REPL stdin closed; it will restart on the next call",
             ));
         }
+        session.tools_installed = rpc.is_some();
+        let live = session.live.as_mut().expect("just ensured");
 
         let deadline = tokio::time::Instant::now() + timeout;
         let keep = self.max_output_bytes + ok.len() + end.len() + 4096;
-        let stderr_keep = self.max_output_bytes + stderr_end.len() + 256;
+        let frames = if rpc.is_some() { rpc::MAX_FRAME } else { 0 };
+        let stderr_keep = self.max_output_bytes + stderr_end.len() + frames + 256;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut dropped = 0u64;
         let mut ok_seen = false;
         let outcome = loop {
+            if let Some(rpc) = rpc.as_mut() {
+                if let Some(frame) = rpc.take_frame(&mut stderr) {
+                    // Dropping the answer on timeout or cancellation aborts
+                    // the nested calls; the parent's token is untouched.
+                    tokio::select! {
+                        biased;
+                        _ = ctx.cancellation.cancelled() => break ReadOutcome::Cancelled,
+                        _ = tokio::time::sleep_until(deadline) => break ReadOutcome::Timeout,
+                        answered = rpc.answer(&frame, ctx) => if let Err(error) = answered {
+                            break ReadOutcome::Failed(error);
+                        },
+                    }
+                    continue;
+                }
+            }
             if let (Some(end_pos), Some(stderr_end_pos)) = (
                 find(&stdout, end.as_bytes()),
                 find(&stderr, stderr_end.as_bytes()),
@@ -387,6 +442,9 @@ impl BunReplTool {
             }
         };
 
+        if let (Some(dirty), ReadOutcome::Complete { .. }) = (dirty.as_mut(), &outcome) {
+            dirty.armed = false;
+        }
         match outcome {
             ReadOutcome::Complete {
                 end_pos,
@@ -447,6 +505,13 @@ impl BunReplTool {
                     "Bun REPL exited before completing; it will restart on the next call",
                 ))
             }
+            ReadOutcome::Failed(error) => {
+                self.kill_live(&mut session).await;
+                session.restart_notice = true;
+                Err(ToolError::msg(format!(
+                    "{error}; the Bun REPL will restart on the next call"
+                )))
+            }
         }
     }
 
@@ -455,90 +520,18 @@ impl BunReplTool {
     /// the kill request but does not propagate provider errors or await exit.
     pub async fn reset(&self) -> Result<Value, ToolError> {
         let mut session = self.session.lock().await;
+        session.interrupted.store(false, Ordering::SeqCst);
         self.kill_live(&mut session).await;
         session.restart_notice = false;
         Ok(json!({"state": "ok", "restarted": true, "output": "", "stderr": ""}))
     }
 }
 
-fn push_bounded(buffer: &mut Vec<u8>, chunk: &[u8], cap: usize) -> u64 {
-    buffer.extend_from_slice(chunk);
-    trim_front(buffer, cap)
-}
-
-fn trim_front(buffer: &mut Vec<u8>, cap: usize) -> u64 {
-    if buffer.len() <= cap {
-        return 0;
-    }
-    let excess = buffer.len() - cap;
-    buffer.drain(..excess);
-    excess as u64
-}
-
-fn truncate_tail(text: &mut String, max_bytes: usize) -> u64 {
-    if text.len() <= max_bytes {
-        return 0;
-    }
-    let mut cut = text.len() - max_bytes;
-    while !text.is_char_boundary(cut) {
-        cut += 1;
-    }
-    text.drain(..cut);
-    cut as u64
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-/// Bun's line editor redraws piped input with CR + CSI 2K. Those rows are
-/// input echo, not program output, so discard them along with the banner and
-/// `.load` notice. User output is otherwise preserved as plain text.
-fn clean_stdout(raw: &[u8]) -> String {
-    String::from_utf8_lossy(raw)
-        .split_inclusive('\n')
-        .filter(|line| !line.contains("\u{1b}[2K"))
-        .map(strip_ansi)
-        .filter(|line| {
-            let line = line.trim();
-            !line.starts_with("Welcome to Bun")
-                && !line.starts_with("Type .copy")
-                && !line.starts_with("Loading ")
-        })
-        .collect::<String>()
-        .trim()
-        .to_owned()
-}
-
-fn clean_text(raw: &[u8]) -> String {
-    strip_ansi(&String::from_utf8_lossy(raw)).trim().to_owned()
-}
-
-fn strip_ansi(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if ('@'..='~').contains(&next) {
-                    break;
-                }
-            }
-        } else if ch != '\r' {
-            output.push(ch);
-        }
-    }
-    output
-}
-
 #[async_trait]
 impl Tool for BunReplTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "bun_repl".into(),
+            name: NAME.into(),
             description: "Execute JavaScript or TypeScript in a persistent Bun REPL. Variables, imports, and functions survive across calls; top-level await and multi-line code work. Use console.log() for output. reset discards all state. A timed-out execution kills the REPL, and the next call reports restarted: true."
                 .into(),
             parameters: json!({
@@ -557,8 +550,19 @@ impl Tool for BunReplTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        self.call_with(input, ctx, None).await
+    }
+}
+
+impl BunReplTool {
+    async fn call_with(
+        &self,
+        input: Value,
+        ctx: &ToolContext,
+        dispatch: Option<&ToolDispatch>,
+    ) -> Result<Value, ToolError> {
         match input.get("action").and_then(Value::as_str) {
-            None | Some("exec") => self.exec(&input, ctx).await,
+            None | Some("exec") => self.exec(&input, ctx, dispatch).await,
             Some("reset") => self.reset().await,
             Some(other) => Err(ToolError::msg(format!(
                 "unknown action `{other}`; expected exec|reset"

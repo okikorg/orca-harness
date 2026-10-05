@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use orca_harness_core::{Extension, Limits, Model, Tool};
 use orca_harness_extensions::{LongSessionConfig, MemoryModel, ToolPolicy};
-use orca_harness_tools::{FileGuard, TodoList};
+use orca_harness_tools::{FileGuard, ProgrammaticTools, TodoList};
 
 use crate::background::{ProcessConfig, SubagentConfig};
 use crate::extensions::{
@@ -46,6 +46,9 @@ pub(crate) struct AgentDefinition {
     /// How sessions of a [`ToolPreset::Coding`] agent build their
     /// `shell` and `process` tools; `None` means local defaults.
     pub processes: Option<ProcessConfig>,
+    /// Lets `bun_repl` code call the run's other tools; see
+    /// [`AgentBuilder::programmatic_tools`].
+    pub programmatic_tools: Option<ProgrammaticTools>,
 }
 
 pub struct AgentBuilder {
@@ -66,6 +69,7 @@ pub struct AgentBuilder {
     mcp: Option<Mcp>,
     skills: Option<Skills>,
     memory: Option<MemoryConfig>,
+    programmatic_tools: Option<ProgrammaticTools>,
 }
 
 impl AgentBuilder {
@@ -88,6 +92,7 @@ impl AgentBuilder {
             mcp: None,
             skills: None,
             memory: None,
+            programmatic_tools: None,
         }
     }
 
@@ -224,6 +229,20 @@ impl AgentBuilder {
     /// Add the Bun REPL tool. Each session starts its own REPL.
     pub fn bun(mut self) -> Self {
         self.tool_sources.push(ToolSource::Bun);
+        self
+    }
+
+    /// Let code in the session's `bun_repl` call the run's other tools
+    /// through `await tools.list()`, `tools.call(name, arguments)` and
+    /// `tools.batch([...])`. Each nested call runs through the run's
+    /// dispatcher policy and extensions, under the id `{parent}.ptc{n}`.
+    /// Nested code sees what the model sees (MCP server tools only once
+    /// selected) narrowed by `config`'s visibility, and never `bun_repl`
+    /// itself. Takes effect in sessions with a `bun_repl` (see
+    /// [`bun`](Self::bun)); sandboxed sessions also give each subagent
+    /// child its own interpreter with the child's tools.
+    pub fn programmatic_tools(mut self, config: ProgrammaticTools) -> Self {
+        self.programmatic_tools = Some(config);
         self
     }
 
@@ -370,6 +389,7 @@ impl AgentBuilder {
                 shared_todo_list: self.shared_todo_list,
                 subagents: self.subagents,
                 processes: self.processes,
+                programmatic_tools: self.programmatic_tools,
             }),
         })
     }

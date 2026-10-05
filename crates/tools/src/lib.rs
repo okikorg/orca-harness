@@ -40,6 +40,7 @@ mod bun_repl;
 mod core_tools;
 mod fs_admin;
 mod kernel;
+mod programmatic;
 pub mod retry;
 mod spawner;
 mod subagent;
@@ -65,6 +66,7 @@ pub use core_tools::{
 };
 pub use fs_admin::{CopyFileTool, CreateFolderTool, DeleteFileTool, FileInfoTool, RenameFileTool};
 pub use kernel::PyKernelTool;
+pub use programmatic::{ProgrammaticTools, ToolDispatch, ToolVisibility};
 pub use spawner::{Spawn, Spawned, Spawner};
 pub use subagent::{
     refresh_inventory, subagent_completions_prompt, ActiveInventory, BackgroundAcknowledgement,

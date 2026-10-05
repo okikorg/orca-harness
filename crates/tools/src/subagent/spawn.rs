@@ -199,17 +199,16 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         if retained_context {
             agent_limits.deadline = None;
         }
-        let mut agent = Agent::new(model.clone())
-            .limits(agent_limits)
-            .extension(meter);
+        let mut agent = Agent::new(model.clone()).limits(agent_limits);
+        // Shared instances, so a child's programmatic dispatch runs through
+        // the child's own tools and extensions.
+        let mut extensions: Vec<Arc<dyn Extension>> = vec![Arc::new(meter)];
         if let Some(system) = system {
             agent = agent.system_prompt(system);
         }
-        for tool in (self.tools)() {
-            agent = agent.tool_arc(tool);
-        }
+        let mut tools = (self.tools)();
         if self.depth + 1 < self.max_depth.get() {
-            agent = agent.tool_arc(Arc::new(self.child_replica(
+            tools.push(Arc::new(self.child_replica(
                 spawn_id,
                 model,
                 identity.clone(),
@@ -240,9 +239,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             .transpose()
             .map_err(ToolError::msg)?;
         if let Some(factory) = &self.spawn_extensions {
-            for extension in factory(&spawn) {
-                agent = agent.extension_arc(extension);
-            }
+            extensions.extend(factory(&spawn));
         }
         // Retry *inside* the inner loop. The top-level agent's `ToolRetry`
         // only wraps that agent's own tool calls — inner agents build a
@@ -253,7 +250,7 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
         // is not retried.
         let tool_attempts = self.max_depth.tool_attempts();
         if tool_attempts > 1 {
-            agent = agent.extension_arc(std::sync::Arc::new(SubagentRetry::new(
+            extensions.push(std::sync::Arc::new(SubagentRetry::new(
                 (
                     tool_attempts,
                     std::time::Duration::from_millis(self.max_depth.retry_backoff_ms() as u64),
@@ -261,6 +258,27 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
                 self.ok_failure.clone(),
                 self.retry_error.clone(),
             )));
+        }
+        if let Some((sandbox, working_dir, config)) = &self.programmatic_bun {
+            let bun = Arc::new(
+                crate::BunReplTool::new()
+                    .sandbox(sandbox.clone())
+                    .working_dir(working_dir),
+            );
+            let dispatch = crate::ToolDispatch::new(
+                tools.iter().cloned(),
+                extensions.iter().cloned(),
+                config.clone(),
+            )
+            .max_parallel(limits.max_parallel_tools);
+            tools.push(bun.clone().with_dispatch(dispatch));
+            extensions.push(Arc::new(ChildBunCleanup(bun)));
+        }
+        for tool in tools {
+            agent = agent.tool_arc(tool);
+        }
+        for extension in extensions {
+            agent = agent.extension_arc(extension);
         }
 
         if let (Some(notifier), Some((config, _))) = (req.notifier, background.as_mut()) {
@@ -278,5 +296,23 @@ impl<M: Model + Clone + 'static> SubagentTool<M> {
             in_flight: InFlight(self.stats.clone()),
             context,
         })
+    }
+}
+
+/// Stops a child's Bun interpreter when the child's run ends.
+struct ChildBunCleanup(Arc<crate::BunReplTool>);
+
+#[async_trait]
+impl Extension for ChildBunCleanup {
+    fn name(&self) -> &str {
+        "child_bun_cleanup"
+    }
+
+    fn subscriptions(&self) -> Subscriptions {
+        Subscriptions::none().on_agent_end()
+    }
+
+    async fn on_agent_end(&self, _context: &Context) {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), self.0.reset()).await;
     }
 }
