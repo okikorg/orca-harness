@@ -3,6 +3,7 @@
 //! Loading only reads package metadata. It does not create plugin data,
 //! install dependencies, or execute plugin-provided code.
 
+mod codex;
 mod hooks;
 mod manifest;
 mod mcp;
@@ -15,7 +16,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::mcp::StdioLaunch;
+
 use crate::skills::Discovered;
+pub use codex::{
+    parse_codex_plugin, CodexPlugin, CodexPluginServer, CodexPluginSkill, CodexPluginTransport,
+};
 
 pub(crate) const PLUGIN_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 pub(crate) const MCP_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
