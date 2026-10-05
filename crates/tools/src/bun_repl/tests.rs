@@ -4,7 +4,7 @@ use serde_json::json;
 
 use orca_harness_core::{CancellationToken, Concurrency, Tool, ToolContext};
 
-use super::{clean_stdout, strip_ansi, BunReplTool, TempSource};
+use super::{clean_stdout, output::strip_ansi, BunReplTool, TempSource};
 use crate::BackgroundStats;
 
 fn ctx() -> ToolContext {

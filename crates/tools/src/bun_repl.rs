@@ -6,7 +6,6 @@
 //! block through Bun's terminal line editor. Unique success/end sentinels turn
 //! the interactive stream into a bounded request/response protocol.
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -20,6 +19,12 @@ use orca_harness_core::{Concurrency, Tool, ToolContext, ToolError, ToolSchema};
 
 use crate::pgroup;
 use crate::BackgroundStats;
+
+mod output;
+mod source;
+
+use output::{clean_stdout, clean_text, find, push_bounded, trim_front, truncate_tail};
+use source::TempSource;
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -74,126 +79,6 @@ impl Drop for InterruptedRepl {
                 }
             });
         }
-    }
-}
-
-/// Removes the per-call source even when execution is cancelled or times out.
-///
-/// The file has to live wherever `bun` does: `.load` is executed *by the
-/// REPL*, so a host temp file is invisible to a sandboxed interpreter.
-/// Under a sandbox the source is written through the provider and removed
-/// the same way.
-struct TempSource {
-    path: PathBuf,
-    /// Set when the file lives in a sandbox, so `Drop` knows where to
-    /// delete it from.
-    sandbox: Option<Arc<dyn orca_harness_core::Sandbox>>,
-}
-
-impl TempSource {
-    /// The per-call file name. Process id plus sequence, so two tools in
-    /// one process never collide and neither do two processes.
-    fn file_name(seq: u64) -> String {
-        format!("orca-bun-repl-{}-{seq}.ts", std::process::id())
-    }
-
-    fn body(code: &str, marker: &str) -> Vec<u8> {
-        let mut out = code.as_bytes().to_vec();
-        out.extend_from_slice(b"\n;console.log(");
-        out.extend_from_slice(marker.as_bytes());
-        out.extend_from_slice(b")\n");
-        out
-    }
-
-    /// Write the source inside `sandbox`, in the directory `bun` runs in.
-    async fn write_sandboxed(
-        sandbox: &Arc<dyn orca_harness_core::Sandbox>,
-        dir: &str,
-        code: &str,
-        marker: &str,
-    ) -> Result<Self, ToolError> {
-        let seq = TEMP_SEQ.fetch_add(1, Ordering::SeqCst);
-        let path = PathBuf::from(dir).join(Self::file_name(seq));
-        sandbox
-            .write_file(
-                &path.to_string_lossy(),
-                &Self::body(code, marker),
-                orca_harness_core::FileMode::Regular,
-            )
-            .await
-            .map_err(|error: orca_harness_core::SandboxError| {
-                ToolError::msg(format!("failed to write Bun REPL input: {error}"))
-            })?;
-        Ok(Self {
-            path,
-            sandbox: Some(sandbox.clone()),
-        })
-    }
-
-    fn write(code: &str, marker: &str) -> Result<Self, ToolError> {
-        let dir = std::env::temp_dir();
-        if dir.to_string_lossy().chars().any(char::is_whitespace) {
-            return Err(ToolError::msg(
-                "bun_repl needs a temporary directory whose path has no whitespace",
-            ));
-        }
-        for _ in 0..16 {
-            let seq = TEMP_SEQ.fetch_add(1, Ordering::SeqCst);
-            let path = dir.join(Self::file_name(seq));
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let file = options.open(&path);
-            match file {
-                Ok(mut file) => {
-                    let source = Self {
-                        path,
-                        sandbox: None,
-                    };
-                    file.write_all(code.as_bytes())
-                        .and_then(|_| file.write_all(b"\n;console.log("))
-                        .and_then(|_| file.write_all(marker.as_bytes()))
-                        .and_then(|_| file.write_all(b")\n"))
-                        .map_err(|error| {
-                            ToolError::msg(format!("failed to write Bun REPL input: {error}"))
-                        })?;
-                    return Ok(source);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => {
-                    return Err(ToolError::msg(format!(
-                        "failed to create Bun REPL input: {error}"
-                    )))
-                }
-            }
-        }
-        Err(ToolError::msg(
-            "failed to allocate a unique Bun REPL input file",
-        ))
-    }
-}
-
-impl Drop for TempSource {
-    fn drop(&mut self) {
-        let Some(sandbox) = self.sandbox.take() else {
-            let _ = std::fs::remove_file(&self.path);
-            return;
-        };
-        // A provider delete is async and `Drop` is not, so it is handed
-        // to the runtime. The file is one small per-call source; losing
-        // the race at shutdown leaks it inside a sandbox that is about to
-        // be destroyed anyway.
-        let path = std::mem::take(&mut self.path);
-        tokio::spawn(async move {
-            let command = format!("rm -f '{}'", path.to_string_lossy().replace('\'', r"'\''"));
-            let _ = sandbox
-                .exec(orca_harness_core::ExecRequest::new(command))
-                .await;
-        });
     }
 }
 
@@ -631,79 +516,6 @@ impl BunReplTool {
         session.restart_notice = false;
         Ok(json!({"state": "ok", "restarted": true, "output": "", "stderr": ""}))
     }
-}
-
-fn push_bounded(buffer: &mut Vec<u8>, chunk: &[u8], cap: usize) -> u64 {
-    buffer.extend_from_slice(chunk);
-    trim_front(buffer, cap)
-}
-
-fn trim_front(buffer: &mut Vec<u8>, cap: usize) -> u64 {
-    if buffer.len() <= cap {
-        return 0;
-    }
-    let excess = buffer.len() - cap;
-    buffer.drain(..excess);
-    excess as u64
-}
-
-fn truncate_tail(text: &mut String, max_bytes: usize) -> u64 {
-    if text.len() <= max_bytes {
-        return 0;
-    }
-    let mut cut = text.len() - max_bytes;
-    while !text.is_char_boundary(cut) {
-        cut += 1;
-    }
-    text.drain(..cut);
-    cut as u64
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-/// Bun's line editor redraws piped input with CR + CSI 2K. Those rows are
-/// input echo, not program output, so discard them along with the banner and
-/// `.load` notice. User output is otherwise preserved as plain text.
-fn clean_stdout(raw: &[u8]) -> String {
-    String::from_utf8_lossy(raw)
-        .split_inclusive('\n')
-        .filter(|line| !line.contains("\u{1b}[2K"))
-        .map(strip_ansi)
-        .filter(|line| {
-            let line = line.trim();
-            !line.starts_with("Welcome to Bun")
-                && !line.starts_with("Type .copy")
-                && !line.starts_with("Loading ")
-        })
-        .collect::<String>()
-        .trim()
-        .to_owned()
-}
-
-fn clean_text(raw: &[u8]) -> String {
-    strip_ansi(&String::from_utf8_lossy(raw)).trim().to_owned()
-}
-
-fn strip_ansi(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if ('@'..='~').contains(&next) {
-                    break;
-                }
-            }
-        } else if ch != '\r' {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 #[async_trait]
