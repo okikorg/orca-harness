@@ -183,8 +183,14 @@ impl DockerProvisioner {
         workspace: &str,
         directories: &[String],
     ) -> Result<Arc<dyn Sandbox>, SandboxError> {
+        if !plain_path(workspace) {
+            return Err(SandboxError::Request(format!(
+                "workspace must be absolute without parent traversal: {workspace}"
+            )));
+        }
         if let Some(outside) = directories.iter().find(|directory| {
-            *directory != workspace && !directory.starts_with(&format!("{workspace}/"))
+            !plain_path(directory)
+                || (*directory != workspace && !directory.starts_with(&format!("{workspace}/")))
         }) {
             return Err(SandboxError::Request(format!(
                 "protected directory must be inside workspace: {outside}"
@@ -204,6 +210,15 @@ pub(super) fn docker_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+/// Absolute and free of `..`, as the SDK requires of a session workspace.
+fn plain_path(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 #[cfg(test)]
@@ -260,18 +275,36 @@ mod tests {
             .ends_with("target=/etc/orca-network,readonly"));
     }
 
-    #[test]
-    fn finalize_refuses_directories_outside_the_workspace() {
-        let refused = tokio::runtime::Builder::new_current_thread()
+    fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(DockerProvisioner::finalize_named(
+            .block_on(future)
+    }
+
+    #[test]
+    fn finalize_refuses_directories_outside_the_workspace() {
+        for (workspace, directory) in [
+            ("/workspace", "/etc"),
+            ("/workspace", "/workspace/../opt"),
+            ("/workspace", "/workspace/.orca/../../opt"),
+            ("/workspace", "workspace/skills"),
+            ("/workspace/../opt", "/workspace/../opt/skills"),
+        ] {
+            let refused = block_on(DockerProvisioner::finalize_named(
                 "name",
                 "owner",
-                "/workspace",
-                &["/etc".into()],
+                workspace,
+                &[directory.into()],
             ));
-        assert!(matches!(refused, Err(SandboxError::Request(_))));
+            match refused {
+                Err(SandboxError::Request(message)) => {
+                    assert!(message.contains("traversal") || message.contains("inside"))
+                }
+                Err(other) => panic!("wrong refusal for {directory}: {other}"),
+                Ok(_) => panic!("{directory} was accepted"),
+            }
+        }
     }
 }
