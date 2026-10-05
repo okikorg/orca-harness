@@ -32,6 +32,7 @@ pub use builder::{SessionBuilder, SessionMode, Sessions};
 
 pub struct Session {
     agent: Agent,
+    environment: crate::SessionEnvironment,
     tools: SessionTools,
     context: Arc<Mutex<Context>>,
     recorder: Option<Arc<SessionHandler>>,
@@ -53,7 +54,13 @@ fn fresh_context(agent: &Agent) -> Context {
 }
 
 impl Session {
-    fn open(agent: Agent, mode: SessionMode, imported: Vec<Message>) -> Result<Self, SdkError> {
+    fn open(
+        agent: Agent,
+        mode: SessionMode,
+        imported: Vec<Message>,
+        environment: crate::SessionEnvironment,
+    ) -> Result<Self, SdkError> {
+        environment.validate(&agent.inner)?;
         let context = if imported.is_empty() {
             fresh_context(&agent)
         } else {
@@ -68,13 +75,15 @@ impl Session {
                     &agent.inner.harness.workspace().root().display().to_string(),
                     &agent.inner.model_name,
                 )?;
+                environment.persist(&handler.path())?;
                 handler.sync(&context);
                 Some(Arc::new(handler))
             }
         };
         let truncation_store = session_store(&agent);
         Ok(Self {
-            tools: SessionTools::new(&agent.inner),
+            tools: SessionTools::new(&agent.inner, &environment),
+            environment,
             agent,
             context: Arc::new(Mutex::new(context)),
             recorder,
@@ -88,7 +97,12 @@ impl Session {
     /// Resume a persistent session from disk. The transcript and recovery
     /// store are restored; live processes, REPL state, the read-before-write
     /// guard, todos, and detached subagents start fresh.
-    pub(crate) fn resume(agent: Agent, id: &str) -> Result<Self, SdkError> {
+    pub(crate) fn resume(
+        agent: Agent,
+        id: &str,
+        environment: crate::SessionEnvironment,
+    ) -> Result<Self, SdkError> {
+        environment.validate(&agent.inner)?;
         let path = agent
             .inner
             .harness
@@ -98,10 +112,12 @@ impl Session {
             .find(|file| file.meta.id == id)
             .map(|file| file.path)
             .ok_or_else(|| SdkError::SessionNotFound(id.to_string()))?;
+        environment.verify(&path)?;
         let (handler, loaded) = SessionHandler::resume(&path)?;
         let truncation_store = load_session_store(&agent, Some(&path))?;
         Ok(Self {
-            tools: SessionTools::new(&agent.inner),
+            tools: SessionTools::new(&agent.inner, &environment),
+            environment,
             agent,
             context: Arc::new(Mutex::new(loaded.context)),
             recorder: Some(Arc::new(handler)),
