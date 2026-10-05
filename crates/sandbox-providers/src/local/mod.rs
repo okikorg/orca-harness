@@ -49,6 +49,8 @@ pub struct DockerProvisioner {
     spec: EnvironmentSpec,
     /// Container name and opaque owner label; see [`Self::named`].
     identity: Option<(String, String)>,
+    /// Host network and trust volume; see [`Self::isolated_network`].
+    isolated_network: Option<(String, String)>,
 }
 
 impl DockerProvisioner {
@@ -56,6 +58,7 @@ impl DockerProvisioner {
         Self {
             spec,
             identity: None,
+            isolated_network: None,
         }
     }
 }
@@ -97,6 +100,7 @@ impl Provisioner for DockerProvisioner {
         }
 
         let identity = self.identity_args()?;
+        let attachment = self.network_args()?;
 
         // Claimed before `docker run`: if this future is dropped while the
         // daemon is still creating the container, the guard can only find
@@ -131,6 +135,7 @@ impl Provisioner for DockerProvisioner {
             args.push("--network".into());
             args.push("none".into());
         }
+        args.extend(attachment);
         for (key, value) in &self.spec.env {
             args.push("-e".into());
             args.push(format!("{key}={value}"));
