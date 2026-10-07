@@ -23,7 +23,6 @@ mod refine_command_tests {
             mcp: Default::default(),
             skills: crate::skills::Skills::new(&dir, None, None),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         (app, dir)

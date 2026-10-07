@@ -24,7 +24,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         let screen = rendered_rows(&mut app, 90, 30).join("\n");

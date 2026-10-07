@@ -46,7 +46,6 @@ mod skills_command_tests {
                 mcp: Default::default(),
                 skills: self.skills.clone(),
                 mode: Default::default(),
-                todos: Default::default(),
                 plan: Default::default(),
             })
         }
@@ -192,7 +191,10 @@ mod skills_command_tests {
         press(&mut app, &worker, KeyCode::Enter);
         assert!(app.overlay.is_none());
         assert_eq!(app.composer, "$draft-release-notes ");
-        assert!(rx.try_recv().is_err(), "using a plugin Skill does not reload");
+        assert!(
+            rx.try_recv().is_err(),
+            "using a plugin Skill does not reload"
+        );
 
         app.composer.clear();
         app.cursor = 0;
@@ -205,7 +207,11 @@ mod skills_command_tests {
         press(&mut app, &worker, KeyCode::Char('t'));
         assert!(app.overlay.is_none());
         assert!(app.composer.is_empty());
-        assert!(printed(&app).contains("read-only here"), "{}", printed(&app));
+        assert!(
+            printed(&app).contains("read-only here"),
+            "{}",
+            printed(&app)
+        );
         assert!(rx.try_recv().is_err(), "read-only action does not reload");
 
         app.overlay = Some(Overlay::Skills {
@@ -279,7 +285,6 @@ mod skills_command_tests {
             mcp: Default::default(),
             skills: skills.clone(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -536,5 +541,4 @@ mod skills_command_tests {
         press(&mut app, &worker, KeyCode::Backspace);
         assert_eq!(app.composer, "costs $5");
     }
-
 }

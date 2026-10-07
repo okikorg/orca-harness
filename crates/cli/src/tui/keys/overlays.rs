@@ -127,7 +127,7 @@ pub(crate) fn handle_overlay_key(
             PickerEvent::Activated(index) => After::CloseAndSetInspector(InspectorMode::ALL[index]),
             _ => After::Nothing,
         },
-        Overlay::Usage | Overlay::Todo | Overlay::Processes => match key.code {
+        Overlay::Usage | Overlay::Processes => match key.code {
             KeyCode::Enter | KeyCode::Char('q') => After::Close,
             _ => After::Nothing,
         },

@@ -10,7 +10,6 @@ mod layout;
 pub mod message;
 pub mod notification;
 pub mod picker;
-pub mod progress_list;
 pub mod section;
 pub mod status_bar;
 pub mod subagent_row;

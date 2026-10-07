@@ -182,7 +182,6 @@ pub(crate) fn handle_terminal_event(
                     StatusFocus::Agents => {
                         app.agent_browser = Some(AgentBrowser::new(agent_ids(app).len()))
                     }
-                    StatusFocus::Todo => app.overlay = Some(Overlay::Todo),
                 }
                 app.status_focus = None;
                 return;
@@ -417,9 +416,6 @@ fn status_items(app: &App) -> Vec<StatusFocus> {
     }
     if !app.subagent_transcripts.is_empty() {
         items.push(StatusFocus::Agents);
-    }
-    if !app.cfg.todos.is_empty() {
-        items.push(StatusFocus::Todo);
     }
     items
 }

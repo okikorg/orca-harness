@@ -179,7 +179,7 @@ pub(crate) fn handle_ui_msg(
             match *result {
                 Ok(outcome) => {
                     let t = theme();
-                    // The same block shape as /todo and /hotkeys: a strong
+                    // The same block shape as /hotkeys: a strong
                     // header, dim tree rows, one strong action row.
                     let mut lines = vec![Line::from(vec![
                         Span::styled("  refine", t.strong),

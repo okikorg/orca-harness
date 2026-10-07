@@ -56,7 +56,7 @@ pub use orca_harness_tools::{
     core_tools, core_tools_with_executor, core_tools_with_guard, fs_admin_tools, AskTool,
     BackgroundStats, BunReplTool, Executor, FileGuard, ProcessNotification,
     ProcessNotificationKind, ProgrammaticTools, PyKernelTool, SubagentDepth, SubagentTool,
-    TodoList, TodoWriteTool, WorkflowSubmission, Workspace,
+    WorkflowSubmission, Workspace,
 };
 
 /// Core contracts and every companion type needed to implement them.

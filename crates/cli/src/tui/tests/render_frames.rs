@@ -53,7 +53,7 @@ flowchart TB
         subgraph Kernel["Execution kernel"]
             CORE["crates/harness-core\nagent loop · dispatcher · limits · extensions hooks"]
             EXT["crates/extensions\npolicy · memory · compaction · retry · sessions"]
-            TOOLS["crates/tools\nshell · fs · process · python/bun · subagents · todo"]
+            TOOLS["crates/tools\nshell · fs · process · python/bun · subagents"]
             TOOLX["crates/tool-extensions\nMCP · skills · web"]
             MP["crates/model-providers\nOpenAI · OpenRouter · Codex adapters"]
             AUTH["crates/provider-auth\ncredential contracts"]

@@ -14,7 +14,6 @@ mod extensions_command_tests {
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         })
     }

@@ -100,7 +100,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         app.prompt_queue.push_back("inspect the failure".into());
@@ -295,43 +294,14 @@
         assert!(rx.try_recv().is_err(), "the tray never talks to the worker");
     }
 
-    #[tokio::test]
-    async fn status_row_opens_context_and_todo_overlays_and_esc_collapses_them() {
+    #[test]
+    fn status_row_opens_context_and_esc_collapses_it() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = test_app();
-        let tool = orca_harness_tools::TodoWriteTool::new(app.cfg.todos.clone());
-        let ctx = orca_harness_core::ToolContext {
-            call_id: "todo-status".into(),
-            tool_name: "todo_write".into(),
-            cancellation: CancellationToken::new(),
-            deadline: None,
-        };
-        orca_harness_core::Tool::call(
-            &tool,
-            serde_json::json!({"todos": [
-                {"content": "inspect status navigation", "status": "in_progress"},
-                {"content": "add overlays", "status": "pending"}
-            ]}),
-            &ctx,
-        )
-        .await
-        .unwrap();
-
         press(&mut app, &tx, KeyCode::Down);
         assert_eq!(app.status_focus, Some(StatusFocus::Context));
         press(&mut app, &tx, KeyCode::Enter);
         assert!(matches!(app.overlay, Some(Overlay::Usage)));
-        press(&mut app, &tx, KeyCode::Esc);
-        assert!(app.overlay.is_none());
-
-        press(&mut app, &tx, KeyCode::Down);
-        press(&mut app, &tx, KeyCode::Right);
-        assert_eq!(app.status_focus, Some(StatusFocus::Todo));
-        press(&mut app, &tx, KeyCode::Enter);
-        assert!(matches!(app.overlay, Some(Overlay::Todo)));
-        let text = flat_lines(&live_lines(&app, 100));
-        assert!(text.contains("inspect status navigation"), "{text}");
-        assert!(text.contains("add overlays"), "{text}");
         press(&mut app, &tx, KeyCode::Esc);
         assert!(app.overlay.is_none());
     }

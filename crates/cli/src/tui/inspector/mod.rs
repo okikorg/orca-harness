@@ -112,7 +112,6 @@ fn inspector_action_label(tool_name: &str) -> &'static str {
         "pykernel" => "Run Python in the persistent kernel",
         "bun_repl" => "Run JavaScript or TypeScript in the persistent Bun REPL",
         "subagent" => "Delegate a focused task",
-        "todo_write" => "Update the task list",
         "ask" => "Ask for clarification",
         "web_fetch" => "Fetch a web document",
         "read_tool_result" => "Read a stored tool result",

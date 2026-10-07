@@ -1,6 +1,6 @@
 use super::integrations::*;
 
-// The slash-command handlers (`/mode`, `/rewind`, `/todo`, `/skills`,
+// The slash-command handlers (`/mode`, `/rewind`, `/skills`,
 // `/mcp`, ...) behind the composer palette. Each takes the trimmed
 // argument text and drives the [`App`] overlay/queue/notice machinery; a
 // few hand a follow-up `WorkerCmd` to the agent for anything that needs
@@ -84,12 +84,6 @@ pub(crate) fn slash_command(
     if let Some(rest) = command.strip_prefix("rewind") {
         if rest.is_empty() || rest.starts_with(' ') {
             rewind_command(app, rest.trim(), worker);
-            return;
-        }
-    }
-    if let Some(rest) = command.strip_prefix("todo") {
-        if rest.is_empty() || rest.starts_with(' ') {
-            todo_command(app, width);
             return;
         }
     }
@@ -600,34 +594,6 @@ pub(crate) fn hotkeys_command(app: &mut App, width: usize) {
         lines.push(Line::from(Span::styled(
             view::truncate_line(&text, width),
             t.dim,
-        )));
-    }
-    app.push_transcript_block(lines, BlockSpacing::Tight);
-}
-
-/// `/todo` — the agent's current task list, as `todo_write` last left it.
-pub(crate) fn todo_command(app: &mut App, width: usize) {
-    use orca_harness_tools::TodoStatus;
-    let items = app.cfg.todos.items();
-    if items.is_empty() {
-        push_notice(app, "no task list — the agent writes one with todo_write");
-        return;
-    }
-    let t = theme();
-    let (done, total) = app.cfg.todos.progress();
-    let mut lines = vec![Line::from(vec![
-        Span::styled("  todo", t.strong),
-        Span::styled(format!(" · {done}/{total} done"), t.dim),
-    ])];
-    for item in items {
-        let (marker, style) = match item.status {
-            TodoStatus::Completed => ("✓", t.dim),
-            TodoStatus::InProgress => ("▸", t.strong),
-            TodoStatus::Pending => ("□", t.dim),
-        };
-        lines.push(Line::from(Span::styled(
-            view::truncate_line(&format!("  {marker} {}", item.content), width),
-            style,
         )));
     }
     app.push_transcript_block(lines, BlockSpacing::Tight);

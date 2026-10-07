@@ -1,8 +1,5 @@
 use ratatui::text::{Line, Span};
 
-use orca_harness_tools::TodoStatus;
-
-use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
 use crate::tui::components::subagent_row::SubagentRow;
 use crate::tui::components::tool_row::ToolRow;
 use crate::tui::components::transcript::{append_block, line_is_blank, BlockSpacing};
@@ -17,24 +14,6 @@ mod activity;
 mod cache;
 pub(crate) use activity::*;
 pub(crate) use cache::StreamingMarkdownCache;
-
-/// The task list belongs beside the live run state, where the complete
-/// plan stays visible instead of disappearing into a clipped status line.
-pub(crate) fn todo_lines(todos: &orca_harness_tools::TodoList, width: usize) -> Vec<Line<'static>> {
-    let items = todos.items();
-    let items: Vec<_> = items
-        .iter()
-        .map(|item| ProgressItem {
-            content: &item.content,
-            state: match item.status {
-                TodoStatus::Completed => ProgressState::Completed,
-                TodoStatus::InProgress => ProgressState::Active,
-                TodoStatus::Pending => ProgressState::Pending,
-            },
-        })
-        .collect();
-    progress_list("todo", &items, width)
-}
 
 pub(crate) fn process_lines(
     stats: &orca_harness_tools::BackgroundStats,

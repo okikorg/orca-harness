@@ -17,8 +17,7 @@ use orca_harness_tool_extensions::mcp::McpModel;
 use orca_harness_tool_extensions::skills::SkillOnce;
 use orca_harness_tool_extensions::web::{Firecrawl, UrlPolicy, WebFetchTool, WebSearchTool};
 use orca_harness_tools::{
-    core_tools, BunReplTool, PyKernelTool, SubagentDepth, SubagentModel, TodoList, TodoWriteTool,
-    Workspace,
+    core_tools, BunReplTool, PyKernelTool, SubagentDepth, SubagentModel, Workspace,
 };
 
 use crate::approval::HeadlessGate;
@@ -68,7 +67,6 @@ pub async fn run<M: Model + Clone + 'static>(
     skills: &crate::skills::Skills,
     skill_notices: &[String],
     mode: &ModeHandle,
-    todos: &TodoList,
     plan_area: &crate::plan::PlanArea,
     memory: &MemoryStore,
     memory_scope: &MemoryScope,
@@ -204,9 +202,6 @@ pub async fn run<M: Model + Clone + 'static>(
         if enabled(&tool.schema().name) {
             agent = agent.tool_arc(tool);
         }
-    }
-    if !cfg.bare && enabled("todo_write") {
-        agent = agent.tool_arc(Arc::new(TodoWriteTool::new(todos.clone())));
     }
     if !cfg.bare && enabled("memory_search") {
         agent = agent.tool_arc(Arc::new(MemorySearchTool::new(

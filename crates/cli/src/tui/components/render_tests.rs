@@ -210,14 +210,6 @@ fn component_widths_and_cursor_stay_inside_the_pane() {
                 .line(),
             );
         }
-        lines.extend(progress_list::progress_list(
-            "A long progress label",
-            &[progress_list::ProgressItem {
-                content: "Review the rendering",
-                state: progress_list::ProgressState::Active,
-            }],
-            width,
-        ));
         lines.extend(message::user_prompt(
             "a long user prompt with 日本語\n\nmore text",
             width,

@@ -93,9 +93,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let composer_height = composer.lines.len();
 
     let live = live_region(app, left_width);
-    // Let a todo rail use the available height rather than silently
-    // clipping later steps, while keeping the reserved rows and the
-    // composer on short terminals.
+    // Keep the reserved rows and composer on short terminals.
     let live_height = live
         .lines
         .len()
@@ -450,14 +448,6 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         });
     }
     status
-        .push({
-            let segment = Segment::new(todo_segment(&app.cfg.todos), status_bar::COUNTS);
-            if app.status_focus == Some(StatusFocus::Todo) {
-                segment.with_style(theme().select)
-            } else {
-                segment
-            }
-        })
         .push(Segment::new(
             queue_segment(app.prompt_queue.len()),
             status_bar::COUNTS,

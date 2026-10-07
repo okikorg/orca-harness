@@ -152,7 +152,6 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "web_fetch",
     "web_search",
     "skill",
-    "todo_write",
     "ask",
 ];
 

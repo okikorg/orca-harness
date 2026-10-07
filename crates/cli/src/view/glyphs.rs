@@ -576,10 +576,6 @@ mod tests {
                 "components/subagent_row.rs",
                 include_str!("../tui/components/subagent_row.rs"),
             ),
-            (
-                "components/progress_list.rs",
-                include_str!("../tui/components/progress_list.rs"),
-            ),
         ];
         // `tool_row.rs` receives its glyph from callers; it never chooses a
         // state mark. Its test fixture also uses `○` as a connector.

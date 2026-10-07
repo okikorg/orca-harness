@@ -18,7 +18,7 @@ pub const CONTEXT: u8 = 8;
 pub const HINT: u8 = 7;
 pub const MODEL: u8 = 6;
 pub const WORKSPACE: u8 = 5;
-/// Todo progress and the queue length.
+/// Queue length.
 pub const COUNTS: u8 = 4;
 /// Background processes, kernels, agents.
 pub const STATS: u8 = 3;
@@ -241,7 +241,7 @@ mod tests {
             .push(Segment::new("plan mode", KEEP))
             .push(Segment::new("ctx 10%", CONTEXT))
             .push(Segment::new("", STATS))
-            .push(Segment::new("todo 1/3", COUNTS))
+            .push(Segment::new("queued 1", COUNTS))
             .push(Segment::new("enter send", HINT))
             .trailing(Segment::new("repo", WORKSPACE));
         bar
@@ -288,7 +288,7 @@ mod tests {
         let text = text(&line);
         assert!(
             text.starts_with(
-                " model · effort high · idle · plan mode · ctx 10% · todo 1/3 · enter send"
+                " model · effort high · idle · plan mode · ctx 10% · queued 1 · enter send"
             ),
             "{text}"
         );
@@ -300,9 +300,9 @@ mod tests {
     fn narrow_rows_drop_the_lowest_priority_first() {
         let text = text(&bar().line(66, Style::default()));
         assert!(!text.contains("effort"), "effort goes first: {text}");
-        assert!(text.contains("todo 1/3"), "{text}");
+        assert!(text.contains("queued 1"), "{text}");
         let text = super::tests::text(&bar().line(44, Style::default()));
-        assert!(!text.contains("todo"), "{text}");
+        assert!(!text.contains("queued"), "{text}");
         assert!(text.contains("enter send"), "hint outlives counts: {text}");
         assert!(text.contains("plan mode"), "{text}");
     }

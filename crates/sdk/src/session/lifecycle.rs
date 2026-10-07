@@ -29,7 +29,7 @@ impl Session {
 
     /// Copy this persistent session into a new one. The fork shares the
     /// transcript and recovery store but not live processes, REPL state,
-    /// the read-before-write guard, todos, detached subagents, or workflow
+    /// the read-before-write guard, detached subagents, or workflow
     /// runs: those start fresh unless the agent configured caller-owned
     /// instances. In particular the fork has its own subagent manager,
     /// completion inbox, workflow store, and notification channel; results
@@ -69,7 +69,7 @@ impl Session {
     }
 
     /// Start a new conversation in this session and clear its
-    /// read-before-write guard and todo list, cancelling any detached
+    /// read-before-write guard, cancelling any detached
     /// subagents and workflow runs (with their stage workers), dropping
     /// their undelivered results and stored stage outputs, and killing the
     /// session's background processes (host- and model-started alike,
@@ -118,7 +118,7 @@ impl Session {
     }
 
     /// Empty this persistent session's transcript in place, keeping its
-    /// id and file. Like [`clear`](Self::clear), the guard, todos,
+    /// id and file. Like [`clear`](Self::clear), the guard,
     /// detached subagents, workflow runs with their stored stage outputs,
     /// and background processes are reset with it.
     pub async fn reset_in_place(&self) -> Result<(), SdkError> {

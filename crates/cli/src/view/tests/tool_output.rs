@@ -8,7 +8,7 @@
     fn every_builtin_tool_has_a_human_activity_label() {
         let tools = [
             "shell", "read_file", "write_file", "edit_file", "grep", "glob", "process",
-            "pykernel", "bun_repl", "subagent", "todo_write", "ask", "web_fetch", "web_search",
+            "pykernel", "bun_repl", "subagent", "ask", "web_fetch", "web_search",
             "read_tool_result",
             "skill", "mcp_search_tools", "mcp_select_tool", "mcp_features", "copy_file",
             "rename_file", "delete_file", "create_folder", "file_info",
@@ -17,7 +17,6 @@
             assert!(!crate::presentation::tool_action_label(tool).is_empty(), "{tool}");
         }
         assert_eq!(crate::presentation::tool_action_label("pykernel"), "PyKernel");
-        assert_eq!(crate::presentation::tool_action_label("todo_write"), "Todo");
         assert_eq!(crate::presentation::tool_action_label("grep"), "Search text");
         assert_eq!(crate::presentation::tool_action_label("web_search"), "Web search");
         assert_eq!(crate::presentation::tool_action_label("edit_file"), "Edit");
