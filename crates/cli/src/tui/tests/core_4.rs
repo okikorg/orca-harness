@@ -461,7 +461,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         app.git_branch = Some("feature/status-branch".into());

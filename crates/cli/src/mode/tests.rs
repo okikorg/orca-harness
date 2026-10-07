@@ -118,7 +118,6 @@ async fn orchestrate_mode_allows_reads_edits_and_delegation() {
         "glob",
         "web_fetch",
         "skill",
-        "todo_write",
         "ask",
         "write_file",
         "edit_file",

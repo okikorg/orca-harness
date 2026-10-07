@@ -72,7 +72,7 @@ impl BackgroundServices {
     /// read-before-write guard per spawn plus the caller-owned custom
     /// tools. With programmatic tool calling in a sandbox, each child also
     /// gets a fresh `bun_repl` there over its own tools; children
-    /// otherwise get no REPLs, todo list, skills, MCP, or memory tools.
+    /// otherwise get no REPLs, skills, MCP, or memory tools.
     /// Nesting is governed by the shared [`SubagentDepth`] handle, as for
     /// the model tool.
     ///

@@ -78,7 +78,7 @@ if !status.healthy {
     return Err("ticket MCP server is unhealthy".into());
 }
 // After all sessions stop: mcp.disconnect("tickets");</pre></div><p>MCP tools use names such as <code>mcp__tickets__lookup</code>. Skill and MCP catalogs are snapshotted at run boundaries; changing them does not rewrite an active run’s tool registry.</p></section>
-<section class="section" id="sdk-session-lifecycle"><h2>Choose a session lifecycle</h2><p><code>Agent::run(request)</code> opens a fresh ephemeral session for a one-shot request. For multiple turns or imported history, open a session explicitly. <code>context(messages)</code> seeds its conversation; <code>persistent()</code> saves that history so <code>agent.resume_session(&amp;id)</code> can reopen it later. Resuming restores the transcript, not live built-in tool state such as processes or todos.</p><div class="terminal"><pre>use orca_harness_sdk::RunRequest;
+<section class="section" id="sdk-session-lifecycle"><h2>Choose a session lifecycle</h2><p><code>Agent::run(request)</code> opens a fresh ephemeral session for a one-shot request. For multiple turns or imported history, open a session explicitly. <code>context(messages)</code> seeds its conversation; <code>persistent()</code> saves that history so <code>agent.resume_session(&amp;id)</code> can reopen it later. Resuming restores the transcript, not live built-in tool state such as processes.</p><div class="terminal"><pre>use orca_harness_sdk::RunRequest;
 
 let session = agent.new_session()
     .context(messages)

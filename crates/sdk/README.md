@@ -18,7 +18,7 @@
 
 The facade also re-exports core contracts, model adapters, provider credentials, web integrations, and standard tool bundles so a typical host needs one workspace dependency instead of wiring every crate manually.
 
-The top level is a convenience subset: the most common companion types for implementing `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `ToolDecision`, `HarnessError`, and the Codex credential contract), plus the standard tool bundle from `orca-harness-tools` (`core_tools*`, `fs_admin_tools`, `Workspace`, `FileGuard`, `Executor`, and the ask, REPL, kernel, and todo tools), which has no namespace of its own.
+The top level is a convenience subset: the most common companion types for implementing `Model`, `Tool`, `Extension`, and `CredentialSource` (such as `ModelResponse`, `ToolContext`, `ToolResult`, `ToolDecision`, `HarnessError`, and the Codex credential contract), plus the standard tool bundle from `orca-harness-tools` (`core_tools*`, `fs_admin_tools`, `Workspace`, `FileGuard`, `Executor`, and the ask, REPL, and kernel tools), which has no namespace of its own.
 
 Each of the four namespaces below is the complete grouping for its area:
 

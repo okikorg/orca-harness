@@ -57,9 +57,6 @@ pub struct TuiConfig {
     /// status line shows it. Read by the plan gate on every tool call,
     /// so a flip applies to the call in flight, not to the next run.
     pub mode: crate::mode::ModeHandle,
-    /// Shared handle onto the agent's task list, written by `todo_write`
-    /// and rendered by `/todo`.
-    pub todos: orca_harness_tools::TodoList,
     /// The plan artifact the current planning episode may write. Leaving
     /// plan mode ends the episode and reports where the plan went.
     pub plan: crate::plan::PlanArea,
@@ -255,8 +252,6 @@ pub(crate) enum Overlay {
     Inspector { picker: ListPicker },
     /// Read-only session usage panel; any dismissal key closes it.
     Usage,
-    /// The current structured task list, expanded from the status line.
-    Todo,
     /// Process-tool children that are still running.
     Processes,
     /// Masked API-key entry for a provider whose key is not in the env.
@@ -459,7 +454,6 @@ pub(crate) enum StatusFocus {
     Context,
     Processes,
     Agents,
-    Todo,
 }
 
 pub(crate) enum HeldInput {

@@ -12,7 +12,7 @@ use orca_harness_core::{Agent, CancellationToken, Context, Model};
 use orca_harness_extensions::{
     compact, CompactConfig, ContextCapacity, HarnessEvent, SessionHandler, TruncationStore,
 };
-use orca_harness_tools::{CompletionInbox, FileGuard, SubagentManager, TodoList};
+use orca_harness_tools::{CompletionInbox, FileGuard, SubagentManager};
 
 use crate::msg::{RunId, UiMsg, WorkerCmd};
 use crate::{config, mcp, skills, spawn_window_probe, Endpoint, Planning};
@@ -73,7 +73,6 @@ pub(crate) async fn worker<F>(
     mcp: mcp::McpServers,
     skills: skills::Skills,
     session: Option<Arc<SessionHandler>>,
-    todos: TodoList,
     files: FileGuard,
     planning: Planning,
     mut context: Context,
@@ -303,12 +302,10 @@ pub(crate) async fn worker<F>(
                     }
                 };
                 context = fresh;
-                // The plan belonged to the conversation being cleared,
-                // and so did every "I have read this file": the model
+                // Read-before-write state belongs to the conversation: the model
                 // that did the reading is gone. The planning episode
                 // ends too, so a fresh conversation names a fresh file
                 // rather than appending to the last one's plan.
-                todos.clear();
                 files.clear();
                 planning.area.end();
                 completions.reset();

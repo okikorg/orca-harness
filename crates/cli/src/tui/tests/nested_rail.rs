@@ -16,7 +16,6 @@ mod nested_rail_tests {
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         })
     }

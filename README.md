@@ -143,7 +143,7 @@ a full multi-provider setup in three steps.
 | Modes           | `normal`, `plan` (read-only; plans go to `docs/plan/`), `orchestrate` (delegation-first), `auto` (reviews only risky calls), `yolo`           | [Plan](https://orcapods.ai/orcacode/docs/#plan-mode) · [Orchestrate](https://orcapods.ai/orcacode/docs/#orchestrate-mode) · [Auto](https://orcapods.ai/orcacode/docs/#auto-mode) |
 | Subagents       | Background workers routed across `local`, `fast`, `mid` and `frontier` tiers on any provider, with depth, step and timeout budgets             | [Subagents](https://orcapods.ai/orcacode/docs/#subagents)                                                                                     |
 | Sidekicks       | Session-long workers that keep their context between follow-up tasks: `/sidekick <task>`, `/sidekick stop`                                   | [Sidekicks](https://orcapods.ai/orcacode/docs/#subagents/sidekicks)                                                                           |
-| Tools           | Shell, background processes, persistent Python and Bun REPLs, workspace-rooted file tools with read-before-write, patches, todo list, web      | [Tools](https://orcapods.ai/orcacode/docs/#tools)                                                                                             |
+| Tools           | Shell, background processes, persistent Python and Bun REPLs, workspace-rooted file tools with read-before-write, patches, web      | [Tools](https://orcapods.ai/orcacode/docs/#tools)                                                                                             |
 | Sessions        | Recorded per workspace; `--continue`, `--resume`, `/rewind`, `/fork`, `/clear`                                                                | [Sessions](https://orcapods.ai/orcacode/docs/#sessions)                                                                                       |
 | Memory          | One local SQLite FTS5 store; the model proposes records, you approve them, and they are recalled automatically                               | [Memory](https://orcapods.ai/orcacode/docs/#memory)                                                                                           |
 | MCP             | Stdio servers with lazy tool schemas, so a large catalog costs nothing until a tool is used                                                  | [MCP](https://orcapods.ai/orcacode/docs/#mcp)                                                                                                 |
@@ -232,7 +232,7 @@ container through an `Executor` (`Executor::ssh("user@host")`,
 | `crates/harness-core`       | agent loop, model and tool contracts, dispatcher, limits, test doubles          |
 | `crates/model-providers`    | OpenAI-compatible, Codex, Anthropic, OpenRouter, Vercel and CheaperInference adapters |
 | `crates/provider-auth`      | provider-neutral credential contracts                                           |
-| `crates/tools`              | shell, processes, files, Python and Bun compute, subagents, workflows, todo     |
+| `crates/tools`              | shell, processes, files, Python and Bun compute, subagents, workflows     |
 | `crates/tool-extensions`    | MCP, skills and web integrations                                                |
 | `crates/extensions`         | events, policy, memory, compaction, truncation, retry, usage, sessions          |
 | `crates/harness-dag`        | validated DAG workflows with dynamic map expansion                              |

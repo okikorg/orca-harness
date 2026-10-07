@@ -14,7 +14,6 @@ mod theme_command_tests {
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         })
     }
@@ -76,12 +75,11 @@ mod theme_command_tests {
 }
 
 #[cfg(test)]
-mod mode_rewind_todo_tests {
+mod mode_rewind_tests {
     use super::*;
     use crate::mode::{Mode, ModeHandle};
-    use orca_harness_tools::TodoList;
 
-    fn app_with(mode: ModeHandle, todos: TodoList) -> App {
+    fn app_with(mode: ModeHandle) -> App {
         App::new(TuiConfig {
             model_name: "m".into(),
             workspace_name: "w".into(),
@@ -93,7 +91,6 @@ mod mode_rewind_todo_tests {
             mcp: Default::default(),
             skills: Default::default(),
             mode,
-            todos,
             plan: Default::default(),
         })
     }
@@ -109,7 +106,7 @@ mod mode_rewind_todo_tests {
     #[tokio::test]
     async fn mode_toggles_bare_and_sets_by_name() {
         let mode = ModeHandle::default();
-        let mut app = app_with(mode.clone(), TodoList::new());
+        let mut app = app_with(mode.clone());
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Bare /mode opens the standard picker (same as /provider and
@@ -153,7 +150,7 @@ mod mode_rewind_todo_tests {
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         let mode = ModeHandle::new(Mode::Normal);
-        let mut app = app_with(mode.clone(), TodoList::new());
+        let mut app = app_with(mode.clone());
         slash_command(&mut app, "mode", &worker, 80);
 
         // Down four times → yolo row, enter lands it with the loud notice.
@@ -194,7 +191,7 @@ mod mode_rewind_todo_tests {
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         // An episode where the agent judged no plan was needed: silence.
-        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        let mut app = app_with(ModeHandle::new(Mode::Plan));
         slash_command(&mut app, "mode normal", &worker, 80);
         let rendered = texts(&app);
         assert!(rendered.contains("normal mode"), "{rendered}");
@@ -202,7 +199,7 @@ mod mode_rewind_todo_tests {
         assert!(!rendered.contains("no plan"), "{rendered}");
 
         // An episode where it wrote two.
-        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        let mut app = app_with(ModeHandle::new(Mode::Plan));
         app.cfg.plan.record("docs/plan/2026-08-22-first.md");
         app.cfg.plan.record("docs/plan/2026-08-22-second.md");
         slash_command(&mut app, "mode normal", &worker, 80);
@@ -224,7 +221,7 @@ mod mode_rewind_todo_tests {
     #[tokio::test]
     async fn a_written_plan_asks_for_approval_and_yes_starts_implementing() {
         let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        let mut app = app_with(ModeHandle::new(Mode::Plan));
         let finish = |app: &mut App| {
             app.run = RunState::Running {
                 id: crate::msg::RunId::User(1),
@@ -272,7 +269,7 @@ mod mode_rewind_todo_tests {
     #[tokio::test]
     async fn switching_from_plan_to_yolo_ends_the_episode_once() {
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = app_with(ModeHandle::new(Mode::Plan), TodoList::new());
+        let mut app = app_with(ModeHandle::new(Mode::Plan));
         app.cfg.plan.record("docs/plan/2026-08-22-yolo.md");
 
         slash_command(&mut app, "mode yolo", &worker, 80);
@@ -299,7 +296,7 @@ mod mode_rewind_todo_tests {
     /// point nobody knows whether the conversation warrants one.
     #[tokio::test]
     async fn entering_plan_mode_says_nothing_about_files() {
-        let mut app = app_with(ModeHandle::new(Mode::Normal), TodoList::new());
+        let mut app = app_with(ModeHandle::new(Mode::Normal));
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
         slash_command(&mut app, "mode plan", &worker, 80);
         let rendered = texts(&app);
@@ -340,7 +337,7 @@ mod mode_rewind_todo_tests {
     #[tokio::test]
     async fn mode_yolo_announces_itself_loudly() {
         let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = app_with(ModeHandle::new(Mode::Normal), TodoList::new());
+        let mut app = app_with(ModeHandle::new(Mode::Normal));
 
         slash_command(&mut app, "mode yolo", &worker, 80);
         let rendered = texts(&app);
@@ -351,124 +348,9 @@ mod mode_rewind_todo_tests {
         assert_eq!(app.cfg.mode.get(), Mode::Normal);
     }
 
-    /// Write a task list through the real tool, the way the model does.
-    async fn set_todos(todos: &TodoList, items: serde_json::Value) {
-        let tool = orca_harness_tools::TodoWriteTool::new(todos.clone());
-        let ctx = orca_harness_core::ToolContext {
-            call_id: "c".into(),
-            tool_name: "todo_write".into(),
-            cancellation: orca_harness_core::CancellationToken::new(),
-            deadline: None,
-        };
-        orca_harness_core::Tool::call(&tool, serde_json::json!({ "todos": items }), &ctx)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn todo_progress_shows_in_the_status_line_once_there_is_a_list() {
-        let todos = TodoList::new();
-        assert_eq!(todo_segment(&todos), "", "silent with no list");
-        set_todos(
-            &todos,
-            serde_json::json!([
-                {"content": "a", "status": "completed"},
-                {"content": "b", "status": "in_progress"},
-                {"content": "c"}
-            ]),
-        )
-        .await;
-        assert_eq!(todo_segment(&todos), "todo 1/3");
-    }
-
-    #[tokio::test]
-    async fn todo_progress_expands_from_the_status_row() {
-        let todos = TodoList::new();
-        set_todos(
-            &todos,
-            serde_json::json!([
-                {"content": "inspect the rendering", "status": "completed"},
-                {"content": "add a visible progress cue", "status": "in_progress"},
-                {"content": "verify it"}
-            ]),
-        )
-        .await;
-        let mut app = app_with(ModeHandle::default(), todos);
-        app.overlay = Some(Overlay::Todo);
-
-        let rendered = live_lines(&app, 80)
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let g = crate::view::glyphs::glyphs();
-        assert!(rendered.contains("todo") && rendered.contains("1/3"), "{rendered}");
-        assert!(
-            rendered.contains(&format!("├─ {} inspect the rendering", g.done)),
-            "{rendered}"
-        );
-        // Hollow is work: the active item shares the pending mark and is
-        // told apart by colour and weight.
-        assert!(
-            rendered.contains(&format!("├─ {} add a visible progress cue", g.running_frame(0))),
-            "{rendered}"
-        );
-        assert!(rendered.contains(&format!("└─ {} verify it", g.waiting)), "{rendered}");
-    }
-
-    #[tokio::test]
-    async fn completed_todo_progress_says_complete() {
-        let todos = TodoList::new();
-        set_todos(
-            &todos,
-            serde_json::json!([
-                {"content": "inspect", "status": "completed"},
-                {"content": "verify", "status": "completed"}
-            ]),
-        )
-        .await;
-        let mut app = app_with(ModeHandle::default(), todos);
-        app.overlay = Some(Overlay::Todo);
-
-        let rendered = live_lines(&app, 80)
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let g = crate::view::glyphs::glyphs();
-        assert!(rendered.contains("todo") && rendered.contains("2/2"), "{rendered}");
-        assert!(rendered.contains(&format!("├─ {} inspect", g.done)), "{rendered}");
-        assert!(rendered.contains(&format!("└─ {} verify", g.done)), "{rendered}");
-    }
-
-    #[tokio::test]
-    async fn todo_renders_the_list_and_says_so_when_there_is_none() {
-        let todos = TodoList::new();
-        let mut app = app_with(ModeHandle::default(), todos.clone());
-        let (worker, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-        slash_command(&mut app, "todo", &worker, 80);
-        assert!(texts(&app).contains("no task list"));
-
-        set_todos(
-            &todos,
-            serde_json::json!([
-                {"content": "read the code", "status": "completed"},
-                {"content": "write the fix", "status": "in_progress"}
-            ]),
-        )
-        .await;
-
-        slash_command(&mut app, "todo", &worker, 80);
-        let rendered = texts(&app);
-        assert!(rendered.contains("1/2 done"), "{rendered}");
-        assert!(rendered.contains("✓ read the code"), "{rendered}");
-        assert!(rendered.contains("▸ write the fix"), "{rendered}");
-    }
-
     #[tokio::test]
     async fn rewind_sends_the_turn_count_and_rejects_nonsense() {
-        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let mut app = app_with(ModeHandle::default());
         let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         slash_command(&mut app, "rewind", &worker, 80);
@@ -486,7 +368,7 @@ mod mode_rewind_todo_tests {
 
     #[tokio::test]
     async fn fork_asks_the_worker_to_branch() {
-        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let mut app = app_with(ModeHandle::default());
         let (worker, mut rx) = tokio::sync::mpsc::unbounded_channel();
         slash_command(&mut app, "fork", &worker, 80);
         assert!(matches!(rx.try_recv(), Ok(WorkerCmd::Fork)));
@@ -496,7 +378,7 @@ mod mode_rewind_todo_tests {
     /// the tokens it already spent are not conversation state.
     #[test]
     fn rewind_redraws_the_transcript_and_keeps_the_token_totals() {
-        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let mut app = app_with(ModeHandle::default());
         let (tx, _rx) = mpsc::unbounded_channel();
         app.tokens_in = 1200;
         app.tokens_out = 340;
@@ -533,7 +415,7 @@ mod mode_rewind_todo_tests {
 
     #[test]
     fn forking_moves_the_session_id_without_touching_the_transcript() {
-        let mut app = app_with(ModeHandle::default(), TodoList::new());
+        let mut app = app_with(ModeHandle::default());
         let (tx, _rx) = mpsc::unbounded_channel();
         app.cfg.session_id = Some("old-id".into());
         app.turn_count = 3;

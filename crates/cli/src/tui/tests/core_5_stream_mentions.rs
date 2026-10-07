@@ -11,7 +11,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         app.run = RunState::Running {
@@ -54,7 +53,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         app.transcript.push(Line::from("final answer"));
@@ -80,7 +78,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         app.run = RunState::Running {
@@ -122,7 +119,6 @@
             mcp: Default::default(),
             skills: Default::default(),
             mode: Default::default(),
-            todos: Default::default(),
             plan: Default::default(),
         });
         app.run = RunState::Running {

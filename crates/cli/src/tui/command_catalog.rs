@@ -319,12 +319,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         takes_args: true,
     },
     CommandSpec {
-        name: "todo",
-        description: "show the agent's current task list",
-        category: "Session",
-        takes_args: false,
-    },
-    CommandSpec {
         name: "usage",
         description: "session token totals, cache traffic, and context occupancy",
         category: "Session",

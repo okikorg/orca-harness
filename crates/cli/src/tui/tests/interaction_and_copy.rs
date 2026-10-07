@@ -10,7 +10,6 @@ fn test_app() -> App {
         mcp: Default::default(),
         skills: Default::default(),
         mode: Default::default(),
-        todos: Default::default(),
         plan: Default::default(),
     });
     // These interaction fixtures exercise the explicit Minimal style.

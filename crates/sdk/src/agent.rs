@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use orca_harness_core::{Extension, Limits, Model, Tool};
 use orca_harness_extensions::{LongSessionConfig, MemoryModel, ToolPolicy};
-use orca_harness_tools::{FileGuard, ProgrammaticTools, TodoList};
+use orca_harness_tools::{FileGuard, ProgrammaticTools};
 
 use crate::background::{ProcessConfig, SubagentConfig};
 use crate::extensions::{
@@ -39,7 +39,6 @@ pub(crate) struct AgentDefinition {
     /// Caller-owned instances that every session uses instead of creating
     /// its own. `None` means each session gets a fresh one.
     pub shared_file_guard: Option<FileGuard>,
-    pub shared_todo_list: Option<TodoList>,
     /// Sessions build their own subagent manager, inbox, and `subagent`
     /// tool from this recipe (see [`crate::background::BackgroundServices`]).
     pub subagents: Option<SubagentConfig>,
@@ -63,7 +62,6 @@ pub struct AgentBuilder {
     extension_config: ExtensionConfig,
     context_capacity: Option<u64>,
     shared_file_guard: Option<FileGuard>,
-    shared_todo_list: Option<TodoList>,
     subagents: Option<SubagentConfig>,
     processes: Option<ProcessConfig>,
     mcp: Option<Mcp>,
@@ -86,7 +84,6 @@ impl AgentBuilder {
             extension_config: ExtensionConfig::default(),
             context_capacity: None,
             shared_file_guard: None,
-            shared_todo_list: None,
             subagents: None,
             processes: None,
             mcp: None,
@@ -246,29 +243,6 @@ impl AgentBuilder {
         self
     }
 
-    /// Add the `todo_write` tool. Each session gets its own list, readable
-    /// through [`Session::todo_list`](crate::Session::todo_list).
-    pub fn todos(mut self) -> Self {
-        if !self.has_todos() {
-            self.tool_sources.push(ToolSource::Todos);
-        }
-        self
-    }
-
-    /// Add the `todo_write` tool backed by one caller-owned `list` that
-    /// every session shares (and [`Session::clear`](crate::Session::clear)
-    /// clears).
-    pub fn todos_shared(mut self, list: TodoList) -> Self {
-        self.shared_todo_list = Some(list);
-        self.todos()
-    }
-
-    fn has_todos(&self) -> bool {
-        self.tool_sources
-            .iter()
-            .any(|source| matches!(source, ToolSource::Todos))
-    }
-
     /// Add the `subagent` tool and the typed host handle
     /// [`Session::subagents`](crate::Session::subagents). Each session owns
     /// its manager, queue, and completion inbox; only `config`'s live
@@ -386,7 +360,6 @@ impl AgentBuilder {
                 extension_config: self.extension_config,
                 context_capacity: self.context_capacity,
                 shared_file_guard: self.shared_file_guard,
-                shared_todo_list: self.shared_todo_list,
                 subagents: self.subagents,
                 processes: self.processes,
                 programmatic_tools: self.programmatic_tools,
@@ -418,10 +391,10 @@ impl Agent {
     /// Open a `Session` to manage it instead.
     ///
     /// Built-in mutable tool state (the read-before-write [`FileGuard`],
-    /// the [`TodoList`], background processes, Python/Bun REPLs) is owned by
+    /// background processes, Python/Bun REPLs) is owned by
     /// the ephemeral session and released when the call returns. Only
     /// explicitly shared instances persist across calls:
-    /// [`AgentBuilder::file_guard`], [`AgentBuilder::todos_shared`], and
+    /// [`AgentBuilder::file_guard`] and
     /// custom tools registered with [`AgentBuilder::tool_arc`].
     ///
     /// ```rust,no_run
@@ -449,18 +422,5 @@ impl Agent {
 
     pub fn resume_session(&self, id: &str) -> Result<crate::Session, SdkError> {
         crate::Session::resume(self.clone(), id, crate::SessionEnvironment::Local)
-    }
-
-    /// The caller-owned todo list configured with
-    /// [`AgentBuilder::todos_shared`], if any. Lists created by
-    /// [`AgentBuilder::todos`] are session-owned, so this returns `None`
-    /// for them; read those through
-    /// [`Session::todo_list`](crate::Session::todo_list).
-    #[deprecated(
-        since = "0.6.3",
-        note = "todo state is session-owned; use Session::todo_list, or AgentBuilder::todos_shared to keep one caller-owned list"
-    )]
-    pub fn todo_list(&self) -> Option<TodoList> {
-        self.inner.shared_todo_list.clone()
     }
 }

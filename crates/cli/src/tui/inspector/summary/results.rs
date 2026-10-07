@@ -270,43 +270,6 @@ fn append_ask(lines: &mut Vec<Line<'static>>, value: &Value, label: &str, width:
     section.append_to(lines);
 }
 
-fn append_todos(lines: &mut Vec<Line<'static>>, value: &Value, width: usize) {
-    let Some(items) = value.get("todos").and_then(Value::as_array) else {
-        return;
-    };
-    if items.is_empty() {
-        text_section(lines, "todo", "No active tasks", width, theme().dim);
-        return;
-    }
-    let owned: Vec<(String, ProgressState)> = items
-        .iter()
-        .take(20)
-        .map(|item| {
-            let content = string(item, "content").to_owned();
-            let state = match string(item, "status") {
-                "completed" => ProgressState::Completed,
-                "in_progress" => ProgressState::Active,
-                _ => ProgressState::Pending,
-            };
-            (content, state)
-        })
-        .collect();
-    let refs: Vec<_> = owned
-        .iter()
-        .map(|(content, state)| ProgressItem {
-            content,
-            state: *state,
-        })
-        .collect();
-    lines.extend(progress_list("todo", &refs, width));
-    if items.len() > owned.len() {
-        lines.push(Line::from(Span::styled(
-            format!("    {} more tasks", items.len() - owned.len()),
-            theme().dim,
-        )));
-    }
-}
-
 fn append_kernel_result(lines: &mut Vec<Line<'static>>, output: &Value, width: usize) {
     let state = string(output, "state");
     let mut result = section(width, format!(

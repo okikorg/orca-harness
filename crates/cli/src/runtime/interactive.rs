@@ -20,7 +20,7 @@ use orca_harness_tool_extensions::skills::SkillOnce;
 use orca_harness_tool_extensions::web::{Firecrawl, UrlPolicy, WebFetchTool, WebSearchTool};
 use orca_harness_tools::{
     core_tools_with_guard, ActiveInventory, AskTool, BackgroundStats, CompletionInbox, FileGuard,
-    SubagentDepth, SubagentManager, SubagentSpawn, TodoList, TodoWriteTool, Workspace,
+    SubagentDepth, SubagentManager, SubagentSpawn, Workspace,
 };
 
 use crate::approval::Approval;
@@ -89,7 +89,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
     let subagent_depth = endpoint.subagent_settings.clone();
     let stats = BackgroundStats::new();
     let mode = ModeHandle::new(cfg.mode());
-    let todos = TodoList::new();
     let files = FileGuard::new();
     let plan_area = PlanArea::new();
     let planning = Planning {
@@ -128,7 +127,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
             &skills,
             &skill_notices,
             &mode,
-            &todos,
             &plan_area,
             &memory,
             &memory_scope,
@@ -236,7 +234,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         let plugin_hooks = plugin_hooks.clone();
         let skills = skills.clone();
         let mode = mode.clone();
-        let todos = todos.clone();
         let files = files.clone();
         let plan_area = plan_area.clone();
         let memory = memory.clone();
@@ -273,7 +270,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
                 &plugin_hooks,
                 &skills,
                 &mode,
-                &todos,
                 &files,
                 &plan_area,
                 &memory,
@@ -304,7 +300,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
     // worker reloads; /mcp renders whatever the last reload recorded.
     let tui_mcp = mcp.clone();
     let tui_skills = skills.clone();
-    let worker_todos = todos.clone();
     let worker_commands = cmd_tx.clone();
     let _ = cmd_tx.send(crate::msg::WorkerCmd::ReloadMcp);
     let worker_task = tokio::spawn(worker(
@@ -317,7 +312,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         mcp,
         skills,
         session,
-        worker_todos,
         files,
         planning,
         context,
@@ -340,7 +334,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         mcp: tui_mcp,
         skills: tui_skills,
         mode,
-        todos,
         plan: plan_area,
     };
     let result = tui::run(tui_cfg, cmd_tx, ui_rx).await;
@@ -375,7 +368,6 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     plugin_hooks: &Option<Arc<orca_harness_tool_extensions::plugin_hooks::PluginHookExtension>>,
     skills: &skills::Skills,
     mode: &ModeHandle,
-    todos: &TodoList,
     files: &FileGuard,
     plan_area: &PlanArea,
     memory: &MemoryStore,
@@ -460,7 +452,6 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     // outputs trimmed before the toggle remain pageable.
     agent = agent
         .tool_arc(std::sync::Arc::new(ReadToolResultTool::new(store.clone())))
-        .tool_arc(std::sync::Arc::new(TodoWriteTool::new(todos.clone())))
         .tool_arc(std::sync::Arc::new(MemorySearchTool::new(
             memory.clone(),
             memory_scope.clone(),

@@ -1,66 +1,15 @@
-//! Built-in mutable tool state (todos, the read-before-write guard, the
+//! Built-in mutable tool state (the read-before-write guard, the
 //! process manager) belongs to the session, not the agent: two sessions
 //! opened from one agent must not see or control each other's state, while
 //! state must persist across turns inside one session.
 
 use orca_harness_core::testing::{call, ScriptedModel};
 use orca_harness_core::ModelResponse;
-use orca_harness_sdk::{Harness, TodoList, ToolPreset};
+use orca_harness_sdk::{Harness, ToolPreset};
 use serde_json::json;
 
 mod common;
 use common::temp_dir;
-
-fn todo_call(id: &str) -> orca_harness_core::ToolCall {
-    call(
-        id,
-        "todo_write",
-        json!({"todos": [{"content": "ship it", "status": "in_progress"}]}),
-    )
-}
-
-#[tokio::test]
-async fn todos_are_isolated_between_sessions() {
-    let root = temp_dir("todos-isolated");
-    let harness = Harness::builder().workspace(&root).build().unwrap();
-    let model = ScriptedModel::tool_round(vec![todo_call("t1")], "planned");
-    let agent = harness.agent(model).todos().build().unwrap();
-
-    let a = agent.new_session().ephemeral().open().unwrap();
-    let b = agent.new_session().ephemeral().open().unwrap();
-    assert_eq!(a.run("plan").await.unwrap().text, "planned");
-
-    assert_eq!(a.todo_list().unwrap().items().len(), 1);
-    assert!(b.todo_list().unwrap().items().is_empty());
-
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[tokio::test]
-async fn todos_shared_when_explicitly_configured() {
-    let root = temp_dir("todos-shared");
-    let harness = Harness::builder().workspace(&root).build().unwrap();
-    let model = ScriptedModel::tool_round(vec![todo_call("t1")], "planned");
-    let list = TodoList::new();
-    let agent = harness
-        .agent(model)
-        .todos_shared(list.clone())
-        .build()
-        .unwrap();
-
-    let a = agent.new_session().ephemeral().open().unwrap();
-    let b = agent.new_session().ephemeral().open().unwrap();
-    a.run("plan").await.unwrap();
-
-    assert_eq!(list.items().len(), 1);
-    assert_eq!(a.todo_list().unwrap().items().len(), 1);
-    assert_eq!(b.todo_list().unwrap().items().len(), 1);
-    #[allow(deprecated)]
-    let agent_level = agent.todo_list();
-    assert_eq!(agent_level.unwrap().items().len(), 1);
-
-    let _ = std::fs::remove_dir_all(&root);
-}
 
 /// Scripts `read_file` for the first run, then `write_file` for the next
 /// two. Sessions share the agent's model, so run order decides who gets
@@ -154,56 +103,29 @@ async fn multi_turn_state_persists_within_a_session() {
 }
 
 #[tokio::test]
-async fn fork_and_clear_reset_builtin_state() {
-    let root = temp_dir("fork-clear-todos");
-    let harness = Harness::builder().workspace(&root).build().unwrap();
-    let model = ScriptedModel::tool_round(vec![todo_call("t1")], "planned");
-    let agent = harness.agent(model).todos().build().unwrap();
-
-    let session = agent.new_session().persistent().open().unwrap();
-    session.run("plan").await.unwrap();
-    assert_eq!(session.todo_list().unwrap().items().len(), 1);
-
-    let fork = session.fork().await.unwrap();
-    assert!(fork.todo_list().unwrap().items().is_empty());
-    assert_eq!(session.todo_list().unwrap().items().len(), 1);
-
-    session.clear().await.unwrap();
-    assert!(session.todo_list().unwrap().items().is_empty());
-
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[tokio::test]
 async fn resume_restores_transcript_but_not_builtin_state() {
     let root = temp_dir("resume-fresh-state");
     std::fs::write(root.join("notes.txt"), "original").unwrap();
     let harness = Harness::builder().workspace(&root).build().unwrap();
     let model = ScriptedModel::tool_round(
-        vec![
-            call("r1", "read_file", json!({"path": "notes.txt"})),
-            todo_call("t1"),
-        ],
+        vec![call("r1", "read_file", json!({"path": "notes.txt"}))],
         "planned",
     );
     let agent = harness
         .agent(model)
         .tools(ToolPreset::ShellLess)
-        .todos()
         .build()
         .unwrap();
 
     let session = agent.new_session().persistent().open().unwrap();
     let id = session.id().unwrap();
     session.run("read and plan").await.unwrap();
-    assert_eq!(session.todo_list().unwrap().items().len(), 1);
     assert_eq!(session.file_guard().len(), 1);
     let turns = session.messages().await.len();
     drop(session);
 
     let resumed = agent.resume_session(&id).unwrap();
     assert_eq!(resumed.messages().await.len(), turns);
-    assert!(resumed.todo_list().unwrap().items().is_empty());
     assert!(resumed.file_guard().is_empty());
 
     let _ = std::fs::remove_dir_all(&root);

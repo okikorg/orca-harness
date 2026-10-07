@@ -1,6 +1,6 @@
 //! Tool presets and per-session tool construction. An agent records a
 //! recipe (preset plus builder-ordered sources); each session materializes
-//! it so mutable built-ins (file guard, todos, processes, REPLs) are owned
+//! it so mutable built-ins (file guard, processes, REPLs) are owned
 //! by that session alone.
 
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use orca_harness_core::Tool;
 use orca_harness_tools::{
     core_tools_with_shell_and_process, fs_admin_tools, BunReplTool, EditFileTool, FileGuard,
     GlobTool, GrepTool, ProcessController, ProcessTool, PyKernelTool, ReadFileTool, ShellTool,
-    TodoList, TodoWriteTool, Workspace, WriteFileTool,
+    Workspace, WriteFileTool,
 };
 use tokio::sync::broadcast;
 
@@ -36,7 +36,6 @@ pub(crate) enum ToolSource {
     Custom(Arc<dyn Tool>),
     Python,
     Bun,
-    Todos,
 }
 
 /// The preset's tools alone, for callers (subagent children) that keep
@@ -141,13 +140,12 @@ fn command_tools(
 
 /// The tools one session runs with, plus the mutable built-in state
 /// behind them. Built at open/resume/fork so two sessions never share a
-/// process manager, REPL, guard, or todo list unless the agent was
+/// process manager, REPL, or guard unless the agent was
 /// configured with a caller-owned instance.
 pub(crate) struct SessionTools {
     pub(crate) file_guard: FileGuard,
     python: Vec<Arc<PyKernelTool>>,
     bun: Vec<Arc<BunReplTool>>,
-    pub(crate) todo_list: Option<TodoList>,
     /// Present when the agent configured subagents; owns this session's
     /// manager, completion inbox, `subagent` tool, and (unless disabled)
     /// `workflow` tool with its stage-output store.
@@ -192,7 +190,6 @@ impl SessionTools {
         let processes = environment.processes(definition);
         let working_dir = || workspace.root().display().to_string();
         let file_guard = definition.shared_file_guard.clone().unwrap_or_default();
-        let mut todo_list: Option<TodoList> = None;
         let mut python = Vec::new();
         let mut bun = Vec::new();
         let (events, _) = broadcast::channel(NOTIFICATION_CAPACITY);
@@ -235,12 +232,6 @@ impl SessionTools {
                     bun.push(tool.clone());
                     tool
                 }
-                ToolSource::Todos => {
-                    let list = todo_list.get_or_insert_with(|| {
-                        definition.shared_todo_list.clone().unwrap_or_default()
-                    });
-                    Arc::new(TodoWriteTool::new(list.clone()))
-                }
             });
         }
         let background = definition
@@ -254,7 +245,6 @@ impl SessionTools {
             python,
             bun,
             file_guard,
-            todo_list,
             background,
             process,
             events,
@@ -280,7 +270,7 @@ impl SessionTools {
         }
     }
 
-    /// Reset every session-owned built-in: the guard, todos, detached
+    /// Reset every session-owned built-in: the guard, detached
     /// subagents with their undelivered results, and background
     /// processes (killed and forgotten; the manager keeps serving).
     pub(crate) async fn reset_repls(&self) {
@@ -289,9 +279,6 @@ impl SessionTools {
 
     pub(crate) async fn clear(&self) {
         self.file_guard.clear();
-        if let Some(todos) = &self.todo_list {
-            todos.clear();
-        }
         if let Some(background) = &self.background {
             background.clear();
         }

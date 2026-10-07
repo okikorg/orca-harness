@@ -23,7 +23,6 @@ pub fn tool_action_label(name: &str) -> &'static str {
         "bun_repl" => "Bun REPL",
         "subagent" => "Subagent",
         "workflow" => "Workflow",
-        "todo_write" => "Todo",
         "ask" => "Ask",
         "web_fetch" => "Fetch web page",
         "read_tool_result" => "Read tool result",

@@ -1,6 +1,6 @@
 //! One tree vocabulary for every rail.
 //!
-//! Tool rows, subagent rows, nested spawns, the queue and the todo list all
+//! Tool rows, subagent rows, nested spawns, and the queue all
 //! draw the same `├─` / `└─` branch, carry the same `│ ` stem under a row
 //! that is not the last, and reserve the same connector cells when one row
 //! is tied to the inspector. Keeping the glyphs and the arithmetic here

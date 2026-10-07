@@ -110,7 +110,7 @@ use self::render::reset_conversation_ui;
 #[cfg(test)]
 use self::render::{
     activity_lines, context_segment, live_lines, mode_segment, palette_lines, projected_transcript,
-    stabilize_transcript_scroll, stats_segments, todo_segment,
+    stabilize_transcript_scroll, stats_segments,
 };
 use self::render::{draw, transcript_content_width};
 #[cfg(test)]

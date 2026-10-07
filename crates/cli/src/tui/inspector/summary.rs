@@ -5,7 +5,6 @@ use serde_json::Value;
 use crate::tui::components::inspector::{
     inspector_fields, inspector_text, CodePreview, INSPECTOR_BODY_INDENT,
 };
-use crate::tui::components::progress_list::{progress_list, ProgressItem, ProgressState};
 use crate::tui::components::section::Section;
 use crate::view::{self, theme};
 
@@ -72,8 +71,6 @@ fn append_input(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usiz
             input.append_to(lines);
         }
         "process" => append_process_input(lines, tool, width),
-        "todo_write" if tool.output.is_none() => append_todos(lines, &tool.input, width),
-        "todo_write" => {}
         "ask" => append_ask(lines, &tool.input, "request", width),
         "subagent" => text_section(
             lines,
@@ -141,7 +138,6 @@ fn append_result(lines: &mut Vec<Line<'static>>, tool: &ToolActivity, width: usi
         "grep" => append_grep_result(lines, output, width),
         "glob" => append_collection(lines, output, "matches", "matches", width),
         "process" => append_process_result(lines, output, width),
-        "todo_write" => append_todos(lines, output, width),
         "ask" => append_ask(lines, output, "answers", width),
         "pykernel" | "bun_repl" => append_kernel_result(lines, output, width),
         "subagent" => append_subagent_result(lines, output, width),

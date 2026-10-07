@@ -8,9 +8,7 @@
 //! compute), [`BunReplTool`] (persistent JavaScript/TypeScript compute),
 //! [`SubagentTool`] (spawn
 //! independent in-process agents, with nesting governed by a shared
-//! [`SubagentDepth`]), and [`TodoWriteTool`] (the agent's plan as
-//! structured state, readable by the host through a shared
-//! [`TodoList`]). A separate [`fs_admin_tools`] bundle adds
+//! [`SubagentDepth`]). A separate [`fs_admin_tools`] bundle adds
 //! copy/rename/delete/mkdir/stat for shell-less restricted agents. These
 //! are ordinary [`Tool`] implementations — nothing here is privileged;
 //! they register into an [`Agent`](orca_harness_core::Agent) like any
@@ -44,7 +42,6 @@ mod programmatic;
 pub mod retry;
 mod spawner;
 mod subagent;
-mod todo;
 
 use std::sync::Arc;
 
@@ -78,7 +75,6 @@ pub use subagent::{
     DEFAULT_SUBAGENT_TIMEOUT, MIN_SUBAGENT_DEPTH, MIN_SUBAGENT_MAX_STEPS,
     PREFERENCE_SUBAGENT_ROUTE,
 };
-pub use todo::{TodoItem, TodoList, TodoStatus, TodoWriteTool};
 
 /// Filesystem administration bundle: `copy_file`, `rename_file`,
 /// `delete_file`, `create_folder`, `file_info`. Not part of

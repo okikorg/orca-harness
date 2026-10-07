@@ -73,7 +73,7 @@ documentation review date is not a release date.
   CheaperInference, Anthropic, and ChatGPT/Codex), models, and persistent configuration
 - Workspace tools, background processes, and output retrieval
 - Durable memory, automatic scoped recall, explicit management, and local storage
-- Sessions, task lists, and transcript controls
+- Sessions and transcript controls
 - Complete current tool and extension reference, including mode and availability rules
 - Rust SDK guide set with focused subpages for first-agent setup, production host assembly, and background lifecycle management
 - Benchmark methodology, checked-in results, regression budgets, MCP retrieval accuracy, and subagent stress evidence

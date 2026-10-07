@@ -207,17 +207,10 @@ mod main_tests {
         assert!(prompt.contains("fanning out"));
     }
 
-    /// The task list is a registered tool, so the prompt names it and
-    /// says what keeping it current means.
     #[test]
-    fn system_prompt_advertises_the_task_list() {
+    fn system_prompt_does_not_advertise_removed_task_list() {
         let prompt = system_prompt(&Workspace::new(PathBuf::from(".")), false);
-        assert!(prompt.contains("todo_write"));
-        assert!(prompt.contains("Do not use todo_write by default"));
-        assert!(prompt.contains("explicitly asks for a todo plan"));
-        assert!(prompt.contains("5+ distinct steps"));
-        assert!(prompt.contains("single-step or few-step work"));
-        assert!(prompt.contains("in_progress"));
+        assert!(!prompt.contains("todo_write"));
     }
 
     #[test]

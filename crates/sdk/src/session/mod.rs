@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use orca_harness_core::{Context, Message};
 use orca_harness_extensions::{SessionHandler, TruncationStore};
-use orca_harness_tools::{FileGuard, TodoList};
+use orca_harness_tools::FileGuard;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::background::{BackgroundNotification, Processes, Subagents, Workflows};
@@ -96,7 +96,7 @@ impl Session {
 
     /// Resume a persistent session from disk. The transcript and recovery
     /// store are restored; live processes, REPL state, the read-before-write
-    /// guard, todos, and detached subagents start fresh.
+    /// guard and detached subagents start fresh.
     pub(crate) fn resume(
         agent: Agent,
         id: &str,
@@ -147,15 +147,6 @@ impl Session {
     /// [`AgentBuilder::file_guard`]: crate::AgentBuilder::file_guard
     pub fn file_guard(&self) -> FileGuard {
         self.tools.file_guard.clone()
-    }
-
-    /// The todo list behind this session's `todo_write` tool, when the
-    /// agent enabled todos. Session-owned unless the agent set
-    /// [`AgentBuilder::todos_shared`].
-    ///
-    /// [`AgentBuilder::todos_shared`]: crate::AgentBuilder::todos_shared
-    pub fn todo_list(&self) -> Option<TodoList> {
-        self.tools.todo_list.clone()
     }
 
     /// Typed host access to this session's subagents, when the agent

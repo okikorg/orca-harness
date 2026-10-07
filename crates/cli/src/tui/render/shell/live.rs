@@ -12,9 +12,7 @@ use crate::view::{self, theme};
 use super::super::overlays::*;
 use super::super::pickers::*;
 use super::super::plugins::*;
-use super::super::transcript::{
-    location_picker_lines, process_lines, skill_mention_picker_lines, todo_lines,
-};
+use super::super::transcript::{location_picker_lines, process_lines, skill_mention_picker_lines};
 
 /// Status-line segments for live background work; empty when idle so the
 /// line stays quiet. Each persistent compute tool is unnumbered (0 or 1).
@@ -90,17 +88,6 @@ pub(crate) fn mode_segment(mode: &crate::mode::ModeHandle, plan: &crate::plan::P
     }
 }
 
-/// Progress through the agent's task list, once it has one.
-pub(crate) fn todo_segment(todos: &orca_harness_tools::TodoList) -> String {
-    match todos.progress() {
-        (_, 0) => String::new(),
-        (done, total) => {
-            let g = glyphs();
-            g.counted(g.done, "todo", &format!("{done}/{total}"))
-        }
-    }
-}
-
 /// A compact execution rail. Prompts stay out of the transcript until
 /// they start, so the conversation preserves its actual chronology.
 pub(crate) fn queue_lines(app: &App, width: usize) -> Vec<Line<'static>> {
@@ -159,7 +146,7 @@ pub(crate) enum LiveAnchor {
     /// Prompts, overlays and pickers are read from their header down.
     Top,
     /// While a run is in progress the spinner row at the foot is what the
-    /// user watches, so a tall queue or todo list gives up its head.
+    /// user watches, so a tall queue gives up its head.
     Bottom,
 }
 
@@ -229,7 +216,6 @@ pub(crate) fn live_region(app: &App, width: usize) -> LiveRegion {
                 inspector_picker_lines(app.inspector_mode, picker, width)
             }
             Overlay::Usage => usage_lines(app, width),
-            Overlay::Todo => todo_lines(&app.cfg.todos, width),
             Overlay::Processes => process_lines(&app.cfg.stats, width),
             Overlay::ApiKey { provider, input } => api_key_lines(*provider, input),
             Overlay::Settings { picker } => settings_lines(app, picker, width),
