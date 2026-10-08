@@ -41,6 +41,7 @@ fn scripted_final(text: &str) -> Arc<ScriptedModel> {
                 reasoning_tokens: Some(3),
                 cache_read_tokens: 19,
                 cache_create_tokens: 23,
+                ..Default::default()
             }),
         },
         ModelResponse::Final {
@@ -51,6 +52,7 @@ fn scripted_final(text: &str) -> Arc<ScriptedModel> {
                 reasoning_tokens: Some(3),
                 cache_read_tokens: 19,
                 cache_create_tokens: 23,
+                ..Default::default()
             }),
         },
     ]))

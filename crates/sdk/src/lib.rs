@@ -62,10 +62,10 @@ pub use orca_harness_tools::{
 /// Core contracts and every companion type needed to implement them.
 pub mod contracts {
     pub use orca_harness_core::{
-        CancellationToken, Concurrency, Context, DeltaSink, Extension, ExtensionError, FnTool,
-        HarnessError, Image, Limits, Message, Model, ModelDelta, ModelError, ModelResponse, Next,
-        Subscriptions, Tool, ToolCall, ToolContext, ToolDecision, ToolError, ToolName, ToolResult,
-        ToolSchema, Usage,
+        CancellationToken, Concurrency, Context, CostDetails, DeltaSink, Extension, ExtensionError,
+        FnTool, HarnessError, Image, Limits, Message, Model, ModelDelta, ModelError, ModelResponse,
+        Next, Subscriptions, Tool, ToolCall, ToolContext, ToolDecision, ToolError, ToolName,
+        ToolResult, ToolSchema, Usage,
     };
 }
 

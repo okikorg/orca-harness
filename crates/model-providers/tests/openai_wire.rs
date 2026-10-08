@@ -164,6 +164,67 @@ async fn non_streaming_length_finish_reason_is_typed_and_retains_usage() {
     }
 }
 
+fn recorded_ids() -> (
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    orca_harness_model_providers::openai::ResponseIdHook,
+) {
+    let ids = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = ids.clone();
+    let hook: orca_harness_model_providers::openai::ResponseIdHook =
+        std::sync::Arc::new(move |id: &str| sink.lock().unwrap().push(id.to_owned()));
+    (ids, hook)
+}
+
+#[tokio::test]
+async fn non_streaming_reports_the_response_id_and_cost() {
+    let completion = json!({
+        "id": "gen-abc",
+        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 7, "cost": 1.08e-05}
+    });
+    let (base_url, _) = one_shot_server(completion.to_string()).await;
+    let (ids, hook) = recorded_ids();
+    let model = OpenAiModel::new("test-model")
+        .base_url(base_url)
+        .response_id(hook);
+
+    let response = model.generate(&Context::new(), &[]).await.unwrap();
+
+    assert_eq!(*ids.lock().unwrap(), ["gen-abc"]);
+    assert_eq!(
+        response.usage().and_then(|usage| usage.cost),
+        Some(1.08e-05)
+    );
+}
+
+#[tokio::test]
+async fn a_stream_cut_before_its_usage_still_reports_the_id_once() {
+    let body = [
+        r#"data: {"id":"gen-cut","choices":[{"delta":{"content":"par"}}]}"#,
+        r#"data: {"id":"gen-cut","choices":[{"delta":{"content":"tial"}}]}"#,
+    ]
+    .join("\n\n")
+        + "\n\n";
+    let (base_url, _) = one_shot_server(body).await;
+    let (ids, hook) = recorded_ids();
+    let model = OpenAiModel::new("test-model")
+        .base_url(base_url)
+        .response_id(hook);
+    let mut context = Context::new();
+    context.push_user("hi");
+
+    let error = model
+        .generate_streaming(&context, &[], &|_| {})
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, ModelError::IncompleteResponse { usage: None, .. }),
+        "{error:?}"
+    );
+    assert_eq!(*ids.lock().unwrap(), ["gen-cut"]);
+}
+
 #[tokio::test]
 async fn http_failures_preserve_retry_timing_and_permanent_classification() {
     use orca_harness_model_providers::http_error::retry_delay;

@@ -8,13 +8,15 @@
 mod request;
 mod stream;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use orca_harness_core::{
-    Context, DeltaSink, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
+    Context, CostDetails, DeltaSink, Model, ModelError, ModelResponse, ToolCall, ToolSchema, Usage,
 };
 
 use self::stream::ChunkAccumulator;
@@ -40,6 +42,10 @@ fn parse_tool_arguments(
     })
 }
 
+/// Receives a response's `id` once per call. OpenRouter calls it the
+/// generation id, the key to its `GET /generation` cost lookup.
+pub type ResponseIdHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct OpenAiModel {
     base_url: String,
     api_key: Option<String>,
@@ -57,6 +63,7 @@ pub struct OpenAiModel {
     prompt_cache: bool,
     session_id: Option<String>,
     prompt_cache_key: Option<String>,
+    response_id: Option<ResponseIdHook>,
 }
 
 impl OpenAiModel {
@@ -78,6 +85,7 @@ impl OpenAiModel {
             prompt_cache: false,
             session_id: None,
             prompt_cache_key: None,
+            response_id: None,
         }
     }
 
@@ -87,6 +95,29 @@ impl OpenAiModel {
     pub fn usage_accounting(mut self, enabled: bool) -> Self {
         self.usage_accounting = enabled;
         self
+    }
+
+    /// Report each call's response `id` as soon as it is known: from the
+    /// first chunk of a stream, so a stream cut before its usage chunk
+    /// still names the generation. The hook belongs to this instance, so a
+    /// host that needs the id of one particular call builds one per call.
+    pub fn response_id(mut self, hook: ResponseIdHook) -> Self {
+        self.response_id = Some(hook);
+        self
+    }
+
+    fn report_response_id(&self, id: Option<&str>) {
+        if let (Some(hook), Some(id)) = (&self.response_id, id.filter(|id| !id.is_empty())) {
+            hook(id);
+        }
+    }
+
+    /// Reports a stream's id once, from the first chunk that carries one.
+    fn report_stream_id(&self, accumulator: &ChunkAccumulator, reported: &mut bool) {
+        if !*reported && accumulator.response_id().is_some() {
+            self.report_response_id(accumulator.response_id());
+            *reported = true;
+        }
     }
 
     /// Add OpenRouter's normalized prompt-cache directive. Kept opt-in
@@ -220,6 +251,8 @@ impl OpenAiModel {
 
 #[derive(Deserialize)]
 struct ChatCompletion {
+    #[serde(default)]
+    id: Option<String>,
     choices: Vec<Choice>,
     usage: Option<WireUsage>,
 }
@@ -238,6 +271,17 @@ pub(crate) struct WireUsage {
     /// DeepSeek-style cache reporting, used when details are absent.
     #[serde(default)]
     prompt_cache_hit_tokens: u64,
+    /// OpenRouter's cost of the call in US dollars (usage accounting).
+    #[serde(default)]
+    cost: Option<f64>,
+    #[serde(default)]
+    cost_details: Option<WireCostDetails>,
+}
+
+#[derive(Deserialize, Default)]
+struct WireCostDetails {
+    #[serde(default)]
+    upstream_inference_cost: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -280,6 +324,10 @@ impl WireUsage {
             reasoning_tokens: self
                 .completion_tokens_details
                 .and_then(|details| details.reasoning_tokens),
+            cost: self.cost,
+            cost_details: self.cost_details.map(|details| CostDetails {
+                upstream_inference_cost: details.upstream_inference_cost,
+            }),
         }
     }
 }
@@ -324,6 +372,7 @@ impl Model for OpenAiModel {
 
         let completion: ChatCompletion = serde_json::from_str(&body)
             .map_err(|e| ModelError::InvalidResponse(format!("{e}: {body}")))?;
+        self.report_response_id(completion.id.as_deref());
         let choice = completion
             .choices
             .into_iter()
@@ -398,6 +447,7 @@ impl Model for OpenAiModel {
         let mut lines = SseLineBuffer::default();
         let mut accumulator = ChunkAccumulator::new();
         let mut done_observed = false;
+        let mut id_reported = false;
 
         'body: while let Some(chunk) = bytes.next().await {
             let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
@@ -406,7 +456,9 @@ impl Model for OpenAiModel {
                     done_observed = true;
                     break 'body;
                 }
-                for delta in accumulator.apply(&payload)? {
+                let deltas = accumulator.apply(&payload);
+                self.report_stream_id(&accumulator, &mut id_reported);
+                for delta in deltas? {
                     sink.emit(delta).await;
                 }
             }
@@ -418,7 +470,9 @@ impl Model for OpenAiModel {
                     done_observed = true;
                     break;
                 }
-                for delta in accumulator.apply(&payload)? {
+                let deltas = accumulator.apply(&payload);
+                self.report_stream_id(&accumulator, &mut id_reported);
+                for delta in deltas? {
                     sink.emit(delta).await;
                 }
             }

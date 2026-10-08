@@ -42,6 +42,7 @@ async fn run_text_events_and_custom_tool() {
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
                 reasoning_tokens: None,
+                ..Default::default()
             }),
         },
         ModelResponse::Final {
@@ -52,6 +53,7 @@ async fn run_text_events_and_custom_tool() {
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
                 reasoning_tokens: None,
+                ..Default::default()
             }),
         },
     ]);

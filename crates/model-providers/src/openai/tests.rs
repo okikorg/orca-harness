@@ -266,6 +266,33 @@ fn completion_reasoning_tokens_preserve_absent_zero_and_nonzero() {
 }
 
 #[test]
+fn openrouter_cost_and_details_are_carried_and_absent_stays_none() {
+    // The 2026-10-08 OpenRouter call: 12 input and 7 output tokens of
+    // openai/gpt-5.6-luna reported `cost: 1.08e-05`.
+    let wire: WireUsage = serde_json::from_value(json!({
+        "prompt_tokens": 12,
+        "completion_tokens": 7,
+        "cost": 1.08e-05,
+        "cost_details": {"upstream_inference_cost": 1.08e-05},
+    }))
+    .unwrap();
+    let usage = wire.into_usage();
+    assert_eq!(usage.cost, Some(1.08e-05));
+    assert_eq!(
+        usage
+            .cost_details
+            .and_then(|details| details.upstream_inference_cost),
+        Some(1.08e-05)
+    );
+
+    let plain: WireUsage =
+        serde_json::from_value(json!({"prompt_tokens": 12, "completion_tokens": 7})).unwrap();
+    let usage = plain.into_usage();
+    assert_eq!(usage.cost, None);
+    assert_eq!(usage.cost_details, None);
+}
+
+#[test]
 fn model_options_are_opt_in_and_do_not_enable_router_usage() {
     let body = OpenAiModel::new("m").request_body(&context(), &[]);
     for key in [

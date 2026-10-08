@@ -8,7 +8,7 @@
 //! by the Agent and not otherwise reachable).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
@@ -27,6 +27,8 @@ pub struct UsageHandle {
     reasoning_reported: Arc<AtomicBool>,
     cache_read: Arc<AtomicU64>,
     cache_create: Arc<AtomicU64>,
+    /// Reported cost, summed by `Usage::add`; there is no atomic float.
+    cost: Arc<Mutex<Usage>>,
     steps: Arc<AtomicU64>,
 }
 
@@ -47,11 +49,17 @@ impl UsageHandle {
             self.reasoning.fetch_add(tokens, Ordering::Relaxed);
             self.reasoning_reported.store(true, Ordering::Relaxed);
         }
+        self.cost.lock().unwrap().add(&Usage {
+            cost: usage.cost,
+            cost_details: usage.cost_details,
+            ..Usage::default()
+        });
         self.steps.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The cumulative usage so far.
     pub fn total(&self) -> Usage {
+        let cost = *self.cost.lock().unwrap();
         Usage {
             input_tokens: self.input.load(Ordering::Relaxed),
             output_tokens: self.output.load(Ordering::Relaxed),
@@ -61,6 +69,8 @@ impl UsageHandle {
                 .reasoning_reported
                 .load(Ordering::Relaxed)
                 .then(|| self.reasoning.load(Ordering::Relaxed)),
+            cost: cost.cost,
+            cost_details: cost.cost_details,
         }
     }
 
@@ -161,5 +171,45 @@ mod tests {
                 .reasoning_tokens,
             None
         );
+    }
+
+    #[test]
+    fn reported_cost_is_summed_and_absent_cost_stays_absent() {
+        use orca_harness_core::CostDetails;
+
+        let handle = UsageHandle::new();
+        handle.add(&Usage {
+            output_tokens: 7,
+            ..Usage::default()
+        });
+        assert_eq!(handle.total().cost, None);
+        assert_eq!(handle.total().cost_details, None);
+
+        let mut total = Usage::default();
+        for cost in [Some(0.25), None, Some(0.5)] {
+            let usage = Usage {
+                cost,
+                cost_details: cost.map(|cost| CostDetails {
+                    upstream_inference_cost: Some(cost),
+                }),
+                ..Usage::default()
+            };
+            handle.add(&usage);
+            total.add(&usage);
+        }
+        assert_eq!(handle.total().cost, Some(0.75));
+        assert_eq!(
+            handle.total().cost_details,
+            Some(CostDetails {
+                upstream_inference_cost: Some(0.75)
+            })
+        );
+        assert_eq!(total.cost, handle.total().cost);
+
+        let legacy = serde_json::json!({"inputTokens": 1, "outputTokens": 2, "cacheReadTokens": 0, "cacheCreateTokens": 0});
+        let read: Usage = serde_json::from_value(legacy).unwrap();
+        assert_eq!((read.cost, read.cost_details), (None, None));
+        let written = serde_json::to_value(read).unwrap();
+        assert!(written.get("cost").is_none() && written.get("costDetails").is_none());
     }
 }

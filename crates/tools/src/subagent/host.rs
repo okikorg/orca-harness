@@ -346,6 +346,7 @@ impl SubagentOutcome {
                 reasoning_tokens: self.reasoning_tokens,
                 cache_read_tokens: self.cache_read_tokens,
                 cache_create_tokens: self.cache_create_tokens,
+                ..Usage::default()
             },
             "runtimeMs": self.runtime_ms,
             "steps": self.steps,
