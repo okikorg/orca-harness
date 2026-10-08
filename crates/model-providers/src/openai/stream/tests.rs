@@ -358,6 +358,47 @@ fn usage_only_chunk_with_empty_choices_is_captured() {
 }
 
 #[test]
+fn stream_cost_and_response_id_are_captured() {
+    let mut acc = ChunkAccumulator::new();
+    apply_all(
+        &mut acc,
+        &[
+            r#"{"id":"gen-1","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#,
+            r#"{"id":"gen-1","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"cost":1.08e-05,"cost_details":{"upstream_inference_cost":1.08e-05}}}"#,
+        ],
+    );
+    assert_eq!(acc.response_id(), Some("gen-1"));
+    match acc.finish(true).unwrap() {
+        ModelResponse::Final { usage, .. } => {
+            let usage = usage.expect("usage captured");
+            assert_eq!(usage.cost, Some(1.08e-05));
+            assert_eq!(
+                usage
+                    .cost_details
+                    .and_then(|details| details.upstream_inference_cost),
+                Some(1.08e-05)
+            );
+        }
+        other => panic!("expected Final, got {other:?}"),
+    }
+}
+
+#[test]
+fn response_id_survives_a_stream_cut_before_usage() {
+    let mut acc = ChunkAccumulator::new();
+    apply_all(
+        &mut acc,
+        &[
+            r#"{"id":"","choices":[{"delta":{"content":"par"}}]}"#,
+            r#"{"id":"gen-2","choices":[{"delta":{"content":"tial"}}]}"#,
+            r#"{"id":"gen-3","choices":[{"delta":{"content":"!"}}]}"#,
+        ],
+    );
+    assert_eq!(acc.response_id(), Some("gen-2"));
+    assert!(acc.finish(false).is_err());
+}
+
+#[test]
 fn accompanying_text_survives_alongside_tool_calls() {
     let mut acc = ChunkAccumulator::new();
     apply_all(

@@ -18,7 +18,11 @@ use crate::tool::{ToolCall, ToolSchema};
 /// are reported separately, never double-counted. OpenAI-style
 /// `prompt_tokens` includes cached tokens and must be reduced; Anthropic
 /// `input_tokens` already excludes them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `cost` is what the endpoint itself says the call cost, in US dollars,
+/// when it reports one (OpenRouter's `usage.cost`). Adapters never derive
+/// it from token counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     /// Prompt tokens actually processed (excluding cache reads/writes).
@@ -31,6 +35,29 @@ pub struct Usage {
     pub reasoning_tokens: Option<u64>,
     pub cache_read_tokens: u64,
     pub cache_create_tokens: u64,
+    /// Endpoint-reported cost in US dollars. None means none was reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    /// The endpoint's breakdown of `cost`, when it sends one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_details: Option<CostDetails>,
+}
+
+/// OpenRouter's `usage.cost_details`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CostDetails {
+    /// What the upstream provider charged, in US dollars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_inference_cost: Option<f64>,
+}
+
+/// Sums two optional figures; absent on both sides stays absent.
+fn add_reported<T: std::ops::Add<Output = T>>(total: Option<T>, other: Option<T>) -> Option<T> {
+    match (total, other) {
+        (Some(total), Some(other)) => Some(total + other),
+        (total, other) => total.or(other),
+    }
 }
 
 impl Usage {
@@ -42,6 +69,14 @@ impl Usage {
         }
         self.cache_read_tokens += other.cache_read_tokens;
         self.cache_create_tokens += other.cache_create_tokens;
+        self.cost = add_reported(self.cost, other.cost);
+        if let Some(details) = other.cost_details {
+            let total = self.cost_details.get_or_insert_with(CostDetails::default);
+            total.upstream_inference_cost = add_reported(
+                total.upstream_inference_cost,
+                details.upstream_inference_cost,
+            );
+        }
     }
 
     /// The context this step occupied: everything the model saw (cached

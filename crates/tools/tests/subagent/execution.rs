@@ -14,6 +14,7 @@ async fn runs_task_and_reports_answer_and_usage() {
             reasoning_tokens: Some(2),
             cache_read_tokens: 30,
             cache_create_tokens: 20,
+            ..Default::default()
         }),
     }]));
     let (ws, _dir) = temp_ws();

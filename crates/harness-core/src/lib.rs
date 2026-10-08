@@ -44,7 +44,7 @@ pub use dispatcher::Dispatcher;
 pub use error::{ExtensionError, HarnessError, ModelError, ToolError};
 pub use extension::{Extension, ExtensionRegistry, Next, Subscriptions, ToolDecision};
 pub use limits::Limits;
-pub use model::{DeltaSink, Model, ModelDelta, ModelResponse, Usage};
+pub use model::{CostDetails, DeltaSink, Model, ModelDelta, ModelResponse, Usage};
 pub use sandbox::{
     Capabilities, Chunk, Entry, ExecOutput, ExecRequest, FileMode, Output, Provisioner, Sandbox,
     SandboxError, Session, SpawnRequest, Stat,

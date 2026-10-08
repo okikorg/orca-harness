@@ -26,6 +26,7 @@ fn usage(input_tokens: u64, output_tokens: u64) -> Usage {
         cache_read_tokens: 0,
         cache_create_tokens: 0,
         reasoning_tokens: None,
+        ..Default::default()
     }
 }
 

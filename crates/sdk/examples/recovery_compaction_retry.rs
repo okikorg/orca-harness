@@ -66,6 +66,7 @@ async fn model_retry_demo(root: &std::path::Path) {
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
                 reasoning_tokens: None,
+                ..Default::default()
             }),
         },
         ModelResponse::Final {
@@ -76,6 +77,7 @@ async fn model_retry_demo(root: &std::path::Path) {
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
                 reasoning_tokens: None,
+                ..Default::default()
             }),
         },
     ]);
@@ -139,6 +141,7 @@ async fn truncation_recovery_demo(root: &std::path::Path) {
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
                 reasoning_tokens: None,
+                ..Default::default()
             }),
         },
         ModelResponse::Final {
@@ -149,6 +152,7 @@ async fn truncation_recovery_demo(root: &std::path::Path) {
                 cache_read_tokens: 0,
                 cache_create_tokens: 0,
                 reasoning_tokens: None,
+                ..Default::default()
             }),
         },
     ]);

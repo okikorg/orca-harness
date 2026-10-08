@@ -12,6 +12,8 @@ use crate::sse::SseLineBuffer;
 
 #[derive(Deserialize)]
 struct WireChunk {
+    #[serde(default)]
+    id: Option<String>,
     error: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "null_as_empty")]
     choices: Vec<WireChunkChoice>,
@@ -74,11 +76,17 @@ pub(crate) struct ChunkAccumulator {
     tool_calls: Vec<PartialToolCall>,
     usage: Option<Usage>,
     finish_reason: Option<String>,
+    response_id: Option<String>,
 }
 
 impl ChunkAccumulator {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// The response `id`, from the first chunk that carried one.
+    pub(crate) fn response_id(&self) -> Option<&str> {
+        self.response_id.as_deref()
     }
 
     /// Apply one `data:` payload (already stripped of SSE framing, not
@@ -90,6 +98,10 @@ impl ChunkAccumulator {
                 payload.len()
             ))
         })?;
+
+        if self.response_id.is_none() {
+            self.response_id = chunk.id.filter(|id| !id.is_empty());
+        }
 
         if let Some(error) = chunk.error {
             return Err(crate::http_error::stream_error(&error));

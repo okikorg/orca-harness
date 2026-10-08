@@ -136,6 +136,7 @@ pub(crate) fn parse_usage(value: &Value) -> Option<Usage> {
         reasoning_tokens: value
             .pointer("/output_tokens_details/reasoning_tokens")
             .and_then(Value::as_u64),
+        ..Usage::default()
     })
 }
 
