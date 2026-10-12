@@ -2,7 +2,8 @@ use orca_harness_core::{
     CancellationToken, Context, Model, ModelError, ModelResponse, Tool, ToolSchema,
 };
 use orca_harness_tools::{
-    BackgroundStatus, SubagentManager, SubagentTool, WorkflowStore, WorkflowTool,
+    BackgroundStatus, SubagentManager, SubagentNotification, SubagentTool, WorkflowStore,
+    WorkflowTool,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -454,5 +455,103 @@ async fn a_failed_stage_leads_with_its_error_and_does_not_read_as_cancelled() {
     assert_eq!(
         outcome["stages"]["after"], "stopped",
         "a stage abandoned by a sibling failure is not a cancellation"
+    );
+}
+
+/// Fails the `review b` stage with a transport error for its first
+/// `failures` attempts; everything else echoes.
+#[derive(Clone)]
+struct Flaky {
+    inner: Echo,
+    failures: Arc<std::sync::atomic::AtomicUsize>,
+}
+#[async_trait::async_trait]
+impl Model for Flaky {
+    async fn generate(
+        &self,
+        context: &Context,
+        schemas: &[ToolSchema],
+    ) -> Result<ModelResponse, ModelError> {
+        let flaky = context.messages().iter().any(|m| {
+            matches!(m, orca_harness_core::Message::User { content, .. } if content == "review b")
+        });
+        if flaky
+            && self
+                .failures
+                .fetch_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |n| n.checked_sub(1),
+                )
+                .is_ok()
+        {
+            return Err(ModelError::Request("connection reset by peer".into()));
+        }
+        self.inner.generate(context, schemas).await
+    }
+}
+fn flaky_tool(
+    failures: usize,
+) -> (
+    WorkflowTool<Flaky>,
+    tokio::sync::mpsc::UnboundedReceiver<SubagentNotification>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let subagent = Arc::new(
+        SubagentTool::with_tools(
+            Flaky {
+                inner: Echo {
+                    calls: Arc::default(),
+                    held: None,
+                },
+                failures: Arc::new(failures.into()),
+            },
+            Arc::new(Vec::new),
+        )
+        .background(SubagentManager::new(4), move |n| {
+            let _ = tx.send(n);
+        }),
+    );
+    (
+        WorkflowTool::new(subagent, WorkflowStore::new()).unwrap(),
+        rx,
+    )
+}
+const FLAKY_MAP: &str = r#"[
+    {"id":"source","prompt":"dimensions","schema":"string[]"},
+    {"id":"map","kind":"map","over":"source","prompt":"review {{ item }}"}
+]"#;
+
+#[tokio::test]
+async fn a_transient_stage_failure_is_retried_once_and_the_run_completes() {
+    let (tool, mut rx) = flaky_tool(1);
+    let graph: serde_json::Value = serde_json::from_str(FLAKY_MAP).unwrap();
+    tool.call(json!({"action":"run","graph":graph}), &ctx())
+        .await
+        .unwrap();
+    let (n, _) = terminal(&mut rx).await;
+    let outcome = &n.result.as_ref().unwrap()["workflow"];
+    assert_eq!(outcome["state"], "done");
+    assert_eq!(outcome["outputs"]["map"], "[\"review a\",\"review b\"]");
+}
+
+#[tokio::test]
+async fn a_failed_run_says_how_to_replay_its_completed_stages() {
+    let (tool, mut rx) = flaky_tool(2);
+    let graph: serde_json::Value = serde_json::from_str(FLAKY_MAP).unwrap();
+    let ack = tool
+        .call(json!({"action":"run","graph":graph}), &ctx())
+        .await
+        .unwrap();
+    let (n, _) = terminal(&mut rx).await;
+    let error = n.result.unwrap_err();
+    let first = error.lines().next().unwrap();
+    assert!(first.contains("map[1]:"), "{first}");
+    assert!(
+        first.contains(&format!(
+            "2 completed stage outputs kept; rerun the same graph with resumeFrom={}",
+            ack["runId"]
+        )),
+        "{first}"
     );
 }
