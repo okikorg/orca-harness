@@ -51,12 +51,12 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       # The tag names the version (orcacode-v0.1.0 releases 0.1.0) and has to
       # agree with the workspace version the binary reports via --version,
@@ -134,19 +134,19 @@ jobs:
             size_gate: false
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
       # `targets` runs rustup target add, which is how the x86_64 darwin
       # build gets its std on the arm64 macos-14 runner.
       - name: rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.target }}
 
@@ -155,7 +155,7 @@ jobs:
       # because a new Zig release can run ahead of cargo-zigbuild.
       - name: zig
         if: matrix.zigbuild
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
@@ -199,7 +199,7 @@ jobs:
           ls -l "$ASSET"
 
       - name: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -218,7 +218,7 @@ jobs:
       # (docs/releases/<version>.md, drafted by ci/release.sh notes). The
       # checkout is only for that file; the binaries come from the artifacts.
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
@@ -237,7 +237,7 @@ jobs:
           fi
 
       - name: download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -257,7 +257,7 @@ jobs:
           cat SHA256SUMS
 
       - name: github release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.tag.outputs.tag }}
           name: orcacode v${{ needs.tag.outputs.version }}

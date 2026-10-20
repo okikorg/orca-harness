@@ -1,0 +1,8 @@
+# Keeps the commit-pinned actions current: Dependabot opens a PR when an
+# action's tag moves, with the new commit and the tag in the comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

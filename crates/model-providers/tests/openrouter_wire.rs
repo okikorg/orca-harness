@@ -7,7 +7,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use orca_harness_core::{Context, Model, ModelResponse};
+use orca_harness_core::{Context, Model, ModelResponse, ToolCall, ToolResult};
+use orca_harness_model_providers::openai::OpenAiModel;
 use orca_harness_model_providers::openrouter::{list_models, OpenRouterModel};
 
 /// Captured request: lowercased head (request line + headers) and body.
@@ -118,4 +119,59 @@ async fn generation_delegates_with_attribution_headers() {
         panic!("expected a final answer");
     };
     assert_eq!(text, "hello");
+}
+
+// Hosts that build `OpenAiModel` for OpenRouter themselves (to keep
+// `response_format`, verbosity and the response id hook) turn caching on
+// as `OpenRouterModel` does: a multi-turn Anthropic request carries the
+// moving breakpoint, the fixed one on the system prompt, and the session.
+#[tokio::test]
+async fn a_multi_turn_anthropic_request_through_openrouter_carries_its_breakpoints() {
+    let completion = json!({
+        "choices": [{"message": {"content": "done", "tool_calls": []}}]
+    });
+    let (base_url, captured) = one_shot_server(completion.to_string()).await;
+
+    let model = OpenAiModel::new("anthropic/claude-haiku-5.5")
+        .base_url(base_url)
+        .api_key("sk-or-test")
+        .usage_accounting(true)
+        .prompt_cache(true)
+        .session_id("sesn_123");
+    let mut context = Context::new();
+    context.push_system("Stable instructions");
+    context.push_user("first question");
+    context.push_assistant_text("first answer");
+    context.push_user("look it up");
+    let call = ToolCall {
+        id: "call_1".into(),
+        name: "lookup".into(),
+        arguments: json!({"key": "a"}),
+    };
+    context.push_assistant_tool_calls(None, vec![call.clone()]);
+    context.append_tool_results(vec![ToolResult {
+        call_id: call.id,
+        tool_name: call.name,
+        output: json!({"value": 1}),
+        is_error: false,
+    }]);
+
+    model.generate(&context, &[]).await.unwrap();
+
+    let sent = captured.await.unwrap();
+    let body: Value = serde_json::from_str(&sent.body).unwrap();
+    assert_eq!(body["cache_control"], json!({"type": "ephemeral"}));
+    assert_eq!(body["session_id"], "sesn_123");
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([{"type": "text", "text": "Stable instructions", "cache_control": {"type": "ephemeral"}}])
+    );
+    let marked = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message.to_string().contains("cache_control"))
+        .count();
+    assert_eq!(marked, 1, "only the system prompt carries a block marker");
+    assert_eq!(body["messages"][5]["role"], "tool");
 }
