@@ -117,6 +117,13 @@ impl AnthropicModel {
             "stream": true, "messages": messages
         });
         if !system.is_empty() {
+            // The fixed breakpoint: tools and system prompt, the same on
+            // every call. The top-level field below is the moving one.
+            if self.prompt_cache {
+                if let Some(last) = system.last_mut() {
+                    last["cache_control"] = json!({"type": "ephemeral"});
+                }
+            }
             body["system"] = json!(system);
         }
         if !tools.is_empty() {

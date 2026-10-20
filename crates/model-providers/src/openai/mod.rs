@@ -61,6 +61,7 @@ pub struct OpenAiModel {
     headers: Vec<(String, String)>,
     usage_accounting: bool,
     prompt_cache: bool,
+    gateway_caching: bool,
     session_id: Option<String>,
     prompt_cache_key: Option<String>,
     response_id: Option<ResponseIdHook>,
@@ -83,6 +84,7 @@ impl OpenAiModel {
             headers: Vec::new(),
             usage_accounting: false,
             prompt_cache: false,
+            gateway_caching: false,
             session_id: None,
             prompt_cache_key: None,
             response_id: None,
@@ -120,16 +122,26 @@ impl OpenAiModel {
         }
     }
 
-    /// Add OpenRouter's normalized prompt-cache directive. Kept opt-in
-    /// because not every OpenAI-compatible endpoint accepts this field.
-    pub(crate) fn prompt_cache(mut self, enabled: bool) -> Self {
+    /// Add OpenRouter's normalized prompt-cache directive: the top-level
+    /// `cache_control`, a breakpoint that moves to the end of each request,
+    /// and a fixed one on the system prompt. Kept opt-in because not every
+    /// OpenAI-compatible endpoint accepts these fields.
+    pub fn prompt_cache(mut self, enabled: bool) -> Self {
         self.prompt_cache = enabled;
         self
     }
 
-    /// Keep gateway routing stable across every model step in one agent run.
-    pub(crate) fn session_id(mut self, session_id: impl Into<String>) -> Self {
+    /// Keep gateway routing stable across every model step in one agent run
+    /// (OpenRouter's sticky routing).
+    pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Ask Vercel AI Gateway to place its own cache markers
+    /// (`providerOptions.gateway.caching: "auto"`); unset, it adds none.
+    pub fn gateway_caching(mut self, enabled: bool) -> Self {
+        self.gateway_caching = enabled;
         self
     }
 

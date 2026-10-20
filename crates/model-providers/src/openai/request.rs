@@ -9,7 +9,11 @@ impl OpenAiModel {
             "model": self.model,
             "messages": [],
         });
-        body["messages"] = Value::Array(encode_messages(context));
+        let mut messages = encode_messages(context);
+        if self.prompt_cache {
+            mark_system_prompt(&mut messages);
+        }
+        body["messages"] = Value::Array(messages);
         if !tools.is_empty() {
             body["tools"] = Value::Array(
                 tools
@@ -60,6 +64,9 @@ impl OpenAiModel {
         if self.prompt_cache {
             body["cache_control"] = json!({"type": "ephemeral"});
         }
+        if self.gateway_caching {
+            body["providerOptions"] = json!({"gateway": {"caching": "auto"}});
+        }
         if let Some(session_id) = &self.session_id {
             body["session_id"] = json!(session_id);
         }
@@ -68,6 +75,22 @@ impl OpenAiModel {
         }
         body
     }
+}
+
+/// Puts the fixed cache breakpoint on the last system message ahead of the
+/// conversation: it and the tools before it are the same on every call of a
+/// session, so they are read back even when the moving breakpoint misses.
+fn mark_system_prompt(messages: &mut [Value]) {
+    let leading = messages
+        .iter()
+        .take_while(|message| message["role"] == "system")
+        .count();
+    let Some(system) = leading.checked_sub(1).map(|last| &mut messages[last]) else {
+        return;
+    };
+    let text = system["content"].take();
+    system["content"] =
+        json!([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]);
 }
 
 pub(super) fn encode_messages(context: &Context) -> Vec<Value> {

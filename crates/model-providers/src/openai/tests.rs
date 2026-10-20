@@ -184,6 +184,81 @@ fn prompt_cache_and_session_are_opt_in() {
     assert!(openai.get("cache_control").is_none());
 }
 
+// The top-level `cache_control` is the moving breakpoint, at the end of each
+// request. The system prompt carries a fixed one, so the tools and the system
+// prompt are read back even when a step adds more blocks than the provider's
+// lookback, and a new session of the same agent reads them too.
+#[test]
+fn prompt_cache_marks_the_system_prompt_as_a_fixed_breakpoint() {
+    let mut context = Context::new();
+    context.push_system("Stable instructions");
+    context.push_user("first");
+    context.push_assistant_text("answer");
+    context.push_user("second");
+
+    let plain = OpenAiModel::new("m").request_body(&context, &schemas());
+    assert_eq!(
+        plain["messages"][0],
+        json!({"role": "system", "content": "Stable instructions"})
+    );
+
+    let cached = OpenAiModel::new("m")
+        .prompt_cache(true)
+        .request_body(&context, &schemas());
+    assert_eq!(
+        cached["messages"][0],
+        json!({"role": "system", "content": [{
+            "type": "text",
+            "text": "Stable instructions",
+            "cache_control": {"type": "ephemeral"}
+        }]})
+    );
+    assert_eq!(
+        cached["messages"].as_array().unwrap()[1..],
+        plain["messages"].as_array().unwrap()[1..]
+    );
+    assert_eq!(cached["cache_control"], json!({"type": "ephemeral"}));
+}
+
+#[test]
+fn prompt_cache_marks_only_the_last_leading_system_message() {
+    let mut leading = Context::new();
+    leading.push_system("one");
+    leading.push_system("two");
+    leading.push_user("hi");
+    leading.push_system("a later note");
+
+    let body = OpenAiModel::new("m")
+        .prompt_cache(true)
+        .request_body(&leading, &[]);
+    assert_eq!(body["messages"][0]["content"], "one");
+    assert_eq!(
+        body["messages"][1]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    assert_eq!(body["messages"][3]["content"], "a later note");
+
+    let no_system = OpenAiModel::new("m")
+        .prompt_cache(true)
+        .request_body(&context(), &[]);
+    assert_eq!(no_system["messages"][0]["content"], "hi");
+}
+
+#[test]
+fn gateway_caching_asks_vercel_for_its_automatic_markers() {
+    let plain = OpenAiModel::new("m").request_body(&context(), &[]);
+    assert!(plain.get("providerOptions").is_none());
+
+    let body = OpenAiModel::new("m")
+        .gateway_caching(true)
+        .request_body(&context(), &[]);
+    assert_eq!(
+        body["providerOptions"],
+        json!({"gateway": {"caching": "auto"}})
+    );
+    assert!(body.get("cache_control").is_none());
+}
+
 // Prompt caching only pays off when the front of the request is byte-stable
 // across the turns of one session: the provider matches a prefix, so a single
 // byte that moves turn to turn writes a fresh entry instead of reading the

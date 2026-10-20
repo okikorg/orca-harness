@@ -80,7 +80,9 @@ impl AnthropicModel {
         self
     }
 
-    /// Enable automatic ephemeral prompt caching (provider-default TTL).
+    /// Enable ephemeral prompt caching (provider-default TTL): the top-level
+    /// `cache_control`, which moves to the end of each request, and a fixed
+    /// breakpoint on the last system block.
     pub fn prompt_cache(mut self, enabled: bool) -> Self {
         self.prompt_cache = enabled;
         self

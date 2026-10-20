@@ -176,6 +176,36 @@ async fn native_request_headers_caching_images_and_tool_round_trip() {
     assert_eq!(wire, body);
 }
 
+// The top-level field is the moving breakpoint; the last system block is the
+// fixed one, which caches the tools and the system prompt that precede it.
+#[test]
+fn prompt_cache_marks_the_last_system_block() {
+    let mut context = Context::new();
+    context.push_system("Stable instructions");
+    context.push_system("More instructions");
+    context.push_user("Hello");
+
+    let plain = AnthropicModel::new("claude-test")
+        .request_body(&context, &tools(), &no_thinking())
+        .unwrap();
+    assert!(plain["system"][1].get("cache_control").is_none());
+
+    let cached = AnthropicModel::new("claude-test")
+        .prompt_cache(true)
+        .request_body(&context, &tools(), &no_thinking())
+        .unwrap();
+    assert_eq!(
+        cached["system"],
+        json!([
+            {"type": "text", "text": "Stable instructions"},
+            {"type": "text", "text": "More instructions", "cache_control": {"type": "ephemeral"}}
+        ])
+    );
+    assert_eq!(cached["messages"], plain["messages"]);
+    assert_eq!(cached["tools"], plain["tools"]);
+    assert_eq!(cached["cache_control"], json!({"type": "ephemeral"}));
+}
+
 #[tokio::test]
 async fn sdk_defaults_custom_endpoint_and_missing_credentials() {
     let mut context = Context::new();
