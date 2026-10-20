@@ -8,7 +8,9 @@
 mod request;
 mod stream;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -44,7 +46,42 @@ fn parse_tool_arguments(
 
 /// Receives a response's `id` once per call. OpenRouter calls it the
 /// generation id, the key to its `GET /generation` cost lookup.
-pub type ResponseIdHook = Arc<dyn Fn(&str) + Send + Sync>;
+pub type ResponseIdHook = Arc<dyn Fn(&str, ResponseIdSource) + Send + Sync>;
+
+/// Where a call's response id was read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResponseIdSource {
+    /// OpenRouter's `X-Generation-Id` header on a 2xx response, before any
+    /// of the body.
+    Header,
+    /// The first stream chunk that carried an `id`, or a plain call's body:
+    /// the response had no header.
+    Body,
+}
+
+/// The response header OpenRouter names its generation in.
+const GENERATION_HEADER: &str = "x-generation-id";
+
+/// How long a call its caller dropped keeps waiting for the response
+/// headers, so the generation id they carry is still reported.
+pub const HEADER_WAIT: Duration = Duration::from_secs(10);
+
+/// Reports one call's response id, at most once.
+struct IdReport {
+    hook: Option<ResponseIdHook>,
+    reported: AtomicBool,
+}
+
+impl IdReport {
+    fn report(&self, id: Option<&str>, source: ResponseIdSource) {
+        let (Some(hook), Some(id)) = (&self.hook, id.filter(|id| !id.is_empty())) else {
+            return;
+        };
+        if !self.reported.swap(true, Ordering::AcqRel) {
+            hook(id, source);
+        }
+    }
+}
 
 pub struct OpenAiModel {
     base_url: String,
@@ -64,6 +101,7 @@ pub struct OpenAiModel {
     session_id: Option<String>,
     prompt_cache_key: Option<String>,
     response_id: Option<ResponseIdHook>,
+    header_wait: Duration,
 }
 
 impl OpenAiModel {
@@ -86,6 +124,7 @@ impl OpenAiModel {
             session_id: None,
             prompt_cache_key: None,
             response_id: None,
+            header_wait: HEADER_WAIT,
         }
     }
 
@@ -97,27 +136,29 @@ impl OpenAiModel {
         self
     }
 
-    /// Report each call's response `id` as soon as it is known: from the
-    /// first chunk of a stream, so a stream cut before its usage chunk
-    /// still names the generation. The hook belongs to this instance, so a
-    /// host that needs the id of one particular call builds one per call.
+    /// Report each call's response `id` once, as soon as it is known: from
+    /// the `X-Generation-Id` header of a 2xx response, before the body, so a
+    /// call dropped before its first chunk still names the generation; else
+    /// from the first chunk of a stream or a plain call's body. The hook
+    /// belongs to this instance, so a host that needs the id of one
+    /// particular call builds one per call.
     pub fn response_id(mut self, hook: ResponseIdHook) -> Self {
         self.response_id = Some(hook);
         self
     }
 
-    fn report_response_id(&self, id: Option<&str>) {
-        if let (Some(hook), Some(id)) = (&self.response_id, id.filter(|id| !id.is_empty())) {
-            hook(id);
-        }
+    /// How long a call its caller dropped keeps waiting for its response
+    /// headers to report their id ([`HEADER_WAIT`] unless set).
+    pub fn header_wait(mut self, wait: Duration) -> Self {
+        self.header_wait = wait;
+        self
     }
 
-    /// Reports a stream's id once, from the first chunk that carries one.
-    fn report_stream_id(&self, accumulator: &ChunkAccumulator, reported: &mut bool) {
-        if !*reported && accumulator.response_id().is_some() {
-            self.report_response_id(accumulator.response_id());
-            *reported = true;
-        }
+    fn id_report(&self) -> Arc<IdReport> {
+        Arc::new(IdReport {
+            hook: self.response_id.clone(),
+            reported: AtomicBool::new(false),
+        })
     }
 
     /// Add OpenRouter's normalized prompt-cache directive. Kept opt-in
@@ -236,14 +277,48 @@ impl OpenAiModel {
         request
     }
 
-    async fn post(&self, body: Value) -> Result<reqwest::Response, ModelError> {
+    async fn post(
+        &self,
+        body: Value,
+        ids: &Arc<IdReport>,
+    ) -> Result<reqwest::Response, ModelError> {
         let request = self.prepare_request(&body);
         // RequestBuilder owns the serialized bytes; release the JSON tree
         // before waiting for a potentially long provider response.
         drop(body);
-        let response = request
-            .send()
+        // The request runs in a task of its own, so a caller that drops the
+        // call still gets the headers' generation id reported: for up to
+        // `header_wait` after the drop, then the response is dropped, which
+        // closes the connection and stops the generation upstream.
+        let (mut reply, response) = tokio::sync::oneshot::channel();
+        let ids = ids.clone();
+        let wait = self.header_wait;
+        tokio::spawn(async move {
+            let sent = request.send();
+            tokio::pin!(sent);
+            let response = tokio::select! {
+                response = &mut sent => response,
+                _ = async {
+                    reply.closed().await;
+                    tokio::time::sleep(wait).await;
+                } => return,
+            };
+            // An error status is a refusal before any stream: its headers
+            // name nothing to charge.
+            if let Ok(response) = &response {
+                if response.status().is_success() {
+                    let id = response
+                        .headers()
+                        .get(GENERATION_HEADER)
+                        .and_then(|value| value.to_str().ok());
+                    ids.report(id, ResponseIdSource::Header);
+                }
+            }
+            let _ = reply.send(response);
+        });
+        let response = response
             .await
+            .map_err(|_| ModelError::Request("the request task ended without a response".into()))?
             .map_err(|e| crate::http_error::transport_error(&e))?;
         crate::http_error::check_response(response).await
     }
@@ -364,7 +439,8 @@ impl Model for OpenAiModel {
         context: &Context,
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, ModelError> {
-        let response = self.post(self.request_body(context, tools)).await?;
+        let ids = self.id_report();
+        let response = self.post(self.request_body(context, tools), &ids).await?;
         let body = response
             .text()
             .await
@@ -372,7 +448,7 @@ impl Model for OpenAiModel {
 
         let completion: ChatCompletion = serde_json::from_str(&body)
             .map_err(|e| ModelError::InvalidResponse(format!("{e}: {body}")))?;
-        self.report_response_id(completion.id.as_deref());
+        ids.report(completion.id.as_deref(), ResponseIdSource::Body);
         let choice = completion
             .choices
             .into_iter()
@@ -442,12 +518,12 @@ impl Model for OpenAiModel {
         body["stream"] = json!(true);
         body["stream_options"] = json!({"include_usage": true});
 
-        let response = self.post(body).await?;
+        let ids = self.id_report();
+        let response = self.post(body, &ids).await?;
         let mut bytes = response.bytes_stream();
         let mut lines = SseLineBuffer::default();
         let mut accumulator = ChunkAccumulator::new();
         let mut done_observed = false;
-        let mut id_reported = false;
 
         'body: while let Some(chunk) = bytes.next().await {
             let chunk = chunk.map_err(|e| crate::http_error::transport_error(&e))?;
@@ -457,7 +533,7 @@ impl Model for OpenAiModel {
                     break 'body;
                 }
                 let deltas = accumulator.apply(&payload);
-                self.report_stream_id(&accumulator, &mut id_reported);
+                ids.report(accumulator.response_id(), ResponseIdSource::Body);
                 for delta in deltas? {
                     sink.emit(delta).await;
                 }
@@ -471,7 +547,7 @@ impl Model for OpenAiModel {
                     break;
                 }
                 let deltas = accumulator.apply(&payload);
-                self.report_stream_id(&accumulator, &mut id_reported);
+                ids.report(accumulator.response_id(), ResponseIdSource::Body);
                 for delta in deltas? {
                     sink.emit(delta).await;
                 }

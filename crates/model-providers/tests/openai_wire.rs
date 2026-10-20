@@ -171,7 +171,7 @@ fn recorded_ids() -> (
     let ids = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = ids.clone();
     let hook: orca_harness_model_providers::openai::ResponseIdHook =
-        std::sync::Arc::new(move |id: &str| sink.lock().unwrap().push(id.to_owned()));
+        std::sync::Arc::new(move |id: &str, _| sink.lock().unwrap().push(id.to_owned()));
     (ids, hook)
 }
 
