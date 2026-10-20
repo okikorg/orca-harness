@@ -26,6 +26,9 @@ pub struct ProcessConfig {
     pub(crate) max_output_bytes: Option<usize>,
     pub(crate) buffer_cap: Option<usize>,
     pub(crate) max_processes: Option<usize>,
+    /// Set from a network-off [`SessionEnvironment`](crate::SessionEnvironment),
+    /// never by the host directly: the `shell` tool's network error line.
+    pub(crate) network_off: Option<String>,
 }
 
 impl ProcessConfig {

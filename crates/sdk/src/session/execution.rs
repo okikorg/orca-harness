@@ -28,6 +28,7 @@ use super::events::{EventFanout, RunObserver};
 use super::persistence::save_session_store;
 use super::BusyGuard;
 use crate::background::{rearm, BackgroundNotification, RunBackground};
+use crate::environment::NetworkOffNote;
 use crate::extensions::Compaction;
 use crate::{Agent, Mcp, RunOutcome, RunRequest, SdkError};
 
@@ -52,6 +53,8 @@ pub(super) struct RunExecution {
     /// The session's completion inbox and manager, when the agent
     /// configured subagents.
     pub(super) background: Option<RunBackground>,
+    /// The session's sandbox has no network: the note the model gets.
+    pub(super) network_off: Option<NetworkOffNote>,
     pub(super) _busy: BusyGuard,
 }
 
@@ -101,6 +104,7 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
         cancellation,
         observer,
         background,
+        network_off,
         _busy,
     } = run;
     let mut context = context.lock().await;
@@ -189,6 +193,10 @@ pub(super) async fn execute(run: RunExecution) -> Result<RunOutcome, SdkError> {
         extensions.push(Arc::new(ActiveInventory::new(
             background.inbox.manager().clone(),
         )));
+    }
+    // After compaction, for the same reason as the inventory.
+    if let Some(note) = network_off {
+        extensions.push(Arc::new(note));
     }
     // After compaction: it reads "already loaded" off the context the
     // model is about to see.

@@ -35,6 +35,7 @@ use orca_harness_tools::{
 use tokio::sync::broadcast;
 
 use crate::agent::AgentDefinition;
+use crate::environment::NetworkOffNote;
 use crate::tools::{preset_tools, ToolSource};
 
 pub use notifications::{BackgroundNotification, NOTIFICATION_CAPACITY};
@@ -128,7 +129,11 @@ impl BackgroundServices {
             .background(manager, move |notification| {
                 notifications::notify(&notifier.0, &notifier.1, notification);
             })
-            .spawn_extensions(spawn_extensions(definition, config))
+            .spawn_extensions(spawn_extensions(
+                definition,
+                config,
+                environment.network_off_note(),
+            ))
             // Share the handle before applying explicit limits: `max_depth`
             // publishes configured limits into the shared handle, and
             // explicit limits are per spawn, not a rewrite of what every
@@ -249,8 +254,13 @@ impl Drop for BackgroundServices {
 /// The per-spawn extension factory installed on the session's `subagent`
 /// tool, in the order a child registers them: the host's event relay,
 /// the agent's inherited extensions, the host's per-spawn extensions,
-/// then output truncation sized from the live settings.
-fn spawn_extensions(definition: &AgentDefinition, config: &SubagentConfig) -> SpawnExtensions {
+/// output truncation sized from the live settings, then a network-off
+/// sandbox's note.
+fn spawn_extensions(
+    definition: &AgentDefinition,
+    config: &SubagentConfig,
+    network_off: Option<NetworkOffNote>,
+) -> SpawnExtensions {
     let inherited: Vec<Arc<dyn Extension>> = if config.inherit_extensions {
         definition.extensions.clone()
     } else {
@@ -276,6 +286,10 @@ fn spawn_extensions(definition: &AgentDefinition, config: &SubagentConfig) -> Sp
         let output_chars = settings.output_chars();
         if output_chars != 0 {
             extensions.push(Arc::new(Truncation::new(output_chars as usize)));
+        }
+        // Children run commands in the same sandbox.
+        if let Some(note) = &network_off {
+            extensions.push(Arc::new(note.clone()));
         }
         extensions
     })

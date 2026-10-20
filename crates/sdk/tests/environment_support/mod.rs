@@ -20,6 +20,8 @@ use std::{
 pub struct MemSandbox {
     pub caps: Option<Capabilities>,
     pub fail_exec: bool,
+    /// What every `exec` reports; empty success output when unset.
+    pub exec_output: Option<ExecOutput>,
     pub live_repls: bool,
     pub hang_first_kill: bool,
     pub kills: Arc<std::sync::atomic::AtomicUsize>,
@@ -62,7 +64,7 @@ impl Sandbox for MemSandbox {
             let path = rest.trim().trim_matches('\'');
             self.files.lock().unwrap().remove(path);
         }
-        Ok(ExecOutput::default())
+        Ok(self.exec_output.clone().unwrap_or_default())
     }
 
     /// A session that runs nothing: it records the argv it was asked for

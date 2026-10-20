@@ -337,6 +337,7 @@ impl Session {
                 .background
                 .as_ref()
                 .map(|services| services.run_handles()),
+            network_off: self.environment.network_off_note(),
             _busy: busy,
         })
     }

@@ -118,6 +118,9 @@ fn command_tools(
         process = process.working_dir(dir);
     }
     if let Some(config) = config {
+        if let Some(message) = &config.network_off {
+            shell = shell.network_off(message.clone());
+        }
         if let Some(bytes) = config.max_output_bytes {
             process = process.max_output_bytes(bytes);
         }

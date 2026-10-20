@@ -3,7 +3,7 @@
 #![allow(clippy::result_large_err)]
 use crate::{agent::AgentDefinition, background::ProcessConfig, tools::ToolSource};
 use crate::{SdkError, ToolPreset};
-use orca_harness_core::Sandbox;
+use orca_harness_core::{Context, Extension, ExtensionError, Message, Sandbox, Subscriptions};
 use orca_harness_tools::{Executor, Workspace};
 use std::{
     path::{Path, PathBuf},
@@ -31,6 +31,8 @@ pub enum SessionEnvironment {
         binding_id: String,
         sandbox: Arc<dyn Sandbox>,
         workspace: PathBuf,
+        /// Set with [`Self::network_off`]: why the sandbox has no network.
+        network_off: Option<String>,
     },
 }
 
@@ -44,9 +46,53 @@ impl SessionEnvironment {
             binding_id: binding_id.into(),
             sandbox,
             workspace: workspace.into(),
+            network_off: None,
         };
         value.validate_shape()?;
         Ok(value)
+    }
+
+    /// Mark a sandbox the host started without network access; `message`
+    /// is what the person should be told. Every model call of the session
+    /// and its subagents then has the note "This sandbox has no network
+    /// access. If a task needs the network, tell the user: <message>" in
+    /// context, and the `shell` tool adds `[Orca] <message>` below a failed
+    /// command's network error. Not part of the persisted binding: a resume
+    /// passes whatever the new sandbox is.
+    pub fn network_off(self, message: impl Into<String>) -> Result<Self, SdkError> {
+        let message = message.into();
+        match self {
+            Self::Sandbox {
+                binding_id,
+                sandbox,
+                workspace,
+                ..
+            } if !message.trim().is_empty() => Ok(Self::Sandbox {
+                binding_id,
+                sandbox,
+                workspace,
+                network_off: Some(message),
+            }),
+            Self::Sandbox { .. } => Err(SdkError::Config(
+                "a network-off sandbox needs a nonempty message".into(),
+            )),
+            _ => Err(SdkError::Config(
+                "only a sandbox environment can be marked network-off".into(),
+            )),
+        }
+    }
+
+    /// The note the model gets on a network-off sandbox.
+    pub(crate) fn network_off_note(&self) -> Option<NetworkOffNote> {
+        match self {
+            Self::Sandbox {
+                network_off: Some(message),
+                ..
+            } => Some(NetworkOffNote(format!(
+                "This sandbox has no network access. If a task needs the network, tell the user: {message}"
+            ))),
+            _ => None,
+        }
     }
 
     fn validate_shape(&self) -> Result<(), SdkError> {
@@ -117,15 +163,20 @@ impl SessionEnvironment {
     pub(crate) fn processes(&self, definition: &AgentDefinition) -> Option<ProcessConfig> {
         match self {
             Self::Sandbox {
-                sandbox, workspace, ..
-            } => Some(
-                definition
+                sandbox,
+                workspace,
+                network_off,
+                ..
+            } => {
+                let mut config = definition
                     .processes
                     .clone()
                     .unwrap_or_default()
                     .executor(Executor::sandbox(sandbox.clone()))
-                    .working_dir(workspace.clone()),
-            ),
+                    .working_dir(workspace.clone());
+                config.network_off = network_off.clone();
+                Some(config)
+            }
             _ => definition.processes.clone(),
         }
     }
@@ -176,6 +227,34 @@ impl SessionEnvironment {
             return Err(SdkError::Config(
                 "session environment binding mismatch; supply the original environment".into(),
             ));
+        }
+        Ok(())
+    }
+}
+
+/// A network-off sandbox's note to the model, added before a model call
+/// unless the context already has it, so a compaction that drops it gets
+/// it back at the next call.
+#[derive(Clone)]
+pub(crate) struct NetworkOffNote(String);
+
+#[async_trait::async_trait]
+impl Extension for NetworkOffNote {
+    fn name(&self) -> &str {
+        "network-off-note"
+    }
+
+    fn subscriptions(&self) -> Subscriptions {
+        Subscriptions::none().before_model()
+    }
+
+    async fn before_model(&self, context: &mut Context) -> Result<(), ExtensionError> {
+        let present = context
+            .messages()
+            .iter()
+            .any(|message| matches!(message, Message::User { content, .. } if *content == self.0));
+        if !present {
+            context.push_user(self.0.clone());
         }
         Ok(())
     }
