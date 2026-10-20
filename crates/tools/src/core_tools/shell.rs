@@ -219,6 +219,9 @@ pub struct ShellTool {
     /// window and the NDJSON line cap downstream.
     max_output_bytes: usize,
     working_dir: Option<String>,
+    /// Set on a sandbox the host started without network access: the
+    /// line added below a failed command's network error.
+    network_off: Option<String>,
 }
 
 impl Default for ShellTool {
@@ -234,6 +237,7 @@ impl ShellTool {
             timeout: None,
             max_output_bytes: 64 * 1024,
             working_dir: None,
+            network_off: None,
         }
     }
 
@@ -259,6 +263,14 @@ impl ShellTool {
         self
     }
 
+    /// The target has no network access, and `message` says why. A
+    /// command that fails with a network error gets one more line, `[Orca]
+    /// <message>`, below that error in the stream that reported it.
+    pub fn network_off(mut self, message: impl Into<String>) -> Self {
+        self.network_off = Some(message.into());
+        self
+    }
+
     /// The sandbox path: the provider runs the command and reports the
     /// same three fields, so the tool's contract to the model is unchanged.
     /// Cancellation still wins the race; the provider enforces the timeout.
@@ -280,8 +292,11 @@ impl ShellTool {
             }
         };
 
-        let (stdout, stdout_truncated) = truncate(output.stdout, self.max_output_bytes);
-        let (stderr, stderr_truncated) = truncate(output.stderr, self.max_output_bytes);
+        let (mut stdout, stdout_truncated) = truncate(output.stdout, self.max_output_bytes);
+        let (mut stderr, stderr_truncated) = truncate(output.stderr, self.max_output_bytes);
+        if output.exit_code != 0 {
+            self.mark_network_error(&mut stdout, &mut stderr);
+        }
         Ok(json!({
             "stdout": stdout,
             "stderr": stderr,
@@ -290,6 +305,28 @@ impl ShellTool {
             "stdoutTruncated": stdout_truncated,
             "stderrTruncated": stderr_truncated,
         }))
+    }
+
+    /// On a network-off target, a failed command whose output carries a
+    /// network error gets `[Orca] <message>` as its own line below it:
+    /// stderr when the error is there, otherwise stdout.
+    fn mark_network_error(&self, stdout: &mut String, stderr: &mut String) {
+        let Some(message) = &self.network_off else {
+            return;
+        };
+        let stream = if is_network_error(stderr) {
+            stderr
+        } else if is_network_error(stdout) {
+            stdout
+        } else {
+            return;
+        };
+        if !stream.is_empty() && !stream.ends_with('\n') {
+            stream.push('\n');
+        }
+        stream.push_str("[Orca] ");
+        stream.push_str(message);
+        stream.push('\n');
     }
 
     fn build_command(&self, command_str: &str) -> Command {
@@ -302,6 +339,23 @@ impl ShellTool {
             .kill_on_drop(true);
         cmd
     }
+}
+
+/// What resolvers, sockets and the common clients (curl, pip, npm, Node,
+/// Python) print when a command cannot reach the network.
+const NETWORK_ERRORS: [&str; 8] = [
+    "Could not resolve host",
+    "Temporary failure in name resolution",
+    "Name or service not known",
+    "Network is unreachable",
+    "Failed to establish a new connection",
+    "getaddrinfo",
+    "ENOTFOUND",
+    "ECONNREFUSED",
+];
+
+fn is_network_error(output: &str) -> bool {
+    NETWORK_ERRORS.iter().any(|error| output.contains(error))
 }
 
 fn truncate(bytes: Vec<u8>, cap: usize) -> (String, bool) {
@@ -397,8 +451,11 @@ impl Tool for ShellTool {
         };
         let status = status.map_err(|e| ToolError::msg(format!("wait failed: {e}")))?;
 
-        let (stdout, stdout_truncated) = truncate(stdout, self.max_output_bytes);
-        let (stderr, stderr_truncated) = truncate(stderr, self.max_output_bytes);
+        let (mut stdout, stdout_truncated) = truncate(stdout, self.max_output_bytes);
+        let (mut stderr, stderr_truncated) = truncate(stderr, self.max_output_bytes);
+        if !status.success() {
+            self.mark_network_error(&mut stdout, &mut stderr);
+        }
 
         Ok(json!({
             "stdout": stdout,
@@ -418,5 +475,87 @@ mod tests {
     #[test]
     fn shell_has_no_default_timeout() {
         assert_eq!(ShellTool::local().timeout, None);
+    }
+
+    const MESSAGE: &str = "Network is off here.";
+
+    async fn run(tool: &ShellTool, command: &str) -> Value {
+        let ctx = ToolContext {
+            call_id: "test".into(),
+            tool_name: "shell".into(),
+            cancellation: orca_harness_core::CancellationToken::new(),
+            deadline: None,
+        };
+        tool.call(json!({ "command": command }), &ctx)
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn every_listed_network_error_is_recognised() {
+        for error in NETWORK_ERRORS {
+            assert!(
+                is_network_error(&format!("before {error} after")),
+                "{error}"
+            );
+        }
+        assert!(!is_network_error("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_command_with_a_network_error_gets_the_line_below_it() {
+        let tool = ShellTool::local().network_off(MESSAGE);
+        let out = run(
+            &tool,
+            "echo 'curl: (6) Could not resolve host: example.com' >&2; exit 6",
+        )
+        .await;
+        assert_eq!(
+            out["stderr"],
+            "curl: (6) Could not resolve host: example.com\n[Orca] Network is off here.\n"
+        );
+        assert_eq!(out["stdout"], "");
+        assert_eq!(out["exitCode"], 6);
+
+        // No trailing newline: the line still starts on its own line.
+        let out = run(
+            &tool,
+            "printf 'connect ECONNREFUSED 10.0.0.1:443' >&2; exit 1",
+        )
+        .await;
+        assert_eq!(
+            out["stderr"],
+            "connect ECONNREFUSED 10.0.0.1:443\n[Orca] Network is off here.\n"
+        );
+
+        // Reported on stdout only: the line follows it there.
+        let out = run(
+            &tool,
+            "echo 'getaddrinfo ENOTFOUND registry.npmjs.org'; exit 1",
+        )
+        .await;
+        assert_eq!(
+            out["stdout"],
+            "getaddrinfo ENOTFOUND registry.npmjs.org\n[Orca] Network is off here.\n"
+        );
+        assert_eq!(out["stderr"], "");
+    }
+
+    #[tokio::test]
+    async fn other_output_is_left_alone() {
+        let tool = ShellTool::local().network_off(MESSAGE);
+        // Succeeded, though its output names a network error.
+        let out = run(&tool, "echo 'Could not resolve host' >&2").await;
+        assert_eq!(out["stderr"], "Could not resolve host\n");
+        // Failed, but not on the network.
+        let out = run(&tool, "echo 'No such file or directory' >&2; exit 1").await;
+        assert_eq!(out["stderr"], "No such file or directory\n");
+        // Not marked network-off.
+        let out = run(
+            &ShellTool::local(),
+            "echo 'Network is unreachable' >&2; exit 1",
+        )
+        .await;
+        assert_eq!(out["stderr"], "Network is unreachable\n");
     }
 }
