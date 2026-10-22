@@ -12,11 +12,11 @@ mod common;
 mod environment_support;
 use environment_support::{environment, MemSandbox};
 
-const MESSAGE: &str = "Network is off on Free sandboxes until your organization has credit. \
-    Add credit, or write to us on Discord (https://discord.gg/btTYzdzvqq).";
+const MESSAGE: &str = "The network is off in Free sandboxes until you add credit. Agents can \
+    still run code, but can't install packages or reach the internet.";
 const NOTE: &str = "This sandbox has no network access. If a task needs the network, tell the \
-    user: Network is off on Free sandboxes until your organization has credit. Add credit, or \
-    write to us on Discord (https://discord.gg/btTYzdzvqq).";
+    user: The network is off in Free sandboxes until you add credit. Agents can still run code, \
+    but can't install packages or reach the internet.";
 const CURL: &str = "curl: (6) Could not resolve host: example.com";
 
 /// A sandbox whose every command fails the way curl does without DNS.
