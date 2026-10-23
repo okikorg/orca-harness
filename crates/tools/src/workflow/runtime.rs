@@ -247,7 +247,15 @@ impl<M: Model + Clone + 'static> Runtime<M> {
                     .map(str::to_string)
                     .ok_or_else(|| "stage returned no answer".into())
             });
-            let advance = run.dag.complete(&stage, result);
+            let retry = match &result {
+                Err(error) if transient(error) => run
+                    .deadline
+                    .is_none_or(|deadline| tokio::time::Instant::now() < deadline)
+                    .then(|| run.dag.retry(&stage))
+                    .flatten(),
+                _ => None,
+            };
+            let advance = retry.unwrap_or_else(|| run.dag.complete(&stage, result));
             self.persist(run);
             advance
         };
@@ -467,6 +475,7 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             config.manager.cancel(*spawn);
         }
         let failed = outcome.state != RunState::Done;
+        let completed = run.dag.completed();
         let runtime_ms = u64::try_from(run.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut outcome = WorkflowOutcome::new(outcome, runtime_ms);
         outcome.peak_admitted = run.peak;
@@ -492,8 +501,16 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             result: if failed {
                 // Lead with the cause: the per-stage map cannot name it, and a
                 // reader that stops at the first line must still see why.
+                // Finished stages are not in `outputs` when their barrier or
+                // dependents never settled, so say how to get them back.
+                let kept = match completed {
+                    0 => String::new(),
+                    n => format!(
+                        " ({n} completed stage outputs kept; rerun the same graph with resumeFrom={id} to replay them)"
+                    ),
+                };
                 Err(format!(
-                    "workflow {} ({}): {}\n{answer}",
+                    "workflow {} ({}): {}{kept}\n{answer}",
                     value["state"].as_str().unwrap_or("failed"),
                     id,
                     outcome.error.as_deref().unwrap_or("no error reported"),
@@ -503,4 +520,16 @@ impl<M: Model + Clone + 'static> Runtime<M> {
             },
         })
     }
+}
+
+/// A stage failure worth one more attempt: a provider transport or
+/// truncated-response error. The model layer retries these itself unless
+/// output had already streamed, which is exactly when a reset mid-body
+/// reaches here. Cancellation, deadlines, auth, and filtering stay final.
+fn transient(error: &str) -> bool {
+    error
+        .strip_prefix("subagent failed: model error: ")
+        .is_some_and(|cause| {
+            cause.starts_with("request failed: ") || cause.starts_with("incomplete response: ")
+        })
 }

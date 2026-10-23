@@ -37,9 +37,7 @@ impl Dag {
             self.graph.insert(child_id.clone(), child.clone());
             self.status.insert(child_id.clone(), StageStatus::Running);
             self.in_flight.insert(child_id.clone());
-            if child.schema.is_some() {
-                self.prompts.insert(child_id.clone(), child.prompt.clone());
-            }
+            self.prompts.insert(child_id.clone(), child.prompt.clone());
             children.push(child_id);
             ready.push(child);
         }
