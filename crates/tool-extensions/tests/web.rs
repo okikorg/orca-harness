@@ -6,6 +6,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::Barrier;
 
 use orca_harness_core::{CancellationToken, Tool, ToolContext};
 use orca_harness_tool_extensions::web::{Firecrawl, UrlPolicy, WebFetchTool, WebSearchTool};
@@ -26,8 +27,11 @@ fn http_response(status: &str, content_type: &str, extra: &str, body: &str) -> S
     )
 }
 
-/// Serve canned responses, one connection each, in order, after `delay`.
-async fn spawn_server_delayed(responses: Vec<String>, delay: std::time::Duration) -> SocketAddr {
+/// Serve canned responses, optionally waiting for concurrent requests before replying.
+async fn spawn_server_with_barrier(
+    responses: Vec<String>,
+    barrier: Option<Arc<Barrier>>,
+) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -37,7 +41,9 @@ async fn spawn_server_delayed(responses: Vec<String>, delay: std::time::Duration
             };
             let mut buf = [0u8; 4096];
             let _ = sock.read(&mut buf).await; // request head; contents irrelevant
-            tokio::time::sleep(delay).await;
+            if let Some(barrier) = &barrier {
+                barrier.wait().await;
+            }
             let _ = sock.write_all(response.as_bytes()).await;
             let _ = sock.shutdown().await;
         }
@@ -47,7 +53,7 @@ async fn spawn_server_delayed(responses: Vec<String>, delay: std::time::Duration
 
 /// Serve canned responses, one connection each, in order.
 async fn spawn_server(responses: Vec<String>) -> SocketAddr {
-    spawn_server_delayed(responses, std::time::Duration::ZERO).await
+    spawn_server_with_barrier(responses, None).await
 }
 
 #[tokio::test]
@@ -190,20 +196,21 @@ async fn search_parses_provider_results() {
 async fn concurrent_fetches_fan_out_through_the_dispatcher() {
     use orca_harness_core::testing::call;
     use orca_harness_core::{Dispatcher, ExtensionRegistry, ToolRegistry};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
-    // Three servers, each delaying 300ms before answering: a serial client
-    // needs 900ms+, a parallel batch finishes near 300ms.
+    // No server replies until all three requests arrive. Serial dispatch
+    // cannot cross this barrier, regardless of machine speed.
+    let barrier = Arc::new(Barrier::new(3));
     let mut urls = Vec::new();
     for i in 0..3 {
-        let addr = spawn_server_delayed(
+        let addr = spawn_server_with_barrier(
             vec![http_response(
                 "200 OK",
                 "text/plain",
                 "",
                 &format!("body-{i}"),
             )],
-            Duration::from_millis(300),
+            Some(barrier.clone()),
         )
         .await;
         urls.push(format!("http://{addr}/p{i}"));
@@ -219,26 +226,24 @@ async fn concurrent_fetches_fan_out_through_the_dispatcher() {
         .map(|(i, url)| call(&format!("c{i}"), "web_fetch", json!({"url": url})))
         .collect();
 
-    let started = Instant::now();
-    let results = Dispatcher::new()
-        .execute(
+    let results = tokio::time::timeout(
+        Duration::from_secs(10),
+        Dispatcher::new().execute(
             batch,
             &tools,
             &ExtensionRegistry::new(),
             &orca_harness_core::CancellationToken::new(),
             None,
             3,
-        )
-        .await
-        .unwrap();
-    let wall = started.elapsed();
+        ),
+    )
+    .await
+    .expect("all three fetches must arrive before any server responds")
+    .unwrap();
 
+    assert_eq!(results.len(), 3);
     for (i, result) in results.iter().enumerate() {
         assert!(!result.is_error, "fetch {i} failed: {}", result.output);
         assert_eq!(result.output["content"], json!(format!("body-{i}")));
     }
-    assert!(
-        wall < Duration::from_millis(700),
-        "3×300ms fetches should overlap, took {wall:?}"
-    );
 }
