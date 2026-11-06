@@ -77,6 +77,42 @@ Remote MCP tools are named `mcp__<server>__<tool>` and are loaded through the
 `mcp_search_tools`, `mcp_select_tool` and `mcp_features` interface tools. A
 `--tools` allowlist must name the interface tools and the remote tools it wants.
 
+### Providers and models
+
+`--provider LABEL` picks the provider for one invocation (headless runs,
+`--list-models`, `--list-providers`) and wins over the saved provider. Labels:
+`openrouter`, `vercel`, `cheaperinference`, `openai`, `openai-codex`, `anthropic`,
+`local`. Keys and logins resolve as usual (flag, environment, saved config, OAuth
+login); nothing is written to `config.json`. The model is `--model`, otherwise the
+provider's saved model, otherwise its default. `ORCA_MODEL` and `ORCA_BASE_URL` are
+ignored when `--provider` is given, since they usually belong to another provider.
+An explicit `--base-url` still applies, with the same reach as without `--provider`:
+requests to openrouter, openai, anthropic and local, and generation (not
+`--list-models`) for vercel and cheaperinference; openai-codex always uses its own
+endpoints. An unknown label, or `--provider` combined with `--openrouter`/`--anthropic`
+naming a different provider, exits 1.
+
+`orcacode --list-providers --json` prints one document and makes no network calls:
+
+```json
+{"active":"openai-codex","providers":[{"label":"openrouter","name":"OpenRouter","auth":"api_key","configured":true,"model":"openrouter/auto"}]}
+```
+
+`auth` is `api_key`, `oauth` or `none`. `configured` means a key in the environment
+or config (`api_key`), a stored login (`oauth`), and is always true for `local`.
+`model` is the saved model for that provider or its default. Key values are never
+printed.
+
+`orcacode --provider openrouter --list-models --json` prints the catalog; a failed
+listing exits non-zero with the error on stderr:
+
+```json
+{"provider":"openrouter","models":[{"id":"...","name":"Display name","contextWindow":131072,"efforts":["low","high"]}]}
+```
+
+`name`, `contextWindow` and `efforts` are `null` when the provider does not publish
+them. Without `--json` the plain-text listing is unchanged.
+
 ### Events
 
 Every line on stdout is one JSON object with a `type`. The first is `metadata`

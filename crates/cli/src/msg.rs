@@ -50,6 +50,19 @@ impl Provider {
     }
 
     /// Parse a label as produced by [`Provider::label`].
+    /// Human-readable name, as shown in `--list-providers`.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Provider::OpenRouter => "OpenRouter",
+            Provider::Vercel => "Vercel AI Gateway",
+            Provider::CheaperInference => "CheaperInference",
+            Provider::OpenAi => "OpenAI API",
+            Provider::OpenAiCodex => "OpenAI Codex (ChatGPT subscription)",
+            Provider::Anthropic => "Anthropic",
+            Provider::Local => "Local (OpenAI-compatible)",
+        }
+    }
+
     pub fn from_label(label: &str) -> Option<Provider> {
         Provider::ALL.into_iter().find(|p| p.label() == label)
     }
