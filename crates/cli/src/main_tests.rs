@@ -507,6 +507,7 @@ mod main_tests {
             firecrawl_key: None,
             openrouter: false,
             list_models: false,
+            list_providers: false,
             workspace: PathBuf::from("."),
             prompt: None,
             prompt_source: None,

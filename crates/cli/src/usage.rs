@@ -25,7 +25,13 @@ OPTIONS:
                      web_search tool
   --openrouter       use OpenRouter (openrouter.ai) as the endpoint
   --anthropic        use the native Anthropic Messages API
+  --provider LABEL   provider for this run, overriding the saved one:
+                     openrouter, vercel, cheaperinference, openai,
+                     openai-codex, anthropic, local (never saved)
+  --list-providers   print the providers, their auth and saved models
+                     and exit (--json for one JSON document)
   --list-models      print the endpoint's model catalog and exit
+                     (--json for one JSON document)
   --workspace DIR    tool workspace root (default: current directory)
   --max-steps N      model invocations per run (default 48)
   --max-output-tokens N

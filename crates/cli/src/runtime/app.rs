@@ -46,9 +46,32 @@ pub(crate) async fn entrypoint() -> ExitCode {
         }
     }
 
+    if cfg.list_providers {
+        let rows = crate::msg::Provider::ALL.map(crate::provider_list::ProviderRow::probe);
+        if cfg.json {
+            println!(
+                "{}",
+                crate::provider_list::providers_document(cfg.provider, &rows)
+            );
+        } else {
+            println!(
+                "{}",
+                crate::provider_list::providers_text(cfg.provider, &rows)
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+
     if cfg.list_models {
         let result = Endpoint::from_config(&cfg).list_models().await;
         return match result {
+            Ok(models) if cfg.json => {
+                println!(
+                    "{}",
+                    crate::provider_list::models_document(cfg.provider, &models)
+                );
+                ExitCode::SUCCESS
+            }
             Ok(models) => {
                 for model in models {
                     println!("{}", model.summary());

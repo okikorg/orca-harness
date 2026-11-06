@@ -20,6 +20,7 @@ mod plan;
 mod plugin;
 mod presentation;
 mod prompt;
+mod provider_list;
 mod read_only;
 mod refine;
 mod run_args;
@@ -91,6 +92,8 @@ pub struct Config {
     pub firecrawl_key: Option<String>,
     pub openrouter: bool,
     pub list_models: bool,
+    /// `--list-providers`: print the provider registry and exit.
+    pub list_providers: bool,
     pub workspace: PathBuf,
     pub prompt: Option<String>,
     /// `-p -` or `--prompt-file`: read into `prompt` before the run starts.

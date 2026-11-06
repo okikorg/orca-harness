@@ -10,7 +10,10 @@ use crate::{config, resolve_theme, select_provider, Config, USAGE};
 
 pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut model = std::env::var("ORCA_MODEL").ok();
-    let mut base_url = std::env::var("ORCA_BASE_URL").ok();
+    let env_base_url = std::env::var("ORCA_BASE_URL").ok();
+    let mut base_url_flag: Option<String> = None;
+    let mut provider_flag: Option<Provider> = None;
+    let mut list_providers = false;
     let mut api_key: Option<String> = None;
     let mut firecrawl_key: Option<String> = None;
     let mut openrouter = false;
@@ -61,7 +64,17 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         };
         match arg.as_str() {
             "--model" => model = Some(value("--model")?),
-            "--base-url" => base_url = Some(value("--base-url")?),
+            "--base-url" => base_url_flag = Some(value("--base-url")?),
+            "--provider" => {
+                let label = value("--provider")?;
+                provider_flag = Some(Provider::from_label(&label).ok_or_else(|| {
+                    format!(
+                        "unknown provider: {label} (expected one of: {})",
+                        Provider::ALL.map(Provider::label).join(", ")
+                    )
+                })?);
+            }
+            "--list-providers" => list_providers = true,
             "--api-key" => api_key = Some(value("--api-key")?),
             "--firecrawl-key" => firecrawl_key = Some(value("--firecrawl-key")?),
             "--openrouter" => openrouter = true,
@@ -151,13 +164,37 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     if openrouter && anthropic {
         return Err("--anthropic and --openrouter cannot be combined".into());
     }
-    let stored_provider = if openrouter || anthropic || base_url.is_some() {
-        None
-    } else {
-        config::stored_provider().and_then(|label| Provider::from_label(&label))
+    if let Some(chosen) = provider_flag {
+        for (set, flag, implied) in [
+            (openrouter, "--openrouter", Provider::OpenRouter),
+            (anthropic, "--anthropic", Provider::Anthropic),
+        ] {
+            if set && chosen != implied {
+                return Err(format!(
+                    "--provider {} cannot be combined with {flag}",
+                    chosen.label()
+                ));
+            }
+        }
+    }
+    // An explicit --provider ignores ORCA_BASE_URL (a standing local
+    // endpoint must not redirect it); an explicit --base-url still applies.
+    let base_url = match provider_flag {
+        Some(_) => base_url_flag,
+        None => base_url_flag.or(env_base_url),
     };
-    let openrouter = openrouter || stored_provider == Some(Provider::OpenRouter);
-    let provider = if anthropic {
+    let stored_provider =
+        if provider_flag.is_some() || openrouter || anthropic || base_url.is_some() {
+            None
+        } else {
+            config::stored_provider().and_then(|label| Provider::from_label(&label))
+        };
+    let openrouter = openrouter
+        || stored_provider == Some(Provider::OpenRouter)
+        || provider_flag == Some(Provider::OpenRouter);
+    let provider = if let Some(chosen) = provider_flag {
+        chosen
+    } else if anthropic {
         Provider::Anthropic
     } else {
         select_provider(openrouter, base_url.is_some(), stored_provider)
@@ -175,7 +212,9 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         Provider::CheaperInference => Provider::CheaperInference.base_url().into(),
         Provider::OpenAiCodex => orca_harness_model_providers::openai_codex::CODEX_BASE_URL.into(),
         Provider::Anthropic => Provider::Anthropic.base_url().into(),
-        Provider::OpenAi if api_key.is_some() => "https://api.openai.com/v1".into(),
+        Provider::OpenAi if api_key.is_some() || provider_flag.is_some() => {
+            "https://api.openai.com/v1".into()
+        }
         Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),
     });
     let model = model
@@ -228,6 +267,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         firecrawl_key,
         openrouter,
         list_models,
+        list_providers,
         workspace,
         prompt,
         prompt_source,
