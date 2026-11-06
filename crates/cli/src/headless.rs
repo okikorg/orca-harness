@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use orca_harness_core::{Agent, CancellationToken, Context, Model};
+use orca_harness_core::{Agent, CancellationToken, Context, HarnessError, Image, Model};
 use orca_harness_extensions::{
     EventStream, HarnessEvent, MemoryExtension, MemoryManageTool, MemoryModel, MemoryScope,
     MemorySearchTool, MemoryStore, Truncation, UsageMeter,
@@ -22,8 +22,11 @@ use orca_harness_tools::{
 
 use crate::approval::HeadlessGate;
 use crate::auto_approval::AutoApproval;
+use crate::headless_input::ApprovalChannel;
 use crate::mode::{ModeHandle, PlanGate};
 use crate::presentation;
+use crate::read_only::ReadOnlyGate;
+use crate::stdio_approval::StdioApprovals;
 use crate::Config;
 
 const BARE_TOOLS: [&str; 3] = ["read_file", "grep", "glob"];
@@ -72,10 +75,27 @@ pub async fn run<M: Model + Clone + 'static>(
     memory_scope: &MemoryScope,
     model_retries: Arc<AtomicU64>,
     subagent_settings: SubagentDepth,
+    images: Vec<Image>,
 ) -> i32 {
     // Connect before constructing the model adapter so selection made by an
     // MCP tool is reflected in the immediately following provider request.
-    let mcp = crate::mcp::McpServers::new();
+    let mcp = crate::mcp::McpServers::new().with_run_servers(cfg.mcp_config.clone());
+    let saved_mcp = if cfg.mcp_config.is_empty() {
+        Vec::new()
+    } else {
+        crate::config::stored_mcp_servers()
+    };
+    for server in &cfg.mcp_config {
+        if saved_mcp
+            .iter()
+            .any(|saved| saved.enabled && saved.name == server.name)
+        {
+            eprintln!(
+                "MCP {} from --mcp-config replaces the saved server of that name for this run",
+                server.name
+            );
+        }
+    }
     let mut plugin_hooks = None;
     if !cfg.bare {
         let mut mcp_notices = mcp.reload().await;
@@ -96,6 +116,7 @@ pub async fn run<M: Model + Clone + 'static>(
         Arc::new(McpModel::new(model, mcp.catalog()))
     };
     let model_for_subagents = model.clone();
+    let session_id = session.as_ref().map(|session| session.session_id());
     let model: Arc<dyn Model> = if cfg.bare {
         model
     } else {
@@ -169,12 +190,27 @@ pub async fn run<M: Model + Clone + 'static>(
     let model: Arc<dyn Model> = Arc::new(crate::mode::OrchestrateModel::new(model, mode.clone()));
     let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws.root());
     let (meter, usage) = UsageMeter::new();
-    // PlanGate first: --plan denies before --yolo/--auto-approve can allow.
+    // Auto owns unresolved admission and yolo disables it, so neither may
+    // have the headless human gate re-added afterward.
+    let admit_gated = cfg.auto_approve || cfg.mode().bypasses_human_approval();
+    let stdio_approvals = (cfg.approvals == ApprovalChannel::Stdio
+        && (!admit_gated || cfg.read_only))
+        .then(|| StdioApprovals::from_process(admit_gated, cfg.read_only));
+    // PlanGate and ReadOnlyGate first: they deny before --yolo/--auto-approve can allow.
     let mut agent = Agent::new(model)
         .limits(cfg.limits())
         .extension(events)
         .extension(meter)
-        .extension(PlanGate::new(mode.clone(), plan_area.clone()))
+        .extension(PlanGate::new(mode.clone(), plan_area.clone()));
+    if cfg.read_only {
+        let mcp_tools = mcp
+            .tools()
+            .iter()
+            .map(|tool| tool.schema().name)
+            .collect::<Vec<_>>();
+        agent = agent.extension(ReadOnlyGate::new(mcp_tools, stdio_approvals.is_some()));
+    }
+    let mut agent = agent
         .extension(orca_harness_tools::MutationPreflight)
         .extension(auto_approval.clone());
     if let Some(plugin_hooks) = &plugin_hooks {
@@ -186,9 +222,9 @@ pub async fn run<M: Model + Clone + 'static>(
     if crate::extensions::enabled("retry") {
         agent = agent.extension(crate::extensions::tool_retry());
     }
-    // Auto owns unresolved admission and yolo disables it, so neither may
-    // have the headless human gate re-added afterward.
-    if !cfg.auto_approve && !cfg.mode().bypasses_human_approval() {
+    if let Some(gate) = &stdio_approvals {
+        agent = agent.extension(gate.clone());
+    } else if !admit_gated {
         agent = agent.extension(HeadlessGate);
     }
     if let Some(session) = &session {
@@ -244,6 +280,8 @@ pub async fn run<M: Model + Clone + 'static>(
             );
             let subagent_plugin_hooks = plugin_hooks.clone();
             let subagent_auto_approval = auto_approval.for_subagent();
+            // Children ask the same caller; ids keep concurrent requests apart.
+            let subagent_approvals = stdio_approvals.clone();
             agent = agent.tool_arc(Arc::new(subagent.spawn_extensions(Arc::new(move |_| {
                 let host_hooks = [
                     Some(Arc::new(subagent_auto_approval.clone())
@@ -251,6 +289,9 @@ pub async fn run<M: Model + Clone + 'static>(
                     subagent_plugin_hooks
                         .as_ref()
                         .map(|hooks| hooks.clone() as Arc<dyn orca_harness_core::Extension>),
+                    subagent_approvals.as_ref().map(|gate| {
+                        Arc::new(gate.clone()) as Arc<dyn orca_harness_core::Extension>
+                    }),
                 ];
                 crate::runtime::subagents::extensions(
                     &extension_settings,
@@ -290,6 +331,7 @@ pub async fn run<M: Model + Clone + 'static>(
         cancel_on_signal.cancel();
     });
 
+    let resumed_run = resumed.is_some();
     let mut context = match resumed {
         // A recorded transcript already begins with its system prompt.
         Some(context) => context,
@@ -308,7 +350,19 @@ pub async fn run<M: Model + Clone + 'static>(
     if mode.is_plan() && plan_area.open() {
         context.push_system(crate::plan::briefing(&crate::plan::today()));
     }
-    context.push_user(crate::prompt::strip_location_mentions(prompt));
+    if cfg.read_only {
+        context.push_system(
+            "Read-only mode is on for this run: do not modify files or state. Only \
+             observing tools and MCP tools run; shell runs only if the caller approves \
+             each command. Answer with what you found.",
+        );
+    }
+    let prompt = crate::prompt::strip_location_mentions(prompt);
+    if images.is_empty() {
+        context.push_user(prompt);
+    } else {
+        context.push_user_with_images(prompt, images);
+    }
 
     let started = Instant::now();
     if json {
@@ -323,6 +377,14 @@ pub async fn run<M: Model + Clone + 'static>(
                 "maxOutputTokens": cfg.max_output_tokens,
                 "bare": cfg.bare,
                 "tools": selected_names,
+                "sessionId": session_id,
+                "resumed": resumed_run,
+                "readOnly": cfg.read_only,
+                "approvals": match cfg.approvals {
+                    ApprovalChannel::Deny => "deny",
+                    ApprovalChannel::Stdio => "stdio",
+                },
+                "mcpServers": cfg.mcp_config.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             })
         );
     }
@@ -335,13 +397,19 @@ pub async fn run<M: Model + Clone + 'static>(
             totals.input_tokens, totals.output_tokens
         );
     }
-    let status = if result.is_ok() { "success" } else { "error" };
+    let status = match &result {
+        Ok(_) => "success",
+        Err(HarnessError::StepLimitExceeded) => "max_steps",
+        Err(HarnessError::Cancelled) => "cancelled",
+        Err(_) => "error",
+    };
     if json {
         println!(
             "{}",
             serde_json::json!({
                 "type": "summary",
                 "status": status,
+                "sessionId": session_id,
                 "provider": cfg.provider.label(),
                 "model": cfg.model,
                 "effort": cfg.reasoning_effort,
@@ -405,5 +473,78 @@ impl OpenLine {
             stream
         };
         self.0.store(open, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use orca_harness_extensions::HarnessEvent;
+    use serde_json::json;
+
+    /// The README's NDJSON section is the contract hosts build against;
+    /// every serialized event type must appear in it.
+    #[test]
+    fn readme_documents_every_json_event_type() {
+        let readme = include_str!("../README.md");
+        let events = [
+            HarnessEvent::AgentStart,
+            HarnessEvent::AssistantDelta {
+                text: String::new(),
+            },
+            HarnessEvent::ReasoningDelta {
+                text: String::new(),
+            },
+            HarnessEvent::ToolInputDelta {
+                text: String::new(),
+            },
+            HarnessEvent::Assistant {
+                message: String::new(),
+            },
+            HarnessEvent::ToolCall {
+                tool_call_id: String::new(),
+                tool_name: String::new(),
+                input: json!({}),
+            },
+            HarnessEvent::ToolStarted {
+                tool_call_id: String::new(),
+                tool_name: String::new(),
+            },
+            HarnessEvent::ToolFinished {
+                tool_call_id: String::new(),
+                tool_name: String::new(),
+                is_error: false,
+            },
+            HarnessEvent::ToolResult {
+                tool_call_id: String::new(),
+                tool_name: String::new(),
+                output: json!(null),
+                is_error: false,
+            },
+            HarnessEvent::Usage {
+                usage: Default::default(),
+            },
+            HarnessEvent::Result {
+                message: String::new(),
+            },
+            HarnessEvent::Error {
+                message: String::new(),
+            },
+        ];
+        let mut types = events
+            .iter()
+            .map(|event| {
+                serde_json::to_value(event).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        types.extend(["metadata", "summary", "approval_request"].map(String::from));
+        for kind in types {
+            assert!(
+                readme.contains(&format!(r#"{{"type":"{kind}""#)),
+                "README is missing the {kind} event"
+            );
+        }
     }
 }

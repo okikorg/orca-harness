@@ -73,6 +73,8 @@ enum LaunchIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DesiredSource {
     Standalone,
+    /// Supplied by headless `--mcp-config` for this process only.
+    Run,
     Plugin {
         plugin: String,
         server: String,
@@ -123,6 +125,9 @@ pub struct McpServers {
     desired: Arc<RwLock<Vec<DesiredServer>>>,
     plugin_collisions: Arc<Mutex<BTreeSet<PluginCollision>>>,
     plugins: PluginSnapshot,
+    /// `--mcp-config` servers. Never written to config; a run server
+    /// replaces a saved server of the same name for this process.
+    run_servers: Arc<Vec<crate::headless_input::RunMcpServer>>,
 }
 
 impl Default for McpServers {
@@ -143,7 +148,14 @@ impl McpServers {
             desired: Arc::default(),
             plugin_collisions: Arc::default(),
             plugins,
+            run_servers: Arc::default(),
         }
+    }
+
+    /// Add per-run servers (headless `--mcp-config`) to the saved ones.
+    pub fn with_run_servers(mut self, servers: Vec<crate::headless_input::RunMcpServer>) -> Self {
+        self.run_servers = Arc::new(servers);
+        self
     }
 
     /// The three stable interfaces followed by every hidden remote tool in
@@ -418,11 +430,17 @@ impl McpServers {
                     .map_err(|error| error.to_string())
             }
             LaunchIdentity::Structured(launch) => {
-                let DesiredSource::Plugin { data, .. } = &server.source else {
-                    unreachable!("structured launches are plugin-owned")
-                };
-                crate::config::create_plugin_data_dir(data)
-                    .map_err(|error| format!("cannot create plugin data directory: {error}"))?;
+                match &server.source {
+                    DesiredSource::Plugin { data, .. } => {
+                        crate::config::create_plugin_data_dir(data).map_err(|error| {
+                            format!("cannot create plugin data directory: {error}")
+                        })?
+                    }
+                    DesiredSource::Run => {}
+                    DesiredSource::Standalone => {
+                        unreachable!("standalone servers use legacy command strings")
+                    }
+                }
                 McpClient::connect_stdio(&server.name, launch)
                     .await
                     .map_err(|error| error.to_string())
@@ -437,12 +455,18 @@ impl McpServers {
         let mut desired = configured
             .iter()
             .filter(|server| server.enabled)
+            .filter(|server| !self.run_servers.iter().any(|run| run.name == server.name))
             .map(|server| DesiredServer {
                 name: server.name.clone(),
                 launch: LaunchIdentity::Legacy(server.command.clone()),
                 source: DesiredSource::Standalone,
             })
             .collect::<Vec<_>>();
+        desired.extend(self.run_servers.iter().map(|server| DesiredServer {
+            name: server.name.clone(),
+            launch: LaunchIdentity::Structured(server.launch.clone()),
+            source: DesiredSource::Run,
+        }));
         desired.extend(self.plugins.servers.iter().map(|server| DesiredServer {
             name: server.name.clone(),
             launch: LaunchIdentity::Structured(server.launch.clone()),
@@ -515,7 +539,9 @@ impl McpServers {
 impl DesiredServer {
     fn connected_line(&self, count: &str) -> String {
         match &self.source {
-            DesiredSource::Standalone => format!("MCP {} connected · {count}", self.name),
+            DesiredSource::Standalone | DesiredSource::Run => {
+                format!("MCP {} connected · {count}", self.name)
+            }
             DesiredSource::Plugin { plugin, server, .. } => {
                 format!("Plugin {plugin} MCP {server} connected · {count}")
             }
@@ -524,7 +550,9 @@ impl DesiredServer {
 
     fn error_line(&self, error: &str) -> String {
         match &self.source {
-            DesiredSource::Standalone => format!("MCP {} · {error}", self.name),
+            DesiredSource::Standalone | DesiredSource::Run => {
+                format!("MCP {} · {error}", self.name)
+            }
             DesiredSource::Plugin { plugin, server, .. } => {
                 format!("Plugin {plugin} MCP {server} · {error}")
             }
