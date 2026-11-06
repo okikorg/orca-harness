@@ -10,6 +10,7 @@ mod changelog;
 mod config;
 mod extensions;
 mod headless;
+mod headless_input;
 mod instructions;
 mod mcp;
 mod mode;
@@ -19,9 +20,11 @@ mod plan;
 mod plugin;
 mod presentation;
 mod prompt;
+mod read_only;
 mod refine;
 mod run_args;
 mod skills;
+mod stdio_approval;
 mod subagent_models;
 mod subagent_settings;
 mod tui;
@@ -135,9 +138,20 @@ OPTIONS:
   --resume ID        resume a recorded session by id (a unique prefix works)
   --no-session       do not record this session to disk
   --json             headless: emit NDJSON harness events on stdout
+  --prompt-file PATH headless: read the prompt from a file (-p - reads stdin)
+  --mcp-config JSON  headless: extra MCP servers for this run only, inline
+                     JSON or a file: {\"name\":{\"command\":\"...\",
+                     \"args\":[...],\"env\":{...},\"cwd\":\"...\"}};
+                     never saved to config.json
+  --approvals MODE   headless: deny (default) or stdio; stdio emits
+                     approval_request events and reads decisions from stdin
+                     (requires --json)
+  --read-only        headless: no file writes, compute, delegation or memory
+                     writes; shell needs approval; MCP tools stay usable
+  --image PATH       headless: attach an image to the prompt (repeatable)
   --auto-approve     headless: allow shell/write/edit without approval
                      (implied by --yolo)
-  -p, --prompt TEXT  headless prompt
+  -p, --prompt TEXT  headless prompt (- reads it from stdin)
   -h, --help         show this help
   -v, -V, --version  print the version and exit
 
@@ -171,6 +185,16 @@ pub struct Config {
     pub list_models: bool,
     pub workspace: PathBuf,
     pub prompt: Option<String>,
+    /// `-p -` or `--prompt-file`: read into `prompt` before the run starts.
+    pub prompt_source: Option<headless_input::PromptSource>,
+    /// `--mcp-config`: servers for this run only, added to the saved ones.
+    pub mcp_config: Vec<headless_input::RunMcpServer>,
+    /// `--approvals`: how a headless run answers gated tool calls.
+    pub approvals: headless_input::ApprovalChannel,
+    /// `--read-only`: no writes anywhere, shell behind approval.
+    pub read_only: bool,
+    /// `--image`: files attached to the headless user message.
+    pub images: Vec<PathBuf>,
     pub json: bool,
     pub auto_approve: bool,
     pub max_steps: u32,

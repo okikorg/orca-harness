@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use orca_harness_model_providers::openrouter;
 
+use crate::headless_input::{self, ApprovalChannel, PromptSource};
 use crate::msg::Provider;
 use crate::{config, resolve_theme, select_provider, Config, USAGE};
 
@@ -17,6 +18,11 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut list_models = false;
     let mut workspace = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut prompt = None;
+    let mut prompt_source: Option<PromptSource> = None;
+    let mut mcp_config = Vec::new();
+    let mut approvals = ApprovalChannel::Deny;
+    let mut read_only = false;
+    let mut images = Vec::new();
     let mut json = false;
     let mut auto_approve = false;
     let mut max_steps = 48;
@@ -106,7 +112,30 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             "--yolo" => yolo = true,
             "--json" => json = true,
             "--auto-approve" => auto_approve = true,
-            "-p" | "--prompt" => prompt = Some(value("-p")?),
+            "-p" | "--prompt" => {
+                let text = value("-p")?;
+                if prompt.is_some() || prompt_source.is_some() {
+                    return Err("give the prompt once: -p TEXT, -p - or --prompt-file".into());
+                }
+                if text == "-" {
+                    prompt_source = Some(PromptSource::Stdin);
+                } else {
+                    prompt = Some(text);
+                }
+            }
+            "--prompt-file" => {
+                let path = value("--prompt-file")?;
+                if prompt.is_some() || prompt_source.is_some() {
+                    return Err("give the prompt once: -p TEXT, -p - or --prompt-file".into());
+                }
+                prompt_source = Some(PromptSource::File(PathBuf::from(path)));
+            }
+            "--mcp-config" => {
+                mcp_config.extend(headless_input::parse_mcp_config(&value("--mcp-config")?)?)
+            }
+            "--approvals" => approvals = ApprovalChannel::parse(&value("--approvals")?)?,
+            "--read-only" => read_only = true,
+            "--image" => images.push(PathBuf::from(value("--image")?)),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 std::process::exit(0);
@@ -154,8 +183,41 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         .unwrap_or_else(|| provider.default_model().into());
     let theme = resolve_theme(theme);
 
-    if prompt.is_none() && (bare || tools.is_some()) {
+    let headless = prompt.is_some() || prompt_source.is_some();
+    if !headless && (bare || tools.is_some()) {
         return Err("--bare and --tools require headless -p/--prompt".into());
+    }
+    if !headless
+        && (!mcp_config.is_empty()
+            || approvals != ApprovalChannel::Deny
+            || read_only
+            || !images.is_empty())
+    {
+        return Err(
+            "--mcp-config, --approvals, --read-only and --image require headless -p/--prompt"
+                .into(),
+        );
+    }
+    if bare && !mcp_config.is_empty() {
+        return Err("--bare skips MCP; drop --bare to use --mcp-config".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(name) = mcp_config.iter().find(|s| !seen.insert(s.name.clone())) {
+        return Err(format!(
+            "--mcp-config: server {} is defined twice",
+            name.name
+        ));
+    }
+    if approvals == ApprovalChannel::Stdio {
+        if !json {
+            return Err("--approvals stdio requires --json".into());
+        }
+        if prompt_source == Some(PromptSource::Stdin) {
+            return Err(
+                "--approvals stdio reads decisions from stdin; pass the prompt with --prompt-file instead of -p -"
+                    .into(),
+            );
+        }
     }
 
     Ok(Config {
@@ -168,6 +230,11 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         list_models,
         workspace,
         prompt,
+        prompt_source,
+        mcp_config,
+        approvals,
+        read_only,
+        images,
         json,
         auto_approve,
         max_steps,

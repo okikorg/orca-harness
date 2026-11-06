@@ -37,6 +37,24 @@ use crate::{
 /// Headless or interactive. The endpoint (provider, base url, key, model)
 /// lives in the worker and can be switched from the TUI at runtime.
 pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
+    // Headless inputs are read before a session file is created, so a bad
+    // path or empty stdin fails without leaving an empty session behind.
+    if let Some(source) = &cfg.prompt_source {
+        match crate::headless_input::read_prompt(source, std::io::stdin().lock()) {
+            Ok(prompt) => cfg.prompt = Some(prompt),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let images = match crate::headless_input::load_images(&cfg.images) {
+        Ok(images) => images,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let session = if cfg.no_session {
         None
     } else {
@@ -132,6 +150,7 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
             &memory_scope,
             endpoint.model_retry_counter(),
             subagent_depth.clone(),
+            images,
         )
         .await;
         return ExitCode::from(code as u8);

@@ -42,6 +42,83 @@ Provider settings, themes, API keys, approval rules, and selected models are per
 cargo test -p orcacode
 ```
 
+## Headless engine contract
+
+A host can drive `orcacode` as one process per turn:
+
+```bash
+orcacode -p - --json --mcp-config servers.json < prompt.txt          # new session
+orcacode --resume SESSION_ID -p - --json --mcp-config servers.json < next.txt
+```
+
+Headless flags:
+
+| Flag | Meaning |
+| :-- | :-- |
+| `-p TEXT`, `-p -`, `--prompt-file PATH` | Prompt inline, from stdin to EOF, or from a file. Exactly one. An empty prompt is an error. |
+| `--json` | NDJSON events on stdout, one object per line. Diagnostics stay on stderr. |
+| `--resume ID` | Continue a recorded session; use the `sessionId` from a previous run. A unique prefix also works. |
+| `--mcp-config JSON\|PATH` | MCP servers for this run only, added to the saved ones; never written to `config.json`. A run server replaces a saved server of the same name (a notice goes to stderr). Not allowed with `--bare`. |
+| `--approvals deny\|stdio` | `deny` (default): gated tools are refused unless `--auto-approve`/`--yolo`. `stdio`: ask the caller (requires `--json`; use `--prompt-file`, not `-p -`). |
+| `--read-only` | No writes anywhere (stricter than `--plan`, which still writes `docs/plan/`), no compute, delegation or memory writes. MCP tools stay usable. `shell` runs only with `--approvals stdio`, asked every time. `--auto-approve` and `--yolo` do not widen it. |
+| `--image PATH` | Attach a png, jpg, gif or webp file (up to 20 MiB) to the prompt. Repeatable. A bad file fails the run before it starts. |
+| `--max-steps N` | Model invocations for the run (default 48). |
+
+`--mcp-config` takes inline JSON (a value starting with `{`) or a file path. Either
+the bare map or the `mcpServers` wrapper works. The command runs directly, with no
+shell: paths and arguments may contain spaces. `env` is merged over the inherited
+environment; `args`, `env` and `cwd` are optional.
+
+```json
+{"docs": {"command": "/opt/my tools/server", "args": ["--root", "a b"], "env": {"TOKEN": "x"}, "cwd": "/tmp"}}
+```
+
+Remote MCP tools are named `mcp__<server>__<tool>` and are loaded through the
+`mcp_search_tools`, `mcp_select_tool` and `mcp_features` interface tools. A
+`--tools` allowlist must name the interface tools and the remote tools it wants.
+
+### Events
+
+Every line on stdout is one JSON object with a `type`. The first is `metadata`
+and the last is `summary`; harness events come in between.
+
+```json
+{"type":"metadata","provider":"local","model":"m","effort":null,"promptCache":true,"maxOutputTokens":null,"bare":false,"tools":null,"sessionId":"<session id>","resumed":false,"readOnly":false,"approvals":"deny","mcpServers":["docs"]}
+{"type":"agent_start"}
+{"type":"assistant_delta","text":"..."}
+{"type":"reasoning_delta","text":"..."}
+{"type":"tool_input_delta","text":"..."}
+{"type":"assistant","message":"..."}
+{"type":"tool_call","tool_call_id":"c1","tool_name":"shell","input":{"command":"ls"}}
+{"type":"approval_request","id":"approval-1","tool_call_id":"c1","tool_name":"shell","input":{"command":"ls"}}
+{"type":"tool_started","tool_call_id":"c1","tool_name":"shell"}
+{"type":"tool_finished","tool_call_id":"c1","tool_name":"shell","is_error":false}
+{"type":"tool_result","tool_call_id":"c1","tool_name":"shell","output":"...","is_error":false}
+{"type":"usage","usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheCreateTokens":0}}
+{"type":"result","message":"final answer"}
+{"type":"error","message":"..."}
+{"type":"summary","status":"success","sessionId":"<session id>","provider":"local","model":"m","effort":null,"durationMs":1234,"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheCreateTokens":0},"modelSteps":2,"toolCalls":1,"modelRetries":0}
+```
+
+- `sessionId` is the recorded session's full id, for new and resumed runs alike;
+  it is `null` only with `--no-session`. `resumed` is true for `--resume`,
+  `--continue` and `orcacode resume ID`.
+- `summary.status` is `success`, `max_steps` (the `--max-steps` budget ran out),
+  `cancelled` (SIGINT/SIGTERM), or `error`. The exit code is 0 only for `success`.
+- `approval_request` appears only with `--approvals stdio`. Answer on stdin with one
+  line per request, in any order:
+
+  ```json
+  {"type":"approval","id":"approval-1","decision":"allow"}
+  ```
+
+  `decision` is `allow`, `deny`, or `always` (allow that tool for the rest of this
+  run; never saved, and never applies to read-only `shell`). Requests can be open
+  concurrently and are matched by `id`; subagent children ask the same way.
+  Malformed lines are ignored with a stderr warning. EOF on stdin denies every
+  open and later request. The process exits when the run ends even if stdin is
+  still open.
+
 ## Orchestrate mode
 
 Start with `orcacode --orchestrate`, select `/mode orchestrate` in the terminal,
