@@ -9,6 +9,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
@@ -73,11 +74,17 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// One request the fake endpoint received: lowercased head and raw body.
+type Seen = Arc<Mutex<Vec<(String, String)>>>;
+
 /// Serves `GET /v1/models` with a two-model catalog and answers any POST
-/// with a one-line streamed reply.
-fn fake_endpoint() -> String {
+/// with a one-line streamed reply. Every request is recorded so tests can
+/// check the key and model that actually went over the wire.
+fn fake_endpoint() -> (String, Seen) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let seen: Seen = Arc::default();
+    let record = seen.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
@@ -106,6 +113,8 @@ fn fake_endpoint() -> String {
                         }
                         raw.extend_from_slice(&buf[..n]);
                     }
+                    let body = String::from_utf8_lossy(&raw[split + 4..]).to_string();
+                    record.lock().unwrap().push((head.to_lowercase(), body));
                     break Some(head);
                 }
             };
@@ -137,7 +146,25 @@ fn fake_endpoint() -> String {
             );
         }
     });
-    url
+    (url, seen)
+}
+
+/// The last chat request: its authorization header (if any) and model.
+fn last_post(seen: &Seen) -> (Option<String>, Value) {
+    let seen = seen.lock().unwrap();
+    let (head, body) = seen
+        .iter()
+        .rev()
+        .find(|(head, _)| head.starts_with("post"))
+        .expect("no chat request reached the endpoint");
+    let auth = head
+        .lines()
+        .find_map(|line| line.strip_prefix("authorization:"))
+        .map(|value| value.trim().to_string());
+    (
+        auth,
+        serde_json::from_str::<Value>(body).unwrap()["model"].clone(),
+    )
 }
 
 #[test]
@@ -179,7 +206,7 @@ fn list_providers_json_reports_auth_configuration_and_saved_models() {
 #[test]
 fn list_models_json_uses_the_requested_provider() {
     let fixture = Fixture::new();
-    let url = fake_endpoint();
+    let (url, _) = fake_endpoint();
     let output = fixture.run(&[
         "--provider",
         "local",
@@ -223,7 +250,7 @@ fn list_models_json_uses_the_requested_provider() {
 fn headless_runs_on_the_requested_provider_and_reports_its_label() {
     let fixture = Fixture::new();
     let before = fixture.config();
-    let url = fake_endpoint();
+    let (url, seen) = fake_endpoint();
     for (provider, model) in [("local", "saved-local"), ("openrouter", "saved/model")] {
         let output = fixture.run(&[
             "--provider",
@@ -242,6 +269,14 @@ fn headless_runs_on_the_requested_provider_and_reports_its_label() {
         assert_eq!(metadata["provider"], provider);
         assert_eq!(metadata["model"], model, "saved model for {provider}");
         assert!(!stdout(&output).contains(SAVED_KEY));
+        assert!(!stderr(&output).contains(SAVED_KEY));
+        // What actually went over the wire: the chosen provider's model and
+        // key. Local needs no key; openrouter sends its saved one.
+        let (auth, sent_model) = last_post(&seen);
+        assert_eq!(sent_model, model, "{provider} request model");
+        let expected =
+            (provider == "openrouter").then(|| format!("bearer {}", SAVED_KEY.to_lowercase()));
+        assert_eq!(auth, expected, "{provider} authorization");
     }
     assert_eq!(fixture.config(), before, "config.json must not change");
 }
