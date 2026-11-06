@@ -49,12 +49,17 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_env(args, &[])
+    }
+
+    fn run_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_orcacode"))
             .args(args)
             .current_dir(self.root.join("ws"))
             .env_clear()
             .env("HOME", &self.root)
             .env("ORCA_CONFIG_DIR", self.root.join("config"))
+            .envs(env.iter().copied())
             .output()
             .unwrap()
     }
@@ -315,4 +320,57 @@ fn bad_provider_flags_exit_one_with_a_clear_message() {
         "--json",
     ]);
     assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn explicit_provider_ignores_standing_model_and_base_url_env() {
+    let fixture = Fixture::new();
+    let (url, seen) = fake_endpoint();
+    let env = [
+        ("ORCA_MODEL", "model-for-another-provider"),
+        ("ORCA_BASE_URL", "http://127.0.0.1:1/v1"),
+    ];
+    // --provider: both env vars ignored; saved model, explicit --base-url.
+    let output = fixture.run_env(
+        &[
+            "--provider",
+            "local",
+            "--base-url",
+            &url,
+            "-p",
+            "hi",
+            "--json",
+            "--no-session",
+        ],
+        &env,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(last_post(&seen).1, "saved-local");
+
+    // --model still wins over the saved model.
+    let output = fixture.run_env(
+        &[
+            "--provider",
+            "local",
+            "--base-url",
+            &url,
+            "--model",
+            "flag-model",
+            "-p",
+            "hi",
+            "--json",
+            "--no-session",
+        ],
+        &env,
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(last_post(&seen).1, "flag-model");
+
+    // Without --provider the env vars keep their old meaning.
+    let output = fixture.run_env(
+        &["-p", "hi", "--json", "--no-session"],
+        &[("ORCA_MODEL", "env-model"), ("ORCA_BASE_URL", &url)],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(last_post(&seen).1, "env-model");
 }

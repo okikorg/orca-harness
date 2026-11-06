@@ -83,10 +83,14 @@ Remote MCP tools are named `mcp__<server>__<tool>` and are loaded through the
 `--list-models`, `--list-providers`) and wins over the saved provider. Labels:
 `openrouter`, `vercel`, `cheaperinference`, `openai`, `openai-codex`, `anthropic`,
 `local`. Keys and logins resolve as usual (flag, environment, saved config, OAuth
-login); nothing is written to `config.json`. Without `--model` the provider's saved
-model is used, otherwise its default. `ORCA_BASE_URL` is ignored when `--provider`
-is given; an explicit `--base-url` still applies. An unknown label, or `--provider`
-combined with `--openrouter`/`--anthropic` naming a different provider, exits 1.
+login); nothing is written to `config.json`. The model is `--model`, otherwise the
+provider's saved model, otherwise its default. `ORCA_MODEL` and `ORCA_BASE_URL` are
+ignored when `--provider` is given, since they usually belong to another provider.
+An explicit `--base-url` still applies, with the same reach as without `--provider`:
+requests to openrouter, openai, anthropic and local, and generation (not
+`--list-models`) for vercel and cheaperinference; openai-codex always uses its own
+endpoints. An unknown label, or `--provider` combined with `--openrouter`/`--anthropic`
+naming a different provider, exits 1.
 
 `orcacode --list-providers --json` prints one document and makes no network calls:
 

@@ -9,7 +9,8 @@ use crate::msg::Provider;
 use crate::{config, resolve_theme, select_provider, Config, USAGE};
 
 pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
-    let mut model = std::env::var("ORCA_MODEL").ok();
+    let env_model = std::env::var("ORCA_MODEL").ok();
+    let mut model: Option<String> = None;
     let env_base_url = std::env::var("ORCA_BASE_URL").ok();
     let mut base_url_flag: Option<String> = None;
     let mut provider_flag: Option<Provider> = None;
@@ -217,7 +218,10 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         }
         Provider::OpenAi | Provider::Local => "http://localhost:11434/v1".into(),
     });
+    // Like ORCA_BASE_URL, a standing ORCA_MODEL usually names another
+    // provider's model, so an explicit --provider ignores it.
     let model = model
+        .or(env_model.filter(|_| provider_flag.is_none()))
         .or_else(|| config::stored_model(provider.label()))
         .unwrap_or_else(|| provider.default_model().into());
     let theme = resolve_theme(theme);
