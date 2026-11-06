@@ -9,8 +9,8 @@ name: release-orcacode
 #
 # Asset names are the contract with the landing installer (orcacode.sh in
 # agent-orc) and the release server, so they match orcacode-v0.1.0 exactly:
-#   orcacode-darwin-arm64.tar.gz  aarch64-apple-darwin        macos-14
-#   orcacode-darwin-x64.tar.gz    x86_64-apple-darwin         macos-14, rustup target
+#   orcacode-darwin-arm64.tar.gz  aarch64-apple-darwin        macos-15
+#   orcacode-darwin-x64.tar.gz    x86_64-apple-darwin         macos-15, rustup target
 #   orcacode-linux-x64.tar.gz     x86_64-unknown-linux-musl   ubuntu, cargo-zigbuild
 #   orcacode-linux-arm64.tar.gz   aarch64-unknown-linux-musl  ubuntu, cargo-zigbuild
 #   orcacode-windows-x64.zip      x86_64-pc-windows-gnu       ubuntu, cargo-zigbuild
@@ -102,13 +102,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             asset: orcacode-darwin-arm64.tar.gz
             bin: orcacode
             zigbuild: false
             size_gate: true
-          - os: macos-14
+          - os: macos-15
             target: x86_64-apple-darwin
             asset: orcacode-darwin-x64.tar.gz
             bin: orcacode
@@ -139,7 +139,7 @@ jobs:
           ref: ${{ needs.tag.outputs.tag }}
 
       # `targets` runs rustup target add, which is how the x86_64 darwin
-      # build gets its std on the arm64 macos-14 runner.
+      # build gets its std on the arm64 macos-15 runner.
       - name: rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
