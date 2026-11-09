@@ -1,6 +1,10 @@
 //! Shared workspace root: every file tool resolves paths against it and
 //! refuses to escape it, then performs its I/O through it.
 //!
+//! Added directories ([`Workspace::with_added_dirs`]) widen that boundary
+//! to more host folders without moving the root; the rule for both lives
+//! in [`roots`](super::roots).
+//!
 //! Path resolution alone is defense-in-depth, not a sandbox — a caller
 //! with a `shell` tool can still reach the whole host, and this just
 //! stops accidental `../../etc/passwd` reads. Real isolation comes from
@@ -13,10 +17,12 @@
 //! tools share this type, and a boundary that eight places have to
 //! remember to honor is a boundary with seven chances to be forgotten.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orca_harness_core::{Sandbox, Stat, ToolError};
+
+use super::roots::Roots;
 
 /// Where a workspace's file operations actually happen.
 #[derive(Clone)]
@@ -28,14 +34,14 @@ enum Backend {
 /// A directory that file tools are rooted at. Cheap to clone (Arc'd).
 #[derive(Clone)]
 pub struct Workspace {
-    root: Arc<PathBuf>,
+    roots: Arc<Roots>,
     backend: Backend,
 }
 
 impl std::fmt::Debug for Workspace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Workspace")
-            .field("root", &self.root)
+            .field("roots", &self.roots)
             .field(
                 "backend",
                 match self.backend {
@@ -53,7 +59,7 @@ impl Workspace {
     /// before constructing.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
-            root: Arc::new(root.into()),
+            roots: Arc::new(Roots::new(root.into())),
             backend: Backend::Host,
         }
     }
@@ -62,7 +68,7 @@ impl Workspace {
     /// operation goes to the provider; nothing touches this machine.
     pub fn sandboxed(root: impl Into<PathBuf>, sandbox: Arc<dyn Sandbox>) -> Self {
         Self {
-            root: Arc::new(root.into()),
+            roots: Arc::new(Roots::new(root.into())),
             backend: Backend::Sandbox(sandbox),
         }
     }
@@ -82,53 +88,74 @@ impl Workspace {
     }
 
     pub fn root(&self) -> &Path {
-        self.root.as_path()
+        self.roots.main()
     }
 
-    /// Resolve a caller-supplied relative path against the root, rejecting
-    /// absolute paths and any `..` that would climb above the root. The
-    /// returned path is lexically normalized (it does not touch the
-    /// filesystem, so it is safe for not-yet-existing files).
+    /// Resolve a caller-supplied path. Relative paths join the root and
+    /// may not climb above it; absolute paths are accepted only when they
+    /// point into the root or an added directory. On the host, existing
+    /// symlinks are followed for the check, so a link cannot lead out of
+    /// every root. The returned path is lexically normalized and may name
+    /// a file that does not exist yet. See [`roots`](super::roots).
     pub fn resolve(&self, rel: &str) -> Result<PathBuf, ToolError> {
-        let candidate = Path::new(rel);
-        if candidate.is_absolute() {
-            return Err(ToolError::msg(format!(
-                "path must be relative to the workspace root, got absolute: {rel}"
-            )));
-        }
+        self.roots.resolve(rel, !self.is_sandboxed())
+    }
 
-        let mut out = self.root.as_ref().clone();
-        let mut depth: isize = 0;
-        for comp in candidate.components() {
-            match comp {
-                Component::CurDir => {}
-                Component::Normal(seg) => {
-                    out.push(seg);
-                    depth += 1;
-                }
-                Component::ParentDir => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return Err(ToolError::msg(format!(
-                            "path escapes the workspace root: {rel}"
-                        )));
-                    }
-                    out.pop();
-                }
-                Component::RootDir | Component::Prefix(_) => {
-                    return Err(ToolError::msg(format!(
-                        "unsupported path component in {rel}"
-                    )));
-                }
-            }
+    /// Whether an absolute host path lies inside the root or an added
+    /// directory once symlinks are followed. Always `false` for a
+    /// sandboxed workspace, whose paths this machine cannot inspect.
+    pub fn contains(&self, path: &Path) -> bool {
+        !self.is_sandboxed() && self.roots.contains(path)
+    }
+
+    /// Allow the file tools to reach these host directories too, by
+    /// absolute path. Each must exist; it is stored canonicalized. The
+    /// shell and every relative path still start at [`root`](Self::root).
+    /// Refused for a sandboxed workspace.
+    pub fn with_added_dirs<P: Into<PathBuf>>(
+        self,
+        dirs: impl IntoIterator<Item = P>,
+    ) -> Result<Self, ToolError> {
+        if self.is_sandboxed() {
+            return Err(ToolError::msg(
+                "added directories are host paths and cannot join a sandboxed workspace",
+            ));
         }
-        Ok(out)
+        let mut roots = Roots::new(self.roots.main().to_path_buf());
+        roots.add(self.roots.added().iter().cloned())?;
+        roots.add(dirs.into_iter().map(Into::into))?;
+        Ok(Self {
+            roots: Arc::new(roots),
+            backend: self.backend,
+        })
+    }
+
+    /// The added directories, canonical, in the order given.
+    pub fn added_dirs(&self) -> &[PathBuf] {
+        self.roots.added()
+    }
+
+    /// Whether `path`, an entry met while walking a directory that is
+    /// already inside a root, is a host symlink leading out of every root.
+    /// Tree walkers skip such entries. Plain entries cost one `lstat`; only
+    /// links are resolved. Always `false` for a sandboxed workspace.
+    pub(crate) fn link_escapes(&self, path: &Path) -> bool {
+        !self.is_sandboxed()
+            && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+            && !self.roots.contains(path)
+    }
+
+    /// Whether `dir` is the root or an added directory itself.
+    pub(crate) fn is_root(&self, dir: &Path) -> bool {
+        self.roots.is_root(dir)
     }
 
     /// The workspace-relative form of an absolute path, for display in
-    /// tool output. Falls back to the input if it is not under the root.
+    /// tool output. Falls back to the input if it is not under the root,
+    /// so files in added directories show their absolute path: the form
+    /// the model must use to reach them again.
     pub fn display_rel<'a>(&self, path: &'a Path) -> &'a Path {
-        path.strip_prefix(self.root.as_ref()).unwrap_or(path)
+        path.strip_prefix(self.roots.main()).unwrap_or(path)
     }
 }
 

@@ -33,6 +33,10 @@ OPTIONS:
   --list-models      print the endpoint's model catalog and exit
                      (--json for one JSON document)
   --workspace DIR    tool workspace root (default: current directory)
+  --add-dir DIR      also let file tools read and edit DIR by absolute
+                     path; repeatable. The root, shell cwd, AGENTS.md
+                     and skills stay on --workspace. Pass it again with
+                     --resume: added directories are not saved
   --max-steps N      model invocations per run (default 48)
   --max-output-tokens N
                      output-token cap (Anthropic default: 8192)

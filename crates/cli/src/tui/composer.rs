@@ -1,11 +1,48 @@
-//! Composer location-mention parsing and workspace path discovery.
+//! Composer location-mention parsing, workspace path discovery, and the
+//! `@` picker's entries.
 
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::components::picker::ListPicker;
 use super::format::byte_index;
-use super::state::LocationEntry;
+
+/// A workspace-relative (or, in an added directory, absolute) file or
+/// directory inserted into the composer by
+/// the `@` mention picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocationEntry {
+    pub(crate) path: String,
+    pub(crate) directory: bool,
+}
+
+pub(crate) struct LocationPicker {
+    pub(crate) entries: Vec<LocationEntry>,
+    pub(crate) query: String,
+    /// Character offset of the `@` that opened this picker.
+    pub(crate) token_start: usize,
+    pub(crate) picker: ListPicker,
+}
+
+impl LocationPicker {
+    pub(crate) fn filtered(&self) -> Vec<&LocationEntry> {
+        let needle = self.query.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|entry| needle.is_empty() || entry.path.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    pub(crate) fn selected(&self) -> Option<LocationEntry> {
+        self.filtered().get(self.picker.index()).cloned().cloned()
+    }
+
+    pub(crate) fn sync_len(&mut self) {
+        let len = self.filtered().len();
+        self.picker.set_len(len);
+    }
+}
 
 pub(crate) fn mention_starts_at(composer: &str, at: usize) -> bool {
     at == 0
@@ -77,9 +114,43 @@ fn remove_mention_before_cursor(
 /// Enumerate a bounded set of workspace-relative paths without following
 /// symlinks. Build/dependency metadata directories are omitted so `@` stays
 /// focused on files an agent can meaningfully work with.
-pub(crate) fn workspace_locations(root: &Path) -> Vec<LocationEntry> {
+///
+/// Each `--add-dir` directory follows, listed by absolute path (the form
+/// the file tools accept for it). The added directories share their own
+/// budget, so they can neither starve the workspace nor be starved by it.
+pub(crate) fn workspace_locations(root: &Path, added: &[PathBuf]) -> Vec<LocationEntry> {
     const MAX_LOCATIONS: usize = 5_000;
-    workspace_locations_with_limit(root, MAX_LOCATIONS)
+    let mut entries = workspace_locations_with_limit(root, MAX_LOCATIONS);
+    entries.extend(added_locations(added, MAX_LOCATIONS));
+    entries
+}
+
+fn added_locations(added: &[PathBuf], budget: usize) -> Vec<LocationEntry> {
+    let share = budget / added.len().max(1);
+    let mut entries = Vec::new();
+    for dir in added {
+        let absolute = |rel: &str| {
+            let path = dir.display().to_string();
+            if rel.is_empty() {
+                path
+            } else {
+                format!("{path}/{rel}")
+            }
+        };
+        entries.push(LocationEntry {
+            path: absolute(""),
+            directory: true,
+        });
+        entries.extend(
+            workspace_locations_with_limit(dir, share.saturating_sub(1))
+                .into_iter()
+                .map(|entry| LocationEntry {
+                    path: absolute(&entry.path),
+                    directory: entry.directory,
+                }),
+        );
+    }
+    entries
 }
 
 fn workspace_locations_with_limit(root: &Path, max_locations: usize) -> Vec<LocationEntry> {
@@ -136,7 +207,35 @@ fn workspace_locations_with_limit(root: &Path, max_locations: usize) -> Vec<Loca
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_locations_with_limit;
+    use super::{added_locations, workspace_locations_with_limit};
+
+    #[test]
+    fn added_directories_are_listed_by_absolute_path_within_their_share() {
+        let base = std::env::temp_dir().join(format!("orca-location-added-{}", std::process::id()));
+        let (one, two) = (base.join("one"), base.join("two"));
+        for dir in [&one, &two] {
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+            std::fs::write(dir.join("README.md"), "").unwrap();
+        }
+        let paths = |budget| -> Vec<String> {
+            added_locations(&[one.clone(), two.clone()], budget)
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect()
+        };
+        let all = paths(100);
+        let at = |dir: &std::path::Path, rel: &str| format!("{}/{rel}", dir.display());
+        for dir in [&one, &two] {
+            assert!(all.contains(&dir.display().to_string()), "{all:?}");
+            assert!(all.contains(&at(dir, "src/lib.rs")), "{all:?}");
+        }
+        // A budget of 4 gives each directory two slots: itself and one entry.
+        let tight = paths(4);
+        assert_eq!(tight.len(), 4, "{tight:?}");
+        assert!(tight.contains(&two.display().to_string()), "{tight:?}");
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn leading_dot_folder_cannot_consume_the_whole_location_budget() {

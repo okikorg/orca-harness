@@ -12,7 +12,7 @@ fn routine_local_work_skips_review_but_egress_and_deletion_do_not() {
         name: name.into(),
         arguments: json!({}),
     };
-    let workspace_root = std::env::current_dir().unwrap();
+    let workspace_root = Workspace::new(std::env::current_dir().unwrap());
     assert!(AutoApproval::known_safe(
         &call("read_file"),
         &json!({}),
@@ -87,7 +87,7 @@ async fn real_workspace_edit_bypasses_the_reviewer() {
         .extension(AutoApproval::new(
             ModeHandle::new(Mode::Auto),
             reviewer,
-            &root,
+            &Workspace::new(&root),
         ))
         .run("update demo.txt")
         .await
@@ -119,7 +119,7 @@ async fn real_routine_shell_command_bypasses_the_reviewer() {
         .extension(AutoApproval::new(
             ModeHandle::new(Mode::Auto),
             reviewer,
-            &root,
+            &Workspace::new(&root),
         ))
         .run("run the routine check")
         .await
@@ -155,7 +155,7 @@ async fn composed_shell_command_falls_back_to_exact_action_review() {
         .extension(AutoApproval::new(
             ModeHandle::new(Mode::Auto),
             reviewer,
-            &root,
+            &Workspace::new(&root),
         ))
         .run("run both checks")
         .await
@@ -263,7 +263,11 @@ async fn auto_reviews_and_executes_the_final_rewritten_action() {
     });
     let executed = Arc::new(Mutex::new(None));
     let recorded = executed.clone();
-    let auto = AutoApproval::new(ModeHandle::new(Mode::Auto), reviewer, std::env::temp_dir());
+    let root = std::env::temp_dir();
+    let added = root.join(format!("orca-auto-review-added-{}", std::process::id()));
+    std::fs::create_dir_all(&added).unwrap();
+    let workspace = Workspace::new(&root).with_added_dirs([&added]).unwrap();
+    let auto = AutoApproval::new(ModeHandle::new(Mode::Auto), reviewer, &workspace);
     let agent = Agent::new(OneCallModel(AtomicUsize::new(0)))
         .extension(Rewrite)
         .extension(auto)
@@ -289,6 +293,14 @@ async fn auto_reviews_and_executes_the_final_rewritten_action() {
     assert_eq!(packets.len(), 1);
     assert_eq!(packets[0]["root_request"], "change the requested file");
     assert_eq!(packets[0]["arguments"], json!({"path": "after.txt"}));
+    // The reviewer is told which directories are in scope, added ones too.
+    assert_eq!(
+        packets[0]["allowed_directories"],
+        json!([
+            root.display().to_string(),
+            added.canonicalize().unwrap().display().to_string()
+        ])
+    );
 }
 
 #[tokio::test]
@@ -303,7 +315,7 @@ async fn invalid_review_fails_closed_without_executing() {
         .extension(AutoApproval::new(
             ModeHandle::new(Mode::Auto),
             reviewer,
-            std::env::temp_dir(),
+            &Workspace::new(std::env::temp_dir()),
         ))
         .tool(FnTool::new(
             "mutate",
@@ -326,7 +338,11 @@ async fn exact_cautions_are_reused_for_the_current_root_request() {
         response: r#"{"decision":"caution","reason":"too broad"}"#,
         packets: packets.clone(),
     });
-    let auto = AutoApproval::new(ModeHandle::new(Mode::Auto), reviewer, std::env::temp_dir());
+    let auto = AutoApproval::new(
+        ModeHandle::new(Mode::Auto),
+        reviewer,
+        &Workspace::new(std::env::temp_dir()),
+    );
     let mut context = Context::new();
     context.push_user("make the scoped change");
     auto.capture_request(&context);
@@ -354,7 +370,11 @@ fn subagent_tasks_cannot_replace_root_authority() {
         response: r#"{"decision":"clear","reason":"requested"}"#,
         packets: Arc::default(),
     });
-    let root = AutoApproval::new(ModeHandle::new(Mode::Auto), reviewer, std::env::temp_dir());
+    let root = AutoApproval::new(
+        ModeHandle::new(Mode::Auto),
+        reviewer,
+        &Workspace::new(std::env::temp_dir()),
+    );
     let mut root_context = Context::new();
     root_context.push_user("root request");
     root.capture_request(&root_context);

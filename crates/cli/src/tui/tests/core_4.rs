@@ -454,6 +454,7 @@
             model_name: "gpt-oss:20b".into(),
             workspace_name: "/workspace/orca-harness".into(),
             workspace_root: "/test-ws".into(),
+            added_dirs: Vec::new(),
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),

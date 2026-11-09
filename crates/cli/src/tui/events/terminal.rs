@@ -304,7 +304,8 @@ pub(crate) fn handle_terminal_event(
             app.cursor += 1;
             app.reset_palette_picker();
             if c == '@' && mention_starts_at(&app.composer, app.cursor - 1) {
-                let entries = workspace_locations(Path::new(&app.cfg.workspace_root));
+                let entries =
+                    workspace_locations(Path::new(&app.cfg.workspace_root), &app.cfg.added_dirs);
                 app.overlay_stack.clear();
                 app.overlay = Some(Overlay::Locations(LocationPicker {
                     picker: ListPicker::new(entries.len()),

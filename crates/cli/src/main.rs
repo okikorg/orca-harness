@@ -3,6 +3,7 @@
 // Interactive: `orcacode` starts a streaming REPL with tool approvals.
 // Headless:    `orcacode -p "prompt"` runs once and streams to stdout.
 
+mod add_dirs;
 mod approval;
 mod auth;
 mod auto_approval;
@@ -95,6 +96,7 @@ pub struct Config {
     /// `--list-providers`: print the provider registry and exit.
     pub list_providers: bool,
     pub workspace: PathBuf,
+    pub add_dirs: Vec<PathBuf>,
     pub prompt: Option<String>,
     /// `-p -` or `--prompt-file`: read into `prompt` before the run starts.
     pub prompt_source: Option<headless_input::PromptSource>,

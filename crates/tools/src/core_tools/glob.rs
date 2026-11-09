@@ -82,7 +82,7 @@ impl Tool for GlobTool {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "e.g. `*.rs`, `src/**/*.test.ts`."},
-                    "path": {"type": "string", "default": ".", "description": "Subtree to search."}
+                    "path": {"type": "string", "default": ".", "description": "Subtree to search: workspace-relative, or absolute inside an added directory."}
                 },
                 "required": ["pattern"]
             }),

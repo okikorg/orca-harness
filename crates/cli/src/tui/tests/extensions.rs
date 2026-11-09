@@ -7,6 +7,7 @@ mod extensions_command_tests {
             model_name: "m".into(),
             workspace_name: "w".into(),
             workspace_root: "/test-ws".into(),
+            added_dirs: Vec::new(),
             provider: Provider::Local,
             subagent_depth: orca_harness_tools::SubagentDepth::new(1),
             stats: orca_harness_tools::BackgroundStats::new(),
