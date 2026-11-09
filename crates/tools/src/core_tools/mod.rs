@@ -12,6 +12,7 @@ pub(crate) mod iogate;
 mod mutation_preflight;
 pub(crate) mod pgroup;
 mod process;
+mod roots;
 mod search;
 pub(crate) mod shell;
 mod stats;

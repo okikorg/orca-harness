@@ -1,22 +1,25 @@
 //! Deterministic admission for routine local shell work in Auto mode.
 //!
-//! This is deliberately an allowlist. Anything composed, path-escaping,
+//! This is deliberately an allowlist. Anything composed, path-escaping
+//! (outside the workspace and every `--add-dir` directory),
 //! externally effectful, or simply unfamiliar falls back to the existing
 //! exact-action reviewer.
 
 use std::path::{Component, Path};
 
+use orca_harness_tools::Workspace;
+
 use serde_json::Value;
 
-pub(super) fn is_known_safe(input: &Value, workspace_root: &Path) -> bool {
+pub(super) fn is_known_safe(input: &Value, workspace: &Workspace) -> bool {
     classify(
         input,
-        workspace_root,
+        workspace,
         std::env::var_os("RIPGREP_CONFIG_PATH").is_some(),
     )
 }
 
-fn classify(input: &Value, workspace_root: &Path, ripgrep_configured: bool) -> bool {
+fn classify(input: &Value, workspace: &Workspace, ripgrep_configured: bool) -> bool {
     let Some(object) = input.as_object() else {
         return false;
     };
@@ -34,7 +37,7 @@ fn classify(input: &Value, workspace_root: &Path, ripgrep_configured: bool) -> b
     };
     if arguments
         .iter()
-        .any(|word| escapes_workspace(word, workspace_root))
+        .any(|word| escapes_workspace(word, workspace))
     {
         return false;
     }
@@ -151,39 +154,41 @@ fn simple_words(command: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-fn escapes_workspace(word: &str, workspace_root: &Path) -> bool {
+fn escapes_workspace(word: &str, workspace: &Workspace) -> bool {
     if word.starts_with('~') {
         return true;
     }
     if word.starts_with('-') && word.contains('/') {
         return true;
     }
-    if path_escapes(Path::new(word), workspace_root) {
+    if path_escapes(Path::new(word), workspace) {
         return true;
     }
     word.starts_with('-')
         && word
             .split_once('=')
-            .is_some_and(|(_, value)| path_escapes(Path::new(value), workspace_root))
+            .is_some_and(|(_, value)| path_escapes(Path::new(value), workspace))
 }
 
-fn path_escapes(candidate: &Path, workspace_root: &Path) -> bool {
+/// Absolute operands are admitted only inside the workspace or an added
+/// directory; relative ones resolve against the root, where the shell
+/// starts. Either way the check follows symlinks (`Workspace::contains`).
+fn path_escapes(candidate: &Path, workspace: &Workspace) -> bool {
     if candidate
         .to_str()
         .is_some_and(|candidate| candidate.starts_with('~'))
-        || candidate.is_absolute()
         || candidate
             .components()
             .any(|component| component == Component::ParentDir)
     {
         return true;
     }
-
-    let joined = workspace_root.join(candidate);
-    match joined.canonicalize() {
-        Ok(resolved) => !resolved.starts_with(workspace_root),
-        Err(_) => std::fs::symlink_metadata(joined).is_ok(),
+    if candidate.is_absolute() {
+        return !workspace.contains(candidate);
     }
+    let root = workspace.root();
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    !workspace.contains(&root.join(candidate))
 }
 
 fn has_option(arguments: &[String], blocked: &[&str]) -> bool {
@@ -315,7 +320,7 @@ mod tests {
     fn safe(command: &str) -> bool {
         classify(
             &json!({"command": command}),
-            &std::env::current_dir().unwrap().canonicalize().unwrap(),
+            &Workspace::new(std::env::current_dir().unwrap()),
             false,
         )
     }
@@ -384,7 +389,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_or_extended_shell_inputs() {
-        let root = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let root = Workspace::new(std::env::current_dir().unwrap());
         assert!(!classify(
             &json!({"command": "true", "timeout": 1}),
             &root,
@@ -415,7 +420,7 @@ mod tests {
         std::fs::write(&outside, "outside\n").unwrap();
         symlink(&outside, workspace.join("outside-link")).unwrap();
         symlink(&outside, workspace.join("outside=link")).unwrap();
-        let workspace = workspace.canonicalize().unwrap();
+        let workspace = Workspace::new(workspace.canonicalize().unwrap());
 
         for command in [
             "ls outside-link",
@@ -431,6 +436,35 @@ mod tests {
                 "expected reviewer fallback: {command}"
             );
         }
+
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admits_absolute_operands_only_inside_an_added_directory() {
+        use std::os::unix::fs::symlink;
+
+        let base =
+            std::env::temp_dir().join(format!("orca-auto-shell-added-{}", std::process::id()));
+        let (root, added, outside) = (base.join("root"), base.join("added"), base.join("outside"));
+        for dir in [&root, &added, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        symlink(&outside, added.join("escape")).unwrap();
+        let added = added.canonicalize().unwrap();
+        let outside = outside.canonicalize().unwrap();
+        let without = Workspace::new(root.canonicalize().unwrap());
+        let with = without.clone().with_added_dirs([&added]).unwrap();
+        let run =
+            |ws: &Workspace, command: String| classify(&json!({"command": command}), ws, false);
+
+        let inside = format!("ls {}", added.display());
+        assert!(run(&with, inside.clone()), "added directory is inside");
+        assert!(!run(&without, inside), "no --add-dir, no admission");
+        assert!(!run(&with, format!("ls {}", outside.display())));
+        assert!(!run(&with, format!("ls {}/escape", added.display())));
+        assert!(!run(&with, format!("ls {}/../outside", added.display())));
 
         std::fs::remove_dir_all(base).ok();
     }

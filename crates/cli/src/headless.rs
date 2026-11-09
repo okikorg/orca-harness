@@ -188,7 +188,7 @@ pub async fn run<M: Model + Clone + 'static>(
 
     // Only the parent receives the live orchestration briefing, not workers/reviewers.
     let model: Arc<dyn Model> = Arc::new(crate::mode::OrchestrateModel::new(model, mode.clone()));
-    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws.root());
+    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws);
     let (meter, usage) = UsageMeter::new();
     // Auto owns unresolved admission and yolo disables it, so neither may
     // have the headless human gate re-added afterward.

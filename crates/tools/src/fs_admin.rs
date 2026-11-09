@@ -43,8 +43,8 @@ impl Tool for CopyFileTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "from": {"type": "string", "description": "Workspace-relative source file."},
-                    "to": {"type": "string", "description": "Workspace-relative destination."}
+                    "from": {"type": "string", "description": "Workspace-relative source file, or absolute inside an added directory."},
+                    "to": {"type": "string", "description": "Workspace-relative destination, or absolute inside an added directory."}
                 },
                 "required": ["from", "to"]
             }),
@@ -106,8 +106,8 @@ impl Tool for RenameFileTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "from": {"type": "string", "description": "Workspace-relative source."},
-                    "to": {"type": "string", "description": "Workspace-relative destination."}
+                    "from": {"type": "string", "description": "Workspace-relative source, or absolute inside an added directory."},
+                    "to": {"type": "string", "description": "Workspace-relative destination, or absolute inside an added directory."}
                 },
                 "required": ["from", "to"]
             }),
@@ -168,7 +168,7 @@ impl Tool for DeleteFileTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Workspace-relative path."},
+                    "path": {"type": "string", "description": "Workspace-relative path, or absolute inside an added directory."},
                     "recursive": {"type": "boolean", "default": false}
                 },
                 "required": ["path"]
@@ -240,7 +240,7 @@ impl Tool for CreateFolderTool {
                 .into(),
             parameters: json!({
                 "type": "object",
-                "properties": { "path": {"type": "string", "description": "Workspace-relative path."} },
+                "properties": { "path": {"type": "string", "description": "Workspace-relative path, or absolute inside an added directory."} },
                 "required": ["path"]
             }),
         }
@@ -278,7 +278,7 @@ impl Tool for FileInfoTool {
                 .into(),
             parameters: json!({
                 "type": "object",
-                "properties": { "path": {"type": "string", "description": "Workspace-relative path."} },
+                "properties": { "path": {"type": "string", "description": "Workspace-relative path, or absolute inside an added directory."} },
                 "required": ["path"]
             }),
         }

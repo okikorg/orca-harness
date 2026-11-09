@@ -200,7 +200,7 @@ impl Tool for EditFileTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Workspace-relative path."},
+                    "path": {"type": "string", "description": "Workspace-relative path, or absolute inside an added directory."},
                     "old": {"type": "string", "description": "Exact text to replace."},
                     "new": {"type": "string", "description": "Replacement text."},
                     "replaceAll": {"type": "boolean", "default": false},
@@ -212,7 +212,7 @@ impl Tool for EditFileTool {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "path": {"type": "string", "description": "Workspace-relative path."},
+                                "path": {"type": "string", "description": "Workspace-relative path, or absolute inside an added directory."},
                                 "operation": {
                                     "type": "string",
                                     "enum": ["replace", "append"],
