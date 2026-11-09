@@ -4,7 +4,6 @@
 //! input through `around_tool`, and the host decides which policy to apply.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +12,7 @@ use orca_harness_core::{
     Context, Extension, ExtensionError, Message, Model, ModelResponse, Next, Subscriptions,
     ToolCall, ToolContext, ToolError, ToolSchema,
 };
+use orca_harness_tools::Workspace;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -37,24 +37,20 @@ pub(crate) struct AutoApproval {
     mode: ModeHandle,
     reviewer: Arc<dyn Model>,
     authority: Arc<Mutex<AuthorityState>>,
-    workspace_root: Arc<PathBuf>,
+    /// The workspace and its added directories: the shell allowlist only
+    /// admits path operands inside them.
+    workspace: Workspace,
     capture_root: bool,
     origin: &'static str,
 }
 
 impl AutoApproval {
-    pub(crate) fn new(
-        mode: ModeHandle,
-        reviewer: Arc<dyn Model>,
-        workspace_root: impl Into<PathBuf>,
-    ) -> Self {
-        let workspace_root = workspace_root.into();
-        let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
+    pub(crate) fn new(mode: ModeHandle, reviewer: Arc<dyn Model>, workspace: &Workspace) -> Self {
         Self {
             mode,
             reviewer,
             authority: Arc::default(),
-            workspace_root: Arc::new(workspace_root),
+            workspace: workspace.clone(),
             capture_root: true,
             origin: "root",
         }
@@ -65,7 +61,7 @@ impl AutoApproval {
             mode: self.mode.clone(),
             reviewer: self.reviewer.clone(),
             authority: self.authority.clone(),
-            workspace_root: self.workspace_root.clone(),
+            workspace: self.workspace.clone(),
             capture_root: false,
             origin: "subagent",
         }
@@ -98,8 +94,8 @@ impl AutoApproval {
         format!("{}\0{}\0{}", self.origin, call.name, input)
     }
 
-    fn known_safe(call: &ToolCall, input: &Value, workspace_root: &Path) -> bool {
-        if call.name == "shell" && shell_policy::is_known_safe(input, workspace_root) {
+    fn known_safe(call: &ToolCall, input: &Value, workspace: &Workspace) -> bool {
+        if call.name == "shell" && shell_policy::is_known_safe(input, workspace) {
             return true;
         }
         if READ_ONLY_TOOLS.contains(&call.name.as_str())
@@ -110,9 +106,10 @@ impl AutoApproval {
         if matches!(call.name.as_str(), "mcp_search_tools" | "mcp_select_tool") {
             return true;
         }
-        // These tools are already constrained to workspace-relative paths and
-        // fail closed through read-before-overwrite, exact-match, and
-        // transactional preflight checks. They are the normal implementation
+        // These tools are already constrained to the workspace and its added
+        // directories (`Workspace::resolve`), and fail closed through
+        // read-before-overwrite, exact-match, and transactional preflight
+        // checks. They are the normal implementation
         // path, not privileged administration.
         if matches!(call.name.as_str(), "write_file" | "edit_file") {
             return true;
@@ -199,9 +196,7 @@ impl Extension for AutoApproval {
         _ctx: &ToolContext,
         next: Next<'a>,
     ) -> Result<Value, ToolError> {
-        if self.mode.get() != Mode::Auto
-            || Self::known_safe(call, &input, self.workspace_root.as_path())
-        {
+        if self.mode.get() != Mode::Auto || Self::known_safe(call, &input, &self.workspace) {
             return next.run(input).await;
         }
         match self.review(call, &input).await? {

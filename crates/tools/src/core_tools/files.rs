@@ -189,7 +189,8 @@ async fn not_found_hint(ws: &Workspace, path: &Path) -> Option<String> {
         if ws.stat(dir).await.is_some_and(|stat| stat.is_dir) {
             break;
         }
-        if dir == ws.root() {
+        // Never climb past a root: above it lies what the tools refuse.
+        if ws.is_root(dir) {
             return None;
         }
         dir = dir.parent()?;
@@ -247,12 +248,12 @@ impl Tool for ReadFileTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "read_file".into(),
-            description: "Read a UTF-8 text file relative to the workspace root. Absolute paths are rejected.".into(),
+            description: "Read a UTF-8 text file in the workspace. Paths are relative to the workspace root, or absolute inside the workspace or an added directory.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": { "path": {
                     "type": "string",
-                    "description": "Path relative to the workspace root; absolute paths are rejected."
+                    "description": "Path relative to the workspace root, or absolute inside the workspace or an added directory."
                 } },
                 "required": ["path"]
             }),
@@ -333,7 +334,7 @@ impl Tool for WriteFileTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Workspace-relative path."},
+                    "path": {"type": "string", "description": "Workspace-relative path, or absolute inside an added directory."},
                     "content": {"type": "string"}
                 },
                 "required": ["path", "content"]
@@ -377,12 +378,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn read_schema_requires_workspace_relative_paths() {
+    fn read_schema_names_both_path_forms() {
         let schema = ReadFileTool::new(Workspace::new("/work")).schema();
-        assert!(schema.description.contains("Absolute paths are rejected."));
+        assert!(schema.description.contains("or an added directory."));
         assert_eq!(
             schema.parameters["properties"]["path"]["description"],
-            "Path relative to the workspace root; absolute paths are rejected."
+            "Path relative to the workspace root, or absolute inside the workspace or an added directory."
         );
     }
 

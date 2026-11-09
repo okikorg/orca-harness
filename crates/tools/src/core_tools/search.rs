@@ -43,7 +43,7 @@ impl Tool for GrepTool {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Literal substring to find."},
-                    "path": {"type": "string", "default": ".", "description": "Subtree to search."}
+                    "path": {"type": "string", "default": ".", "description": "Subtree to search: workspace-relative, or absolute inside an added directory."}
                 },
                 "required": ["query"]
             }),

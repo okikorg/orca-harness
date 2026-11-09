@@ -21,6 +21,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
     let mut anthropic = false;
     let mut list_models = false;
     let mut workspace = std::env::current_dir().map_err(|e| e.to_string())?;
+    let mut add_dirs = Vec::new();
     let mut prompt = None;
     let mut prompt_source: Option<PromptSource> = None;
     let mut mcp_config = Vec::new();
@@ -82,6 +83,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
             "--anthropic" => anthropic = true,
             "--list-models" => list_models = true,
             "--workspace" => workspace = PathBuf::from(value("--workspace")?),
+            "--add-dir" => add_dirs.push(crate::add_dirs::parse(&value("--add-dir")?)?),
             "--max-steps" => {
                 max_steps = value("--max-steps")?
                     .parse()
@@ -273,6 +275,7 @@ pub(crate) fn parse_run_args(args: Vec<String>) -> Result<Config, String> {
         list_models,
         list_providers,
         workspace,
+        add_dirs,
         prompt,
         prompt_source,
         mcp_config,

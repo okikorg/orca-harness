@@ -67,7 +67,13 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         }
     };
 
-    let ws = Workspace::new(&cfg.workspace);
+    let ws = match crate::add_dirs::workspace(&cfg) {
+        Ok(ws) => ws,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     // Scanned before the prompt is built: whether the `skill` tool gets
     // advertised depends on whether any skill was found, and the scan is
     // a handful of read_dir calls.
@@ -101,6 +107,9 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         system_prompt(&ws, cfg.firecrawl_key.is_some())
     };
     if let Some(block) = instructions.block() {
+        system.push_str(&block);
+    }
+    if let Some(block) = crate::add_dirs::prompt_block(&ws) {
         system.push_str(&block);
     }
     let endpoint = Endpoint::from_config(&cfg);
@@ -243,6 +252,7 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
     }
     let mut build = {
         let cfg = cfg.clone();
+        let ws = ws.clone();
         let ui_tx = ui_tx.clone();
         let subagent_depth = subagent_depth.clone();
         let stats = stats.clone();
@@ -264,7 +274,6 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         let cmd_tx = cmd_tx.clone();
         let mut local_tools = LocalToolsCache::default();
         move |endpoint: &Endpoint, preserve_local_tools: bool| {
-            let ws = Workspace::new(&cfg.workspace);
             let local_tools = local_tools.for_build(
                 preserve_local_tools,
                 &ws,
@@ -413,7 +422,7 @@ pub(crate) fn build_agent<M: Model + Clone + 'static>(
     ));
     // Only the parent receives the live orchestration briefing, not workers/reviewers.
     let model: Arc<dyn Model> = Arc::new(crate::mode::OrchestrateModel::new(model, mode.clone()));
-    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws.root());
+    let auto_approval = AutoApproval::new(mode.clone(), model_for_subagents.clone(), ws);
     let events = EventStream::from_fn({
         let ui = ui.clone();
         move |event| {

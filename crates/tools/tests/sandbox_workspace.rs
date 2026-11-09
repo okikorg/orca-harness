@@ -464,3 +464,19 @@ async fn assembly_refuses_a_provider_without_sessions() {
         Ok(_) => panic!("a provider without sessions must not yield a tool set"),
     }
 }
+
+/// Added directories are host paths: a sandboxed workspace refuses them,
+/// and keeps refusing absolute paths, which would name sandbox files the
+/// host cannot check.
+#[test]
+fn sandboxed_workspace_refuses_added_dirs_and_absolute_paths() {
+    let sandbox = Arc::new(MemSandbox::default());
+    let (ws, _) = tools(&sandbox);
+    let error = ws
+        .clone()
+        .with_added_dirs([std::env::temp_dir()])
+        .unwrap_err();
+    assert!(error.to_string().contains("sandboxed"), "{error}");
+    assert!(ws.resolve("/workspace/a.txt").is_err());
+    assert!(!ws.contains(std::path::Path::new("/workspace/a.txt")));
+}

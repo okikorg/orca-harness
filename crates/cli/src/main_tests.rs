@@ -509,6 +509,7 @@ mod main_tests {
             list_models: false,
             list_providers: false,
             workspace: PathBuf::from("."),
+            add_dirs: Vec::new(),
             prompt: None,
             prompt_source: None,
             mcp_config: Vec::new(),
