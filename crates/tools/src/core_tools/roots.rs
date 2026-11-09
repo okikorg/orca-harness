@@ -127,31 +127,25 @@ impl Roots {
     }
 
     /// The refusal for a path that starts inside a root but leaves it
-    /// through a symlink: it names the link and where it leads, and the
-    /// directory to add to allow it. Monorepos often symlink a shared
-    /// folder in; this tells the user the one flag that admits it. `None`
-    /// when no such link is found (a dangling link, or a path that never
-    /// entered a root).
+    /// through a symlink: it names the link, which the caller can already
+    /// see, but not where the link leads. A planted link (to `~/.ssh`, say)
+    /// must not come back as a ready-made folder to add; widening access
+    /// is the user's call, so the message only says that `--add-dir`
+    /// exists. `None` when no such link is found (a dangling link, or a
+    /// path that never entered a root).
     fn link_refusal(&self, raw: &str, path: &Path) -> Option<ToolError> {
-        let (link, target) = self.escaping_link(path)?;
-        let dir = if target.is_dir() {
-            target.clone()
-        } else {
-            target.parent()?.to_path_buf()
-        };
+        let link = self.escaping_link(path)?;
         Some(ToolError::msg(format!(
             "path resolves outside the workspace through a symlink: {raw} \
-             ({} points to {}, outside every root); to allow it, add that \
-             directory, for example with `--add-dir {}`",
-            link.display(),
-            target.display(),
-            dir.display()
+             ({} points outside every allowed folder); the user can allow \
+             extra folders with --add-dir",
+            link.display()
         )))
     }
 
     /// The first symlink on `path`, after the walk has entered a root,
-    /// whose target lies outside every root: `(link, resolved target)`.
-    fn escaping_link(&self, path: &Path) -> Option<(PathBuf, PathBuf)> {
+    /// whose target lies outside every root.
+    fn escaping_link(&self, path: &Path) -> Option<PathBuf> {
         let inside = |real: &Path| self.canonical.iter().any(|root| real.starts_with(root));
         let mut prefix = PathBuf::new();
         let mut entered = false;
@@ -161,7 +155,7 @@ impl Roots {
             if inside(&real) {
                 entered = true;
             } else if entered {
-                return Some((prefix, real));
+                return Some(prefix);
             }
         }
         None

@@ -153,34 +153,29 @@ async fn write_file_creates_inside_roots_only() {
 }
 
 #[tokio::test]
-async fn symlink_refusal_names_the_target_and_the_flag_that_admits_it() {
+async fn symlink_refusal_names_the_link_but_never_its_target() {
     let l = Layout::new();
+    symlink(l.outside.join("note.txt"), l.root.join("secret.txt")).unwrap();
     let read = ReadFileTool::new(l.ws.clone());
-    let leak = l.root.join("leak");
-    for path in [
-        "leak/note.txt".to_string(),
-        Layout::abs(&l.added, "leak/note.txt"),
+    for (path, link) in [
+        ("leak/note.txt".to_string(), l.root.join("leak")),
+        (Layout::abs(&l.added, "leak/note.txt"), l.added.join("leak")),
+        ("secret.txt".to_string(), l.root.join("secret.txt")),
     ] {
         let error = refused(run(&read, json!({ "path": path })).await);
         assert!(error.contains("through a symlink"), "{error}");
         assert!(
-            error.contains(&format!("points to {}", l.outside.display())),
+            error.contains(&format!(
+                "{} points outside every allowed folder",
+                link.display()
+            )),
             "{error}"
         );
-        assert!(
-            error.contains(&format!("--add-dir {}", l.outside.display())),
-            "{error}"
-        );
+        assert!(error.contains("the user can allow extra folders with --add-dir"));
+        // Where the link leads stays out of the message: a planted link
+        // must not become a ready-made folder to add.
+        assert!(!error.contains(&l.outside.display().to_string()), "{error}");
     }
-    let error = refused(run(&read, json!({"path": "leak/note.txt"})).await);
-    assert!(error.contains(&leak.display().to_string()), "{error}");
-    // A link straight to a file suggests the file's directory.
-    symlink(l.outside.join("note.txt"), l.root.join("secret.txt")).unwrap();
-    let error = refused(run(&read, json!({"path": "secret.txt"})).await);
-    assert!(
-        error.contains(&format!("--add-dir {}`", l.outside.display())),
-        "{error}"
-    );
     // Plain outside paths keep the plain message.
     let error = refused(run(&read, json!({"path": Layout::abs(&l.outside, "note.txt")})).await);
     assert!(!error.contains("--add-dir"), "{error}");
