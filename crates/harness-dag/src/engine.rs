@@ -53,6 +53,7 @@ pub struct Dag {
     maps: BTreeMap<StageId, Vec<StageId>>,
     children: BTreeMap<StageId, StageId>,
     retries: BTreeSet<StageId>,
+    failure_retries: BTreeSet<StageId>,
     prompts: BTreeMap<StageId, String>,
     pub state: RunState,
     degraded: bool,
@@ -103,6 +104,7 @@ impl Dag {
             maps: BTreeMap::new(),
             children: BTreeMap::new(),
             retries: BTreeSet::new(),
+            failure_retries: BTreeSet::new(),
             prompts: BTreeMap::new(),
             state: RunState::Running,
             degraded: false,
@@ -189,6 +191,28 @@ impl Dag {
         self.settle_parent(id);
         self.emit()
     }
+    /// Re-emit an in-flight stage once, with the prompt it was first sent,
+    /// instead of failing the run. The host decides which failures are
+    /// worth a second attempt; `None` when the stage already had its retry
+    /// or is not in flight.
+    pub fn retry(&mut self, id: &StageId) -> Option<Advance> {
+        if self.state != RunState::Running
+            || !self.in_flight.contains(id)
+            || !self.failure_retries.insert(id.clone())
+        {
+            return None;
+        }
+        let mut stage = self.graph[id].clone();
+        stage.prompt = self.prompts.get(id).cloned().unwrap_or(stage.prompt);
+        Some(Advance::Spawn(vec![stage]))
+    }
+    /// Stages that finished with an output, map barriers excluded.
+    pub fn completed(&self) -> usize {
+        self.output
+            .keys()
+            .filter(|id| self.graph[*id].kind != Kind::Map)
+            .count()
+    }
     pub fn cancel(&mut self) -> Advance {
         if self.state != RunState::Running {
             return Advance::Spawn(vec![]);
@@ -227,9 +251,7 @@ impl Dag {
                         Ok(p) => p,
                         Err(e) => return self.finish(RunState::Failed, Some(e.to_string())),
                     };
-                    if stage.schema.is_some() {
-                        self.prompts.insert(id.clone(), stage.prompt.clone());
-                    }
+                    self.prompts.insert(id.clone(), stage.prompt.clone());
                     self.in_flight.insert(id.clone());
                     self.status.insert(id, StageStatus::Running);
                     ready.push(stage);
