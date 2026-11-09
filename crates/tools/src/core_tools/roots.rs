@@ -8,6 +8,16 @@
 //! Relative paths join the main root; absolute paths must already point
 //! into a root. Anything else is refused.
 //!
+//! The check is advisory against a racing writer: it resolves the path,
+//! then the tool opens it in a separate step, so a process that swaps a
+//! directory for a symlink in between (time-of-check to time-of-use) can
+//! still redirect the open. That holds on macOS and Linux alike, since
+//! the tools use plain `open` rather than `openat` with
+//! `O_NOFOLLOW`-style resolution. The boundary keeps the model's own
+//! paths honest; it is not a defense against another local process, and
+//! the shell tool can reach the whole host regardless. Use a sandboxed
+//! workspace when isolation matters.
+//!
 //! The check reads the host filesystem, so it only applies to host
 //! workspaces. A sandboxed workspace keeps the purely lexical rule, since
 //! its paths name files in a sandbox this machine cannot inspect.
@@ -92,24 +102,69 @@ impl Roots {
             }
             let normal = normalize_absolute(candidate)
                 .ok_or_else(|| ToolError::msg(format!("unsupported path: {raw}")))?;
-            return if self.contains(&normal) {
-                Ok(normal)
-            } else {
-                Err(ToolError::msg(format!(
+            if self.contains(&normal) {
+                return Ok(normal);
+            }
+            return Err(self.link_refusal(raw, &normal).unwrap_or_else(|| {
+                ToolError::msg(format!(
                     "path is outside the workspace and every added directory: {raw}"
-                )))
-            };
+                ))
+            }));
         }
 
         let joined = join_relative(&self.main, candidate, raw)?;
         // Checked against the canonical main root: the caller's spelling
         // may be relative (`.`) or run through a symlink (`/tmp`).
-        if host && !self.contains(&join_relative(&self.canonical[0], candidate, raw)?) {
-            return Err(ToolError::msg(format!(
-                "path resolves outside the workspace through a symlink: {raw}"
-            )));
+        let check = join_relative(&self.canonical[0], candidate, raw)?;
+        if host && !self.contains(&check) {
+            return Err(self.link_refusal(raw, &check).unwrap_or_else(|| {
+                ToolError::msg(format!(
+                    "path resolves outside the workspace through a symlink: {raw}"
+                ))
+            }));
         }
         Ok(joined)
+    }
+
+    /// The refusal for a path that starts inside a root but leaves it
+    /// through a symlink: it names the link and where it leads, and the
+    /// directory to add to allow it. Monorepos often symlink a shared
+    /// folder in; this tells the user the one flag that admits it. `None`
+    /// when no such link is found (a dangling link, or a path that never
+    /// entered a root).
+    fn link_refusal(&self, raw: &str, path: &Path) -> Option<ToolError> {
+        let (link, target) = self.escaping_link(path)?;
+        let dir = if target.is_dir() {
+            target.clone()
+        } else {
+            target.parent()?.to_path_buf()
+        };
+        Some(ToolError::msg(format!(
+            "path resolves outside the workspace through a symlink: {raw} \
+             ({} points to {}, outside every root); to allow it, add that \
+             directory, for example with `--add-dir {}`",
+            link.display(),
+            target.display(),
+            dir.display()
+        )))
+    }
+
+    /// The first symlink on `path`, after the walk has entered a root,
+    /// whose target lies outside every root: `(link, resolved target)`.
+    fn escaping_link(&self, path: &Path) -> Option<(PathBuf, PathBuf)> {
+        let inside = |real: &Path| self.canonical.iter().any(|root| real.starts_with(root));
+        let mut prefix = PathBuf::new();
+        let mut entered = false;
+        for component in path.components() {
+            prefix.push(component);
+            let real = prefix.canonicalize().ok()?;
+            if inside(&real) {
+                entered = true;
+            } else if entered {
+                return Some((prefix, real));
+            }
+        }
+        None
     }
 }
 
