@@ -13,6 +13,7 @@ mod subagents_command_tests {
             model_name: "m".into(),
             workspace_name: "w".into(),
             workspace_root: "/test-ws".into(),
+            added_dirs: Vec::new(),
             provider: Provider::Local,
             subagent_depth: depth,
             stats: orca_harness_tools::BackgroundStats::new(),

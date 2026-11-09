@@ -263,11 +263,11 @@ async fn auto_reviews_and_executes_the_final_rewritten_action() {
     });
     let executed = Arc::new(Mutex::new(None));
     let recorded = executed.clone();
-    let auto = AutoApproval::new(
-        ModeHandle::new(Mode::Auto),
-        reviewer,
-        &Workspace::new(std::env::temp_dir()),
-    );
+    let root = std::env::temp_dir();
+    let added = root.join(format!("orca-auto-review-added-{}", std::process::id()));
+    std::fs::create_dir_all(&added).unwrap();
+    let workspace = Workspace::new(&root).with_added_dirs([&added]).unwrap();
+    let auto = AutoApproval::new(ModeHandle::new(Mode::Auto), reviewer, &workspace);
     let agent = Agent::new(OneCallModel(AtomicUsize::new(0)))
         .extension(Rewrite)
         .extension(auto)
@@ -293,6 +293,14 @@ async fn auto_reviews_and_executes_the_final_rewritten_action() {
     assert_eq!(packets.len(), 1);
     assert_eq!(packets[0]["root_request"], "change the requested file");
     assert_eq!(packets[0]["arguments"], json!({"path": "after.txt"}));
+    // The reviewer is told which directories are in scope, added ones too.
+    assert_eq!(
+        packets[0]["allowed_directories"],
+        json!([
+            root.display().to_string(),
+            added.canonicalize().unwrap().display().to_string()
+        ])
+    );
 }
 
 #[tokio::test]

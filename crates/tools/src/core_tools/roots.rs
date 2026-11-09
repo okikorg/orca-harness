@@ -68,7 +68,10 @@ impl Roots {
     /// A dangling symlink anywhere on the path counts as outside: writing
     /// through it would create its target, wherever that is.
     pub(super) fn contains(&self, path: &Path) -> bool {
-        let Some(normal) = normalize_absolute(path) else {
+        let Ok(absolute) = std::path::absolute(path) else {
+            return false;
+        };
+        let Some(normal) = normalize_absolute(&absolute) else {
             return false;
         };
         match canonical_prefix(&normal) {

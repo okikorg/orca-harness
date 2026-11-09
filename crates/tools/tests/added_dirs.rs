@@ -242,6 +242,28 @@ async fn glob_and_grep_search_inside_roots_only() {
 }
 
 #[tokio::test]
+async fn grep_does_not_follow_symlinks_out_of_every_root() {
+    let l = Layout::new();
+    symlink(l.outside.join("note.txt"), l.root.join("secret.txt")).unwrap();
+    symlink(l.outside.join("note.txt"), l.added.join("secret.txt")).unwrap();
+    // A link that stays inside the roots is still searched.
+    symlink(l.added.join("note.txt"), l.root.join("to-added.txt")).unwrap();
+    let grep = GrepTool::new(l.ws.clone());
+    for path in [".".to_string(), l.added.display().to_string()] {
+        let out = run(&grep, json!({"query": "needle", "path": path}))
+            .await
+            .unwrap()
+            .to_string();
+        assert!(!out.contains("needle in outside"), "{out}");
+    }
+    let out = run(&grep, json!({"query": "needle in added"}))
+        .await
+        .unwrap()
+        .to_string();
+    assert!(out.contains("to-added.txt"), "{out}");
+}
+
+#[tokio::test]
 async fn copy_file_moves_between_roots_but_not_out() {
     let l = Layout::new();
     let copy = CopyFileTool::new(l.ws.clone());

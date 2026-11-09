@@ -81,7 +81,13 @@ impl Tool for GrepTool {
                     if matches!(name.as_str(), ".git" | "target" | "node_modules") {
                         continue;
                     }
-                    stack.push(dir.join(name));
+                    let path = dir.join(name);
+                    // `stat` and `read` follow links: never through one
+                    // that leads out of every root.
+                    if self.ws.link_escapes(&path) {
+                        continue;
+                    }
+                    stack.push(path);
                 }
             } else if stat.len as usize <= self.max_file_bytes {
                 let Ok(content) = self.ws.read(&dir).await else {

@@ -355,6 +355,7 @@ pub(crate) async fn run_mode(mut cfg: Config) -> ExitCode {
         model_name: cfg.model.clone(),
         workspace_name: cfg.workspace.display().to_string(),
         workspace_root: workspace_scope(&ws),
+        added_dirs: ws.added_dirs().to_vec(),
         provider: initial_provider,
         subagent_depth,
         stats,

@@ -38,6 +38,8 @@ pub(crate) use model::OrchestrateModel;
 #[cfg(test)]
 mod model_tests;
 #[cfg(test)]
+mod startup_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

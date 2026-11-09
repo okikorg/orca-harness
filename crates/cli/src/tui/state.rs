@@ -17,6 +17,7 @@ use orca_harness_core::{CancellationToken, Image};
 use orca_harness_model_providers::openrouter::ModelInfo;
 use orca_harness_model_providers::SupportedEfforts;
 
+pub(crate) use super::composer::{LocationEntry, LocationPicker};
 use super::format::TokenEstimator;
 
 mod activity;
@@ -38,6 +39,8 @@ pub struct TuiConfig {
     /// Canonicalized workspace root: keys this workspace's saved tool
     /// approvals in the config file.
     pub workspace_root: String,
+    /// `--add-dir` directories, canonical; the `@` picker lists them too.
+    pub added_dirs: Vec<std::path::PathBuf>,
     /// The active endpoint provider; provider switches update it.
     pub provider: Provider,
     /// Shared handle behind the `subagent` tool's nesting cap;
@@ -92,22 +95,6 @@ pub(crate) struct EffortPicker {
     pub(crate) picker: ListPicker,
 }
 
-/// Workspace-relative file and directory inserted into the composer by
-/// the `@` mention picker.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LocationEntry {
-    pub(crate) path: String,
-    pub(crate) directory: bool,
-}
-
-pub(crate) struct LocationPicker {
-    pub(crate) entries: Vec<LocationEntry>,
-    pub(crate) query: String,
-    /// Character offset of the `@` that opened this picker.
-    pub(crate) token_start: usize,
-    pub(crate) picker: ListPicker,
-}
-
 /// An enabled, loaded skill inserted into the composer by the `$` picker.
 pub(crate) struct SkillMentionPicker {
     pub(crate) entries: Vec<crate::skills::SkillEntry>,
@@ -115,25 +102,6 @@ pub(crate) struct SkillMentionPicker {
     /// Character offset of the `$` that opened this picker.
     pub(crate) token_start: usize,
     pub(crate) picker: ListPicker,
-}
-
-impl LocationPicker {
-    pub(crate) fn filtered(&self) -> Vec<&LocationEntry> {
-        let needle = self.query.to_lowercase();
-        self.entries
-            .iter()
-            .filter(|entry| needle.is_empty() || entry.path.to_lowercase().contains(&needle))
-            .collect()
-    }
-
-    pub(crate) fn selected(&self) -> Option<LocationEntry> {
-        self.filtered().get(self.picker.index()).cloned().cloned()
-    }
-
-    pub(crate) fn sync_len(&mut self) {
-        let len = self.filtered().len();
-        self.picker.set_len(len);
-    }
 }
 
 impl SkillMentionPicker {

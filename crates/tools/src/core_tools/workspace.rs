@@ -135,6 +135,16 @@ impl Workspace {
         self.roots.added()
     }
 
+    /// Whether `path`, an entry met while walking a directory that is
+    /// already inside a root, is a host symlink leading out of every root.
+    /// Tree walkers skip such entries. Plain entries cost one `lstat`; only
+    /// links are resolved. Always `false` for a sandboxed workspace.
+    pub(crate) fn link_escapes(&self, path: &Path) -> bool {
+        !self.is_sandboxed()
+            && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+            && !self.roots.contains(path)
+    }
+
     /// Whether `dir` is the root or an added directory itself.
     pub(crate) fn is_root(&self, dir: &Path) -> bool {
         self.roots.is_root(dir)
